@@ -1125,6 +1125,23 @@
             </div>
           </div>
           
+          <div class="nav-section">
+            <div class="nav-label">파트너 관리</div>
+            <div class="nav-item" data-tab="partnerMessages" onclick="switchTab('partnerMessages')">
+              <span class="icon">💬</span>
+              <span>파트너 소통</span>
+              <span id="unread-badge" style="background: var(--danger); color: white; font-size: 11px; padding: 2px 6px; border-radius: 10px; margin-left: auto; display: none;">0</span>
+            </div>
+            <div class="nav-item" data-tab="partnerNotices" onclick="switchTab('partnerNotices')">
+              <span class="icon">📢</span>
+              <span>공지사항 관리</span>
+            </div>
+            <div class="nav-item" data-tab="dealSuggestions" onclick="switchTab('dealSuggestions')">
+              <span class="icon">💡</span>
+              <span>공구 제안 관리</span>
+            </div>
+          </div>
+          
           <!-- 로그아웃 -->
           <div class="nav-section" style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--gray-100);">
             <div class="nav-item" onclick="handleAdminLogout()" style="color: var(--gray-500);">
@@ -1493,7 +1510,11 @@ let state = {
   sellerSettlements: [],
   supplierSettlements: [],
   settlementBrands: [],
-  supplierProducts: []
+  supplierProducts: [],
+  // 파트너 관리 데이터
+  partnerMessages: [],
+  partnerNotices: [],
+  dealSuggestions: []
 };
 
 // 상수
@@ -1626,6 +1647,35 @@ function setupListeners() {
     state.supplierProducts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
+  
+  // 파트너 메시지
+  db.collection('partnerMessages').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.partnerMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    updateUnreadBadge();
+    render();
+  });
+  
+  // 파트너 공지사항
+  db.collection('partnerNotices').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.partnerNotices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
+  
+  // 공구 제안
+  db.collection('dealSuggestions').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.dealSuggestions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
+}
+
+// 안읽은 메시지 뱃지 업데이트
+function updateUnreadBadge() {
+  const unreadCount = state.partnerMessages.filter(m => !m.isAdmin && !m.isRead).length;
+  const badge = document.getElementById('unread-badge');
+  if (badge) {
+    badge.textContent = unreadCount;
+    badge.style.display = unreadCount > 0 ? 'inline-block' : 'none';
+  }
 }
 
 // CRUD
@@ -2469,66 +2519,21 @@ function openSupplierModal(supplier = null, bulk = false) {
           </div>
         </div>
         
-        <!-- 🆕 상품 등록 섹션 -->
-        <div id="supplier-products-section" data-supplier-type="${s.supplierType || 'external'}" style="background: var(--gray-50); border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-300);">
+        <!-- 🆕 상품 등록 섹션 - 공급사 상품 DB 연동 -->
+        <div style="background: var(--gray-50); border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-300);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h3 style="font-size: 13px; color: var(--gray-700); margin: 0; font-weight: 600;">📦 상품 등록 <span id="supplier-product-type-label" style="font-size: 11px; font-weight: normal; color: var(--gray-500);">(${s.supplierType === 'inhouse' ? '자사' : '타사'} 상품)</span></h3>
-            <button type="button" class="btn btn-sm btn-primary" onclick="addSupplierProductRow()">+ 상품 추가</button>
+            <h3 style="font-size: 13px; color: var(--gray-700); margin: 0; font-weight: 600;">📦 상품 관리</h3>
           </div>
-          <p style="font-size: 11px; color: var(--gray-500); margin-bottom: 12px;">이 공급사의 상품을 등록하면 매출 정산 시 자동으로 검색됩니다.</p>
+          <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 16px;">이 공급사의 상품은 공급사 상품 DB에서 통합 관리됩니다.</p>
           
-          <!-- 상품 입력 헤더 -->
-          <div id="supplier-product-header" style="display: grid; gap: 8px; align-items: center; padding: 6px 8px; background: var(--gray-700); border-radius: 6px 6px 0 0; font-size: 11px; font-weight: 600; color: #fff; ${s.supplierType === 'inhouse' ? 'grid-template-columns: 2fr 90px 90px 90px 36px;' : 'grid-template-columns: 2fr 90px 90px 70px 36px;'}">
-            <div>상품명</div>
-            ${s.supplierType === 'inhouse' ? `
-              <div style="text-align: right;">소비자정가</div>
-              <div style="text-align: right;">공구판매가</div>
-              <div style="text-align: right;">총마진수수료</div>
-            ` : `
-              <div style="text-align: right;">공구판매가</div>
-              <div style="text-align: right;">공급단가</div>
-              <div style="text-align: right;">수수료%</div>
-            `}
-            <div></div>
-          </div>
-          
-          <div id="supplier-products-list" style="max-height: 250px; overflow-y: auto; border: 1px solid var(--gray-300); border-top: none; border-radius: 0 0 6px 6px; background: var(--white);">
-            ${supplierProducts.length === 0 && !isEdit ? `
-              <div id="supplier-products-empty" style="text-align: center; padding: 20px; color: var(--gray-500); font-size: 12px;">
-                + 상품 추가 버튼을 눌러 상품을 등록하세요
-              </div>
-            ` : ''}
-            ${supplierProducts.map((p, i) => s.supplierType === 'inhouse' ? `
-              <div class="supplier-product-row" data-product-id="${p.id}" style="display: grid; grid-template-columns: 2fr 90px 90px 90px 36px; gap: 8px; align-items: center; padding: 8px; background: #fff; margin-bottom: 1px; border-bottom: 1px solid var(--gray-100);">
-                <input type="text" class="form-input sp-name" value="${p.productName}" placeholder="상품명" style="font-size: 12px;">
-                <input type="number" class="form-input sp-retail-price" value="${p.retailPrice || ''}" placeholder="소비자정가" style="font-size: 12px; text-align: right;">
-                <input type="number" class="form-input sp-sale-price" value="${p.salePrice || ''}" placeholder="공구판매가" style="font-size: 12px; text-align: right;">
-                <input type="number" class="form-input sp-margin-fee" value="${p.marginFee || ''}" placeholder="총마진수수료" style="font-size: 12px; text-align: right; background: var(--gray-50);">
-                <button type="button" onclick="removeSupplierProductRow(this)" style="background: none; border: none; color: var(--gray-400); font-size: 16px; cursor: pointer;">×</button>
-              </div>
-            ` : `
-              <div class="supplier-product-row" data-product-id="${p.id}" style="display: grid; grid-template-columns: 2fr 90px 90px 70px 36px; gap: 8px; align-items: center; padding: 8px; background: #fff; margin-bottom: 1px; border-bottom: 1px solid var(--gray-100);">
-                <input type="text" class="form-input sp-name" value="${p.productName}" placeholder="상품명" style="font-size: 12px;">
-                <input type="number" class="form-input sp-sale-price" value="${p.salePrice || ''}" placeholder="공구판매가" style="font-size: 12px; text-align: right;" onchange="calcSupplyOrFee(this, 'sale')">
-                <input type="number" class="form-input sp-supply-price" value="${p.supplyPrice || ''}" placeholder="공급단가" style="font-size: 12px; text-align: right;" onchange="calcSupplyOrFee(this, 'supply')">
-                <input type="number" class="form-input sp-fee-percent" value="${p.feePercent || (p.salePrice && p.supplyPrice ? Math.round((p.salePrice - p.supplyPrice) / p.salePrice * 100 * 10) / 10 : '')}" placeholder="%" step="0.1" style="font-size: 12px; text-align: right; background: var(--gray-50);" onchange="calcSupplyOrFee(this, 'percent')">
-                <button type="button" onclick="removeSupplierProductRow(this)" style="background: none; border: none; color: var(--gray-400); font-size: 16px; cursor: pointer;">×</button>
-              </div>
-            `).join('')}
-          </div>
-          
-          <!-- 엑셀로 상품 일괄 등록 -->
-          <div style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--gray-300);">
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <button type="button" class="btn btn-secondary btn-sm" onclick="downloadSupplierProductTemplate()">📥 양식 다운로드</button>
-              <label class="btn btn-secondary btn-sm" style="cursor: pointer;">
-                📊 엑셀로 일괄 등록
-                <input type="file" accept=".xlsx,.xls" style="display: none;" onchange="handleSupplierProductExcel(this.files[0])">
-              </label>
-              <span style="font-size: 10px; color: var(--gray-500);">
-                ${s.supplierType === 'inhouse' ? '양식: 상품명, 소비자정가, 공구판매가, 총마진수수료' : '양식: 상품명, 공구판매가, 공급단가(V+)'}
-              </span>
-            </div>
+          <div style="text-align: center; padding: 20px; background: white; border-radius: 8px; border: 1px dashed var(--gray-300);">
+            <div style="font-size: 32px; margin-bottom: 8px;">📦</div>
+            <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 16px;">
+              상품 등록, 수정, 삭제는<br><strong>공급사 상품 DB</strong>에서 관리하세요.
+            </p>
+            <button type="button" class="btn btn-primary" onclick="closeModal(); switchTab('productDB');">
+              📦 공급사 상품 DB로 이동
+            </button>
           </div>
         </div>
         
@@ -2557,47 +2562,45 @@ function openSupplierModal(supplier = null, bulk = false) {
             </div>
           </div>
           
-          <!-- 서류 수령 체크 -->
-          <div style="background: white; border-radius: 8px; padding: 12px; margin-bottom: 12px;">
-            <label class="form-label" style="margin-bottom: 8px;">📋 서류 수령 현황</label>
-            <div style="display: flex; flex-wrap: wrap; gap: 16px;">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="checkbox" id="supplier-has-business-license" ${s.hasBusinessLicense ? 'checked' : ''} style="width: 18px; height: 18px;">
-                <span style="font-size: 13px;">사업자등록증</span>
+          <!-- 서류 수령 체크리스트 -->
+          <div style="background: white; border-radius: 8px; padding: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <label class="form-label" style="margin: 0;">📋 서류 수령 체크리스트</label>
+              <div id="supplier-checklist-progress" style="font-size: 12px; color: var(--gray-500);">0/4 완료</div>
+            </div>
+            
+            <!-- 진행률 바 -->
+            <div style="height: 6px; background: var(--gray-200); border-radius: 3px; margin-bottom: 16px; overflow: hidden;">
+              <div id="supplier-progress-bar" style="height: 100%; background: var(--success); border-radius: 3px; transition: width 0.3s ease; width: 0%;"></div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="supplier-has-product-info" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSupplierProgress()" style="width: 20px; height: 20px; accent-color: var(--success);">
+                <span style="font-size: 13px; font-weight: 500;">📦 상품등록</span>
               </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="checkbox" id="supplier-has-bank-account" ${s.hasBankAccount ? 'checked' : ''} style="width: 18px; height: 18px;">
-                <span style="font-size: 13px;">통장사본</span>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="supplier-has-business-license" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSupplierProgress()" style="width: 20px; height: 20px; accent-color: var(--success);">
+                <span style="font-size: 13px; font-weight: 500;">🏢 사업자</span>
               </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="checkbox" id="supplier-has-product-info" ${s.hasProductInfo ? 'checked' : ''} style="width: 18px; height: 18px;">
-                <span style="font-size: 13px;">상품정보</span>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="supplier-has-bank-account" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSupplierProgress()" style="width: 20px; height: 20px; accent-color: var(--success);">
+                <span style="font-size: 13px; font-weight: 500;">🏦 통장</span>
               </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="checkbox" id="supplier-has-supply-price" ${s.hasSupplyPrice ? 'checked' : ''} style="width: 18px; height: 18px;">
-                <span style="font-size: 13px;">공급단가</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="checkbox" id="supplier-has-commission" ${s.hasCommission ? 'checked' : ''} style="width: 18px; height: 18px;">
-                <span style="font-size: 13px;">수수료</span>
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="supplier-has-contract" ${s.hasContract ? 'checked' : ''} onchange="updateSupplierProgress()" style="width: 20px; height: 20px; accent-color: var(--success);">
+                <span style="font-size: 13px; font-weight: 500;">📝 계약</span>
               </label>
             </div>
-          </div>
-          
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">사업자등록증 (URL/파일명)</label>
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <input type="text" class="form-input" id="supplier-business-license" value="${s.businessLicenseUrl || ''}" placeholder="URL 또는 파일명" style="flex: 1;">
-                ${s.businessLicenseUrl ? `<a href="${s.businessLicenseUrl}" target="_blank" class="btn btn-secondary btn-sm">📄 보기</a>` : ''}
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">통장사본 (URL/파일명)</label>
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <input type="text" class="form-input" id="supplier-bankbook" value="${s.bankBookUrl || ''}" placeholder="URL 또는 파일명" style="flex: 1;">
-                ${s.bankBookUrl ? `<a href="${s.bankBookUrl}" target="_blank" class="btn btn-secondary btn-sm">📄 보기</a>` : ''}
-              </div>
+            
+            <!-- 구글 드라이브 바로가기 버튼 -->
+            <div style="margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--gray-300);">
+              <a href="#" id="supplier-gdrive-link" onclick="openSupplierGDrive('${s.id || ''}')" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: linear-gradient(135deg, #4285f4, #34a853); color: white; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; transition: all 0.2s ease;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(66,133,244,0.4)';" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                  <path d="M12 2L4.5 12.5l2.5 4.3 5-8.5 5 8.5 2.5-4.3L12 2zm-5 17.5l2.5-4.3h9l2.5 4.3H7z"/>
+                </svg>
+                📁 구글 드라이브에서 서류 관리
+              </a>
             </div>
           </div>
         </div>
@@ -2632,6 +2635,162 @@ function openSupplierModal(supplier = null, bulk = false) {
       </form>
     </div>
   `;
+  
+  // 모달 열린 후 진행률 초기화
+  setTimeout(() => updateSupplierProgress(), 50);
+}
+
+// ========== 체크리스트 진행률 함수 ==========
+
+// 공급사 체크리스트 진행률 업데이트 (4개 항목)
+function updateSupplierProgress() {
+  const checkboxes = [
+    'supplier-has-product-info',
+    'supplier-has-business-license',
+    'supplier-has-bank-account',
+    'supplier-has-contract'
+  ];
+  
+  let checked = 0;
+  const total = checkboxes.length;
+  
+  checkboxes.forEach(id => {
+    const cb = document.getElementById(id);
+    if (cb && cb.checked) checked++;
+    
+    // 체크된 항목 스타일 업데이트
+    const label = cb?.closest('.checklist-item');
+    if (label) {
+      if (cb.checked) {
+        label.style.background = 'var(--success-light)';
+        label.style.borderColor = 'var(--success)';
+      } else {
+        label.style.background = 'var(--gray-50)';
+        label.style.borderColor = 'var(--gray-200)';
+      }
+    }
+  });
+  
+  const progress = document.getElementById('supplier-checklist-progress');
+  const progressBar = document.getElementById('supplier-progress-bar');
+  
+  if (progress) {
+    progress.textContent = `${checked}/${total} 완료`;
+    progress.style.color = checked === total ? 'var(--success)' : 'var(--gray-500)';
+  }
+  if (progressBar) {
+    progressBar.style.width = `${(checked / total) * 100}%`;
+    progressBar.style.background = checked === total ? 'var(--success)' : 'var(--primary)';
+  }
+}
+
+// 셀러 체크리스트 진행률 업데이트 (4개 항목)
+function updateSellerProgress() {
+  const checkboxes = [
+    'seller-has-product-info',
+    'seller-has-business-license',
+    'seller-has-bank-account',
+    'seller-has-contract'
+  ];
+  
+  let checked = 0;
+  const total = checkboxes.length;
+  
+  checkboxes.forEach(id => {
+    const cb = document.getElementById(id);
+    if (cb && cb.checked) checked++;
+    
+    // 체크된 항목 스타일 업데이트
+    const label = cb?.closest('.checklist-item');
+    if (label) {
+      if (cb.checked) {
+        label.style.background = 'var(--success-light)';
+        label.style.borderColor = 'var(--success)';
+      } else {
+        label.style.background = 'var(--gray-50)';
+        label.style.borderColor = 'var(--gray-200)';
+      }
+    }
+  });
+  
+  const progress = document.getElementById('seller-checklist-progress');
+  const progressBar = document.getElementById('seller-progress-bar');
+  
+  if (progress) {
+    progress.textContent = `${checked}/${total} 완료`;
+    progress.style.color = checked === total ? 'var(--success)' : 'var(--gray-500)';
+  }
+  if (progressBar) {
+    progressBar.style.width = `${(checked / total) * 100}%`;
+    progressBar.style.background = checked === total ? 'var(--success)' : 'var(--primary)';
+  }
+}
+
+// ========== 구글 드라이브 연동 함수 ==========
+
+// 구글 드라이브 기본 링크 (나중에 실제 링크로 교체)
+const GDRIVE_BASE_URL = 'https://drive.google.com/drive/folders/';
+const GDRIVE_SUPPLIER_FOLDER = ''; // 공급사 폴더 ID (나중에 설정)
+const GDRIVE_SELLER_FOLDER = ''; // 셀러 폴더 ID (나중에 설정)
+
+// 공급사 구글 드라이브 열기
+function openSupplierGDrive(supplierId) {
+  // 공급사별 폴더가 있으면 해당 폴더로, 없으면 기본 폴더로
+  const supplier = state.suppliers.find(s => s.id === supplierId);
+  const folderUrl = supplier?.gdriveFolder || (GDRIVE_SUPPLIER_FOLDER ? GDRIVE_BASE_URL + GDRIVE_SUPPLIER_FOLDER : '');
+  
+  if (folderUrl) {
+    window.open(folderUrl, '_blank');
+  } else {
+    // 폴더 링크가 없으면 안내 메시지
+    showToast('구글 드라이브 폴더 링크가 설정되지 않았습니다. 관리자에게 문의하세요.');
+  }
+}
+
+// 셀러 구글 드라이브 열기
+function openSellerGDrive(sellerId) {
+  // 셀러별 폴더가 있으면 해당 폴더로, 없으면 기본 폴더로
+  const seller = state.sellers.find(s => s.id === sellerId);
+  const folderUrl = seller?.gdriveFolder || (GDRIVE_SELLER_FOLDER ? GDRIVE_BASE_URL + GDRIVE_SELLER_FOLDER : '');
+  
+  if (folderUrl) {
+    window.open(folderUrl, '_blank');
+  } else {
+    // 폴더 링크가 없으면 안내 메시지
+    showToast('구글 드라이브 폴더 링크가 설정되지 않았습니다. 관리자에게 문의하세요.');
+  }
+}
+
+// ========== 셀러 계약 건수 조정 함수 ==========
+
+// 계약 건수 조정 (▼▲ 버튼)
+function adjustContractCount(delta) {
+  const input = document.getElementById('seller-contract-count');
+  if (!input) return;
+  
+  let value = parseInt(input.value) || 1;
+  value = Math.max(1, Math.min(99, value + delta));
+  input.value = value;
+  
+  updateContractCountDisplay();
+}
+
+// 계약 건수 표시 업데이트
+function updateContractCountDisplay() {
+  const input = document.getElementById('seller-contract-count');
+  const display = document.getElementById('contract-count-display');
+  const totalNum = document.getElementById('contract-total-num');
+  
+  if (!input || !display || !totalNum) return;
+  
+  const count = parseInt(input.value) || 1;
+  totalNum.textContent = count;
+  
+  // 건수에 따른 스타일 변경
+  if (count >= 1) {
+    display.style.background = 'var(--success-light)';
+    display.style.color = 'var(--success)';
+  }
 }
 
 // 공급사 상품 행 추가
@@ -3045,14 +3204,11 @@ function submitSupplierForm(e, id) {
     inquiryMethod: document.getElementById('supplier-inquiry').value,
     contractStatus: document.getElementById('supplier-contract-status').value,
     bankAccount: document.getElementById('supplier-bank-account').value,
-    businessLicenseUrl: document.getElementById('supplier-business-license').value,
-    bankBookUrl: document.getElementById('supplier-bankbook').value,
-    // 서류 수령 체크박스
+    // 서류 수령 체크박스 (4개 항목)
+    hasProductInfo: document.getElementById('supplier-has-product-info')?.checked || false,
     hasBusinessLicense: document.getElementById('supplier-has-business-license')?.checked || false,
     hasBankAccount: document.getElementById('supplier-has-bank-account')?.checked || false,
-    hasProductInfo: document.getElementById('supplier-has-product-info')?.checked || false,
-    hasSupplyPrice: document.getElementById('supplier-has-supply-price')?.checked || false,
-    hasCommission: document.getElementById('supplier-has-commission')?.checked || false,
+    hasContract: document.getElementById('supplier-has-contract')?.checked || false,
     // 로그인 정보
     loginId: document.getElementById('supplier-login-id')?.value || '',
     loginPw: document.getElementById('supplier-login-pw')?.value || '',
@@ -3060,6 +3216,7 @@ function submitSupplierForm(e, id) {
     contact: document.getElementById('supplier-manager-phone').value, // 호환성
     _products: products // 상품 목록 (saveSupplier에서 처리)
   };
+  
   if (id) data.id = id;
   saveSupplierWithProducts(data);
 }
@@ -3273,18 +3430,18 @@ function openSellerModal(seller = null, bulk = false) {
   }
   
   m.innerHTML = `
-    <div class="modal-content">
+    <div class="modal-content" style="max-width: 700px;">
       <div class="modal-header">
-        <h2 class="modal-title">${isEdit ? '셀러 수정' : '새 셀러 등록'}</h2>
+        <h2 class="modal-title">👤 ${isEdit ? '셀러 수정' : '새 셀러 등록'}</h2>
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
       
-      ${sellerStatsHtml}
-      
-      <form onsubmit="submitSellerForm(event, '${s.id || ''}')">
+      <form onsubmit="submitSellerForm(event, '${s.id || ''}')" style="max-height: 75vh; overflow-y: auto; padding-right: 8px;">
+        ${sellerStatsHtml}
+        
         <!-- 기본 정보 -->
-        <div style="background: #f8fafc; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
-          <h3 style="font-size: 14px; color: var(--gray-700); margin-bottom: 12px;">👤 기본 정보</h3>
+        <div style="background: var(--gray-50); border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-200);">
+          <h3 style="font-size: 13px; color: var(--gray-700); margin-bottom: 12px; font-weight: 600;">📋 기본 정보</h3>
           <div class="form-row">
             <div class="form-group" style="flex: 2;">
               <label class="form-label">셀러명/닉네임(팔로워수) *</label>
@@ -3312,11 +3469,85 @@ function openSellerModal(seller = null, bulk = false) {
         </div>
         
         <!-- 채널 정보 -->
-        <div style="background: var(--gray-100); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
-          <h3 style="font-size: 14px; color: var(--gray-600); margin-bottom: 12px;">📱 채널 정보</h3>
+        <div style="background: var(--gray-50); border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-200);">
+          <h3 style="font-size: 13px; color: var(--gray-700); margin-bottom: 12px; font-weight: 600;">📱 채널 정보</h3>
           <div class="form-group" style="margin-bottom: 0;">
             <label class="form-label">계정링크</label>
             <input type="text" class="form-input" id="seller-channelLink" value="${s.channelLink || s.accountLink || ''}" placeholder="예: https://www.instagram.com/username">
+          </div>
+        </div>
+        
+        <!-- 🆕 서류 체크리스트 (파일 첨부 삭제) -->
+        <div style="background: var(--gray-50); border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-200);">
+          <h3 style="font-size: 13px; color: var(--gray-700); margin-bottom: 12px; font-weight: 600;">📄 서류 체크리스트</h3>
+          
+          <!-- 서류 수령 체크 -->
+          <div style="background: white; border-radius: 8px; padding: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <label class="form-label" style="margin: 0;">📋 서류 수령 현황</label>
+              <div id="seller-checklist-progress" style="font-size: 12px; color: var(--gray-500);">0/4 완료</div>
+            </div>
+            
+            <!-- 진행률 바 -->
+            <div style="height: 6px; background: var(--gray-200); border-radius: 3px; margin-bottom: 16px; overflow: hidden;">
+              <div id="seller-progress-bar" style="height: 100%; background: var(--primary); border-radius: 3px; transition: width 0.3s ease; width: 0%;"></div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+              <!-- 상품등록 -->
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="seller-has-product-info" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSellerProgress()" style="width: 20px; height: 20px; accent-color: var(--primary);">
+                <span style="font-size: 13px; font-weight: 500;">📦 상품등록</span>
+              </label>
+              
+              <!-- 사업자 -->
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="seller-has-business-license" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSellerProgress()" style="width: 20px; height: 20px; accent-color: var(--primary);">
+                <span style="font-size: 13px; font-weight: 500;">🏢 사업자</span>
+              </label>
+              
+              <!-- 통장 -->
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200); transition: all 0.15s ease;" class="checklist-item">
+                <input type="checkbox" id="seller-has-bank-account" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSellerProgress()" style="width: 20px; height: 20px; accent-color: var(--primary);">
+                <span style="font-size: 13px; font-weight: 500;">🏦 통장</span>
+              </label>
+              
+              <!-- 계약 (건수 조정 포함) -->
+              <div style="padding: 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200);" class="checklist-item">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="seller-has-contract" ${s.hasContract ? 'checked' : ''} onchange="updateSellerProgress()" style="width: 20px; height: 20px; accent-color: var(--primary);">
+                    <span style="font-size: 13px; font-weight: 500;">📝 계약</span>
+                  </label>
+                  
+                  <!-- 계약 건수 조정 -->
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <div style="display: flex; align-items: center; background: white; border: 1px solid var(--gray-300); border-radius: 6px; overflow: hidden;">
+                      <button type="button" onclick="adjustContractCount(-1)" style="width: 26px; height: 26px; border: none; background: var(--gray-100); cursor: pointer; font-size: 12px; font-weight: bold; color: var(--gray-600);">▼</button>
+                      <input type="number" id="seller-contract-count" value="${s.contractCount || 1}" min="1" max="99" style="width: 32px; text-align: center; border: none; font-size: 13px; font-weight: 600; color: var(--gray-900);" onchange="updateContractCountDisplay()">
+                      <button type="button" onclick="adjustContractCount(1)" style="width: 26px; height: 26px; border: none; background: var(--gray-100); cursor: pointer; font-size: 12px; font-weight: bold; color: var(--gray-600);">▲</button>
+                    </div>
+                    <span style="font-size: 11px; color: var(--gray-500);">건</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 총 계약 건수 표시 -->
+            <div id="contract-count-display" style="margin-top: 12px; padding: 8px 12px; background: ${(s.contractCount || 1) >= 1 ? 'var(--success-light)' : 'var(--warning-light)'}; border-radius: 6px; font-size: 13px; font-weight: 500; color: ${(s.contractCount || 1) >= 1 ? 'var(--success)' : 'var(--warning)'}; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              <span>📑</span>
+              <span>총 <strong id="contract-total-num">${s.contractCount || 1}</strong>건의 계약</span>
+            </div>
+            
+            <!-- 구글 드라이브 바로가기 버튼 -->
+            <div style="margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--gray-300);">
+              <a href="#" id="seller-gdrive-link" onclick="openSellerGDrive('${s.id || ''}')" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; background: linear-gradient(135deg, #4285f4, #34a853); color: white; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; transition: all 0.2s ease;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(66,133,244,0.4)';" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                  <path d="M12 2L4.5 12.5l2.5 4.3 5-8.5 5 8.5 2.5-4.3L12 2zm-5 17.5l2.5-4.3h9l2.5 4.3H7z"/>
+                </svg>
+                📁 구글 드라이브에서 서류 관리
+              </a>
+            </div>
           </div>
         </div>
         
@@ -3350,8 +3581,28 @@ function openSellerModal(seller = null, bulk = false) {
       </form>
     </div>
   `;
+  
+  // 모달 열린 후 진행률 및 계약 건수 초기화
+  setTimeout(() => {
+    updateSellerProgress();
+    updateContractCountDisplay();
+  }, 50);
 }
 
+// 셀러 모달 내 파일 업로드
+// 셀러 파일 관련 함수 - 제거됨 (구글 드라이브로 관리)
+// 기존 호환성을 위해 placeholder 함수 유지
+function uploadSellerDocInModal() { console.log('파일 첨부 기능이 구글 드라이브로 이전되었습니다.'); }
+function removeSellerDoc() { console.log('파일 삭제 기능이 구글 드라이브로 이전되었습니다.'); }
+function viewSellerDocument() { showToast('서류는 구글 드라이브에서 확인하세요.'); }
+function viewSellerContracts() { showToast('계약서는 구글 드라이브에서 확인하세요.'); }
+function viewSingleContract() { showToast('계약서는 구글 드라이브에서 확인하세요.'); }
+function deleteSellerContract() { showToast('계약서 관리는 구글 드라이브에서 진행하세요.'); }
+function uploadSellerDocDirect() { showToast('파일 업로드는 구글 드라이브로 이전되었습니다.'); }
+function openDocumentViewer() { showToast('서류 확인은 구글 드라이브에서 진행하세요.'); }
+
+
+// 셀러 서류 직접 업로드 (테이블에서)
 // 셀러 입력 방식 전환
 function showSellerTextInput() {
   document.getElementById('seller-excel-upload').style.display = 'none';
@@ -3531,7 +3782,15 @@ function submitSellerForm(e, id) {
     // 로그인 정보
     loginId: document.getElementById('seller-login-id')?.value || '',
     loginPw: document.getElementById('seller-login-pw')?.value || '',
+    // 서류 체크리스트 (4개 항목)
+    hasProductInfo: document.getElementById('seller-has-product-info')?.checked || false,
+    hasBusinessLicense: document.getElementById('seller-has-business-license')?.checked || false,
+    hasBankAccount: document.getElementById('seller-has-bank-account')?.checked || false,
+    hasContract: document.getElementById('seller-has-contract')?.checked || false,
+    // 계약 건수
+    contractCount: parseInt(document.getElementById('seller-contract-count')?.value) || 1,
   };
+  
   if (id) data.id = id;
   saveSeller(data);
 }
@@ -3589,6 +3848,9 @@ function render() {
     case 'settlement': renderSettlement(); break;
     case 'salesReport': renderSalesReport(); break;
     case 'shareLinks': renderShareLinks(); break;
+    case 'partnerMessages': renderPartnerMessages(); break;
+    case 'partnerNotices': renderPartnerNotices(); break;
+    case 'dealSuggestions': renderDealSuggestions(); break;
   }
 }
 
@@ -3851,22 +4113,62 @@ function renderSuppliers() {
   const grandTotalSales = Object.values(supplierSalesStats).reduce((sum, s) => sum + s.totalSalesAmount, 0);
   const grandTotalCount = Object.values(supplierSalesStats).reduce((sum, s) => sum + s.totalSalesCount, 0);
   
-  // 서류 완료 여부 체크 (5개 항목: 상품정보, 공급단가, 수수료, 사업자등록증, 통장사본)
+  // 서류 완료 여부 체크 (4개 항목: 상품등록, 사업자, 통장, 계약)
   const fullyDocumented = contractedSuppliers.filter(s => {
-    return s.hasBusinessLicense && s.hasBankAccount && s.hasProductInfo && s.hasSupplyPrice && s.hasCommission;
+    return s.hasProductInfo && s.hasBusinessLicense && s.hasBankAccount && s.hasContract;
   });
   
   const missingDocs = contractedSuppliers.filter(s => {
-    return !(s.hasBusinessLicense && s.hasBankAccount && s.hasProductInfo && s.hasSupplyPrice && s.hasCommission);
+    return !(s.hasProductInfo && s.hasBusinessLicense && s.hasBankAccount && s.hasContract);
   });
   
-  // 판매량 TOP 3 / 저조 브랜드 3
+  // 판매량 TOP 5 / 저조 브랜드
   const suppliersWithSales = state.suppliers
     .map(s => ({ ...s, sales: supplierSalesStats[s.id]?.totalSalesAmount || 0, count: supplierSalesStats[s.id]?.totalSalesCount || 0 }))
     .filter(s => s.sales > 0);
   
-  const topSellers = [...suppliersWithSales].sort((a, b) => b.sales - a.sales).slice(0, 3);
+  const topSellers = [...suppliersWithSales].sort((a, b) => b.sales - a.sales).slice(0, 5);
   const lowSellers = [...suppliersWithSales].sort((a, b) => a.sales - b.sales).slice(0, 3);
+  
+  // 공구 진행 TOP 5 (캘린더 등록 기준)
+  const products = state.supplierProducts || [];
+  const dealProgressStats = products.map(p => {
+    // selectedProducts가 객체 배열 [{productId, ...}] 또는 문자열 배열 [id]일 수 있음
+    const linkedDeals = state.deals.filter(d => {
+      if (!d.selectedProducts) return false;
+      return d.selectedProducts.some(item => {
+        const pid = typeof item === 'string' ? item : item.productId;
+        return pid === p.id;
+      });
+    });
+    return {
+      ...p,
+      dealCount: linkedDeals.length
+    };
+  }).filter(p => p.dealCount > 0)
+    .sort((a, b) => b.dealCount - a.dealCount)
+    .slice(0, 5);
+  
+  // 판매 베스트 TOP 5 (매출관리 내역서 정산 기준)
+  const salesByProduct = {};
+  (state.sellerSettlements || []).forEach(ss => {
+    const items = ss.salesItems || ss.items || [];
+    items.forEach(item => {
+      const productName = item.productName || item.name || '알 수 없음';
+      const brandName = ss.brandName || '-';
+      const key = `${brandName}__${productName}`;
+      if (!salesByProduct[key]) {
+        salesByProduct[key] = { productName, brandName, totalQty: 0, totalAmount: 0 };
+      }
+      salesByProduct[key].totalQty += Number(item.quantity) || 0;
+      salesByProduct[key].totalAmount += Number(item.amount) || 0;
+    });
+  });
+  
+  const salesBestStats = Object.values(salesByProduct)
+    .filter(p => p.totalAmount > 0)
+    .sort((a, b) => b.totalAmount - a.totalAmount)
+    .slice(0, 5);
   
   app.innerHTML = `
     <div class="page-header">
@@ -3913,41 +4215,65 @@ function renderSuppliers() {
       </div>
     </div>
     
-    <!-- 3행: 판매 순위 -->
+    <!-- 3행: 판매 순위 (4열) -->
     <div class="card" style="margin-bottom: 16px; padding: 16px;">
       <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">📊 판매 순위</h3>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-        <!-- 판매량 TOP 3 -->
-        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px;">
-          <div style="font-size: 13px; font-weight: 600; color: #065f46; margin-bottom: 12px;">🏆 판매량 TOP 3</div>
-          ${topSellers.length === 0 ? '<div style="color: #065f46; font-size: 12px;">판매 데이터가 없습니다</div>' : 
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px;">
+        <!-- 판매량 TOP 5 (브랜드) -->
+        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px;">
+          <div style="font-size: 12px; font-weight: 600; color: #065f46; margin-bottom: 10px;">🏆 브랜드 판매량</div>
+          ${topSellers.length === 0 ? '<div style="color: var(--gray-500); font-size: 11px;">데이터 없음</div>' : 
             topSellers.map((s, i) => `
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; margin-bottom: 6px;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-size: 16px;">${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</span>
-                  <span style="font-weight: 600;">${s.name}</span>
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: white; border-radius: 6px; margin-bottom: 4px; ${i < 3 ? 'border-left: 2px solid ' + (i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : '#CD7F32') : ''}">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="font-size: 12px;">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1)}</span>
+                  <span style="font-weight: 600; font-size: 12px;">${s.name}</span>
                 </div>
                 <div style="text-align: right;">
-                  <div style="font-weight: 700; color: #059669;">${s.sales.toLocaleString()}원</div>
-                  <div style="font-size: 11px; color: #065f46;">${s.count}건</div>
+                  <div style="font-weight: 700; color: #059669; font-size: 11px;">${s.sales.toLocaleString()}원</div>
                 </div>
               </div>
             `).join('')}
         </div>
+        <!-- 공구 진행 TOP 5 (상품) -->
+        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px;">
+          <div style="font-size: 12px; font-weight: 600; color: #1e40af; margin-bottom: 10px;">📦 공구 진행 TOP 5</div>
+          ${dealProgressStats.length === 0 ? '<div style="color: var(--gray-500); font-size: 11px;">공구 등록된 상품 없음</div>' : 
+            dealProgressStats.map((p, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: white; border-radius: 6px; margin-bottom: 4px; ${i < 3 ? 'border-left: 2px solid ' + (i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : '#CD7F32') : ''}">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-weight: 600; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.productName}</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">${p.brandName || '-'}</div>
+                </div>
+                <div style="font-weight: 700; color: #2563eb; font-size: 11px; flex-shrink: 0;">${p.dealCount}건</div>
+              </div>
+            `).join('')}
+        </div>
+        <!-- 판매 베스트 TOP 5 (상품) -->
+        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px;">
+          <div style="font-size: 12px; font-weight: 600; color: #dc2626; margin-bottom: 10px;">🔥 판매 베스트 TOP 5</div>
+          ${salesBestStats.length === 0 ? '<div style="color: var(--gray-500); font-size: 11px;">정산 데이터 없음</div>' : 
+            salesBestStats.map((p, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: white; border-radius: 6px; margin-bottom: 4px; ${i < 3 ? 'border-left: 2px solid ' + (i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : '#CD7F32') : ''}">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-weight: 600; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${p.productName}</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">${p.brandName} · ${p.totalQty}개</div>
+                </div>
+                <div style="font-weight: 700; color: #dc2626; font-size: 11px; flex-shrink: 0;">${p.totalAmount.toLocaleString()}원</div>
+              </div>
+            `).join('')}
+        </div>
         <!-- 판매 저조 브랜드 -->
-        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px;">
-          <div style="font-size: 13px; font-weight: 600; color: var(--gray-600); margin-bottom: 12px;">📉 판매 저조 브랜드</div>
-          ${lowSellers.length === 0 ? '<div style="color: var(--gray-600); font-size: 12px;">판매 데이터가 없습니다</div>' : 
+        <div style="background: var(--white); border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 10px;">📉 판매 저조 브랜드</div>
+          ${lowSellers.length === 0 ? '<div style="color: var(--gray-500); font-size: 11px;">데이터 없음</div>' : 
             lowSellers.map((s, i) => `
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; margin-bottom: 6px;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-size: 14px; color: var(--gray-600);">${i + 1}위</span>
-                  <span style="font-weight: 600;">${s.name}</span>
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: white; border-radius: 6px; margin-bottom: 4px;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="font-size: 11px; color: var(--gray-600);">${i + 1}위</span>
+                  <span style="font-weight: 600; font-size: 12px;">${s.name}</span>
                 </div>
-                <div style="text-align: right;">
-                  <div style="font-weight: 700; color: #d97706;">${s.sales.toLocaleString()}원</div>
-                  <div style="font-size: 11px; color: var(--gray-600);">${s.count}건</div>
-                </div>
+                <div style="font-weight: 700; color: #d97706; font-size: 11px;">${s.sales.toLocaleString()}원</div>
               </div>
             `).join('')}
         </div>
@@ -3958,7 +4284,7 @@ function renderSuppliers() {
     ${missingDocs.length > 0 ? `
     <div class="card" style="margin-bottom: 16px; border: 2px solid #fca5a5;">
       <h2 class="card-title" style="color: #dc2626;">⚠️ 서류 미비 공급사 (계약완료)</h2>
-      <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">상품정보, 공급단가, 수수료, 사업자등록증, 통장사본 중 미비 항목이 있습니다</p>
+      <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">상품등록, 사업자, 통장, 계약 중 미비 항목이 있습니다</p>
       <div style="overflow-x: auto;">
         <table class="data-table">
           <thead>
@@ -3966,9 +4292,8 @@ function renderSuppliers() {
               <th>공급사명</th>
               <th>유형</th>
               <th>계약상태</th>
-              <th style="text-align: center;">서류 수령현황</th>
-              <th style="text-align: center;">사업자등록증</th>
-              <th style="text-align: center;">통장사본</th>
+              <th style="text-align: center;">서류 체크리스트</th>
+              <th style="text-align: center;">드라이브</th>
               <th>담당자</th>
               <th></th>
             </tr>
@@ -3986,48 +4311,29 @@ function renderSuppliers() {
                     </select>
                   </td>
                   <td style="text-align: center;">
-                    <div style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: center;">
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="상품정보">
-                        <input type="checkbox" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasProductInfo', this.checked)" style="width: 14px; height: 14px;">
-                        <span>상품</span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;">
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasProductInfo ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="상품등록">
+                        <input type="checkbox" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasProductInfo', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasProductInfo ? '#166534' : '#991b1b'};">상품등록</span>
                       </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="공급단가">
-                        <input type="checkbox" ${s.hasSupplyPrice ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasSupplyPrice', this.checked)" style="width: 14px; height: 14px;">
-                        <span>단가</span>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasBusinessLicense ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="사업자등록증">
+                        <input type="checkbox" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBusinessLicense', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasBusinessLicense ? '#166534' : '#991b1b'};">사업자</span>
                       </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="수수료">
-                        <input type="checkbox" ${s.hasCommission ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasCommission', this.checked)" style="width: 14px; height: 14px;">
-                        <span>수수료</span>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasBankAccount ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="통장사본">
+                        <input type="checkbox" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBankAccount', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasBankAccount ? '#166534' : '#991b1b'};">통장</span>
                       </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="사업자등록증">
-                        <input type="checkbox" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBusinessLicense', this.checked)" style="width: 14px; height: 14px;">
-                        <span>사업자</span>
-                      </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="통장사본">
-                        <input type="checkbox" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBankAccount', this.checked)" style="width: 14px; height: 14px;">
-                        <span>통장</span>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasContract ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="계약서">
+                        <input type="checkbox" ${s.hasContract ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasContract', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasContract ? '#166534' : '#991b1b'};">계약</span>
                       </label>
                     </div>
                   </td>
                   <td style="text-align: center;">
-                    ${s.businessLicenseData ? `
-                      <button class="btn btn-sm" style="background: #dbeafe; color: #1e40af; padding: 2px 8px; font-size: 11px;" onclick="viewDocument('${s.id}', 'businessLicense')">📄 보기</button>
-                    ` : `
-                      <label style="cursor: pointer;">
-                        <span class="btn btn-sm" style="background: #fecaca; color: #991b1b; padding: 2px 8px; font-size: 11px;">📎 미첨부</span>
-                        <input type="file" accept="image/*,.pdf" style="display: none;" onchange="uploadSupplierDocument('${s.id}', 'businessLicense', this.files[0])">
-                      </label>
-                    `}
-                  </td>
-                  <td style="text-align: center;">
-                    ${s.bankAccountData ? `
-                      <button class="btn btn-sm" style="background: #dbeafe; color: #1e40af; padding: 2px 8px; font-size: 11px;" onclick="viewDocument('${s.id}', 'bankAccount')">📄 보기</button>
-                    ` : `
-                      <label style="cursor: pointer;">
-                        <span class="btn btn-sm" style="background: #fecaca; color: #991b1b; padding: 2px 8px; font-size: 11px;">📎 미첨부</span>
-                        <input type="file" accept="image/*,.pdf" style="display: none;" onchange="uploadSupplierDocument('${s.id}', 'bankAccount', this.files[0])">
-                      </label>
-                    `}
+                    <button onclick="openSupplierGDrive('${s.id}')" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: linear-gradient(135deg, #4285f4, #34a853); border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;" title="구글 드라이브 열기" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 2L4.5 12.5l2.5 4.3 5-8.5 5 8.5 2.5-4.3L12 2zm-5 17.5l2.5-4.3h9l2.5 4.3H7z"/></svg>
+                    </button>
                   </td>
                   <td>${s.managerName || '-'}${s.managerPhone ? ` (${s.managerPhone})` : ''}</td>
                   <td class="actions">
@@ -4046,7 +4352,7 @@ function renderSuppliers() {
     ${fullyDocumented.length > 0 ? `
     <div class="card" style="margin-bottom: 16px; border: 2px solid #a7f3d0;">
       <h2 class="card-title" style="color: #059669;">✅ 서류 완료 공급사</h2>
-      <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">상품정보, 공급단가, 수수료, 사업자등록증, 통장사본 모두 완료</p>
+      <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">상품등록, 사업자, 통장, 계약 모두 완료</p>
       <div style="overflow-x: auto;">
         <table class="data-table">
           <thead>
@@ -4054,9 +4360,8 @@ function renderSuppliers() {
               <th>공급사명</th>
               <th>유형</th>
               <th>계약상태</th>
-              <th style="text-align: center;">서류 수령현황</th>
-              <th style="text-align: center;">사업자등록증</th>
-              <th style="text-align: center;">통장사본</th>
+              <th style="text-align: center;">서류 체크리스트</th>
+              <th style="text-align: center;">드라이브</th>
               <th style="text-align: right;">총 판매액</th>
               <th style="text-align: right;">총 판매건</th>
               <th></th>
@@ -4077,48 +4382,29 @@ function renderSuppliers() {
                     </select>
                   </td>
                   <td style="text-align: center;">
-                    <div style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: center;">
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="상품정보">
-                        <input type="checkbox" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasProductInfo', this.checked)" style="width: 14px; height: 14px;">
-                        <span>상품</span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;">
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasProductInfo ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="상품등록">
+                        <input type="checkbox" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasProductInfo', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasProductInfo ? '#166534' : '#991b1b'};">상품등록</span>
                       </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="공급단가">
-                        <input type="checkbox" ${s.hasSupplyPrice ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasSupplyPrice', this.checked)" style="width: 14px; height: 14px;">
-                        <span>단가</span>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasBusinessLicense ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="사업자등록증">
+                        <input type="checkbox" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBusinessLicense', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasBusinessLicense ? '#166534' : '#991b1b'};">사업자</span>
                       </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="수수료">
-                        <input type="checkbox" ${s.hasCommission ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasCommission', this.checked)" style="width: 14px; height: 14px;">
-                        <span>수수료</span>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasBankAccount ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="통장사본">
+                        <input type="checkbox" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBankAccount', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasBankAccount ? '#166534' : '#991b1b'};">통장</span>
                       </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="사업자등록증">
-                        <input type="checkbox" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBusinessLicense', this.checked)" style="width: 14px; height: 14px;">
-                        <span>사업자</span>
-                      </label>
-                      <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px;" title="통장사본">
-                        <input type="checkbox" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasBankAccount', this.checked)" style="width: 14px; height: 14px;">
-                        <span>통장</span>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: ${s.hasContract ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="계약서">
+                        <input type="checkbox" ${s.hasContract ? 'checked' : ''} onchange="updateSupplierField('${s.id}', 'hasContract', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: ${s.hasContract ? '#166534' : '#991b1b'};">계약</span>
                       </label>
                     </div>
                   </td>
                   <td style="text-align: center;">
-                    ${s.businessLicenseData ? `
-                      <button class="btn btn-sm" style="background: #dbeafe; color: #1e40af; padding: 2px 8px; font-size: 11px;" onclick="viewDocument('${s.id}', 'businessLicense')">📄 보기</button>
-                    ` : `
-                      <label style="cursor: pointer;">
-                        <span class="btn btn-sm" style="background: #f3f4f6; color: #6b7280; padding: 2px 8px; font-size: 11px;">📎 첨부</span>
-                        <input type="file" accept="image/*,.pdf" style="display: none;" onchange="uploadSupplierDocument('${s.id}', 'businessLicense', this.files[0])">
-                      </label>
-                    `}
-                  </td>
-                  <td style="text-align: center;">
-                    ${s.bankAccountData ? `
-                      <button class="btn btn-sm" style="background: #dbeafe; color: #1e40af; padding: 2px 8px; font-size: 11px;" onclick="viewDocument('${s.id}', 'bankAccount')">📄 보기</button>
-                    ` : `
-                      <label style="cursor: pointer;">
-                        <span class="btn btn-sm" style="background: #f3f4f6; color: #6b7280; padding: 2px 8px; font-size: 11px;">📎 첨부</span>
-                        <input type="file" accept="image/*,.pdf" style="display: none;" onchange="uploadSupplierDocument('${s.id}', 'bankAccount', this.files[0])">
-                      </label>
-                    `}
+                    <button onclick="openSupplierGDrive('${s.id}')" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: linear-gradient(135deg, #4285f4, #34a853); border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;" title="구글 드라이브 열기" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 2L4.5 12.5l2.5 4.3 5-8.5 5 8.5 2.5-4.3L12 2zm-5 17.5l2.5-4.3h9l2.5 4.3H7z"/></svg>
+                    </button>
                   </td>
                   <td style="text-align: right; font-weight: 600; color: var(--primary);">${stats.totalSalesAmount.toLocaleString()}원</td>
                   <td style="text-align: right;">${stats.totalSalesCount}건</td>
@@ -4360,6 +4646,8 @@ function renderSellers() {
               <th style="min-width: 120px;">주소</th>
               <th>계정링크</th>
               <th>카테고리</th>
+              <th style="text-align: center;">서류현황</th>
+              <th style="text-align: center;">드라이브</th>
               <th style="text-align: center;">진행현황</th>
               <th style="text-align: right;">총 판매건</th>
               <th style="text-align: right;">총 판매액</th>
@@ -4372,6 +4660,33 @@ function renderSellers() {
               const stats = sellerStats[s.id] || { totalSalesCount: 0, totalSalesAmount: 0, totalMarginAmount: 0, ongoingCount: 0, completedCount: 0 };
               const categoryBadge = s.category ? `<span class="status-badge status-confirmed">${s.category}</span>` : '-';
               
+              // 서류 현황 - 4개 항목 체크리스트
+              const contractCount = s.contractCount || 0;
+              
+              const docStatus = `
+                <div style="display: flex; gap: 6px; justify-content: center; align-items: center; flex-wrap: wrap;">
+                  <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px; padding: 3px 6px; background: ${s.hasProductInfo ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="상품등록">
+                    <input type="checkbox" ${s.hasProductInfo ? 'checked' : ''} onchange="updateSellerField('${s.id}', 'hasProductInfo', this.checked)" style="width: 14px; height: 14px;">
+                    <span style="color: ${s.hasProductInfo ? '#166534' : '#991b1b'};">상품</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px; padding: 3px 6px; background: ${s.hasBusinessLicense ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="사업자">
+                    <input type="checkbox" ${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSellerField('${s.id}', 'hasBusinessLicense', this.checked)" style="width: 14px; height: 14px;">
+                    <span style="color: ${s.hasBusinessLicense ? '#166534' : '#991b1b'};">사업자</span>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 2px; cursor: pointer; font-size: 11px; padding: 3px 6px; background: ${s.hasBankAccount ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="통장">
+                    <input type="checkbox" ${s.hasBankAccount ? 'checked' : ''} onchange="updateSellerField('${s.id}', 'hasBankAccount', this.checked)" style="width: 14px; height: 14px;">
+                    <span style="color: ${s.hasBankAccount ? '#166534' : '#991b1b'};">통장</span>
+                  </label>
+                  <div style="display: flex; align-items: center; gap: 3px; padding: 3px 6px; background: ${contractCount > 0 ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;">
+                    <span style="font-size: 11px; color: ${contractCount > 0 ? '#166534' : '#991b1b'};">계약</span>
+                    <input type="number" min="0" value="${contractCount}" 
+                      onchange="updateSellerField('${s.id}', 'contractCount', parseInt(this.value) || 0)" 
+                      style="width: 36px; padding: 2px 3px; font-size: 11px; border: 1px solid #d1d5db; border-radius: 4px; text-align: center;">
+                    <span style="font-size: 10px; color: var(--gray-500);">건</span>
+                  </div>
+                </div>
+              `;
+              
               return `
                 <tr>
                   <td><strong>${s.name}</strong></td>
@@ -4383,6 +4698,12 @@ function renderSellers() {
                     </a>` : '-'}
                   </td>
                   <td>${categoryBadge}</td>
+                  <td>${docStatus}</td>
+                  <td style="text-align: center;">
+                    <button onclick="openSellerGDrive('${s.id}')" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: linear-gradient(135deg, #4285f4, #34a853); border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;" title="구글 드라이브 열기" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 2L4.5 12.5l2.5 4.3 5-8.5 5 8.5 2.5-4.3L12 2zm-5 17.5l2.5-4.3h9l2.5 4.3H7z"/></svg>
+                    </button>
+                  </td>
                   <td style="text-align: center;">
                     ${stats.completedCount > 0 ? `<span class="status-badge status-confirmed" style="font-size: 11px;">완료 ${stats.completedCount}</span>` : ''}
                     ${stats.ongoingCount > 0 ? `<span class="status-badge status-ongoing" style="font-size: 11px;">진행 ${stats.ongoingCount}</span>` : ''}
@@ -5460,10 +5781,10 @@ function renderProductDB() {
               <tr>
                 <th>공급사</th>
                 <th>상품명</th>
-                <th>유형</th>
-                <th style="text-align: right;">판매가</th>
+                <th style="text-align: right;">정가(V+)</th>
+                <th style="text-align: right;">공구판매가</th>
                 <th style="text-align: right;">공급가(V+)</th>
-                <th style="text-align: right;">마진/수수료</th>
+                <th style="text-align: right;">수수료율</th>
                 <th>공구 연결</th>
                 <th></th>
               </tr>
@@ -5472,8 +5793,14 @@ function renderProductDB() {
               ${products.map(p => {
                 const supplier = state.suppliers.find(s => s.id === p.supplierId);
                 const isInhouse = p.supplierType === 'inhouse';
-                // 이 상품이 연결된 공구 수
-                const linkedDeals = state.deals.filter(d => d.selectedProducts && d.selectedProducts.includes(p.id)).length;
+                // 이 상품이 연결된 공구 수 (selectedProducts가 객체 배열 또는 문자열 배열)
+                const linkedDeals = state.deals.filter(d => {
+                  if (!d.selectedProducts) return false;
+                  return d.selectedProducts.some(item => {
+                    const pid = typeof item === 'string' ? item : item.productId;
+                    return pid === p.id;
+                  });
+                }).length;
                 
                 return `
                   <tr>
@@ -5481,14 +5808,10 @@ function renderProductDB() {
                       <span style="font-weight: 600;">${p.brandName || supplier?.name || '-'}</span>
                     </td>
                     <td><strong>${p.productName || '-'}</strong></td>
-                    <td>
-                      <span class="status-badge ${isInhouse ? 'status-confirmed' : 'status-ongoing'}">
-                        ${isInhouse ? '자사' : '타사'}
-                      </span>
-                    </td>
+                    <td style="text-align: right;">${Number(p.originalPrice || p.retailPrice || 0).toLocaleString()}원</td>
                     <td style="text-align: right;">${Number(p.salePrice || 0).toLocaleString()}원</td>
-                    <td style="text-align: right;">${isInhouse ? '-' : Number(p.supplyPrice || 0).toLocaleString() + '원'}</td>
-                    <td style="text-align: right;">${isInhouse ? Number(p.marginFee || 0).toLocaleString() + '원' : '-'}</td>
+                    <td style="text-align: right;">${Number(p.supplyPrice || 0) > 0 ? Number(p.supplyPrice).toLocaleString() + '원' : '-'}</td>
+                    <td style="text-align: right;">${p.commission ? p.commission + '%' : '-'}</td>
                     <td>
                       ${linkedDeals > 0 ? `<span class="status-badge status-negotiating">${linkedDeals}건</span>` : '<span style="color: var(--gray-400);">-</span>'}
                     </td>
@@ -5535,10 +5858,11 @@ function openProductDBModal(productId = null) {
           </div>
           <div class="form-group">
             <label class="form-label">유형</label>
-            <select class="form-select" id="pdb-type" onchange="toggleProductDBFields()">
+            <select class="form-select" id="pdb-type" disabled style="background: var(--gray-100);">
               <option value="external" ${p.supplierType !== 'inhouse' ? 'selected' : ''}>타사 (공급단가 방식)</option>
               <option value="inhouse" ${p.supplierType === 'inhouse' ? 'selected' : ''}>자사 (마진 방식)</option>
             </select>
+            <small style="color: var(--gray-500); font-size: 11px;">공급사 선택 시 자동 설정</small>
           </div>
         </div>
         
@@ -5547,25 +5871,26 @@ function openProductDBModal(productId = null) {
           <input type="text" class="form-input" id="pdb-name" value="${p.productName || ''}" required placeholder="예: 스킨케어 세트">
         </div>
         
-        <div class="form-row">
-          <div class="form-group" id="pdb-retail-group" style="${p.supplierType === 'inhouse' ? '' : 'display:none;'}">
-            <label class="form-label">소비자 정가</label>
-            <input type="number" class="form-input" id="pdb-retail" value="${p.retailPrice || ''}" placeholder="0">
-          </div>
-          <div class="form-group">
-            <label class="form-label">공구 판매가 *</label>
-            <input type="number" class="form-input" id="pdb-sale" value="${p.salePrice || ''}" required placeholder="0">
-          </div>
+        <div class="form-group">
+          <label class="form-label">정가 (V+, 원)</label>
+          <input type="number" class="form-input" id="pdb-original" value="${p.originalPrice || p.retailPrice || ''}" placeholder="소비자 정가">
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">공구 판매가 (V+, 원) *</label>
+          <input type="number" class="form-input" id="pdb-sale" value="${p.salePrice || ''}" required placeholder="공동구매 판매가" oninput="calcProductDBCommission()">
         </div>
         
         <div class="form-row">
-          <div class="form-group" id="pdb-supply-group" style="${p.supplierType !== 'inhouse' ? '' : 'display:none;'}">
-            <label class="form-label">공급단가 (V+) *</label>
-            <input type="number" class="form-input" id="pdb-supply" value="${p.supplyPrice || ''}" placeholder="VAT 포함 공급가">
+          <div class="form-group">
+            <label class="form-label">공급단가 (V+, 원)</label>
+            <input type="number" class="form-input" id="pdb-supply" value="${p.supplyPrice || ''}" placeholder="VAT 포함 공급가" oninput="calcProductDBCommission()">
+            <small style="color: var(--gray-500); font-size: 11px;">수수료와 둘 중 하나만 입력</small>
           </div>
-          <div class="form-group" id="pdb-margin-group" style="${p.supplierType === 'inhouse' ? '' : 'display:none;'}">
-            <label class="form-label">총 마진/수수료</label>
-            <input type="number" class="form-input" id="pdb-margin" value="${p.marginFee || ''}" placeholder="0">
+          <div class="form-group">
+            <label class="form-label">수수료율 (%)</label>
+            <input type="number" class="form-input" id="pdb-commission" value="${p.commission || ''}" step="0.1" placeholder="수수료" oninput="calcProductDBSupply()">
+            <small style="color: var(--gray-500); font-size: 11px;">공급단가와 둘 중 하나만 입력</small>
           </div>
         </div>
         
@@ -5579,20 +5904,32 @@ function openProductDBModal(productId = null) {
   `;
 }
 
+// 공급단가 → 수수료 자동계산
+function calcProductDBCommission() {
+  const supply = Number(document.getElementById('pdb-supply').value);
+  const sale = Number(document.getElementById('pdb-sale').value);
+  if (supply && sale && sale > 0) {
+    const commission = ((sale - supply) / sale * 100).toFixed(1);
+    document.getElementById('pdb-commission').value = commission;
+  }
+}
+
+// 수수료 → 공급단가 자동계산
+function calcProductDBSupply() {
+  const commission = Number(document.getElementById('pdb-commission').value);
+  const sale = Number(document.getElementById('pdb-sale').value);
+  if (commission && sale && sale > 0) {
+    const supply = Math.round(sale * (1 - commission / 100));
+    document.getElementById('pdb-supply').value = supply;
+  }
+}
+
 function updateProductDBSupplierInfo() {
   const select = document.getElementById('pdb-supplier');
   const option = select.options[select.selectedIndex];
   if (option && option.dataset.type) {
     document.getElementById('pdb-type').value = option.dataset.type === 'inhouse' ? 'inhouse' : 'external';
-    toggleProductDBFields();
   }
-}
-
-function toggleProductDBFields() {
-  const isInhouse = document.getElementById('pdb-type').value === 'inhouse';
-  document.getElementById('pdb-retail-group').style.display = isInhouse ? '' : 'none';
-  document.getElementById('pdb-margin-group').style.display = isInhouse ? '' : 'none';
-  document.getElementById('pdb-supply-group').style.display = isInhouse ? 'none' : '';
 }
 
 async function submitProductDBForm(e, id) {
@@ -5606,10 +5943,10 @@ async function submitProductDBForm(e, id) {
     brandName: supplier?.name || '',
     supplierType: document.getElementById('pdb-type').value,
     productName: document.getElementById('pdb-name').value,
-    retailPrice: Number(document.getElementById('pdb-retail').value) || 0,
+    originalPrice: Number(document.getElementById('pdb-original').value) || 0,
     salePrice: Number(document.getElementById('pdb-sale').value) || 0,
     supplyPrice: Number(document.getElementById('pdb-supply').value) || 0,
-    marginFee: Number(document.getElementById('pdb-margin').value) || 0,
+    commission: Number(document.getElementById('pdb-commission').value) || 0,
     updatedAt: new Date().toISOString()
   };
   
@@ -9580,50 +9917,165 @@ async function updateSupplierField(supplierId, field, value) {
   }
 }
 
+// 셀러 필드 인라인 업데이트
+async function updateSellerField(sellerId, field, value) {
+  try {
+    const sellerRef = db.collection('sellers').doc(sellerId);
+    await sellerRef.update({ [field]: value });
+    
+    // state 업데이트
+    const seller = state.sellers.find(s => s.id === sellerId);
+    if (seller) {
+      seller[field] = value;
+    }
+    
+    // 페이지 새로고침
+    renderSellers();
+  } catch (error) {
+    console.error('셀러 업데이트 오류:', error);
+    alert('업데이트 중 오류가 발생했습니다.');
+  }
+}
+
 // 공급사 서류 파일 업로드 (Base64로 저장)
 async function uploadSupplierDocument(supplierId, docType, file) {
-  if (!file) return;
-  
-  // 파일 크기 제한 (5MB)
-  if (file.size > 5 * 1024 * 1024) {
-    alert('파일 크기는 5MB 이하여야 합니다.');
+  if (!file) {
+    showToast('파일을 선택해주세요.');
     return;
   }
   
-  try {
-    const reader = new FileReader();
-    reader.onload = async function(e) {
-      const base64Data = e.target.result;
-      const fileName = file.name;
-      const fileType = file.type;
-      
-      const fieldName = docType === 'businessLicense' ? 'businessLicenseData' : 'bankAccountData';
-      const fileNameField = docType === 'businessLicense' ? 'businessLicenseFileName' : 'bankAccountFileName';
-      const fileTypeField = docType === 'businessLicense' ? 'businessLicenseFileType' : 'bankAccountFileType';
-      
-      const supplierRef = db.collection('suppliers').doc(supplierId);
-      await supplierRef.update({
-        [fieldName]: base64Data,
-        [fileNameField]: fileName,
-        [fileTypeField]: fileType
-      });
-      
-      // state 업데이트
-      const supplier = state.suppliers.find(s => s.id === supplierId);
-      if (supplier) {
-        supplier[fieldName] = base64Data;
-        supplier[fileNameField] = fileName;
-        supplier[fileTypeField] = fileType;
-      }
-      
-      alert('파일이 업로드되었습니다.');
-      renderSuppliers();
-    };
-    reader.readAsDataURL(file);
-  } catch (error) {
-    console.error('파일 업로드 오류:', error);
-    alert('파일 업로드 중 오류가 발생했습니다.');
+  console.log('업로드 시작:', { supplierId, docType, fileName: file.name, fileSize: file.size, fileType: file.type });
+  
+  // 파일 크기 제한 (10MB 원본 기준)
+  if (file.size > 10 * 1024 * 1024) {
+    showToast('파일 크기는 10MB 이하여야 합니다.');
+    return;
   }
+  
+  // 허용된 파일 형식 확인
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'];
+  if (!allowedTypes.includes(file.type)) {
+    showToast('JPG, PNG, PDF 파일만 업로드 가능합니다.');
+    return;
+  }
+  
+  showToast('파일 처리 중...');
+  
+  try {
+    let base64Data;
+    const fileName = file.name;
+    const fileType = file.type;
+    
+    // 이미지인 경우 압축
+    if (file.type.startsWith('image/') && file.type !== 'image/gif') {
+      base64Data = await compressImage(file, 800, 0.7); // 최대 800px, 품질 70%
+      console.log('이미지 압축 완료:', Math.round(base64Data.length / 1024) + 'KB');
+    } else {
+      // PDF나 GIF는 그대로
+      base64Data = await readFileAsBase64(file);
+    }
+    
+    // Firebase 문서 크기 제한 체크 (약 700KB까지 안전)
+    if (base64Data.length > 700000) {
+      showToast('파일이 너무 큽니다. 더 작은 파일을 사용해주세요.');
+      return;
+    }
+    
+    let fieldName, fileNameField, fileTypeField, checkField;
+    if (docType === 'businessLicense') {
+      fieldName = 'businessLicenseData';
+      fileNameField = 'businessLicenseFileName';
+      fileTypeField = 'businessLicenseFileType';
+      checkField = 'hasBusinessLicense';
+    } else if (docType === 'bankAccount') {
+      fieldName = 'bankAccountData';
+      fileNameField = 'bankAccountFileName';
+      fileTypeField = 'bankAccountFileType';
+      checkField = 'hasBankAccount';
+    } else if (docType === 'contract') {
+      fieldName = 'contractData';
+      fileNameField = 'contractFileName';
+      fileTypeField = 'contractFileType';
+      checkField = 'hasContract';
+    }
+    
+    const updatePayload = {
+      [fieldName]: base64Data,
+      [fileNameField]: fileName,
+      [fileTypeField]: fileType,
+      [checkField]: true,
+      updatedAt: new Date().toISOString()
+    };
+    
+    await db.collection('suppliers').doc(supplierId).update(updatePayload);
+    
+    console.log('Firebase 업데이트 완료');
+    
+    // state 업데이트
+    const supplier = state.suppliers.find(s => s.id === supplierId);
+    if (supplier) {
+      supplier[fieldName] = base64Data;
+      supplier[fileNameField] = fileName;
+      supplier[fileTypeField] = fileType;
+      supplier[checkField] = true;
+    }
+    
+    showToast('파일이 업로드되었습니다!');
+    renderSuppliers();
+  } catch (error) {
+    console.error('업로드 오류:', error);
+    showToast('업로드 실패: ' + (error.message || '알 수 없는 오류'));
+  }
+}
+
+// 이미지 압축 함수
+function compressImage(file, maxSize, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        
+        // 크기 조정
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = Math.round(height * maxSize / width);
+            width = maxSize;
+          } else {
+            width = Math.round(width * maxSize / height);
+            height = maxSize;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // JPEG로 압축
+        const compressedData = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressedData);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// 파일을 Base64로 읽기
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 // 서류 보기 (새 창에서 열기)
@@ -9631,17 +10083,30 @@ function viewDocument(supplierId, docType) {
   const supplier = state.suppliers.find(s => s.id === supplierId);
   if (!supplier) return;
   
-  const fieldName = docType === 'businessLicense' ? 'businessLicenseData' : 'bankAccountData';
-  const fileNameField = docType === 'businessLicense' ? 'businessLicenseFileName' : 'bankAccountFileName';
-  const fileTypeField = docType === 'businessLicense' ? 'businessLicenseFileType' : 'bankAccountFileType';
-  const docTitle = docType === 'businessLicense' ? '사업자등록증' : '통장사본';
+  let fieldName, fileNameField, fileTypeField, docTitle;
+  if (docType === 'businessLicense') {
+    fieldName = 'businessLicenseData';
+    fileNameField = 'businessLicenseFileName';
+    fileTypeField = 'businessLicenseFileType';
+    docTitle = '사업자등록증';
+  } else if (docType === 'bankAccount') {
+    fieldName = 'bankAccountData';
+    fileNameField = 'bankAccountFileName';
+    fileTypeField = 'bankAccountFileType';
+    docTitle = '통장사본';
+  } else if (docType === 'contract') {
+    fieldName = 'contractData';
+    fileNameField = 'contractFileName';
+    fileTypeField = 'contractFileType';
+    docTitle = '계약서';
+  }
   
   const data = supplier[fieldName];
   const fileName = supplier[fileNameField] || '문서';
   const fileType = supplier[fileTypeField] || 'image/png';
   
   if (!data) {
-    alert('첨부된 파일이 없습니다.');
+    showToast('첨부된 파일이 없습니다.');
     return;
   }
   
@@ -10507,40 +10972,85 @@ function generateSupplierStatement(settlementId) {
   if (!settlement) return showToast('정산 정보를 찾을 수 없습니다');
   
   const today = new Date().toLocaleDateString('ko-KR');
-  const products = settlement.products || [];
   
+  // 매칭되는 공급사 정산 찾기 (경영팀 시스템과 동일한 로직)
+  const supplierSettlements = state.supplierSettlements || [];
+  const matchingSupplier = supplierSettlements.find(sup => 
+    ((sup.sellerName || '').includes(settlement.sellerName || '') || (settlement.sellerName || '').includes(sup.sellerName || '')) &&
+    ((sup.brandName || '').includes(settlement.brandName || '') || (settlement.brandName || '').includes(sup.brandName || ''))
+  );
+  
+  // 상품 데이터 가져오기
+  let products = settlement.products || settlement.salesItems || [];
+  if (products.length === 0 && matchingSupplier && matchingSupplier.items) {
+    products = matchingSupplier.items;
+  }
+  
+  // 셀러명에서 닉네임만 추출
+  const sellerName = settlement.sellerName || '-';
+  const sellerParts = sellerName.split('/');
+  const sellerDisplay = sellerParts.length > 1 ? sellerParts[1] : sellerName;
+  
+  // 공급사 정산 금액 - supplierSettlements에서 우선 가져오기
+  const supplyAmount = matchingSupplier ? Number(matchingSupplier.totalSupplyAmount) || 0 : Number(settlement.supplyAmount) || 0;
+  const vatAmount = matchingSupplier ? Number(matchingSupplier.totalVatAmount) || 0 : Number(settlement.vatAmount) || 0;
+  const totalAmount = matchingSupplier ? Number(matchingSupplier.totalAmount) || 0 : Number(settlement.supplierTotalAmount) || 0;
+  const salesAmount = Number(settlement.salesAmount) || 0;
+  
+  // 상품별 행 생성
   let productRows = '';
+  let totalQty = 0;
+  let totalSalesAmount = 0;
+  
   if (products.length > 0) {
     products.forEach((p, i) => {
+      const price = Number(p.salePrice) || Number(p.price) || 0;
+      const qty = Number(p.quantity) || 0;
+      const amount = price * qty;
+      totalQty += qty;
+      totalSalesAmount += amount;
+      
       productRows += '<tr>' +
-        '<td style="padding: 10px; border: 1px solid #e5e7eb; text-align: center;">' + (i + 1) + '</td>' +
-        '<td style="padding: 10px; border: 1px solid #e5e7eb;">' + p.productName + '</td>' +
-        '<td style="padding: 10px; border: 1px solid #e5e7eb; text-align: right;">' + Number(p.supplyPrice).toLocaleString() + '원</td>' +
-        '<td style="padding: 10px; border: 1px solid #e5e7eb; text-align: center;">' + p.quantity + '</td>' +
-        '<td style="padding: 10px; border: 1px solid #e5e7eb; text-align: right;">' + (p.supplyPrice * p.quantity).toLocaleString() + '원</td>' +
+        '<td style="padding: 8px; border: 1px solid #e5e7eb; font-size: 12px;">' + (p.productName || '-') + '</td>' +
+        '<td style="padding: 8px; border: 1px solid #e5e7eb; text-align: right; font-size: 12px;">' + price.toLocaleString() + '원</td>' +
+        '<td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">' + qty + '</td>' +
+        '<td style="padding: 8px; border: 1px solid #e5e7eb; text-align: right;">' + amount.toLocaleString() + '원</td>' +
         '</tr>';
     });
+    
+    // 합계행
+    productRows += '<tr style="background: #f9fafb; font-weight: 600;">' +
+      '<td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">합계</td>' +
+      '<td style="padding: 8px; border: 1px solid #e5e7eb;"></td>' +
+      '<td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">' + totalQty + '</td>' +
+      '<td style="padding: 8px; border: 1px solid #e5e7eb; text-align: right;">' + (totalSalesAmount || salesAmount).toLocaleString() + '원</td>' +
+      '</tr>';
   } else {
-    productRows = '<tr><td colspan="5" style="padding: 20px; text-align: center; color: #6b7684;">상품 정보 없음</td></tr>';
+    productRows = '<tr><td colspan="4" style="padding: 20px; text-align: center; color: #6b7684;">상품 정보 없음</td></tr>';
   }
   
   const content = `
-    <div style="max-width: 800px; margin: 0 auto; padding: 40px; font-family: 'Malgun Gothic', sans-serif;">
+    <div style="max-width: 700px; margin: 0 auto; padding: 40px; font-family: 'Malgun Gothic', sans-serif;">
       <div style="text-align: center; margin-bottom: 40px;">
         <h1 style="font-size: 28px; margin-bottom: 8px; color: #1f2937;">공급사 정산서</h1>
         <p style="color: #6b7684;">모여라딜 | ${today}</p>
       </div>
       
+      <!-- 기본 정보 -->
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 32px;">
         <tr style="background: #fef9c3;">
           <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; width: 25%;">공급사(브랜드)</th>
           <td style="padding: 12px; border: 1px solid #e5e7eb;"><strong>${settlement.brandName}</strong></td>
-          <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; width: 25%;">셀러</th>
-          <td style="padding: 12px; border: 1px solid #e5e7eb;">${settlement.sellerName}</td>
+        </tr>
+        <tr>
+          <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; background: #f9fafb;">셀러</th>
+          <td style="padding: 12px; border: 1px solid #e5e7eb;">${sellerDisplay}</td>
         </tr>
         <tr>
           <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; background: #f9fafb;">공구기간</th>
           <td style="padding: 12px; border: 1px solid #e5e7eb;">${settlement.dealPeriod || '-'}</td>
+        </tr>
+        <tr>
           <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; background: #f9fafb;">정산일</th>
           <td style="padding: 12px; border: 1px solid #e5e7eb;">${settlement.settlementDate}</td>
         </tr>
@@ -10549,28 +11059,27 @@ function generateSupplierStatement(settlementId) {
       <h3 style="font-size: 16px; margin-bottom: 16px; color: #ca8a04;">📦 판매 상품 내역</h3>
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 32px;">
         <tr style="background: #fef9c3;">
-          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 50px;">No.</th>
-          <th style="padding: 10px; border: 1px solid #e5e7eb;">상품명</th>
-          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 100px;">공급단가(V+)</th>
-          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 80px;">수량</th>
-          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 120px;">합계</th>
+          <th style="padding: 10px; border: 1px solid #e5e7eb;">판매상품</th>
+          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 100px;">단가</th>
+          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 60px;">수량</th>
+          <th style="padding: 10px; border: 1px solid #e5e7eb; width: 120px;">판매금액</th>
         </tr>
         ${productRows}
       </table>
       
-      <h3 style="font-size: 16px; margin-bottom: 16px; color: #ca8a04;">💰 정산 금액</h3>
+      <h3 style="font-size: 16px; margin-bottom: 16px; color: #ca8a04;">💰 공급사 정산 금액</h3>
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 32px;">
         <tr>
-          <td style="padding: 12px; border: 1px solid #e5e7eb;">공급가액 (V-)</td>
-          <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">${Number(settlement.supplyAmount || 0).toLocaleString()}원</td>
+          <td style="padding: 14px; border: 1px solid #e5e7eb; background: #f9fafb; width: 50%;">공급가액</td>
+          <td style="padding: 14px; border: 1px solid #e5e7eb; text-align: right; font-weight: 600;">${supplyAmount.toLocaleString()}원</td>
         </tr>
         <tr>
-          <td style="padding: 12px; border: 1px solid #e5e7eb;">부가세 (10%)</td>
-          <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">${Number(settlement.vatAmount || 0).toLocaleString()}원</td>
+          <td style="padding: 14px; border: 1px solid #e5e7eb; background: #f9fafb;">부가세 (10%)</td>
+          <td style="padding: 14px; border: 1px solid #e5e7eb; text-align: right; font-weight: 600;">${vatAmount.toLocaleString()}원</td>
         </tr>
         <tr style="background: #fef9c3;">
-          <td style="padding: 16px; border: 1px solid #e5e7eb; font-weight: 700;">합계 정산금액 (V+)</td>
-          <td style="padding: 16px; border: 1px solid #e5e7eb; text-align: right; font-weight: 700; font-size: 18px; color: #ca8a04;">${Number(settlement.supplierTotalAmount || 0).toLocaleString()}원</td>
+          <td style="padding: 16px; border: 1px solid #e5e7eb; font-weight: 700; font-size: 15px;">합계 정산금액 (V+)</td>
+          <td style="padding: 16px; border: 1px solid #e5e7eb; text-align: right; font-weight: 700; font-size: 20px; color: #ca8a04;">${totalAmount.toLocaleString()}원</td>
         </tr>
       </table>
       
@@ -10583,6 +11092,478 @@ function generateSupplierStatement(settlementId) {
   const printWindow = window.open('', '_blank');
   printWindow.document.write('<!DOCTYPE html><html><head><title>공급사 정산서 - ' + settlement.brandName + '</title></head><body>' + content + '</body></html>');
   printWindow.document.close();
+}
+
+// ==================== 파트너 소통 관리 ====================
+function renderPartnerMessages() {
+  const app = document.getElementById('app');
+  
+  // 파트너별로 그룹화
+  const grouped = {};
+  state.partnerMessages.forEach(m => {
+    const key = `${m.partnerType}-${m.partnerId}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        partnerId: m.partnerId,
+        partnerType: m.partnerType,
+        partnerName: m.partnerName,
+        messages: [],
+        lastMessage: null,
+        unreadCount: 0
+      };
+    }
+    grouped[key].messages.push(m);
+    if (!grouped[key].lastMessage || new Date(m.createdAt) > new Date(grouped[key].lastMessage.createdAt)) {
+      grouped[key].lastMessage = m;
+    }
+    if (!m.isAdmin && !m.isRead) {
+      grouped[key].unreadCount++;
+    }
+  });
+  
+  const conversations = Object.values(grouped).sort((a, b) => 
+    new Date(b.lastMessage?.createdAt || 0) - new Date(a.lastMessage?.createdAt || 0)
+  );
+  
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">💬 파트너 소통</h1>
+      <p style="color: var(--gray-500); margin-top: 4px;">공급사/셀러와 1:1 메시지를 주고받습니다.</p>
+    </div>
+    
+    <div class="card">
+      ${conversations.length === 0 ? `
+        <div style="text-align: center; padding: 60px 20px; color: var(--gray-500);">
+          <div style="font-size: 48px; margin-bottom: 16px;">💬</div>
+          <p>아직 파트너 메시지가 없습니다.</p>
+        </div>
+      ` : `
+        <div style="display: grid; gap: 8px;">
+          ${conversations.map(c => `
+            <div onclick="openMessageThread('${c.partnerType}', '${c.partnerId}', '${c.partnerName}')" 
+                 style="display: flex; justify-content: space-between; align-items: center; padding: 16px; border: 1px solid var(--gray-200); border-radius: 12px; cursor: pointer; transition: all 0.15s; ${c.unreadCount > 0 ? 'background: var(--primary-light); border-color: var(--primary);' : ''}"
+                 onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='${c.unreadCount > 0 ? 'var(--primary-light)' : ''}'">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; background: ${c.partnerType === 'supplier' ? 'var(--info-light)' : 'var(--primary-light)'};">
+                  ${c.partnerType === 'supplier' ? '🏭' : '👤'}
+                </div>
+                <div>
+                  <div style="font-weight: 600; margin-bottom: 4px;">
+                    ${c.partnerName}
+                    <span style="font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; background: ${c.partnerType === 'supplier' ? 'var(--info-light)' : 'var(--primary-light)'}; color: ${c.partnerType === 'supplier' ? 'var(--info)' : 'var(--primary)'};">
+                      ${c.partnerType === 'supplier' ? '공급사' : '셀러'}
+                    </span>
+                  </div>
+                  <div style="font-size: 13px; color: var(--gray-500); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${c.lastMessage?.content || ''}
+                  </div>
+                </div>
+              </div>
+              <div style="text-align: right;">
+                ${c.unreadCount > 0 ? `
+                  <div style="background: var(--danger); color: white; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 12px; margin-bottom: 4px;">
+                    ${c.unreadCount}
+                  </div>
+                ` : ''}
+                <div style="font-size: 12px; color: var(--gray-400);">
+                  ${formatDateKR(c.lastMessage?.createdAt)}
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// 메시지 스레드 열기
+function openMessageThread(partnerType, partnerId, partnerName) {
+  const messages = state.partnerMessages
+    .filter(m => m.partnerId === partnerId && m.partnerType === partnerType)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  
+  // 안읽은 메시지 읽음 처리
+  messages.forEach(m => {
+    if (!m.isAdmin && !m.isRead) {
+      db.collection('partnerMessages').doc(m.id).update({ isRead: true });
+    }
+  });
+  
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 600px; height: 80vh; display: flex; flex-direction: column;">
+      <div class="modal-header" style="flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; background: ${partnerType === 'supplier' ? 'var(--info-light)' : 'var(--primary-light)'};">
+            ${partnerType === 'supplier' ? '🏭' : '👤'}
+          </div>
+          <div>
+            <h2 class="modal-title" style="margin: 0;">${partnerName}</h2>
+            <span style="font-size: 12px; color: var(--gray-500);">${partnerType === 'supplier' ? '공급사' : '셀러'}</span>
+          </div>
+        </div>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      
+      <div id="message-thread" style="flex: 1; overflow-y: auto; padding: 16px; background: var(--gray-50);">
+        ${messages.length === 0 ? `
+          <div style="text-align: center; padding: 40px; color: var(--gray-500);">메시지가 없습니다.</div>
+        ` : messages.map(msg => `
+          <div style="display: flex; flex-direction: column; align-items: ${msg.isAdmin ? 'flex-end' : 'flex-start'}; margin-bottom: 12px;">
+            <div style="max-width: 80%; padding: 12px 16px; border-radius: 16px; ${msg.isAdmin ? 'background: var(--primary); color: white; border-bottom-right-radius: 4px;' : 'background: white; border: 1px solid var(--gray-200); border-bottom-left-radius: 4px;'}">
+              <div style="font-size: 14px; line-height: 1.5;">${msg.content}</div>
+            </div>
+            <div style="font-size: 11px; color: var(--gray-400); margin-top: 4px; padding: 0 4px;">
+              ${msg.isAdmin ? '관리자' : partnerName} · ${formatDateKR(msg.createdAt)}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      
+      <div style="flex-shrink: 0; padding: 16px; border-top: 1px solid var(--gray-200); background: white;">
+        <div style="display: flex; gap: 8px;">
+          <input type="text" id="admin-message-input" class="form-input" placeholder="답변을 입력하세요..." style="flex: 1;" onkeypress="if(event.key==='Enter')sendAdminMessage('${partnerType}','${partnerId}','${partnerName}')">
+          <button class="btn btn-primary" style="flex-shrink: 0;" onclick="sendAdminMessage('${partnerType}','${partnerId}','${partnerName}')">전송</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // 스크롤 맨 아래로
+  setTimeout(() => {
+    const thread = document.getElementById('message-thread');
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, 100);
+}
+
+// 관리자 메시지 전송
+async function sendAdminMessage(partnerType, partnerId, partnerName) {
+  const input = document.getElementById('admin-message-input');
+  const content = input.value.trim();
+  if (!content) return;
+  
+  try {
+    await db.collection('partnerMessages').add({
+      partnerId: partnerId,
+      partnerType: partnerType,
+      partnerName: partnerName,
+      content: content,
+      isAdmin: true,
+      isRead: true,
+      createdAt: new Date().toISOString()
+    });
+    
+    input.value = '';
+    showToast('메시지를 전송했습니다.');
+    openMessageThread(partnerType, partnerId, partnerName);
+  } catch (e) {
+    console.error(e);
+    showToast('전송에 실패했습니다.');
+  }
+}
+
+// ==================== 공지사항 관리 ====================
+function renderPartnerNotices() {
+  const app = document.getElementById('app');
+  
+  const notices = state.partnerNotices.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  
+  app.innerHTML = `
+    <div class="page-header" style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h1 class="page-title">📢 공지사항 관리</h1>
+        <p style="color: var(--gray-500); margin-top: 4px;">파트너에게 전달할 공지사항을 관리합니다.</p>
+      </div>
+      <button class="btn btn-primary" onclick="openNoticeModal()">+ 공지 작성</button>
+    </div>
+    
+    <div class="card">
+      ${notices.length === 0 ? `
+        <div style="text-align: center; padding: 60px 20px; color: var(--gray-500);">
+          <div style="font-size: 48px; margin-bottom: 16px;">📢</div>
+          <p>등록된 공지사항이 없습니다.</p>
+        </div>
+      ` : `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">구분</th>
+              <th>제목</th>
+              <th style="width: 120px;">작성일</th>
+              <th style="width: 100px;">관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${notices.map(n => `
+              <tr>
+                <td>
+                  <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; ${n.important ? 'background: var(--danger-light); color: var(--danger);' : 'background: var(--gray-100); color: var(--gray-600);'}">
+                    ${n.important ? '중요' : '일반'}
+                  </span>
+                </td>
+                <td style="font-weight: 500;">${n.title}</td>
+                <td style="color: var(--gray-500); font-size: 13px;">${formatDateKR(n.createdAt)}</td>
+                <td>
+                  <div class="actions">
+                    <button class="btn btn-ghost btn-sm" onclick="openNoticeModal('${n.id}')">수정</button>
+                    <button class="btn btn-ghost btn-sm" style="color: var(--danger);" onclick="deleteNotice('${n.id}')">삭제</button>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    </div>
+  `;
+}
+
+// 공지사항 모달
+function openNoticeModal(noticeId) {
+  const notice = noticeId ? state.partnerNotices.find(n => n.id === noticeId) : null;
+  const isEdit = !!notice;
+  
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h2 class="modal-title">${isEdit ? '공지 수정' : '새 공지 작성'}</h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <form onsubmit="saveNotice(event, '${noticeId || ''}')">
+        <div style="padding: 20px;">
+          <div class="form-group">
+            <label class="form-label">제목 *</label>
+            <input type="text" class="form-input" id="notice-title" value="${notice?.title || ''}" placeholder="공지사항 제목" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">내용 *</label>
+            <textarea class="form-textarea" id="notice-content" rows="8" placeholder="공지사항 내용을 입력하세요..." required>${notice?.content || ''}</textarea>
+          </div>
+          <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="notice-important" ${notice?.important ? 'checked' : ''} style="width: 18px; height: 18px;">
+              <span class="form-label" style="margin: 0;">중요 공지로 표시</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+          <button type="submit" class="btn btn-primary">${isEdit ? '수정' : '등록'}</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+// 공지사항 저장
+async function saveNotice(e, noticeId) {
+  e.preventDefault();
+  
+  const data = {
+    title: document.getElementById('notice-title').value.trim(),
+    content: document.getElementById('notice-content').value.trim(),
+    important: document.getElementById('notice-important').checked,
+    updatedAt: new Date().toISOString()
+  };
+  
+  try {
+    if (noticeId) {
+      await db.collection('partnerNotices').doc(noticeId).update(data);
+    } else {
+      data.createdAt = new Date().toISOString();
+      await db.collection('partnerNotices').add(data);
+    }
+    
+    showToast('저장되었습니다.');
+    closeModal();
+  } catch (e) {
+    console.error(e);
+    showToast('저장에 실패했습니다.');
+  }
+}
+
+// 공지사항 삭제
+async function deleteNotice(noticeId) {
+  if (!confirm('이 공지사항을 삭제하시겠습니까?')) return;
+  
+  try {
+    await db.collection('partnerNotices').doc(noticeId).delete();
+    showToast('삭제되었습니다.');
+  } catch (e) {
+    console.error(e);
+    showToast('삭제에 실패했습니다.');
+  }
+}
+
+// ==================== 공구 제안 관리 ====================
+function renderDealSuggestions() {
+  const app = document.getElementById('app');
+  
+  const suggestions = state.dealSuggestions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  
+  const pending = suggestions.filter(s => s.status === 'pending');
+  const processed = suggestions.filter(s => s.status !== 'pending');
+  
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">💡 공구 제안 관리</h1>
+      <p style="color: var(--gray-500); margin-top: 4px;">셀러들의 공구 제안을 검토하고 관리합니다.</p>
+    </div>
+    
+    ${pending.length > 0 ? `
+      <div class="card" style="border: 2px solid var(--primary);">
+        <h3 style="margin-bottom: 16px; color: var(--primary);">📋 검토 대기 (${pending.length}건)</h3>
+        <div style="display: grid; gap: 12px;">
+          ${pending.map(s => renderSuggestionCard(s)).join('')}
+        </div>
+      </div>
+    ` : ''}
+    
+    <div class="card">
+      <h3 style="margin-bottom: 16px;">📁 처리 완료</h3>
+      ${processed.length === 0 ? `
+        <div style="text-align: center; padding: 40px; color: var(--gray-500);">
+          처리된 제안이 없습니다.
+        </div>
+      ` : `
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>셀러</th>
+              <th>제안 제목</th>
+              <th>브랜드/상품</th>
+              <th>상태</th>
+              <th>제안일</th>
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${processed.map(s => `
+              <tr>
+                <td>${s.sellerName}</td>
+                <td style="font-weight: 500;">${s.title}</td>
+                <td>${s.brand || '-'}</td>
+                <td>
+                  <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; ${s.status === 'approved' ? 'background: var(--success-light); color: var(--success);' : 'background: var(--danger-light); color: var(--danger);'}">
+                    ${s.status === 'approved' ? '승인' : '반려'}
+                  </span>
+                </td>
+                <td style="font-size: 13px; color: var(--gray-500);">${formatDateKR(s.createdAt)}</td>
+                <td>
+                  <button class="btn btn-ghost btn-sm" onclick="openSuggestionDetail('${s.id}')">상세</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    </div>
+  `;
+}
+
+function renderSuggestionCard(s) {
+  return `
+    <div style="padding: 16px; background: var(--gray-50); border-radius: 12px; border-left: 4px solid var(--primary);">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+        <div>
+          <span style="font-size: 12px; padding: 2px 8px; border-radius: 4px; background: var(--primary-light); color: var(--primary);">셀러: ${s.sellerName}</span>
+          <h4 style="margin: 8px 0 4px;">${s.title}</h4>
+          <p style="font-size: 13px; color: var(--gray-500);">${s.brand || ''} ${s.price ? '· ' + s.price : ''}</p>
+        </div>
+        <div style="font-size: 12px; color: var(--gray-400);">${formatDateKR(s.createdAt)}</div>
+      </div>
+      <div style="font-size: 14px; color: var(--gray-700); margin-bottom: 12px; white-space: pre-wrap; max-height: 80px; overflow: hidden;">${s.content}</div>
+      ${s.link ? `<a href="${s.link}" target="_blank" style="font-size: 13px; color: var(--info);">🔗 참고 링크</a>` : ''}
+      <div style="display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-200);">
+        <button class="btn btn-primary btn-sm" onclick="updateSuggestionStatus('${s.id}', 'approved')">✓ 승인</button>
+        <button class="btn btn-secondary btn-sm" style="color: var(--danger);" onclick="updateSuggestionStatus('${s.id}', 'rejected')">✕ 반려</button>
+        <button class="btn btn-ghost btn-sm" onclick="openSuggestionDetail('${s.id}')">상세보기</button>
+      </div>
+    </div>
+  `;
+}
+
+// 제안 상태 업데이트
+async function updateSuggestionStatus(suggestionId, status) {
+  const statusText = status === 'approved' ? '승인' : '반려';
+  if (!confirm(`이 제안을 ${statusText}하시겠습니까?`)) return;
+  
+  try {
+    await db.collection('dealSuggestions').doc(suggestionId).update({
+      status: status,
+      processedAt: new Date().toISOString()
+    });
+    showToast(`${statusText}되었습니다.`);
+  } catch (e) {
+    console.error(e);
+    showToast('처리에 실패했습니다.');
+  }
+}
+
+// 제안 상세 모달
+function openSuggestionDetail(suggestionId) {
+  const s = state.dealSuggestions.find(item => item.id === suggestionId);
+  if (!s) return;
+  
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h2 class="modal-title">💡 공구 제안 상세</h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div style="padding: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <span style="padding: 4px 10px; border-radius: 6px; font-size: 13px; background: var(--primary-light); color: var(--primary);">
+            셀러: ${s.sellerName}
+          </span>
+          <span style="padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; ${s.status === 'pending' ? 'background: var(--warning-light); color: var(--warning);' : s.status === 'approved' ? 'background: var(--success-light); color: var(--success);' : 'background: var(--danger-light); color: var(--danger);'}">
+            ${s.status === 'pending' ? '검토중' : s.status === 'approved' ? '승인' : '반려'}
+          </span>
+        </div>
+        
+        <h3 style="font-size: 18px; margin-bottom: 8px;">${s.title}</h3>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; padding: 16px; background: var(--gray-50); border-radius: 8px;">
+          <div>
+            <div style="font-size: 12px; color: var(--gray-500);">브랜드/상품</div>
+            <div style="font-weight: 500;">${s.brand || '-'}</div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: var(--gray-500);">예상 판매가</div>
+            <div style="font-weight: 500;">${s.price || '-'}</div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: var(--gray-500);">제안일</div>
+            <div>${formatDateKR(s.createdAt)}</div>
+          </div>
+          ${s.link ? `
+            <div>
+              <div style="font-size: 12px; color: var(--gray-500);">참고 링크</div>
+              <a href="${s.link}" target="_blank" style="color: var(--info);">링크 열기 →</a>
+            </div>
+          ` : ''}
+        </div>
+        
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">제안 내용</div>
+          <div style="padding: 16px; background: var(--gray-50); border-radius: 8px; white-space: pre-wrap; line-height: 1.6;">${s.content}</div>
+        </div>
+        
+        ${s.status === 'pending' ? `
+          <div style="display: flex; gap: 12px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button class="btn btn-primary" style="flex: 1;" onclick="updateSuggestionStatus('${s.id}', 'approved'); closeModal();">✓ 승인</button>
+            <button class="btn btn-secondary" style="flex: 1; color: var(--danger);" onclick="updateSuggestionStatus('${s.id}', 'rejected'); closeModal();">✕ 반려</button>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
 }
 </script>
 
