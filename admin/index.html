@@ -1201,9 +1201,6 @@
               <div class="nav-item" data-tab="cafe24Orders" onclick="switchTab('cafe24Orders')" style="font-size: 13px;">
                 <span>📦 주문 관리</span>
               </div>
-              <div class="nav-item" data-tab="cafe24Shipping" onclick="switchTab('cafe24Shipping')" style="font-size: 13px;">
-                <span>🚚 송장 등록</span>
-              </div>
               <div class="nav-item" data-tab="cafe24Stats" onclick="switchTab('cafe24Stats')" style="font-size: 13px;">
                 <span>📈 매출 통계</span>
               </div>
@@ -1301,6 +1298,30 @@ async function loadAdminPassword() {
   }
 }
 
+// 🎯 권한 체크 함수 - 게스트는 보기만 가능
+function canEdit() {
+  const user = state.currentAdmin;
+  if (!user) return false;
+  // 게스트는 수정 불가
+  if (user.role === 'guest') return false;
+  return true;
+}
+
+// 🎯 권한 없음 알림
+function showNoPermission() {
+  showToast('👀 게스트 계정은 보기만 가능합니다.');
+  return false;
+}
+
+// 🎯 권한 체크 래퍼 - 수정/삭제 기능에 사용
+function requireEditPermission(callback) {
+  if (!canEdit()) {
+    showNoPermission();
+    return;
+  }
+  callback();
+}
+
 // 로그인 상태 확인
 function checkLoginStatus() {
   const isLoggedIn = sessionStorage.getItem('moyeora_admin_logged_in') === 'true';
@@ -1364,8 +1385,49 @@ function showApp() {
     } catch (e) {}
   }
   
+  // 🎯 게스트 배너 표시
+  showGuestBannerIfNeeded();
+  
   // 사이드바 사용자 프로필 업데이트
   updateSidebarUserProfile();
+}
+
+// 🎯 게스트 배너 표시
+function showGuestBannerIfNeeded() {
+  // 기존 배너 제거
+  const existingBanner = document.getElementById('guest-banner');
+  if (existingBanner) existingBanner.remove();
+  
+  const user = state.currentAdmin || state.currentUser;
+  if (!user || user.role !== 'guest') return;
+  
+  const banner = document.createElement('div');
+  banner.id = 'guest-banner';
+  banner.innerHTML = `
+    <div style="
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(90deg, #fef3c7, #fde68a);
+      color: #92400e;
+      padding: 10px 20px;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 9999;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    ">
+      👀 게스트 모드 - 보기만 가능합니다. 등록/수정/삭제 기능은 제한됩니다.
+    </div>
+  `;
+  document.body.appendChild(banner);
+  
+  // app-wrapper에 상단 패딩 추가
+  const appWrapper = document.getElementById('app-wrapper');
+  if (appWrapper) {
+    appWrapper.style.paddingTop = '44px';
+  }
 }
 
 // 사이드바 사용자 프로필 업데이트
@@ -1377,7 +1439,7 @@ function updateSidebarUserProfile() {
   document.getElementById('userName').textContent = user.name || '-';
   
   // 역할
-  const roleText = user.role === 'admin' ? '관리자' : user.role === 'manager' ? '매니저' : '일반';
+  const roleText = user.role === 'admin' ? '관리자' : user.role === 'manager' ? '매니저' : user.role === 'guest' ? '게스트' : '일반';
   document.getElementById('userRole').textContent = roleText;
   
   // 목표 달성률 계산
@@ -1967,6 +2029,9 @@ function updateUnreadBadge() {
 
 // CRUD
 async function saveDeal(data) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   try {
     if (data.id) {
       await db.collection('deals').doc(data.id).update(data);
@@ -1983,6 +2048,9 @@ async function saveDeal(data) {
 }
 
 async function deleteDeal(id) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   if (!confirm('정말 삭제하시겠습니까?')) return;
   try {
     await db.collection('deals').doc(id).delete();
@@ -1994,6 +2062,9 @@ async function deleteDeal(id) {
 }
 
 async function saveSupplier(data) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   try {
     if (data.id) {
       await db.collection('suppliers').doc(data.id).update(data);
@@ -2009,6 +2080,9 @@ async function saveSupplier(data) {
 }
 
 async function deleteSupplier(id) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   if (!confirm('정말 삭제하시겠습니까?')) return;
   try {
     await db.collection('suppliers').doc(id).delete();
@@ -2020,6 +2094,9 @@ async function deleteSupplier(id) {
 }
 
 async function saveSeller(data) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   try {
     if (data.id) {
       await db.collection('sellers').doc(data.id).update(data);
@@ -2035,6 +2112,9 @@ async function saveSeller(data) {
 }
 
 async function deleteSeller(id) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   if (!confirm('정말 삭제하시겠습니까?')) return;
   try {
     await db.collection('sellers').doc(id).delete();
@@ -2687,6 +2767,13 @@ function openDealModal(deal = null) {
           <p style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">💡 공구 완료 후 분석 보고에 활용됩니다.</p>
         </div>
         
+        <!-- 🎯 이벤트비용 추가 -->
+        <div class="form-group">
+          <label class="form-label">이벤트비용 <span style="font-weight: 400; color: var(--gray-500);">(원)</span></label>
+          <input type="number" class="form-input" id="deal-eventCost" value="${d.eventCost || 0}" placeholder="0" min="0" step="1000">
+          <p style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">💡 체험단, 광고비, 샘플비용 등 공구 진행에 사용된 비용</p>
+        </div>
+        
         <div class="form-group">
           <label class="form-label">메모</label>
           <textarea class="form-textarea" id="deal-notes" rows="2" placeholder="추가 정보를 입력하세요">${d.notes || ''}</textarea>
@@ -3052,6 +3139,7 @@ function submitDealForm(e, id) {
     endDate: document.getElementById('deal-end').value,
     status: statusRadio ? statusRadio.value : 'negotiating',
     notes: document.getElementById('deal-notes').value,
+    eventCost: Number(document.getElementById('deal-eventCost')?.value) || 0, // 🎯 이벤트비용
     selectedProducts: selectedProducts,  // 이제 객체 배열: [{productId, productName, marginRate}]
     // 여정 체크리스트
     journeySample: document.getElementById('journey-sample')?.checked || false,
@@ -4499,7 +4587,6 @@ function render() {
     case 'dealCenter': renderDealCenter(); break;
     case 'cafe24Dashboard': renderCafe24Dashboard(); break;
     case 'cafe24Orders': renderCafe24Orders(); break;
-    case 'cafe24Shipping': renderCafe24Shipping(); break;
     case 'cafe24Stats': renderCafe24Stats(); break;
   }
 }
@@ -15018,6 +15105,10 @@ function renderTeamMembers() {
         <div style="font-size: 32px; font-weight: 700; color: var(--gray-700);">${members.filter(m => m.role === 'staff').length}</div>
         <div style="font-size: 13px; color: var(--gray-500);">일반</div>
       </div>
+      <div style="padding: 20px; background: #fef3c7; border-radius: 14px; text-align: center;">
+        <div style="font-size: 32px; font-weight: 700; color: #92400e;">${members.filter(m => m.role === 'guest').length}</div>
+        <div style="font-size: 13px; color: #92400e;">게스트</div>
+      </div>
     </div>
     
     <div class="card">
@@ -15051,8 +15142,9 @@ function renderTeamMembers() {
             ${members.map(m => {
               const roleStyle = m.role === 'admin' ? 'background: linear-gradient(145deg, #fef2f2, #fee2e2); color: #dc2626;' :
                                m.role === 'manager' ? 'background: linear-gradient(145deg, #fff8f0, #ffedd5); color: var(--primary);' :
+                               m.role === 'guest' ? 'background: linear-gradient(145deg, #fef3c7, #fde68a); color: #92400e;' :
                                'background: var(--gray-100); color: var(--gray-600);';
-              const roleText = m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : '일반';
+              const roleText = m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'guest' ? '게스트' : '일반';
               return `
                 <tr>
                   <td style="font-weight: 600;">${m.name}</td>
@@ -15134,10 +15226,14 @@ function openTeamMemberModal(memberId = null) {
           <div class="form-group">
             <label class="form-label">역할 *</label>
             <select class="form-select" id="memberRole" required>
+              <option value="guest" ${member?.role === 'guest' ? 'selected' : ''}>👀 게스트 (보기전용)</option>
               <option value="staff" ${!member?.role || member?.role === 'staff' ? 'selected' : ''}>일반</option>
               <option value="manager" ${member?.role === 'manager' ? 'selected' : ''}>매니저</option>
               <option value="admin" ${member?.role === 'admin' ? 'selected' : ''}>관리자</option>
             </select>
+            <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">
+              💡 게스트: 조회만 가능 / 일반: 기본 기능 / 매니저: 팀 관리 / 관리자: 전체 권한
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">메모</label>
@@ -15156,6 +15252,9 @@ function openTeamMemberModal(memberId = null) {
 // 팀원 저장
 async function saveTeamMember(e, memberId) {
   e.preventDefault();
+  
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
   
   const loginId = document.getElementById('memberLoginId').value.trim();
   
@@ -15194,6 +15293,9 @@ async function saveTeamMember(e, memberId) {
 
 // 팀원 삭제
 async function deleteTeamMember(memberId) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
   if (!confirm('이 팀원을 삭제하시겠습니까?')) return;
   
   try {
@@ -15788,7 +15890,7 @@ function renderSalesDashboard() {
                   ${m.name}
                   ${isMe ? `<span style="font-size: 11px; background: ${tossColors.blue}; color: white; padding: 3px 8px; border-radius: 6px; margin-left: 8px;">나</span>` : ''}
                 </div>
-                <div style="font-size: 13px; color: ${tossColors.gray500}; margin-top: 4px;">${m.loginId || '-'} · ${m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : '일반'}</div>
+                <div style="font-size: 13px; color: ${tossColors.gray500}; margin-top: 4px;">${m.loginId || '-'} · ${m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'guest' ? '게스트' : '일반'}</div>
               </div>
             </div>
             <div style="text-align: right; font-size: 12px; color: ${tossColors.gray400};">
@@ -16376,7 +16478,7 @@ function openGoalSettingModalReal() {
                 </div>
                 <div>
                   <div style="font-weight: 600;">${member.name}</div>
-                  <div style="font-size: 12px; color: var(--gray-500);">${member.role === 'admin' ? '관리자' : member.role === 'manager' ? '매니저' : '일반'}</div>
+                  <div style="font-size: 12px; color: var(--gray-500);">${member.role === 'admin' ? '관리자' : member.role === 'manager' ? '매니저' : member.role === 'guest' ? '게스트' : '일반'}</div>
                 </div>
               </div>
               <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
@@ -17130,14 +17232,19 @@ async function renderCafe24Dashboard() {
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">카페24 데이터 로딩 중...</p></div>';
   
   try {
-    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
+    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(1000).get();
     const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    // 정산 내역 로드
+    const settlementsSnapshot = await db.collection('cafe24_settlements').orderBy('period', 'desc').get();
+    const settlements = settlementsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     
     const today = new Date();
     const todayStr = today.toISOString().split('T')[0];
     const weekStart = new Date(today); weekStart.setDate(today.getDate() - today.getDay() + 1);
     const weekStartStr = weekStart.toISOString().split('T')[0];
     const monthStartStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+    const currentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
     
     const todayOrders = orders.filter(o => o.order_date && o.order_date.startsWith(todayStr));
     const weekOrders = orders.filter(o => o.order_date && o.order_date >= weekStartStr);
@@ -17147,20 +17254,111 @@ async function renderCafe24Dashboard() {
     const weekSales = weekOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
     const monthSales = monthOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
     
-    const statusCounts = { 'N00': 0, 'N10': 0, 'N20': 0, 'N21': 0, 'N22': 0, 'C00': 0 };
-    orders.forEach(o => { if (statusCounts.hasOwnProperty(o.order_status)) statusCounts[o.order_status]++; });
+    // 결제완료 건만 집계 (F = 결제완료)
+    const paidOrders = orders.filter(o => o.payment_status === 'F' || o.payment_status === '결제완료');
+    const totalPaidAmount = paidOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    
+    // 🎯 셀러별 집계
+    const sellerStats = {};
+    orders.forEach(o => {
+      const seller = o.seller_name || '(미지정)';
+      if (!sellerStats[seller]) {
+        sellerStats[seller] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, paidAmount: 0, pgFee: 0 };
+      }
+      sellerStats[seller].orderCount += 1;
+      sellerStats[seller].totalQuantity += Number(o.quantity) || 1;
+      sellerStats[seller].totalAmount += Number(o.total_amount) || 0;
+      sellerStats[seller].pgFee += Number(o.pg_fee) || 0;
+      if (o.payment_status === 'F') {
+        sellerStats[seller].paidAmount += Number(o.total_amount) || 0;
+      }
+    });
+    
+    // 🎯 공급사별 집계 (타사만)
+    const supplierStats = {};
+    orders.forEach(o => {
+      if (o.product_type === 'external' && o.supplier_name) {
+        const supplier = o.supplier_name;
+        if (!supplierStats[supplier]) {
+          supplierStats[supplier] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, pgFee: 0 };
+        }
+        supplierStats[supplier].orderCount += 1;
+        supplierStats[supplier].totalQuantity += Number(o.quantity) || 1;
+        supplierStats[supplier].totalAmount += Number(o.total_amount) || 0;
+        supplierStats[supplier].pgFee += Number(o.pg_fee) || 0;
+      }
+    });
+    
+    // 이번 달 셀러별 집계 (자사/타사 구분 포함)
+    const monthSellerStats = {};
+    monthOrders.forEach(o => {
+      const seller = o.seller_name || '(미지정)';
+      if (!monthSellerStats[seller]) {
+        monthSellerStats[seller] = { 
+          orderCount: 0, 
+          totalQuantity: 0,
+          totalAmount: 0, 
+          pgFee: 0,
+          supplierName: o.supplier_name || '', 
+          productType: o.product_type || 'inhouse',
+          sellerFullName: o.seller_full_name || ''
+        };
+      }
+      monthSellerStats[seller].orderCount += 1;
+      monthSellerStats[seller].totalQuantity += Number(o.quantity) || 1;
+      monthSellerStats[seller].totalAmount += Number(o.total_amount) || 0;
+      monthSellerStats[seller].pgFee += Number(o.pg_fee) || 0;
+    });
+    
+    // 이번 달 공급사별 집계 (타사만)
+    const monthSupplierStats = {};
+    monthOrders.forEach(o => {
+      if (o.product_type === 'external' && o.supplier_name) {
+        const supplier = o.supplier_name;
+        if (!monthSupplierStats[supplier]) {
+          monthSupplierStats[supplier] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, pgFee: 0 };
+        }
+        monthSupplierStats[supplier].orderCount += 1;
+        monthSupplierStats[supplier].totalQuantity += Number(o.quantity) || 1;
+        monthSupplierStats[supplier].totalAmount += Number(o.total_amount) || 0;
+        monthSupplierStats[supplier].pgFee += Number(o.pg_fee) || 0;
+      }
+    });
+    
+    // 🎯 전체 PG수수료 계산
+    const totalPgFee = monthOrders.reduce((sum, o) => sum + (Number(o.pg_fee) || 0), 0);
+    
+    // 이번 달 정산 상태 확인
+    const currentMonthSettlement = settlements.find(s => s.period === currentMonth);
     
     const recentOrders = orders.slice(0, 5);
     
     app.innerHTML = `
       <div class="page-header">
         <h1 class="page-title">📊 카페24 매출 대시보드</h1>
-        <p style="color: var(--gray-500); margin-top: 4px;">실시간 카페24 쇼핑몰 매출 현황</p>
-        <div style="margin-top: 12px; font-size: 13px; color: var(--gray-400);">
-          마지막 동기화: ${orders.length > 0 && orders[0].synced_at ? new Date(orders[0].synced_at).toLocaleString('ko-KR') : '-'}
-          <button onclick="renderCafe24Dashboard()" class="btn btn-sm btn-secondary" style="margin-left: 12px;">🔄 새로고침</button>
+        <p style="color: var(--gray-500); margin-top: 4px;">카페24 쇼핑몰 매출 현황 (엑셀/CSV 업로드 기반)</p>
+      </div>
+      
+      <!-- 엑셀 업로드 카드 -->
+      <div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #eff6ff, #dbeafe); border: 2px dashed #3b82f6;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+          <div>
+            <h3 style="font-size: 16px; font-weight: 600; color: #1e40af; margin-bottom: 8px;">📤 카페24 주문 데이터 업로드</h3>
+            <p style="font-size: 13px; color: #3b82f6;">카페24 → 주문관리 → 전체주문조회 → 엑셀다운로드 파일을 업로드하세요 (CSV, XLSX 지원)</p>
+          </div>
+          <div style="display: flex; gap: 12px; align-items: center;">
+            <label class="btn btn-primary" style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+              📁 파일 선택
+              <input type="file" accept=".xlsx,.xls,.csv" onchange="uploadCafe24Excel(event)" style="display: none;">
+            </label>
+            <button onclick="renderCafe24Dashboard()" class="btn btn-secondary">🔄 새로고침</button>
+          </div>
+        </div>
+        <div style="margin-top: 12px; font-size: 12px; color: var(--gray-500);">
+          마지막 업로드: ${orders.length > 0 && orders[0].synced_at ? new Date(orders[0].synced_at).toLocaleString('ko-KR') : '없음'} | 총 ${orders.length}건 저장됨
         </div>
       </div>
+      
       <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
         <div style="padding: 24px; background: linear-gradient(135deg, #3b82f6, #2563eb); border-radius: 16px; color: white;">
           <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">오늘 매출</div>
@@ -17178,22 +17376,141 @@ async function renderCafe24Dashboard() {
           <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${monthOrders.length}건</div>
         </div>
         <div style="padding: 24px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border-radius: 16px; color: white;">
-          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">전체 주문</div>
-          <div style="font-size: 28px; font-weight: 700;">${orders.length}건</div>
-          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">최근 500건 기준</div>
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">총 결제완료</div>
+          <div style="font-size: 28px; font-weight: 700;">${formatNumber(totalPaidAmount)}원</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${paidOrders.length}건</div>
+        </div>
+        <div style="padding: 24px; background: linear-gradient(135deg, #ef4444, #dc2626); border-radius: 16px; color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">PG수수료 (4%)</div>
+          <div style="font-size: 28px; font-weight: 700;">${formatNumber(totalPgFee)}원</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">카드결제 기준</div>
         </div>
       </div>
+      
+      <!-- 셀러별 정산 관리 -->
       <div class="card" style="margin-bottom: 24px;">
-        <h3 style="margin-bottom: 16px; font-size: 16px; font-weight: 600;">📦 주문 상태 현황</h3>
-        <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px;">
-          <div style="text-align: center; padding: 16px; background: #fef3c7; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #d97706;">${statusCounts['N00']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">입금대기</div></div>
-          <div style="text-align: center; padding: 16px; background: #dbeafe; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #2563eb;">${statusCounts['N10']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">상품준비</div></div>
-          <div style="text-align: center; padding: 16px; background: #e0e7ff; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #4f46e5;">${statusCounts['N20']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">배송준비</div></div>
-          <div style="text-align: center; padding: 16px; background: #d1fae5; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #059669;">${statusCounts['N21']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">배송중</div></div>
-          <div style="text-align: center; padding: 16px; background: #dcfce7; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #16a34a;">${statusCounts['N22']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">배송완료</div></div>
-          <div style="text-align: center; padding: 16px; background: #fee2e2; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #dc2626;">${statusCounts['C00']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">취소</div></div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="font-size: 16px; font-weight: 600;">👤 ${today.getFullYear()}년 ${today.getMonth() + 1}월 셀러별 정산</h3>
+          <button onclick="showCafe24SettlementHistory()" class="btn btn-secondary">📋 전체 정산 내역</button>
+        </div>
+        
+        ${Object.keys(monthSellerStats).length === 0 
+          ? '<div style="text-align: center; padding: 40px; color: var(--gray-400);">이번 달 주문 데이터가 없습니다</div>'
+          : `
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>셀러</th>
+                    <th>구분</th>
+                    <th>브랜드</th>
+                    <th style="text-align: center;">수량</th>
+                    <th style="text-align: right;">매출액</th>
+                    <th style="text-align: right;">PG수수료</th>
+                    <th style="text-align: center;">정산상태</th>
+                    <th style="text-align: center;">관리</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${Object.entries(monthSellerStats).sort((a, b) => b[1].totalAmount - a[1].totalAmount).map(([seller, stats]) => {
+                    const settlementKey = `${currentMonth}_${seller}`;
+                    const sellerSettlement = settlements.find(s => s.id === settlementKey);
+                    const isCompleted = sellerSettlement?.status === 'completed';
+                    const isExternal = stats.productType === 'external';
+                    return `
+                      <tr>
+                        <td style="font-weight: 600;">${seller}</td>
+                        <td>${isExternal 
+                          ? '<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">타사</span>' 
+                          : '<span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 11px;">자사</span>'}</td>
+                        <td><span style="font-size: 12px; color: var(--gray-600);">${stats.supplierName || '-'}</span></td>
+                        <td style="text-align: center; font-weight: 600; color: #059669;">${stats.totalQuantity}개</td>
+                        <td style="text-align: right; font-weight: 600; color: var(--primary);">${formatNumber(stats.totalAmount)}원</td>
+                        <td style="text-align: right; font-size: 12px; color: #dc2626;">${formatNumber(stats.pgFee)}원</td>
+                        <td style="text-align: center;">
+                          <span style="background: ${isCompleted ? '#dcfce7' : '#fef3c7'}; color: ${isCompleted ? '#166534' : '#92400e'}; padding: 4px 12px; border-radius: 20px; font-size: 12px;">
+                            ${isCompleted ? '✅ 완료' : '⏳ 대기'}
+                          </span>
+                        </td>
+                        <td style="text-align: center;">
+                          ${isCompleted 
+                            ? `<button onclick="cancelCafe24SellerSettlement('${currentMonth}', '${seller}')" class="btn btn-sm btn-secondary">취소</button>`
+                            : `<button onclick="completeCafe24SellerSettlement('${currentMonth}', '${seller}', ${stats.totalAmount}, ${stats.orderCount}, '${isExternal ? 'external' : 'inhouse'}', '${stats.supplierName || ''}')" class="btn btn-sm btn-primary">정산완료</button>`
+                          }
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+                <tfoot>
+                  <tr style="background: #f8fafc; font-weight: 700;">
+                    <td colspan="3">전체 합계</td>
+                    <td style="text-align: center; color: #059669;">${monthOrders.reduce((sum, o) => sum + (Number(o.quantity) || 1), 0)}개</td>
+                    <td style="text-align: right; color: var(--primary);">${formatNumber(monthSales)}원</td>
+                    <td style="text-align: right; color: #dc2626;">${formatNumber(totalPgFee)}원</td>
+                    <td colspan="2"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          `
+        }
+      </div>
+      
+      <!-- 공급사별 정산 관리 (타사만) - PG수수료 없음 (셀러 정산에서 이미 차감) -->
+      ${Object.keys(monthSupplierStats).length > 0 ? `
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">🏭 ${today.getFullYear()}년 ${today.getMonth() + 1}월 공급사별 정산 (타사)</h3>
+        <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">💡 공급사 정산에는 PG수수료가 포함되지 않습니다 (셀러 정산에서 차감)</p>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>공급사</th>
+                <th style="text-align: center;">수량</th>
+                <th style="text-align: right;">매출액</th>
+                <th style="text-align: center;">정산상태</th>
+                <th style="text-align: center;">관리</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Object.entries(monthSupplierStats).sort((a, b) => b[1].totalAmount - a[1].totalAmount).map(([supplier, stats]) => {
+                const settlementKey = `${currentMonth}_supplier_${supplier}`;
+                const supplierSettlement = settlements.find(s => s.id === settlementKey);
+                const isCompleted = supplierSettlement?.status === 'completed';
+                return `
+                  <tr>
+                    <td style="font-weight: 600;">${supplier}</td>
+                    <td style="text-align: center; font-weight: 600; color: #059669;">${stats.totalQuantity}개</td>
+                    <td style="text-align: right; font-weight: 600; color: var(--primary);">${formatNumber(stats.totalAmount)}원</td>
+                    <td style="text-align: center;">
+                      <span style="background: ${isCompleted ? '#dcfce7' : '#fef3c7'}; color: ${isCompleted ? '#166534' : '#92400e'}; padding: 4px 12px; border-radius: 20px; font-size: 12px;">
+                        ${isCompleted ? '✅ 완료' : '⏳ 대기'}
+                      </span>
+                    </td>
+                    <td style="text-align: center;">
+                      ${isCompleted 
+                        ? `<button onclick="cancelCafe24SupplierSettlement('${currentMonth}', '${supplier}')" class="btn btn-sm btn-secondary">취소</button>`
+                        : `<button onclick="completeCafe24SupplierSettlement('${currentMonth}', '${supplier}', ${stats.totalAmount}, ${stats.orderCount})" class="btn btn-sm btn-primary">정산완료</button>`
+                      }
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+            <tfoot>
+              <tr style="background: #f8fafc; font-weight: 700;">
+                <td>타사 합계</td>
+                <td style="text-align: center; color: #059669;">${Object.values(monthSupplierStats).reduce((sum, s) => sum + s.totalQuantity, 0)}개</td>
+                <td style="text-align: right; color: var(--primary);">${formatNumber(Object.values(monthSupplierStats).reduce((sum, s) => sum + s.totalAmount, 0))}원</td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
       </div>
+      ` : ''}
+      
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <h3 style="font-size: 16px; font-weight: 600;">🕐 최근 주문</h3>
@@ -17201,16 +17518,16 @@ async function renderCafe24Dashboard() {
         </div>
         <div class="table-wrapper">
           <table class="data-table">
-            <thead><tr><th>주문번호</th><th>주문일시</th><th>주문자</th><th>연락처</th><th>결제금액</th><th>상태</th></tr></thead>
+            <thead><tr><th>주문번호</th><th>주문일시</th><th>수령인</th><th>연락처</th><th>결제금액</th><th>결제상태</th></tr></thead>
             <tbody>
-              ${recentOrders.length === 0 ? '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다</td></tr>' : recentOrders.map(order => `
+              ${recentOrders.length === 0 ? '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다. 카페24에서 엑셀을 다운로드하여 업로드하세요.</td></tr>' : recentOrders.map(order => `
                 <tr>
                   <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
                   <td>${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
                   <td>${order.buyer_name || '-'}</td>
                   <td>${order.buyer_phone || '-'}</td>
                   <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
-                  <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
+                  <td>${getCafe24PaymentStatusBadge(order.payment_status)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -17222,6 +17539,569 @@ async function renderCafe24Dashboard() {
     console.error('카페24 대시보드 로딩 실패:', err);
     app.innerHTML = `<div class="page-header"><h1 class="page-title">📊 카페24 매출 대시보드</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p style="color: var(--gray-500);">데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Dashboard()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
   }
+}
+
+// 카페24 정산 완료 처리
+async function completeCafe24Settlement(period, amount, orderCount) {
+  if (!confirm(`${period} 정산을 완료 처리하시겠습니까?\n\n매출: ${formatNumber(amount)}원\n주문: ${orderCount}건`)) return;
+  
+  try {
+    await db.collection('cafe24_settlements').doc(period).set({
+      period: period,
+      amount: amount,
+      orderCount: orderCount,
+      status: 'completed',
+      settledAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    showToast(`✅ ${period} 정산 완료!`);
+    renderCafe24Dashboard();
+  } catch (err) {
+    console.error('정산 처리 실패:', err);
+    showToast('❌ 정산 처리에 실패했습니다.');
+  }
+}
+
+// 카페24 셀러별 정산 완료 (기존 매출관리에도 등록)
+async function completeCafe24SellerSettlement(period, sellerName, amount, orderCount, productType, supplierName) {
+  if (!confirm(`[${sellerName}] ${period} 정산을 완료 처리하시겠습니까?\n\n매출: ${formatNumber(amount)}원\n주문: ${orderCount}건\n구분: ${productType === 'external' ? '타사 (' + supplierName + ')' : '자사'}`)) return;
+  
+  try {
+    // 1. 카페24 정산 기록
+    const docId = `${period}_${sellerName}`;
+    await db.collection('cafe24_settlements').doc(docId).set({
+      period: period,
+      seller_name: sellerName,
+      supplier_name: supplierName || '',
+      product_type: productType,
+      amount: amount,
+      orderCount: orderCount,
+      status: 'completed',
+      settledAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    
+    // 2. 기존 매출관리 시스템(sellerSettlements)에도 등록
+    const existingSettlement = (state.sellerSettlements || []).find(s => 
+      s.sellerName === sellerName && 
+      s.period === period &&
+      s.source === 'cafe24'
+    );
+    
+    if (!existingSettlement) {
+      await db.collection('sellerSettlements').add({
+        sellerName: sellerName,
+        brandName: supplierName || '자사',
+        period: period,
+        productType: productType, // 'inhouse' or 'external'
+        salesCount: orderCount,
+        totalSalesAmount: amount,
+        source: 'cafe24', // 카페24에서 등록됨을 표시
+        isCompleted: true,
+        completedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      });
+    }
+    
+    showToast(`✅ [${sellerName}] ${period} 정산 완료! (매출관리에도 등록됨)`);
+    renderCafe24Dashboard();
+  } catch (err) {
+    console.error('정산 처리 실패:', err);
+    showToast('❌ 정산 처리에 실패했습니다.');
+  }
+}
+
+// 카페24 셀러별 정산 취소
+async function cancelCafe24SellerSettlement(period, sellerName) {
+  if (!confirm(`[${sellerName}] ${period} 정산을 취소하시겠습니까?\n\n⚠️ 매출관리 내역도 함께 삭제됩니다.`)) return;
+  
+  try {
+    // 1. 카페24 정산 삭제
+    const docId = `${period}_${sellerName}`;
+    await db.collection('cafe24_settlements').doc(docId).delete();
+    
+    // 2. 기존 매출관리에서도 삭제 (cafe24 소스인 것만)
+    const existingSettlement = (state.sellerSettlements || []).find(s => 
+      s.sellerName === sellerName && 
+      s.period === period &&
+      s.source === 'cafe24'
+    );
+    if (existingSettlement) {
+      await db.collection('sellerSettlements').doc(existingSettlement.id).delete();
+    }
+    
+    showToast(`⚠️ [${sellerName}] ${period} 정산이 취소되었습니다.`);
+    renderCafe24Dashboard();
+  } catch (err) {
+    console.error('정산 취소 실패:', err);
+    showToast('❌ 정산 취소에 실패했습니다.');
+  }
+}
+
+// 카페24 공급사별 정산 완료 (기존 매출관리에도 등록)
+async function completeCafe24SupplierSettlement(period, supplierName, amount, orderCount) {
+  if (!confirm(`[${supplierName}] ${period} 공급사 정산을 완료 처리하시겠습니까?\n\n매출: ${formatNumber(amount)}원\n주문: ${orderCount}건`)) return;
+  
+  try {
+    // 1. 카페24 공급사 정산 기록
+    const docId = `${period}_supplier_${supplierName}`;
+    await db.collection('cafe24_settlements').doc(docId).set({
+      period: period,
+      supplier_name: supplierName,
+      type: 'supplier',
+      amount: amount,
+      orderCount: orderCount,
+      status: 'completed',
+      settledAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    
+    // 2. 기존 매출관리 시스템(supplierSettlements)에도 등록
+    const existingSupplierSettlement = (state.supplierSettlements || []).find(s => 
+      s.brandName === supplierName && 
+      s.period === period &&
+      s.source === 'cafe24'
+    );
+    
+    if (!existingSupplierSettlement) {
+      await db.collection('supplierSettlements').add({
+        brandName: supplierName,
+        period: period,
+        totalAmount: amount,
+        orderCount: orderCount,
+        source: 'cafe24',
+        isCompleted: true,
+        completedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      });
+    }
+    
+    showToast(`✅ [${supplierName}] ${period} 공급사 정산 완료! (매출관리에도 등록됨)`);
+    renderCafe24Dashboard();
+  } catch (err) {
+    console.error('정산 처리 실패:', err);
+    showToast('❌ 정산 처리에 실패했습니다.');
+  }
+}
+
+// 카페24 공급사별 정산 취소
+async function cancelCafe24SupplierSettlement(period, supplierName) {
+  if (!confirm(`[${supplierName}] ${period} 공급사 정산을 취소하시겠습니까?\n\n⚠️ 매출관리 내역도 함께 삭제됩니다.`)) return;
+  
+  try {
+    // 1. 카페24 정산 삭제
+    const docId = `${period}_supplier_${supplierName}`;
+    await db.collection('cafe24_settlements').doc(docId).delete();
+    
+    // 2. 기존 매출관리에서도 삭제
+    const existingSettlement = (state.supplierSettlements || []).find(s => 
+      s.brandName === supplierName && 
+      s.period === period &&
+      s.source === 'cafe24'
+    );
+    if (existingSettlement) {
+      await db.collection('supplierSettlements').doc(existingSettlement.id).delete();
+    }
+    
+    showToast(`⚠️ [${supplierName}] ${period} 공급사 정산이 취소되었습니다.`);
+    renderCafe24Dashboard();
+  } catch (err) {
+    console.error('정산 취소 실패:', err);
+    showToast('❌ 정산 취소에 실패했습니다.');
+  }
+}
+
+// 카페24 정산 취소
+async function cancelCafe24Settlement(period) {
+  if (!confirm(`${period} 정산을 취소하시겠습니까?`)) return;
+  
+  try {
+    await db.collection('cafe24_settlements').doc(period).delete();
+    showToast(`⚠️ ${period} 정산이 취소되었습니다.`);
+    renderCafe24Dashboard();
+  } catch (err) {
+    console.error('정산 취소 실패:', err);
+    showToast('❌ 정산 취소에 실패했습니다.');
+  }
+}
+
+// 카페24 정산 내역 보기
+async function showCafe24SettlementHistory() {
+  try {
+    const snapshot = await db.collection('cafe24_settlements').orderBy('period', 'desc').get();
+    const settlements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    // 셀러 정산과 공급사 정산 분리
+    const sellerSettlements = settlements.filter(s => s.type !== 'supplier');
+    const supplierSettlements = settlements.filter(s => s.type === 'supplier');
+    
+    const totalSellerAmount = sellerSettlements.reduce((sum, s) => sum + (s.amount || 0), 0);
+    const totalSupplierAmount = supplierSettlements.reduce((sum, s) => sum + (s.amount || 0), 0);
+    
+    let html = `
+      <div style="padding: 20px; max-height: 80vh; overflow-y: auto;">
+        <h2 style="margin-bottom: 20px;">📋 카페24 정산 내역</h2>
+        
+        <!-- 셀러 정산 -->
+        <div style="margin-bottom: 24px;">
+          <div style="background: #dbeafe; padding: 16px; border-radius: 12px; margin-bottom: 16px;">
+            <div style="font-size: 14px; color: #1d4ed8;">👤 셀러 정산 완료 금액</div>
+            <div style="font-size: 28px; font-weight: 700; color: #1e40af;">${formatNumber(totalSellerAmount)}원</div>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="background: #f3f4f6;">
+                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e5e7eb;">정산월</th>
+                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e5e7eb;">셀러</th>
+                <th style="padding: 10px; text-align: center; border-bottom: 2px solid #e5e7eb;">구분</th>
+                <th style="padding: 10px; text-align: right; border-bottom: 2px solid #e5e7eb;">매출액</th>
+                <th style="padding: 10px; text-align: center; border-bottom: 2px solid #e5e7eb;">정산일</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sellerSettlements.length === 0 
+                ? '<tr><td colspan="5" style="padding: 30px; text-align: center; color: #9ca3af;">셀러 정산 내역이 없습니다</td></tr>'
+                : sellerSettlements.map(s => `
+                  <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">${s.period}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${s.seller_name || '-'}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">
+                      ${s.product_type === 'external' 
+                        ? `<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">타사</span>` 
+                        : `<span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 11px;">자사</span>`}
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: #2563eb;">${formatNumber(s.amount)}원</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${s.settledAt ? new Date(s.settledAt).toLocaleDateString('ko-KR') : '-'}</td>
+                  </tr>
+                `).join('')
+              }
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- 공급사 정산 -->
+        <div>
+          <div style="background: #fef3c7; padding: 16px; border-radius: 12px; margin-bottom: 16px;">
+            <div style="font-size: 14px; color: #92400e;">🏭 공급사 정산 완료 금액</div>
+            <div style="font-size: 28px; font-weight: 700; color: #b45309;">${formatNumber(totalSupplierAmount)}원</div>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="background: #f3f4f6;">
+                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e5e7eb;">정산월</th>
+                <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e5e7eb;">공급사</th>
+                <th style="padding: 10px; text-align: center; border-bottom: 2px solid #e5e7eb;">주문수</th>
+                <th style="padding: 10px; text-align: right; border-bottom: 2px solid #e5e7eb;">매출액</th>
+                <th style="padding: 10px; text-align: center; border-bottom: 2px solid #e5e7eb;">정산일</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${supplierSettlements.length === 0 
+                ? '<tr><td colspan="5" style="padding: 30px; text-align: center; color: #9ca3af;">공급사 정산 내역이 없습니다</td></tr>'
+                : supplierSettlements.map(s => `
+                  <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">${s.period}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${s.supplier_name || '-'}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${s.orderCount || '-'}건</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: #b45309;">${formatNumber(s.amount)}원</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${s.settledAt ? new Date(s.settledAt).toLocaleDateString('ko-KR') : '-'}</td>
+                  </tr>
+                `).join('')
+              }
+            </tbody>
+          </table>
+        </div>
+        
+        <div style="margin-top: 20px; text-align: right;">
+          <button onclick="closeModal()" class="btn btn-secondary">닫기</button>
+        </div>
+      </div>
+    `;
+    
+    openModal('카페24 정산 내역', html);
+  } catch (err) {
+    console.error('정산 내역 로드 실패:', err);
+    showToast('❌ 정산 내역을 불러오는데 실패했습니다.');
+  }
+}
+
+// ==================== 카페24 엑셀 업로드 ====================
+async function uploadCafe24Excel(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  showToast('📤 파일 처리 중...');
+  
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      let rows = [];
+      const fileName = file.name.toLowerCase();
+      
+      if (fileName.endsWith('.csv')) {
+        // CSV 파일 처리
+        const text = e.target.result;
+        rows = parseCSV(text);
+      } else {
+        // Excel 파일 처리
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(sheet);
+      }
+      
+      if (rows.length === 0) {
+        showToast('❌ 파일에 데이터가 없습니다.');
+        return;
+      }
+      
+      console.log('파싱된 첫 행:', rows[0]);
+      console.log('총 행 수:', rows.length);
+      
+      // 주문+상품별로 저장 (행별로 개별 저장)
+      const orderMap = new Map();
+      
+      // 기존 공급사 목록에서 자사/타사 매핑 생성
+      const supplierTypeMap = {};
+      (state.suppliers || []).forEach(s => {
+        supplierTypeMap[s.name.trim().toLowerCase()] = s.supplierType || 'external';
+      });
+      
+      console.log('공급사 타입 매핑:', supplierTypeMap);
+      
+      let rowIndex = 0;
+      for (const row of rows) {
+        rowIndex++;
+        
+        // 주문번호 찾기 (카페24 CSV 형식)
+        const orderId = row['주문번호'] || row['주문 번호'] || row['order_id'] || '';
+        if (!orderId) continue;
+        
+        // 상품번호 (없으면 행 인덱스 사용)
+        const productNo = row['상품번호'] || rowIndex;
+        
+        // 🔑 고유키: 주문번호_상품번호 (행별 개별 저장)
+        const docId = `${orderId}_${productNo}`;
+        
+        // 중복 체크 (이미 있으면 스킵)
+        if (orderMap.has(docId)) continue;
+        
+        // 공급사명 추출 (앞뒤 공백 제거)
+        const supplierName = (row['공급사명'] || row['공급사'] || '').trim();
+        
+        // 🎯 자사/타사 구분: 기존 공급사 DB에서 supplierType 확인
+        const supplierKey = supplierName.toLowerCase();
+        const dbSupplierType = supplierTypeMap[supplierKey];
+        const productType = dbSupplierType === 'inhouse' ? 'inhouse' : 'external';
+        
+        // 셀러명 추출 (상품명(관리용) 컬럼)
+        const rawSellerName = (row['상품명(관리용)'] || row['관리용 상품명'] || '').trim();
+        const sellerName = extractSellerName(rawSellerName);
+        
+        // 주문번호에서 날짜 추출: 20251127-0000014 → 2025-11-27
+        let orderDate = '';
+        if (orderId.length >= 8) {
+          const dateStr = orderId.substring(0, 8);
+          if (/^\d{8}$/.test(dateStr)) {
+            orderDate = `${dateStr.substring(0,4)}-${dateStr.substring(4,6)}-${dateStr.substring(6,8)}T00:00:00`;
+          }
+        }
+        
+        // 🎯 수량 파싱
+        const quantity = parseInt(row['수량'] || row['주문수량'] || 1) || 1;
+        
+        // 🎯 단가 파싱
+        const unitPrice = parseCafe24Amount(row['판매가'] || row['단가'] || 0);
+        
+        // 결제금액 파싱
+        const totalAmount = parseCafe24Amount(row['총 결제금액(KRW)'] || row['총 결제금액'] || 0);
+        const orderAmount = parseCafe24Amount(row['총 주문금액(KRW)'] || row['총 주문금액'] || 0);
+        
+        // 결제상태 (결제금액 > 0 이면 결제완료)
+        const paymentStatus = totalAmount > 0 ? 'F' : 'T';
+        
+        // 수령인 정보
+        const buyerName = row['수령인'] || row['주문자명'] || '';
+        const buyerPhone = row['수령인 휴대전화'] || row['연락처'] || '';
+        
+        // 상품명
+        const productName = row['주문상품명(기본)'] || row['주문상품명'] || '';
+        const productOption = row['주문상품명(옵션포함)'] || '';
+        
+        // 🎯 PG수수료 자동 계산 (신용카드 = 4%)
+        const paymentMethod = row['결제수단'] || '';
+        const isCard = paymentMethod.includes('카드') || paymentMethod.includes('신용') || paymentMethod.toLowerCase().includes('card');
+        const pgFeeRate = isCard ? 0.04 : 0; // 카드 4%, 그 외 0%
+        const pgFee = Math.round(totalAmount * pgFeeRate);
+        
+        orderMap.set(docId, {
+          order_id: String(orderId),
+          product_no: String(productNo),
+          order_date: orderDate,
+          supplier_name: supplierName,
+          seller_name: sellerName,
+          seller_full_name: rawSellerName,
+          product_type: productType,
+          buyer_name: buyerName,
+          buyer_phone: buyerPhone,
+          product_name: productName,
+          product_option: productOption,
+          quantity: quantity,           // 🎯 수량!
+          unit_price: unitPrice,        // 🎯 단가!
+          total_amount: totalAmount,    // 결제금액
+          order_amount: orderAmount,    // 주문금액
+          payment_status: paymentStatus,
+          payment_method: paymentMethod,
+          pg_fee_rate: pgFeeRate,       // 🎯 PG수수료율 (0.04 = 4%)
+          pg_fee: pgFee,                // 🎯 PG수수료 금액
+          shipping_address: row['수령인 주소(전체)'] || '',
+          synced_at: new Date().toISOString()
+        });
+      }
+      
+      // Firebase에 저장
+      let uploadedCount = 0;
+      let errorCount = 0;
+      
+      for (const [docId, orderData] of orderMap) {
+        try {
+          await db.collection('cafe24_orders').doc(docId).set(orderData, { merge: true });
+          uploadedCount++;
+        } catch (rowErr) {
+          console.error('저장 오류:', rowErr);
+          errorCount++;
+        }
+      }
+      
+      showToast(`✅ ${uploadedCount}건 업로드 완료!` + (errorCount > 0 ? ` (${errorCount}건 오류)` : ''));
+      renderCafe24Dashboard();
+      
+    } catch (err) {
+      console.error('파일 업로드 실패:', err);
+      showToast('❌ 파일 처리에 실패했습니다: ' + err.message);
+    }
+  };
+  
+  // CSV는 텍스트로, Excel은 바이너리로 읽기
+  if (file.name.toLowerCase().endsWith('.csv')) {
+    reader.readAsText(file, 'UTF-8');
+  } else {
+    reader.readAsArrayBuffer(file);
+  }
+  event.target.value = '';
+}
+
+// CSV 파싱 함수
+function parseCSV(text) {
+  const lines = text.split('\n');
+  if (lines.length < 2) return [];
+  
+  // BOM 제거
+  let headerLine = lines[0].replace(/^\uFEFF/, '');
+  const headers = parseCSVLine(headerLine);
+  
+  console.log('CSV 헤더:', headers);
+  
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const values = parseCSVLine(line);
+    const row = {};
+    headers.forEach((header, idx) => {
+      row[header.trim()] = values[idx] || '';
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+
+// CSV 라인 파싱 (따옴표 처리)
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+// 카페24 금액 파싱
+function parseCafe24Amount(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  // "12500.00" 또는 "12,500원" 형식 처리
+  const cleaned = String(value).replace(/[^0-9.-]/g, '');
+  return parseFloat(cleaned) || 0;
+}
+
+// 셀러명 추출 (상품명(관리용) 컬럼에서)
+// "최진영/현브로맘(0.4만)" → "현브로맘"
+// "현브로맘" → "현브로맘"
+// "코코맘(0.5만)" → "코코맘"
+function extractSellerName(raw) {
+  if (!raw) return '';
+  let name = String(raw).trim();
+  
+  // 슬래시가 있으면 뒤 부분 사용
+  if (name.includes('/')) {
+    name = name.split('/')[1];
+  }
+  
+  // 괄호가 있으면 괄호 앞까지만
+  if (name.includes('(')) {
+    name = name.split('(')[0];
+  }
+  
+  return name.trim();
+}
+
+// 카페24 주문상태 매핑
+function mapCafe24OrderStatus(status) {
+  if (!status) return 'N22';
+  const s = String(status).trim();
+  
+  if (['N00', 'N10', 'N20', 'N21', 'N22', 'C00', 'C10'].includes(s)) return s;
+  
+  if (s.includes('입금전') || s.includes('입금대기')) return 'N00';
+  if (s.includes('상품준비')) return 'N10';
+  if (s.includes('배송준비')) return 'N20';
+  if (s.includes('배송중')) return 'N21';
+  if (s.includes('배송완료')) return 'N22';
+  if (s.includes('취소')) return 'C00';
+  
+  return 'N22'; // 기본값
+}
+
+// 카페24 결제상태 매핑
+function mapCafe24PaymentStatus(status) {
+  if (!status) return 'F';
+  const s = String(status).trim();
+  
+  if (['F', 'T', 'M'].includes(s)) return s;
+  
+  if (s.includes('결제완료') || s.includes('입금완료')) return 'F';
+  if (s.includes('입금대기') || s.includes('입금전')) return 'T';
+  if (s.includes('미결제')) return 'M';
+  
+  return 'F';
 }
 
 function getCafe24OrderStatusBadge(status) {
@@ -17246,6 +18126,7 @@ async function renderCafe24Orders() {
     state.cafe24Orders = orders;
     state.cafe24FilteredOrders = orders;
     state.cafe24OrdersPage = 1;
+    state.cafe24SelectedOrders = []; // 선택 초기화
     renderCafe24OrdersUI();
   } catch (err) {
     app.innerHTML = `<div class="page-header"><h1 class="page-title">📦 카페24 주문 관리</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Orders()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
@@ -17255,39 +18136,92 @@ async function renderCafe24Orders() {
 function renderCafe24OrdersUI() {
   const app = document.getElementById('app');
   const orders = state.cafe24FilteredOrders || [];
+  const allOrders = state.cafe24Orders || [];
   const currentPage = state.cafe24OrdersPage || 1;
   const perPage = 20;
   const totalPages = Math.ceil(orders.length / perPage);
   const pageOrders = orders.slice((currentPage - 1) * perPage, currentPage * perPage);
   
+  // 셀러/공급사 목록 추출
+  const sellers = [...new Set(allOrders.map(o => o.seller_name).filter(Boolean))].sort();
+  const suppliers = [...new Set(allOrders.map(o => o.supplier_name).filter(Boolean))].sort();
+  
+  // 선택된 항목 수
+  const selectedCount = (state.cafe24SelectedOrders || []).length;
+  
   app.innerHTML = `
-    <div class="page-header"><h1 class="page-title">📦 카페24 주문 관리</h1><p style="color: var(--gray-500); margin-top: 4px;">총 ${orders.length}건의 주문</p></div>
+    <div class="page-header">
+      <h1 class="page-title">📦 카페24 주문 관리</h1>
+      <p style="color: var(--gray-500); margin-top: 4px;">총 ${orders.length}건의 주문</p>
+    </div>
     <div class="card" style="margin-bottom: 16px;">
       <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
-        <div style="flex: 1; min-width: 200px;"><input type="text" id="cafe24OrderSearch" placeholder="주문번호, 주문자, 연락처 검색..." style="width: 100%; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" onkeyup="filterCafe24Orders()"></div>
-        <select id="cafe24StatusFilter" onchange="filterCafe24Orders()" style="padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;"><option value="">전체 상태</option><option value="N00">입금대기</option><option value="N10">상품준비</option><option value="N20">배송준비</option><option value="N21">배송중</option><option value="N22">배송완료</option><option value="C00">취소</option></select>
+        <div style="flex: 1; min-width: 200px;"><input type="text" id="cafe24OrderSearch" placeholder="주문번호, 수령인, 연락처 검색..." style="width: 100%; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" onkeyup="filterCafe24Orders()"></div>
+        <select id="cafe24SellerFilter" onchange="filterCafe24Orders()" style="padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+          <option value="">전체 셀러</option>
+          ${sellers.map(s => `<option value="${s}">${s}</option>`).join('')}
+        </select>
+        <select id="cafe24SupplierFilter" onchange="filterCafe24Orders()" style="padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+          <option value="">전체 브랜드</option>
+          ${suppliers.map(s => `<option value="${s}">${s}</option>`).join('')}
+        </select>
         <select id="cafe24DateFilter" onchange="filterCafe24Orders()" style="padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;"><option value="">전체 기간</option><option value="today">오늘</option><option value="week">이번 주</option><option value="month">이번 달</option><option value="3months">최근 3개월</option></select>
-        <button onclick="renderCafe24Orders()" class="btn btn-secondary">🔄 새로고침</button>
-        <button onclick="exportCafe24OrdersToExcel()" class="btn btn-primary">📥 Excel 다운로드</button>
+        <button onclick="renderCafe24Orders()" class="btn btn-secondary">🔄</button>
+        <button onclick="exportCafe24OrdersToExcel()" class="btn btn-primary">📥 Excel</button>
+      </div>
+      
+      <!-- 선택 삭제 영역 -->
+      <div style="display: flex; gap: 12px; align-items: center; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-200);">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" id="cafe24SelectAll" onchange="toggleCafe24SelectAll()" style="width: 18px; height: 18px; cursor: pointer;">
+          <span style="font-size: 13px; color: var(--gray-600);">전체선택</span>
+        </label>
+        <span style="font-size: 13px; color: var(--gray-500);">|</span>
+        <span style="font-size: 13px; color: var(--primary); font-weight: 600;">${selectedCount}건 선택됨</span>
+        <div style="flex: 1;"></div>
+        <button onclick="deleteSelectedCafe24Orders()" class="btn btn-sm" style="background: #fee2e2; color: #dc2626;" ${selectedCount === 0 ? 'disabled' : ''}>🗑️ 선택 삭제 (${selectedCount})</button>
+        <button onclick="deleteAllCafe24Orders()" class="btn btn-sm" style="background: #ef4444; color: white;">🗑️ 전체 삭제</button>
       </div>
     </div>
     <div class="card">
       <div class="table-wrapper">
         <table class="data-table">
-          <thead><tr><th>주문번호</th><th>주문일시</th><th>주문자</th><th>연락처</th><th>이메일</th><th>결제금액</th><th>주문상태</th><th>결제상태</th></tr></thead>
+          <thead><tr>
+            <th style="width: 40px;"><input type="checkbox" id="cafe24SelectAllTable" onchange="toggleCafe24SelectAll()" ${pageOrders.length > 0 && pageOrders.every(o => (state.cafe24SelectedOrders || []).includes(o.order_id + '_' + o.product_no)) ? 'checked' : ''}></th>
+            <th>주문번호</th>
+            <th>주문일</th>
+            <th>브랜드</th>
+            <th>셀러</th>
+            <th>수령인</th>
+            <th style="text-align: center;">수량</th>
+            <th style="text-align: right;">결제금액</th>
+            <th>상태</th>
+            <th style="width: 80px;">관리</th>
+          </tr></thead>
           <tbody>
-            ${pageOrders.length === 0 ? '<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다</td></tr>' : pageOrders.map(order => `
+            ${pageOrders.length === 0 ? '<tr><td colspan="10" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다</td></tr>' : pageOrders.map(order => {
+              const docId = order.order_id + '_' + (order.product_no || '');
+              return `
               <tr>
-                <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
-                <td style="font-size: 13px;">${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
-                <td>${order.buyer_name || '-'}</td>
-                <td style="font-size: 13px;">${order.buyer_phone || '-'}</td>
-                <td style="font-size: 12px; color: var(--gray-500);">${order.buyer_email || '-'}</td>
-                <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
-                <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
+                <td><input type="checkbox" class="cafe24OrderCheckbox" value="${docId}" onchange="toggleCafe24OrderSelect('${docId}')" ${(state.cafe24SelectedOrders || []).includes(docId) ? 'checked' : ''}></td>
+                <td style="font-weight: 600; color: var(--info); font-size: 12px;">${order.order_id || '-'}</td>
+                <td style="font-size: 12px;">${order.order_date ? order.order_date.substring(0, 10) : '-'}</td>
+                <td>${order.product_type === 'external' 
+                  ? `<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">${order.supplier_name || '타사'}</span>` 
+                  : `<span style="background: #dbeafe; color: #1d4ed8; padding: 2px 6px; border-radius: 4px; font-size: 10px;">${order.supplier_name || '자사'}</span>`}</td>
+                <td><span style="background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 4px; font-size: 11px;">${order.seller_name || '-'}</span></td>
+                <td style="font-size: 12px;">${order.buyer_name || '-'}</td>
+                <td style="text-align: center; font-weight: 600;">${order.quantity || 1}</td>
+                <td style="text-align: right; font-weight: 600; font-size: 12px;">${formatNumber(order.total_amount)}원</td>
                 <td>${getCafe24PaymentStatusBadge(order.payment_status)}</td>
+                <td>
+                  <div style="display: flex; gap: 4px;">
+                    <button onclick="editCafe24Order('${docId}')" class="btn btn-sm btn-secondary" style="padding: 4px 8px; font-size: 11px;">✏️</button>
+                    <button onclick="deleteCafe24Order('${docId}')" class="btn btn-sm" style="padding: 4px 8px; font-size: 11px; background: #fee2e2; color: #dc2626;">🗑️</button>
+                  </div>
+                </td>
               </tr>
-            `).join('')}
+            `;}).join('')}
           </tbody>
         </table>
       </div>
@@ -17298,11 +18232,13 @@ function renderCafe24OrdersUI() {
 
 function filterCafe24Orders() {
   const searchText = document.getElementById('cafe24OrderSearch')?.value.toLowerCase() || '';
-  const statusFilter = document.getElementById('cafe24StatusFilter')?.value || '';
+  const sellerFilter = document.getElementById('cafe24SellerFilter')?.value || '';
+  const supplierFilter = document.getElementById('cafe24SupplierFilter')?.value || '';
   const dateFilter = document.getElementById('cafe24DateFilter')?.value || '';
   let filtered = state.cafe24Orders || [];
   if (searchText) filtered = filtered.filter(o => (o.order_id && o.order_id.toLowerCase().includes(searchText)) || (o.buyer_name && o.buyer_name.toLowerCase().includes(searchText)) || (o.buyer_phone && o.buyer_phone.includes(searchText)));
-  if (statusFilter) filtered = filtered.filter(o => o.order_status === statusFilter);
+  if (sellerFilter) filtered = filtered.filter(o => o.seller_name === sellerFilter);
+  if (supplierFilter) filtered = filtered.filter(o => o.supplier_name === supplierFilter);
   if (dateFilter) {
     const today = new Date(); let startDate = '';
     if (dateFilter === 'today') startDate = today.toISOString().split('T')[0];
@@ -17313,7 +18249,63 @@ function filterCafe24Orders() {
   }
   state.cafe24FilteredOrders = filtered;
   state.cafe24OrdersPage = 1;
+  state.cafe24SelectedOrders = []; // 필터 변경 시 선택 초기화
   renderCafe24OrdersUI();
+}
+
+// 전체 선택 토글
+function toggleCafe24SelectAll() {
+  const filtered = state.cafe24FilteredOrders || [];
+  const allIds = filtered.map(o => o.order_id + '_' + (o.product_no || ''));
+  
+  if ((state.cafe24SelectedOrders || []).length === allIds.length) {
+    state.cafe24SelectedOrders = [];
+  } else {
+    state.cafe24SelectedOrders = [...allIds];
+  }
+  renderCafe24OrdersUI();
+}
+
+// 개별 선택 토글
+function toggleCafe24OrderSelect(docId) {
+  if (!state.cafe24SelectedOrders) state.cafe24SelectedOrders = [];
+  
+  const idx = state.cafe24SelectedOrders.indexOf(docId);
+  if (idx === -1) {
+    state.cafe24SelectedOrders.push(docId);
+  } else {
+    state.cafe24SelectedOrders.splice(idx, 1);
+  }
+  renderCafe24OrdersUI();
+}
+
+// 선택된 주문 삭제
+async function deleteSelectedCafe24Orders() {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
+  const selected = state.cafe24SelectedOrders || [];
+  if (selected.length === 0) {
+    showToast('삭제할 주문을 선택해주세요.');
+    return;
+  }
+  
+  if (!confirm(`선택된 ${selected.length}건의 주문을 삭제하시겠습니까?`)) return;
+  
+  try {
+    showToast('🗑️ 삭제 중...');
+    
+    for (const docId of selected) {
+      await db.collection('cafe24_orders').doc(docId).delete();
+    }
+    
+    state.cafe24SelectedOrders = [];
+    showToast(`✅ ${selected.length}건 삭제 완료`);
+    renderCafe24Orders();
+  } catch (err) {
+    console.error('삭제 실패:', err);
+    showToast('❌ 삭제에 실패했습니다.');
+  }
 }
 
 function changeCafe24OrdersPage(page) {
@@ -17326,12 +18318,195 @@ function changeCafe24OrdersPage(page) {
 function exportCafe24OrdersToExcel() {
   const orders = state.cafe24FilteredOrders || [];
   if (orders.length === 0) { showToast('다운로드할 주문이 없습니다.'); return; }
-  const data = orders.map(o => ({ '주문번호': o.order_id || '', '주문일시': o.order_date || '', '주문자': o.buyer_name || '', '연락처': o.buyer_phone || '', '이메일': o.buyer_email || '', '결제금액': o.total_amount || 0, '주문상태': { 'N00': '입금대기', 'N10': '상품준비', 'N20': '배송준비', 'N21': '배송중', 'N22': '배송완료', 'C00': '취소' }[o.order_status] || o.order_status, '결제상태': { 'F': '결제완료', 'T': '입금대기', 'M': '미결제' }[o.payment_status] || o.payment_status }));
+  const data = orders.map(o => ({ 
+    '주문번호': o.order_id || '', 
+    '주문일': o.order_date ? o.order_date.substring(0, 10) : '', 
+    '구분': o.product_type === 'external' ? '타사' : '자사',
+    '브랜드': o.supplier_name || '', 
+    '셀러': o.seller_name || '', 
+    '상품명': o.product_name || '',
+    '수량': o.quantity || 1,
+    '단가': o.unit_price || 0,
+    '결제금액': o.total_amount || 0, 
+    '수령인': o.buyer_name || '', 
+    '연락처': o.buyer_phone || '', 
+    '결제상태': { 'F': '결제완료', 'T': '입금대기' }[o.payment_status] || o.payment_status
+  }));
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '주문목록');
   XLSX.writeFile(wb, `카페24_주문목록_${new Date().toISOString().split('T')[0]}.xlsx`);
-  showToast(`✅ ${orders.length}건 다운로드 완료`);
+}
+
+// 개별 주문 삭제
+async function deleteCafe24Order(docId) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
+  if (!confirm(`이 주문을 삭제하시겠습니까?`)) return;
+  
+  try {
+    await db.collection('cafe24_orders').doc(docId).delete();
+    showToast(`✅ 삭제 완료`);
+    renderCafe24Orders();
+  } catch (err) {
+    console.error('삭제 실패:', err);
+    showToast('❌ 삭제에 실패했습니다.');
+  }
+}
+
+// 전체 주문 삭제
+async function deleteAllCafe24Orders() {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
+  const orders = state.cafe24Orders || [];
+  if (orders.length === 0) {
+    showToast('삭제할 주문이 없습니다.');
+    return;
+  }
+  
+  if (!confirm(`⚠️ 전체 ${orders.length}건의 주문을 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.`)) return;
+  if (!confirm(`정말로 삭제하시겠습니까?`)) return;
+  
+  try {
+    showToast('🗑️ 삭제 중...');
+    
+    for (const order of orders) {
+      const docId = order.order_id + '_' + (order.product_no || '');
+      await db.collection('cafe24_orders').doc(docId).delete();
+    }
+    
+    showToast(`✅ ${orders.length}건 전체 삭제 완료`);
+    renderCafe24Orders();
+  } catch (err) {
+    console.error('전체 삭제 실패:', err);
+    showToast('❌ 삭제에 실패했습니다.');
+  }
+}
+
+// 주문 수정
+async function editCafe24Order(docId) {
+  const order = (state.cafe24Orders || []).find(o => (o.order_id + '_' + (o.product_no || '')) === docId);
+  if (!order) {
+    showToast('주문을 찾을 수 없습니다.');
+    return;
+  }
+  
+  // 셀러/공급사 목록 (기존 시스템 + 카페24 데이터)
+  const sellers = [...new Set([
+    ...(state.sellers || []).map(s => s.name),
+    ...(state.cafe24Orders || []).map(o => o.seller_name).filter(Boolean)
+  ])].sort();
+  
+  const suppliers = [...new Set([
+    ...(state.suppliers || []).map(s => s.name),
+    ...(state.cafe24Orders || []).map(o => o.supplier_name).filter(Boolean)
+  ])].sort();
+  
+  const html = `
+    <div style="padding: 20px;">
+      <h2 style="margin-bottom: 20px;">✏️ 주문 수정</h2>
+      <div style="display: grid; gap: 16px;">
+        <div>
+          <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">주문번호</label>
+          <input type="text" value="${order.order_id}" readonly style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; background: #f3f4f6;">
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">구분</label>
+            <select id="editProductType" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              <option value="inhouse" ${order.product_type !== 'external' ? 'selected' : ''}>자사</option>
+              <option value="external" ${order.product_type === 'external' ? 'selected' : ''}>타사</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">브랜드/공급사</label>
+            <input type="text" id="editSupplierName" value="${order.supplier_name || ''}" list="supplierList" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+            <datalist id="supplierList">
+              ${suppliers.map(s => `<option value="${s}">`).join('')}
+            </datalist>
+          </div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">셀러</label>
+          <input type="text" id="editSellerName" value="${order.seller_name || ''}" list="sellerList" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+          <datalist id="sellerList">
+            ${sellers.map(s => `<option value="${s}">`).join('')}
+          </datalist>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">수량</label>
+            <input type="number" id="editQuantity" value="${order.quantity || 1}" min="1" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">단가</label>
+            <input type="number" id="editUnitPrice" value="${order.unit_price || 0}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">결제금액</label>
+            <input type="number" id="editTotalAmount" value="${order.total_amount || 0}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">수령인</label>
+            <input type="text" id="editBuyerName" value="${order.buyer_name || ''}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">결제상태</label>
+            <select id="editPaymentStatus" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              <option value="T" ${order.payment_status === 'T' ? 'selected' : ''}>입금대기</option>
+              <option value="F" ${order.payment_status === 'F' ? 'selected' : ''}>결제완료</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;">
+        <button onclick="closeModal()" class="btn btn-secondary">취소</button>
+        <button onclick="saveCafe24Order('${docId}')" class="btn btn-primary">저장</button>
+      </div>
+    </div>
+  `;
+  
+  openModal('주문 수정', html);
+}
+
+// 주문 저장
+async function saveCafe24Order(docId) {
+  // 🔒 권한 체크
+  if (!canEdit()) { showNoPermission(); return; }
+  
+  try {
+    const productType = document.getElementById('editProductType').value;
+    const supplierName = document.getElementById('editSupplierName').value.trim();
+    const sellerName = document.getElementById('editSellerName').value.trim();
+    const quantity = parseInt(document.getElementById('editQuantity').value) || 1;
+    const unitPrice = parseFloat(document.getElementById('editUnitPrice').value) || 0;
+    const totalAmount = parseFloat(document.getElementById('editTotalAmount').value) || 0;
+    const buyerName = document.getElementById('editBuyerName').value.trim();
+    const paymentStatus = document.getElementById('editPaymentStatus').value;
+    
+    await db.collection('cafe24_orders').doc(docId).update({
+      product_type: productType,
+      supplier_name: supplierName,
+      seller_name: sellerName,
+      quantity: quantity,
+      unit_price: unitPrice,
+      total_amount: totalAmount,
+      buyer_name: buyerName,
+      payment_status: paymentStatus,
+      updated_at: new Date().toISOString()
+    });
+    
+    showToast('✅ 주문 수정 완료');
+    closeModal();
+    renderCafe24Orders();
+  } catch (err) {
+    console.error('수정 실패:', err);
+    showToast('❌ 수정에 실패했습니다.');
+  }
 }
 
 // ==================== 카페24 송장 등록 ====================
