@@ -1188,6 +1188,28 @@
             </div>
           </div>
           
+          <!-- 카페24 관리 섹션 -->
+          <div class="nav-section">
+            <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #2563eb, #3b82f6); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);" onclick="toggleCafe24Menu()">
+              <span style="font-weight: 600; color: white;">🛒 카페24</span>
+              <span id="cafe24-menu-arrow" style="transition: transform 0.2s; color: white; transform: rotate(180deg);">▼</span>
+            </div>
+            <div id="cafe24-submenu" style="display: block; padding-left: 8px;">
+              <div class="nav-item" data-tab="cafe24Dashboard" onclick="switchTab('cafe24Dashboard')" style="font-size: 13px;">
+                <span>📊 매출 대시보드</span>
+              </div>
+              <div class="nav-item" data-tab="cafe24Orders" onclick="switchTab('cafe24Orders')" style="font-size: 13px;">
+                <span>📦 주문 관리</span>
+              </div>
+              <div class="nav-item" data-tab="cafe24Shipping" onclick="switchTab('cafe24Shipping')" style="font-size: 13px;">
+                <span>🚚 송장 등록</span>
+              </div>
+              <div class="nav-item" data-tab="cafe24Stats" onclick="switchTab('cafe24Stats')" style="font-size: 13px;">
+                <span>📈 매출 통계</span>
+              </div>
+            </div>
+          </div>
+
           <!-- 관리자 섹션 (닫힌 상태, 비밀번호 필요) -->
           <div class="nav-section" style="margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
             <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #374151, #4b5563); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" onclick="toggleAdminMenu()">
@@ -4475,6 +4497,10 @@ function render() {
     case 'inquiries': renderInquiries(); break;
     case 'urgentSales': renderUrgentSales(); break;
     case 'dealCenter': renderDealCenter(); break;
+    case 'cafe24Dashboard': renderCafe24Dashboard(); break;
+    case 'cafe24Orders': renderCafe24Orders(); break;
+    case 'cafe24Shipping': renderCafe24Shipping(); break;
+    case 'cafe24Stats': renderCafe24Stats(); break;
   }
 }
 
@@ -17084,6 +17110,417 @@ async function migrateSettlementIds() {
     showToast('❌ 마이그레이션에 실패했습니다.');
   }
 }
+
+// ==================== 카페24 메뉴 토글 ====================
+function toggleCafe24Menu() {
+  const submenu = document.getElementById('cafe24-submenu');
+  const arrow = document.getElementById('cafe24-menu-arrow');
+  if (submenu.style.display === 'none') {
+    submenu.style.display = 'block';
+    arrow.style.transform = 'rotate(180deg)';
+  } else {
+    submenu.style.display = 'none';
+    arrow.style.transform = 'rotate(0deg)';
+  }
+}
+
+// ==================== 카페24 매출 대시보드 ====================
+async function renderCafe24Dashboard() {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">카페24 데이터 로딩 중...</p></div>';
+  
+  try {
+    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
+    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    const weekStart = new Date(today); weekStart.setDate(today.getDate() - today.getDay() + 1);
+    const weekStartStr = weekStart.toISOString().split('T')[0];
+    const monthStartStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+    
+    const todayOrders = orders.filter(o => o.order_date && o.order_date.startsWith(todayStr));
+    const weekOrders = orders.filter(o => o.order_date && o.order_date >= weekStartStr);
+    const monthOrders = orders.filter(o => o.order_date && o.order_date >= monthStartStr);
+    
+    const todaySales = todayOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    const weekSales = weekOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    const monthSales = monthOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    
+    const statusCounts = { 'N00': 0, 'N10': 0, 'N20': 0, 'N21': 0, 'N22': 0, 'C00': 0 };
+    orders.forEach(o => { if (statusCounts.hasOwnProperty(o.order_status)) statusCounts[o.order_status]++; });
+    
+    const recentOrders = orders.slice(0, 5);
+    
+    app.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">📊 카페24 매출 대시보드</h1>
+        <p style="color: var(--gray-500); margin-top: 4px;">실시간 카페24 쇼핑몰 매출 현황</p>
+        <div style="margin-top: 12px; font-size: 13px; color: var(--gray-400);">
+          마지막 동기화: ${orders.length > 0 && orders[0].synced_at ? new Date(orders[0].synced_at).toLocaleString('ko-KR') : '-'}
+          <button onclick="renderCafe24Dashboard()" class="btn btn-sm btn-secondary" style="margin-left: 12px;">🔄 새로고침</button>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+        <div style="padding: 24px; background: linear-gradient(135deg, #3b82f6, #2563eb); border-radius: 16px; color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">오늘 매출</div>
+          <div style="font-size: 28px; font-weight: 700;">${formatNumber(todaySales)}원</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${todayOrders.length}건</div>
+        </div>
+        <div style="padding: 24px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 16px; color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">이번 주 매출</div>
+          <div style="font-size: 28px; font-weight: 700;">${formatNumber(weekSales)}원</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${weekOrders.length}건</div>
+        </div>
+        <div style="padding: 24px; background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 16px; color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">이번 달 매출</div>
+          <div style="font-size: 28px; font-weight: 700;">${formatNumber(monthSales)}원</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${monthOrders.length}건</div>
+        </div>
+        <div style="padding: 24px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border-radius: 16px; color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">전체 주문</div>
+          <div style="font-size: 28px; font-weight: 700;">${orders.length}건</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">최근 500건 기준</div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 style="margin-bottom: 16px; font-size: 16px; font-weight: 600;">📦 주문 상태 현황</h3>
+        <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px;">
+          <div style="text-align: center; padding: 16px; background: #fef3c7; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #d97706;">${statusCounts['N00']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">입금대기</div></div>
+          <div style="text-align: center; padding: 16px; background: #dbeafe; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #2563eb;">${statusCounts['N10']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">상품준비</div></div>
+          <div style="text-align: center; padding: 16px; background: #e0e7ff; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #4f46e5;">${statusCounts['N20']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">배송준비</div></div>
+          <div style="text-align: center; padding: 16px; background: #d1fae5; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #059669;">${statusCounts['N21']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">배송중</div></div>
+          <div style="text-align: center; padding: 16px; background: #dcfce7; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #16a34a;">${statusCounts['N22']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">배송완료</div></div>
+          <div style="text-align: center; padding: 16px; background: #fee2e2; border-radius: 12px;"><div style="font-size: 24px; font-weight: 700; color: #dc2626;">${statusCounts['C00']}</div><div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">취소</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="font-size: 16px; font-weight: 600;">🕐 최근 주문</h3>
+          <button onclick="switchTab('cafe24Orders')" class="btn btn-sm btn-secondary">전체보기 →</button>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead><tr><th>주문번호</th><th>주문일시</th><th>주문자</th><th>연락처</th><th>결제금액</th><th>상태</th></tr></thead>
+            <tbody>
+              ${recentOrders.length === 0 ? '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다</td></tr>' : recentOrders.map(order => `
+                <tr>
+                  <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
+                  <td>${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
+                  <td>${order.buyer_name || '-'}</td>
+                  <td>${order.buyer_phone || '-'}</td>
+                  <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
+                  <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    console.error('카페24 대시보드 로딩 실패:', err);
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">📊 카페24 매출 대시보드</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p style="color: var(--gray-500);">데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Dashboard()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+  }
+}
+
+function getCafe24OrderStatusBadge(status) {
+  const statusMap = { 'N00': { label: '입금대기', color: '#d97706', bg: '#fef3c7' }, 'N10': { label: '상품준비', color: '#2563eb', bg: '#dbeafe' }, 'N20': { label: '배송준비', color: '#4f46e5', bg: '#e0e7ff' }, 'N21': { label: '배송중', color: '#059669', bg: '#d1fae5' }, 'N22': { label: '배송완료', color: '#16a34a', bg: '#dcfce7' }, 'C00': { label: '취소', color: '#dc2626', bg: '#fee2e2' } };
+  const s = statusMap[status] || { label: status || '-', color: '#6b7280', bg: '#f3f4f6' };
+  return `<span style="display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; background: ${s.bg}; color: ${s.color};">${s.label}</span>`;
+}
+
+function getCafe24PaymentStatusBadge(status) {
+  const statusMap = { 'F': { label: '결제완료', color: '#16a34a', bg: '#dcfce7' }, 'T': { label: '입금대기', color: '#d97706', bg: '#fef3c7' }, 'M': { label: '미결제', color: '#dc2626', bg: '#fee2e2' } };
+  const s = statusMap[status] || { label: status || '-', color: '#6b7280', bg: '#f3f4f6' };
+  return `<span style="display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; background: ${s.bg}; color: ${s.color};">${s.label}</span>`;
+}
+
+// ==================== 카페24 주문 관리 ====================
+async function renderCafe24Orders() {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">주문 데이터 로딩 중...</p></div>';
+  try {
+    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
+    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    state.cafe24Orders = orders;
+    state.cafe24FilteredOrders = orders;
+    state.cafe24OrdersPage = 1;
+    renderCafe24OrdersUI();
+  } catch (err) {
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">📦 카페24 주문 관리</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Orders()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+  }
+}
+
+function renderCafe24OrdersUI() {
+  const app = document.getElementById('app');
+  const orders = state.cafe24FilteredOrders || [];
+  const currentPage = state.cafe24OrdersPage || 1;
+  const perPage = 20;
+  const totalPages = Math.ceil(orders.length / perPage);
+  const pageOrders = orders.slice((currentPage - 1) * perPage, currentPage * perPage);
+  
+  app.innerHTML = `
+    <div class="page-header"><h1 class="page-title">📦 카페24 주문 관리</h1><p style="color: var(--gray-500); margin-top: 4px;">총 ${orders.length}건의 주문</p></div>
+    <div class="card" style="margin-bottom: 16px;">
+      <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+        <div style="flex: 1; min-width: 200px;"><input type="text" id="cafe24OrderSearch" placeholder="주문번호, 주문자, 연락처 검색..." style="width: 100%; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" onkeyup="filterCafe24Orders()"></div>
+        <select id="cafe24StatusFilter" onchange="filterCafe24Orders()" style="padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;"><option value="">전체 상태</option><option value="N00">입금대기</option><option value="N10">상품준비</option><option value="N20">배송준비</option><option value="N21">배송중</option><option value="N22">배송완료</option><option value="C00">취소</option></select>
+        <select id="cafe24DateFilter" onchange="filterCafe24Orders()" style="padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;"><option value="">전체 기간</option><option value="today">오늘</option><option value="week">이번 주</option><option value="month">이번 달</option><option value="3months">최근 3개월</option></select>
+        <button onclick="renderCafe24Orders()" class="btn btn-secondary">🔄 새로고침</button>
+        <button onclick="exportCafe24OrdersToExcel()" class="btn btn-primary">📥 Excel 다운로드</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead><tr><th>주문번호</th><th>주문일시</th><th>주문자</th><th>연락처</th><th>이메일</th><th>결제금액</th><th>주문상태</th><th>결제상태</th></tr></thead>
+          <tbody>
+            ${pageOrders.length === 0 ? '<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다</td></tr>' : pageOrders.map(order => `
+              <tr>
+                <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
+                <td style="font-size: 13px;">${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
+                <td>${order.buyer_name || '-'}</td>
+                <td style="font-size: 13px;">${order.buyer_phone || '-'}</td>
+                <td style="font-size: 12px; color: var(--gray-500);">${order.buyer_email || '-'}</td>
+                <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
+                <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
+                <td>${getCafe24PaymentStatusBadge(order.payment_status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${totalPages > 1 ? `<div style="display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 20px;"><button onclick="changeCafe24OrdersPage(${currentPage - 1})" class="btn btn-sm btn-secondary" ${currentPage === 1 ? 'disabled' : ''}>이전</button><span style="font-size: 14px; color: var(--gray-600);">${currentPage} / ${totalPages}</span><button onclick="changeCafe24OrdersPage(${currentPage + 1})" class="btn btn-sm btn-secondary" ${currentPage === totalPages ? 'disabled' : ''}>다음</button></div>` : ''}
+    </div>
+  `;
+}
+
+function filterCafe24Orders() {
+  const searchText = document.getElementById('cafe24OrderSearch')?.value.toLowerCase() || '';
+  const statusFilter = document.getElementById('cafe24StatusFilter')?.value || '';
+  const dateFilter = document.getElementById('cafe24DateFilter')?.value || '';
+  let filtered = state.cafe24Orders || [];
+  if (searchText) filtered = filtered.filter(o => (o.order_id && o.order_id.toLowerCase().includes(searchText)) || (o.buyer_name && o.buyer_name.toLowerCase().includes(searchText)) || (o.buyer_phone && o.buyer_phone.includes(searchText)));
+  if (statusFilter) filtered = filtered.filter(o => o.order_status === statusFilter);
+  if (dateFilter) {
+    const today = new Date(); let startDate = '';
+    if (dateFilter === 'today') startDate = today.toISOString().split('T')[0];
+    else if (dateFilter === 'week') { const ws = new Date(today); ws.setDate(today.getDate() - today.getDay() + 1); startDate = ws.toISOString().split('T')[0]; }
+    else if (dateFilter === 'month') startDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+    else if (dateFilter === '3months') { const tm = new Date(today); tm.setMonth(today.getMonth() - 3); startDate = tm.toISOString().split('T')[0]; }
+    if (startDate) filtered = filtered.filter(o => o.order_date && o.order_date >= startDate);
+  }
+  state.cafe24FilteredOrders = filtered;
+  state.cafe24OrdersPage = 1;
+  renderCafe24OrdersUI();
+}
+
+function changeCafe24OrdersPage(page) {
+  const totalPages = Math.ceil((state.cafe24FilteredOrders || []).length / 20);
+  if (page < 1 || page > totalPages) return;
+  state.cafe24OrdersPage = page;
+  renderCafe24OrdersUI();
+}
+
+function exportCafe24OrdersToExcel() {
+  const orders = state.cafe24FilteredOrders || [];
+  if (orders.length === 0) { showToast('다운로드할 주문이 없습니다.'); return; }
+  const data = orders.map(o => ({ '주문번호': o.order_id || '', '주문일시': o.order_date || '', '주문자': o.buyer_name || '', '연락처': o.buyer_phone || '', '이메일': o.buyer_email || '', '결제금액': o.total_amount || 0, '주문상태': { 'N00': '입금대기', 'N10': '상품준비', 'N20': '배송준비', 'N21': '배송중', 'N22': '배송완료', 'C00': '취소' }[o.order_status] || o.order_status, '결제상태': { 'F': '결제완료', 'T': '입금대기', 'M': '미결제' }[o.payment_status] || o.payment_status }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '주문목록');
+  XLSX.writeFile(wb, `카페24_주문목록_${new Date().toISOString().split('T')[0]}.xlsx`);
+  showToast(`✅ ${orders.length}건 다운로드 완료`);
+}
+
+// ==================== 카페24 송장 등록 ====================
+async function renderCafe24Shipping() {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">배송 데이터 로딩 중...</p></div>';
+  try {
+    const ordersSnapshot = await db.collection('cafe24_orders').where('order_status', 'in', ['N10', 'N20']).orderBy('order_date', 'desc').limit(200).get();
+    state.cafe24ShippingOrders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    renderCafe24ShippingUI();
+  } catch (err) {
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">🚚 송장번호 등록</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Shipping()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+  }
+}
+
+function renderCafe24ShippingUI() {
+  const app = document.getElementById('app');
+  const orders = state.cafe24ShippingOrders || [];
+  app.innerHTML = `
+    <div class="page-header"><h1 class="page-title">🚚 송장번호 등록</h1><p style="color: var(--gray-500); margin-top: 4px;">배송 대기 중인 주문: ${orders.length}건</p></div>
+    <div class="card" style="margin-bottom: 16px;">
+      <h3 style="margin-bottom: 16px; font-size: 16px; font-weight: 600;">📦 일괄 송장 등록</h3>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div style="padding: 20px; background: var(--gray-50); border-radius: 12px;"><div style="font-weight: 600; margin-bottom: 12px;">개별 등록</div><p style="font-size: 13px; color: var(--gray-500);">아래 목록에서 각 주문별로 택배사와 송장번호를 입력하세요.</p></div>
+        <div style="padding: 20px; background: #e0f2fe; border-radius: 12px;"><div style="font-weight: 600; margin-bottom: 12px;">Excel 일괄 등록</div><p style="font-size: 13px; color: var(--gray-600); margin-bottom: 16px;">Excel 파일로 송장번호를 일괄 등록할 수 있습니다.</p><div style="display: flex; gap: 8px;"><button onclick="downloadShippingTemplate()" class="btn btn-sm btn-secondary">📥 양식 다운로드</button><label class="btn btn-sm btn-primary" style="cursor: pointer;">📤 Excel 업로드<input type="file" accept=".xlsx,.xls" onchange="uploadShippingExcel(event)" style="display: none;"></label></div></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom: 16px;"><div style="display: flex; align-items: center; gap: 12px;"><span style="font-weight: 600;">기본 택배사:</span><select id="defaultCarrier" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 14px;"><option value="CJ대한통운">CJ대한통운</option><option value="롯데택배">롯데택배</option><option value="한진택배">한진택배</option><option value="우체국택배">우체국택배</option><option value="로젠택배">로젠택배</option></select><button onclick="applyDefaultCarrier()" class="btn btn-sm btn-secondary">전체 적용</button></div></div>
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"><h3 style="font-size: 16px; font-weight: 600;">배송 대기 주문</h3><button onclick="submitAllShipping()" class="btn btn-primary" ${orders.length === 0 ? 'disabled' : ''}>✅ 송장 일괄 등록</button></div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead><tr><th style="width: 40px;"><input type="checkbox" id="shippingSelectAll" onchange="toggleShippingSelectAll()" checked></th><th>주문번호</th><th>주문일시</th><th>주문자</th><th>연락처</th><th>결제금액</th><th>택배사</th><th>송장번호</th><th>상태</th></tr></thead>
+          <tbody>
+            ${orders.length === 0 ? '<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--gray-400);">배송 대기 중인 주문이 없습니다 🎉</td></tr>' : orders.map(order => `
+              <tr>
+                <td><input type="checkbox" class="shipping-checkbox" value="${order.order_id}" checked></td>
+                <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
+                <td style="font-size: 13px;">${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
+                <td>${order.buyer_name || '-'}</td>
+                <td style="font-size: 13px;">${order.buyer_phone || '-'}</td>
+                <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
+                <td><select class="shipping-carrier" data-order="${order.order_id}" style="padding: 6px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;"><option value="CJ대한통운">CJ대한통운</option><option value="롯데택배">롯데택배</option><option value="한진택배">한진택배</option><option value="우체국택배">우체국택배</option><option value="로젠택배">로젠택배</option></select></td>
+                <td><input type="text" class="shipping-number" data-order="${order.order_id}" placeholder="송장번호 입력" style="padding: 6px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px; width: 140px;"></td>
+                <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function applyDefaultCarrier() { const dc = document.getElementById('defaultCarrier').value; document.querySelectorAll('.shipping-carrier').forEach(s => s.value = dc); showToast(`✅ 택배사가 "${dc}"로 설정되었습니다.`); }
+function toggleShippingSelectAll() { const sa = document.getElementById('shippingSelectAll'); document.querySelectorAll('.shipping-checkbox').forEach(cb => cb.checked = sa.checked); }
+
+function downloadShippingTemplate() {
+  const orders = state.cafe24ShippingOrders || [];
+  const data = orders.map(o => ({ '주문번호': o.order_id || '', '주문자': o.buyer_name || '', '연락처': o.buyer_phone || '', '결제금액': o.total_amount || 0, '택배사': 'CJ대한통운', '송장번호': '' }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '송장등록');
+  XLSX.writeFile(wb, `송장등록_양식_${new Date().toISOString().split('T')[0]}.xlsx`);
+  showToast('✅ 송장 등록 양식이 다운로드되었습니다.');
+}
+
+async function uploadShippingExcel(event) {
+  const file = event.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+      let updatedCount = 0;
+      for (const row of rows) {
+        if (row['주문번호'] && row['송장번호']) {
+          await db.collection('cafe24_orders').doc(String(row['주문번호'])).update({ shipping_carrier: row['택배사'] || 'CJ대한통운', tracking_number: row['송장번호'], shipping_updated_at: new Date().toISOString() });
+          updatedCount++;
+        }
+      }
+      showToast(`✅ ${updatedCount}건의 송장번호가 등록되었습니다.`);
+      renderCafe24Shipping();
+    } catch (err) { showToast('❌ Excel 파일 처리에 실패했습니다.'); }
+  };
+  reader.readAsArrayBuffer(file);
+  event.target.value = '';
+}
+
+async function submitAllShipping() {
+  const checkboxes = document.querySelectorAll('.shipping-checkbox:checked');
+  if (checkboxes.length === 0) { showToast('선택된 주문이 없습니다.'); return; }
+  const updates = [];
+  checkboxes.forEach(cb => {
+    const orderId = cb.value;
+    const carrier = document.querySelector(`.shipping-carrier[data-order="${orderId}"]`)?.value;
+    const trackingNumber = document.querySelector(`.shipping-number[data-order="${orderId}"]`)?.value;
+    if (trackingNumber && trackingNumber.trim()) updates.push({ orderId, carrier: carrier || 'CJ대한통운', trackingNumber: trackingNumber.trim() });
+  });
+  if (updates.length === 0) { showToast('송장번호가 입력된 주문이 없습니다.'); return; }
+  if (!confirm(`${updates.length}건의 송장번호를 등록하시겠습니까?`)) return;
+  try {
+    const batch = db.batch();
+    for (const u of updates) batch.update(db.collection('cafe24_orders').doc(u.orderId), { shipping_carrier: u.carrier, tracking_number: u.trackingNumber, order_status: 'N21', shipping_updated_at: new Date().toISOString() });
+    await batch.commit();
+    showToast(`✅ ${updates.length}건의 송장번호가 등록되었습니다.`);
+    renderCafe24Shipping();
+  } catch (err) { showToast('❌ 송장 등록에 실패했습니다.'); }
+}
+
+// ==================== 카페24 매출 통계 ====================
+async function renderCafe24Stats() {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">통계 데이터 계산 중...</p></div>';
+  try {
+    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').get();
+    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    renderCafe24StatsUI(orders);
+  } catch (err) {
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">📈 카페24 매출 통계</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Stats()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+  }
+}
+
+function renderCafe24StatsUI(orders) {
+  const app = document.getElementById('app');
+  const dailySales = {}, monthlySales = {};
+  orders.forEach(order => { if (!order.order_date) return; const date = order.order_date.split('T')[0]; const month = date.substring(0, 7); const amount = Number(order.total_amount) || 0; dailySales[date] = (dailySales[date] || 0) + amount; monthlySales[month] = (monthlySales[month] || 0) + amount; });
+  
+  const last30Days = [], today = new Date();
+  for (let i = 29; i >= 0; i--) { const d = new Date(today); d.setDate(d.getDate() - i); const dateStr = d.toISOString().split('T')[0]; last30Days.push({ date: dateStr, label: `${d.getMonth() + 1}/${d.getDate()}`, sales: dailySales[dateStr] || 0 }); }
+  
+  const last12Months = [];
+  for (let i = 11; i >= 0; i--) { const d = new Date(today.getFullYear(), today.getMonth() - i, 1); const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; last12Months.push({ month: monthStr, label: `${d.getMonth() + 1}월`, sales: monthlySales[monthStr] || 0 }); }
+  
+  const maxDailySales = Math.max(...last30Days.map(d => d.sales), 1);
+  const maxMonthlySales = Math.max(...last12Months.map(d => d.sales), 1);
+  const totalSales = orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const avgOrderAmount = orders.length > 0 ? Math.round(totalSales / orders.length) : 0;
+  const thisMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const lastMonth = today.getMonth() === 0 ? `${today.getFullYear() - 1}-12` : `${today.getFullYear()}-${String(today.getMonth()).padStart(2, '0')}`;
+  const thisMonthSales = monthlySales[thisMonth] || 0;
+  const lastMonthSales = monthlySales[lastMonth] || 0;
+  const monthGrowth = lastMonthSales > 0 ? ((thisMonthSales - lastMonthSales) / lastMonthSales * 100).toFixed(1) : 0;
+  
+  app.innerHTML = `
+    <div class="page-header"><h1 class="page-title">📈 카페24 매출 통계</h1><p style="color: var(--gray-500); margin-top: 4px;">전체 ${orders.length}건의 주문 분석</p></div>
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+      <div style="padding: 24px; background: white; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);"><div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">총 매출</div><div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">${formatNumber(totalSales)}원</div></div>
+      <div style="padding: 24px; background: white; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);"><div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">평균 주문금액</div><div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">${formatNumber(avgOrderAmount)}원</div></div>
+      <div style="padding: 24px; background: white; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);"><div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">이번 달 매출</div><div style="font-size: 24px; font-weight: 700; color: var(--info);">${formatNumber(thisMonthSales)}원</div></div>
+      <div style="padding: 24px; background: white; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);"><div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">전월 대비</div><div style="font-size: 24px; font-weight: 700; color: ${Number(monthGrowth) >= 0 ? '#16a34a' : '#dc2626'};">${Number(monthGrowth) >= 0 ? '↑' : '↓'} ${Math.abs(monthGrowth)}%</div></div>
+    </div>
+    <div class="card" style="margin-bottom: 24px;">
+      <h3 style="margin-bottom: 20px; font-size: 16px; font-weight: 600;">📊 최근 30일 일별 매출</h3>
+      <div style="display: flex; align-items: flex-end; gap: 4px; height: 200px; padding: 0 10px;">
+        ${last30Days.map(d => { const height = maxDailySales > 0 ? (d.sales / maxDailySales * 160) : 0; return `<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;"><div style="width: 100%; background: linear-gradient(180deg, #3b82f6, #2563eb); border-radius: 4px 4px 0 0; height: ${Math.max(height, 2)}px;" title="${d.date}: ${formatNumber(d.sales)}원"></div><div style="font-size: 9px; color: var(--gray-400); transform: rotate(-45deg); white-space: nowrap;">${d.label}</div></div>`; }).join('')}
+      </div>
+    </div>
+    <div class="card" style="margin-bottom: 24px;">
+      <h3 style="margin-bottom: 20px; font-size: 16px; font-weight: 600;">📅 최근 12개월 월별 매출</h3>
+      <div style="display: flex; align-items: flex-end; gap: 12px; height: 220px; padding: 0 20px;">
+        ${last12Months.map(d => { const height = maxMonthlySales > 0 ? (d.sales / maxMonthlySales * 160) : 0; return `<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;"><div style="font-size: 11px; font-weight: 600; color: var(--gray-700);">${formatNumber(d.sales / 10000)}만</div><div style="width: 100%; background: linear-gradient(180deg, #10b981, #059669); border-radius: 6px 6px 0 0; height: ${Math.max(height, 4)}px;" title="${d.month}: ${formatNumber(d.sales)}원"></div><div style="font-size: 12px; color: var(--gray-600); font-weight: 500;">${d.label}</div></div>`; }).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"><h3 style="font-size: 16px; font-weight: 600;">📋 최근 30일 상세</h3><button onclick="exportCafe24DailyStatsToExcel()" class="btn btn-sm btn-secondary">📥 Excel 다운로드</button></div>
+      <div class="table-wrapper" style="max-height: 400px; overflow-y: auto;">
+        <table class="data-table">
+          <thead><tr><th>날짜</th><th>매출액</th><th>비중</th></tr></thead>
+          <tbody>
+            ${last30Days.slice().reverse().map(d => { const total30 = last30Days.reduce((sum, x) => sum + x.sales, 0); const percent = total30 > 0 ? (d.sales / total30 * 100).toFixed(1) : 0; return `<tr><td>${d.date}</td><td style="font-weight: 600;">${formatNumber(d.sales)}원</td><td><div style="display: flex; align-items: center; gap: 8px;"><div style="flex: 1; height: 8px; background: var(--gray-200); border-radius: 4px; overflow: hidden;"><div style="width: ${percent}%; height: 100%; background: var(--info);"></div></div><span style="font-size: 12px; color: var(--gray-500);">${percent}%</span></div></td></tr>`; }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  state.cafe24Last30Days = last30Days;
+}
+
+function exportCafe24DailyStatsToExcel() {
+  const data = (state.cafe24Last30Days || []).map(d => ({ '날짜': d.date, '매출액': d.sales }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '일별매출');
+  XLSX.writeFile(wb, `카페24_매출통계_${new Date().toISOString().split('T')[0]}.xlsx`);
+  showToast('✅ 매출 통계가 다운로드되었습니다.');
+}
+
 </script>
 
 <!-- 마진계산기 퀵배너 -->
