@@ -1047,6 +1047,28 @@
     .profit-tooltip-trigger:hover .profit-tooltip {
       display: block !important;
     }
+    
+    /* 🎯 게스트 모드 스타일 */
+    body.guest-mode input[type="checkbox"]:not([id*="filter"]):not([id*="Filter"]) {
+      pointer-events: none;
+      opacity: 0.6;
+    }
+    body.guest-mode .btn-primary:not([onclick*="download"]):not([onclick*="export"]):not([onclick*="Excel"]),
+    body.guest-mode .btn-danger,
+    body.guest-mode button[onclick*="delete"],
+    body.guest-mode button[onclick*="Delete"],
+    body.guest-mode button[onclick*="save"],
+    body.guest-mode button[onclick*="Save"],
+    body.guest-mode button[onclick*="open"][onclick*="Modal"],
+    body.guest-mode button[onclick*="edit"],
+    body.guest-mode button[onclick*="Edit"] {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    body.guest-mode input[type="file"] {
+      pointer-events: none;
+      opacity: 0.5;
+    }
   </style>
 </head>
 <body>
@@ -1398,8 +1420,14 @@ function showGuestBannerIfNeeded() {
   const existingBanner = document.getElementById('guest-banner');
   if (existingBanner) existingBanner.remove();
   
+  // 게스트 모드 클래스 제거
+  document.body.classList.remove('guest-mode');
+  
   const user = state.currentAdmin || state.currentUser;
   if (!user || user.role !== 'guest') return;
+  
+  // 🎯 게스트 모드 클래스 추가
+  document.body.classList.add('guest-mode');
   
   const banner = document.createElement('div');
   banner.id = 'guest-banner';
@@ -1428,6 +1456,101 @@ function showGuestBannerIfNeeded() {
   if (appWrapper) {
     appWrapper.style.paddingTop = '44px';
   }
+  
+  // 🎯 게스트 모드: 체크박스, 수정/삭제 버튼 클릭 차단
+  setupGuestRestrictions();
+}
+
+// 🎯 게스트 모드 제한 설정
+function setupGuestRestrictions() {
+  // 전역 클릭 이벤트 캡처
+  document.addEventListener('click', function(e) {
+    if (canEdit()) return; // 권한 있으면 통과
+    
+    const target = e.target;
+    
+    // 체크박스 클릭 차단
+    if (target.type === 'checkbox' || target.closest('label')?.querySelector('input[type="checkbox"]')) {
+      e.preventDefault();
+      e.stopPropagation();
+      showNoPermission();
+      return false;
+    }
+    
+    // 수정/삭제/등록 버튼 차단
+    const btnText = target.textContent || '';
+    const btnClass = target.className || '';
+    if (
+      btnText.includes('수정') || 
+      btnText.includes('삭제') || 
+      btnText.includes('등록') || 
+      btnText.includes('저장') ||
+      btnText.includes('추가') ||
+      btnText.includes('보내기') ||
+      btnText.includes('완료') ||
+      btnText.includes('취소') ||
+      btnClass.includes('btn-danger') ||
+      target.closest('button')?.textContent?.includes('수정') ||
+      target.closest('button')?.textContent?.includes('삭제')
+    ) {
+      // 단, 조회/검색/다운로드/닫기는 허용
+      if (
+        btnText.includes('조회') || 
+        btnText.includes('검색') || 
+        btnText.includes('다운로드') ||
+        btnText.includes('Excel') ||
+        btnText.includes('닫기') ||
+        btnText.includes('이전') ||
+        btnText.includes('다음')
+      ) {
+        return; // 허용
+      }
+      
+      if (target.tagName === 'BUTTON' || target.closest('button')) {
+        e.preventDefault();
+        e.stopPropagation();
+        showNoPermission();
+        return false;
+      }
+    }
+  }, true); // 캡처 단계에서 처리
+  
+  // 전역 change 이벤트 캡처 (체크박스, select 등)
+  document.addEventListener('change', function(e) {
+    if (canEdit()) return;
+    
+    const target = e.target;
+    if (target.type === 'checkbox' || target.tagName === 'SELECT') {
+      // 필터용 select는 허용 (검색/필터 기능)
+      if (target.id?.includes('filter') || target.id?.includes('Filter') || target.id?.includes('search')) {
+        return;
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // 체크박스 원래 상태로 되돌리기
+      if (target.type === 'checkbox') {
+        target.checked = !target.checked;
+      }
+      
+      showNoPermission();
+      return false;
+    }
+  }, true);
+  
+  // 파일 업로드 차단
+  document.addEventListener('change', function(e) {
+    if (canEdit()) return;
+    
+    if (e.target.type === 'file') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.target.value = '';
+      showNoPermission();
+      return false;
+    }
+  }, true);
 }
 
 // 사이드바 사용자 프로필 업데이트
