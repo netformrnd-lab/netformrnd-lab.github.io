@@ -1134,10 +1134,10 @@
             </div>
           </div>
           
-          <!-- 공구관리 섹션 (공구센터 통합) -->
+          <!-- 공구센터 섹션 -->
           <div class="nav-section">
             <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: #e5e7eb; padding: 8px 12px; border-radius: 6px; margin-bottom: 4px;" onclick="toggleDealMenu()">
-              <span style="font-weight: 600; color: var(--gray-700);">공구관리</span>
+              <span style="font-weight: 600; color: var(--gray-700);">공구센터</span>
               <span id="deal-menu-arrow" style="transition: transform 0.2s; transform: rotate(180deg);">▼</span>
             </div>
             <div id="deal-submenu" style="display: block; padding-left: 8px;">
@@ -1145,10 +1145,10 @@
                 <span>캘린더</span>
               </div>
               <div class="nav-item" data-tab="dealManagement" onclick="switchTab('dealManagement')" style="font-size: 13px;">
-                <span>공구 관리</span>
+                <span>공구 현황/체크리스트</span>
               </div>
               <div class="nav-item" data-tab="dealCenter" onclick="switchTab('dealCenter')" style="font-size: 13px;">
-                <span>공구 센터</span>
+                <span>공구 제안 관리</span>
               </div>
               <div class="nav-item" data-tab="settlement" onclick="switchTab('settlement')" style="font-size: 13px;">
                 <span>정산 관리</span>
@@ -5832,7 +5832,12 @@ function renderSettlement() {
   const app = document.getElementById('app');
   const today = new Date();
   
-  const completedDeals = state.deals.filter(d => d.status === 'completed');
+  // 정산 대상: status가 completed/settled이거나 endDate가 지난 모든 공구
+  const completedDeals = (state.deals || []).filter(d => {
+    const status = d.status;
+    const endDate = d.endDate ? new Date(d.endDate) : null;
+    return status === 'completed' || status === 'settled' || (endDate && endDate < today);
+  });
   const pendingSettlement = completedDeals.filter(d => !d.supplierSettled || !d.sellerSettled);
   const fullySettled = completedDeals.filter(d => d.supplierSettled && d.sellerSettled);
   
@@ -6004,7 +6009,6 @@ function renderSettlement() {
 }
 
 // ========== 카페24 매출 연동 ==========
-let cafe24UploadedData = [];
 
 function openCafe24MappingModal() {
   // 완료/진행완료 공구 목록 (매핑 대상)
@@ -6016,9 +6020,9 @@ function openCafe24MappingModal() {
   const m = document.getElementById('modal');
   m.style.display = 'flex';
   m.innerHTML = `
-    <div class="modal-content" style="max-width: 900px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column;">
+    <div class="modal-content" style="max-width: 1000px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column;">
       <div class="modal-header" style="background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; margin: -24px -24px 0 -24px; padding: 16px 24px; border-radius: 12px 12px 0 0;">
-        <h2 class="modal-title" style="color: white;">📊 카페24 매출 연동</h2>
+        <h2 class="modal-title" style="color: white;">📊 카페24 매출 자동 분류 & 매핑</h2>
         <button onclick="document.getElementById('modal').style.display='none'" style="background: none; border: none; color: white; font-size: 24px; cursor: pointer;">×</button>
       </div>
       
@@ -6035,86 +6039,52 @@ function openCafe24MappingModal() {
               📥 엑셀 파일 선택
             </button>
             <p style="margin-top: 12px; font-size: 12px; color: var(--gray-500);">
-              카페24 관리자 → 주문관리 → 전체주문조회 → 엑셀 다운로드
+              카페24 관리자 → 주문관리 → 전체주문조회 → 엑셀 다운로드<br>
+              <strong>"상품명(관리용)"</strong> 컬럼 기준으로 자동 분류됩니다
             </p>
             <div id="cafe24UploadStatus" style="margin-top: 12px;"></div>
           </div>
         </div>
         
-        <!-- STEP 2: 공구 선택 -->
-        <div style="margin-bottom: 24px;">
+        <!-- STEP 2: 자동 분류 결과 & 공구 매핑 -->
+        <div id="cafe24GroupSection" style="display: none; margin-bottom: 24px;">
           <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
             <span style="background: #3b82f6; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">2</span>
-            매핑할 공구 선택
+            자동 분류 결과 → 공구 매핑
           </div>
-          
-          ${completedDeals.length === 0 ? `
-            <div style="background: var(--gray-50); border-radius: 12px; padding: 24px; text-align: center; color: var(--gray-500);">
-              완료된 공구가 없습니다. 공구 기간이 종료된 후 매핑할 수 있습니다.
-            </div>
-          ` : `
-            <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--gray-200); border-radius: 12px;">
-              <table class="data-table" style="margin: 0;">
-                <thead style="position: sticky; top: 0; background: white;">
-                  <tr>
-                    <th style="width: 40px;">선택</th>
-                    <th>공구명</th>
-                    <th>셀러</th>
-                    <th>기간</th>
-                    <th>현재 매출</th>
-                    <th>상태</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${completedDeals.map(d => {
-                    const seller = state.sellers.find(s => s.id === d.sellerId);
-                    const hasCafe24Data = d.cafe24Mapped;
-                    return `
-                      <tr style="${hasCafe24Data ? 'background: #dcfce7;' : ''}">
-                        <td style="text-align: center;">
-                          <input type="radio" name="mappingDeal" value="${d.id}" ${hasCafe24Data ? 'disabled' : ''}>
-                        </td>
-                        <td><strong>${d.title || d.brandName || '-'}</strong></td>
-                        <td>${seller?.name || '-'}</td>
-                        <td style="font-size: 11px;">${formatDateKR(d.startDate)} ~ ${formatDateKR(d.endDate)}</td>
-                        <td style="font-weight: 600; color: ${d.totalSales ? 'var(--success)' : 'var(--gray-400)'};">
-                          ${d.totalSales ? formatNumber(d.totalSales) + '원' : '-'}
-                        </td>
-                        <td>
-                          ${hasCafe24Data ? '<span style="color: var(--success); font-size: 11px;">✅ 연동됨</span>' : '<span style="color: var(--gray-400); font-size: 11px;">미연동</span>'}
-                        </td>
-                      </tr>
-                    `;
-                  }).join('')}
-                </tbody>
-              </table>
-            </div>
-          `}
+          <div id="cafe24GroupList" style="display: grid; gap: 12px;"></div>
         </div>
         
-        <!-- STEP 3: 매핑 미리보기 -->
-        <div id="cafe24MappingPreview" style="display: none; margin-bottom: 24px;">
+        <!-- STEP 3: 정산 미리보기 -->
+        <div id="cafe24SettlementPreview" style="display: none; margin-bottom: 24px;">
           <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
             <span style="background: #3b82f6; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">3</span>
-            매핑 미리보기
+            정산 미리보기
           </div>
-          <div id="cafe24PreviewContent" style="background: var(--gray-50); border-radius: 12px; padding: 16px;"></div>
+          <div id="cafe24SettlementContent"></div>
         </div>
       </div>
       
-      <div style="border-top: 1px solid var(--gray-200); padding: 16px 0 0 0; display: flex; justify-content: flex-end; gap: 12px;">
-        <button onclick="document.getElementById('modal').style.display='none'" style="padding: 10px 20px; background: var(--gray-100); color: var(--gray-700); border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
-          취소
-        </button>
-        <button id="cafe24MappingBtn" onclick="applyCafe24Mapping()" style="padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;" disabled>
-          매핑 적용
-        </button>
+      <div style="border-top: 1px solid var(--gray-200); padding: 16px 0 0 0; display: flex; justify-content: space-between; align-items: center;">
+        <div id="cafe24MappingStatus" style="font-size: 13px; color: var(--gray-500);"></div>
+        <div style="display: flex; gap: 12px;">
+          <button onclick="document.getElementById('modal').style.display='none'" style="padding: 10px 20px; background: var(--gray-100); color: var(--gray-700); border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+            취소
+          </button>
+          <button id="cafe24MappingBtn" onclick="applyCafe24Mapping()" style="padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;" disabled>
+            일괄 매핑 적용
+          </button>
+        </div>
       </div>
     </div>
   `;
 }
 
-// 카페24 엑셀 파싱
+// 카페24 데이터 저장용
+let cafe24UploadedData = [];
+let cafe24GroupedData = {};
+
+// 카페24 엑셀 파싱 (자동 분류)
 async function parseCafe24Excel(input) {
   const file = input.files[0];
   if (!file) return;
@@ -6134,54 +6104,66 @@ async function parseCafe24Excel(input) {
     }
     
     // 헤더 분석 (카페24 기본 양식 기준)
-    const headers = rows[0];
-    const orderIdIdx = headers.findIndex(h => h && (h.includes('주문번호') || h.includes('order')));
-    const productIdx = headers.findIndex(h => h && (h.includes('상품명') || h.includes('product')));
-    const qtyIdx = headers.findIndex(h => h && (h.includes('수량') || h.includes('qty')));
-    const priceIdx = headers.findIndex(h => h && (h.includes('결제금액') || h.includes('판매가') || h.includes('price')));
-    const dateIdx = headers.findIndex(h => h && (h.includes('주문일') || h.includes('date')));
+    const headers = rows[0].map(h => String(h || '').trim());
+    const productNameIdx = headers.findIndex(h => h.includes('상품명(관리용)') || h.includes('상품명'));
+    const supplierIdx = headers.findIndex(h => h.includes('공급사'));
+    const orderIdIdx = headers.findIndex(h => h.includes('주문번호'));
+    const qtyIdx = headers.findIndex(h => h.includes('수량'));
+    const totalPriceIdx = headers.findIndex(h => h.includes('총 결제금액') || h.includes('결제금액'));
+    const unitPriceIdx = headers.findIndex(h => h.includes('판매가'));
     
-    // 데이터 파싱
+    // 데이터 파싱 & 그룹화
     cafe24UploadedData = [];
-    let totalQty = 0;
-    let totalSales = 0;
+    cafe24GroupedData = {};
     
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (!row || row.length === 0) continue;
       
+      const productName = String(row[productNameIdx] || '').trim();
+      const supplier = String(row[supplierIdx] || '').trim();
       const qty = parseInt(row[qtyIdx]) || 1;
-      const price = parseInt(String(row[priceIdx]).replace(/[^0-9]/g, '')) || 0;
+      const totalPrice = parseInt(String(row[totalPriceIdx] || '0').replace(/[^0-9]/g, '')) || 0;
+      const orderId = String(row[orderIdIdx] || '');
       
-      cafe24UploadedData.push({
-        orderId: row[orderIdIdx] || '',
-        product: row[productIdx] || '',
-        qty: qty,
-        price: price,
-        date: row[dateIdx] || ''
-      });
+      if (!productName) continue;
       
-      totalQty += qty;
-      totalSales += price;
+      // 그룹 키 생성 (상품명 기준)
+      const groupKey = productName;
+      
+      if (!cafe24GroupedData[groupKey]) {
+        cafe24GroupedData[groupKey] = {
+          productName: productName,
+          supplier: supplier,
+          orders: [],
+          totalQty: 0,
+          totalSales: 0,
+          mappedDealId: null
+        };
+      }
+      
+      cafe24GroupedData[groupKey].orders.push({ orderId, qty, price: totalPrice });
+      cafe24GroupedData[groupKey].totalQty += qty;
+      cafe24GroupedData[groupKey].totalSales += totalPrice;
     }
+    
+    const groupCount = Object.keys(cafe24GroupedData).length;
+    const totalOrders = Object.values(cafe24GroupedData).reduce((sum, g) => sum + g.orders.length, 0);
+    const totalSales = Object.values(cafe24GroupedData).reduce((sum, g) => sum + g.totalSales, 0);
     
     statusEl.innerHTML = `
       <div style="background: #dcfce7; padding: 12px; border-radius: 8px; text-align: left;">
-        <div style="font-weight: 600; color: var(--success); margin-bottom: 8px;">✅ 파일 업로드 완료</div>
+        <div style="font-weight: 600; color: var(--success); margin-bottom: 8px;">✅ 자동 분류 완료</div>
         <div style="font-size: 12px; color: var(--gray-600);">
-          • 주문 건수: <strong>${cafe24UploadedData.length}건</strong><br>
-          • 총 수량: <strong>${formatNumber(totalQty)}개</strong><br>
+          • <strong>${groupCount}개</strong> 그룹으로 분류됨<br>
+          • 총 주문: <strong>${totalOrders}건</strong><br>
           • 총 매출: <strong>${formatNumber(totalSales)}원</strong>
         </div>
       </div>
     `;
     
-    // 공구 선택 시 미리보기 업데이트 활성화
-    document.querySelectorAll('input[name="mappingDeal"]').forEach(radio => {
-      radio.addEventListener('change', () => updateCafe24Preview());
-    });
-    
-    document.getElementById('cafe24MappingBtn').disabled = false;
+    // 그룹 목록 표시
+    renderCafe24Groups();
     
   } catch (e) {
     console.error('Excel parse error:', e);
@@ -6189,134 +6171,250 @@ async function parseCafe24Excel(input) {
   }
 }
 
-// 매핑 미리보기 업데이트
-function updateCafe24Preview() {
-  const selectedDeal = document.querySelector('input[name="mappingDeal"]:checked');
-  const previewDiv = document.getElementById('cafe24MappingPreview');
-  const previewContent = document.getElementById('cafe24PreviewContent');
+// 그룹 목록 렌더링
+function renderCafe24Groups() {
+  const groupSection = document.getElementById('cafe24GroupSection');
+  const groupList = document.getElementById('cafe24GroupList');
   
-  if (!selectedDeal || cafe24UploadedData.length === 0) {
-    previewDiv.style.display = 'none';
+  if (Object.keys(cafe24GroupedData).length === 0) {
+    groupSection.style.display = 'none';
     return;
   }
   
-  const deal = state.deals.find(d => d.id === selectedDeal.value);
-  if (!deal) return;
+  groupSection.style.display = 'block';
   
-  const seller = state.sellers.find(s => s.id === deal.sellerId);
-  const supplier = state.suppliers.find(s => s.id === deal.supplierId);
+  // 완료된 공구 목록
+  const completedDeals = (state.deals || []).filter(d => {
+    const status = d.status;
+    return status === 'completed' || status === 'settled' || d.endDate && new Date(d.endDate) < new Date();
+  }).sort((a, b) => new Date(b.endDate) - new Date(a.endDate));
   
-  // 매출 계산
-  const totalQty = cafe24UploadedData.reduce((sum, d) => sum + d.qty, 0);
-  const totalSales = cafe24UploadedData.reduce((sum, d) => sum + d.price, 0);
+  const groups = Object.entries(cafe24GroupedData);
   
-  // 마진 계산 (공구 정보 기반)
-  const sellerMarginRate = deal.sellerMarginRate || 10;
-  const supplyPrice = deal.supplyPrice || 0;
-  const pgFee = Math.round(totalSales * 0.04);
-  const sellerMargin = Math.round(totalSales * sellerMarginRate / 100);
-  const sellerTax = Math.round(sellerMargin * 0.033);
-  const sellerNet = sellerMargin - sellerTax;
-  const supplierTotal = supplyPrice * totalQty;
-  const moyeoraProfit = totalSales - pgFee - sellerNet - supplierTotal;
-  
-  previewDiv.style.display = 'block';
-  previewContent.innerHTML = `
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-      <div>
-        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">공구 정보</div>
-        <div style="font-weight: 600;">${deal.title || deal.brandName}</div>
-        <div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">
-          셀러: ${seller?.name || '-'} / 공급사: ${supplier?.name || '-'}
-        </div>
-      </div>
-      <div>
-        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">카페24 데이터</div>
-        <div style="font-weight: 600; color: var(--success);">${formatNumber(totalSales)}원</div>
-        <div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">
-          ${cafe24UploadedData.length}건 / ${formatNumber(totalQty)}개
-        </div>
-      </div>
-    </div>
+  groupList.innerHTML = groups.map(([key, group], idx) => {
+    // 자동 매칭 시도 (상품명에서 셀러 이름 추출)
+    let autoMatchedDealId = '';
+    const productNameLower = group.productName.toLowerCase();
     
-    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
-      <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">정산 예상</div>
-      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 12px;">
-        <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
-          <div style="color: var(--gray-500);">PG수수료(4%)</div>
-          <div style="font-weight: 600; color: var(--danger);">-${formatNumber(pgFee)}원</div>
-        </div>
-        <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
-          <div style="color: var(--gray-500);">셀러정산</div>
-          <div style="font-weight: 600; color: #8b5cf6;">${formatNumber(sellerNet)}원</div>
-        </div>
-        <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
-          <div style="color: var(--gray-500);">공급사정산</div>
-          <div style="font-weight: 600; color: #f59e0b;">${formatNumber(supplierTotal)}원</div>
-        </div>
-        <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
-          <div style="color: var(--gray-500);">모여라딜 수익</div>
-          <div style="font-weight: 600; color: ${moyeoraProfit >= 0 ? 'var(--success)' : 'var(--danger)'};">${formatNumber(moyeoraProfit)}원</div>
+    for (const deal of completedDeals) {
+      const dealTitle = (deal.title || '').toLowerCase();
+      const seller = state.sellers.find(s => s.id === deal.sellerId);
+      const sellerName = (seller?.name || '').toLowerCase();
+      
+      // 상품명에 셀러 이름이나 공구명이 포함되어 있으면 자동 매칭
+      if (productNameLower.includes(sellerName) || 
+          dealTitle.includes(productNameLower.split('/')[0]) ||
+          productNameLower.includes(dealTitle.split('/')[0])) {
+        if (!deal.cafe24Mapped) {
+          autoMatchedDealId = deal.id;
+          group.mappedDealId = deal.id;
+          break;
+        }
+      }
+    }
+    
+    return `
+      <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px;" data-group-key="${key}">
+        <div style="display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center;">
+          <div>
+            <div style="font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
+              ${group.productName}
+            </div>
+            <div style="font-size: 12px; color: var(--gray-500);">
+              공급사: ${group.supplier || '-'} | 
+              <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> / 
+              <span style="color: var(--success); font-weight: 600;">${formatNumber(group.totalSales)}원</span>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 12px; color: var(--gray-500);">→</span>
+            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-width: 200px;">
+              <option value="">-- 공구 선택 --</option>
+              ${completedDeals.map(d => {
+                const seller = state.sellers.find(s => s.id === d.sellerId);
+                const isSelected = d.id === autoMatchedDealId;
+                const isMapped = d.cafe24Mapped;
+                return `<option value="${d.id}" ${isSelected ? 'selected' : ''} ${isMapped ? 'disabled' : ''}>
+                  ${d.title || d.brandName || '-'} (${seller?.name || '-'}) ${isMapped ? '✅' : ''}
+                </option>`;
+              }).join('')}
+            </select>
+          </div>
         </div>
       </div>
+    `;
+  }).join('');
+  
+  updateMappingStatus();
+  updateSettlementPreview();
+}
+
+// 그룹 매핑 업데이트
+function updateGroupMapping(groupKey, dealId) {
+  if (cafe24GroupedData[groupKey]) {
+    cafe24GroupedData[groupKey].mappedDealId = dealId || null;
+  }
+  updateMappingStatus();
+  updateSettlementPreview();
+}
+
+// 매핑 상태 업데이트
+function updateMappingStatus() {
+  const statusEl = document.getElementById('cafe24MappingStatus');
+  const btn = document.getElementById('cafe24MappingBtn');
+  
+  const groups = Object.values(cafe24GroupedData);
+  const mappedCount = groups.filter(g => g.mappedDealId).length;
+  const totalCount = groups.length;
+  
+  statusEl.innerHTML = `매핑됨: <strong>${mappedCount}</strong> / ${totalCount} 그룹`;
+  btn.disabled = mappedCount === 0;
+}
+
+// 정산 미리보기 업데이트
+function updateSettlementPreview() {
+  const previewSection = document.getElementById('cafe24SettlementPreview');
+  const previewContent = document.getElementById('cafe24SettlementContent');
+  
+  const mappedGroups = Object.values(cafe24GroupedData).filter(g => g.mappedDealId);
+  
+  if (mappedGroups.length === 0) {
+    previewSection.style.display = 'none';
+    return;
+  }
+  
+  previewSection.style.display = 'block';
+  
+  // 공구별로 그룹화
+  const dealSettlements = {};
+  
+  mappedGroups.forEach(group => {
+    const dealId = group.mappedDealId;
+    if (!dealSettlements[dealId]) {
+      dealSettlements[dealId] = {
+        deal: state.deals.find(d => d.id === dealId),
+        totalSales: 0,
+        totalQty: 0,
+        orderCount: 0
+      };
+    }
+    dealSettlements[dealId].totalSales += group.totalSales;
+    dealSettlements[dealId].totalQty += group.totalQty;
+    dealSettlements[dealId].orderCount += group.orders.length;
+  });
+  
+  previewContent.innerHTML = `
+    <div style="display: grid; gap: 12px;">
+      ${Object.values(dealSettlements).map(ds => {
+        const deal = ds.deal;
+        if (!deal) return '';
+        
+        const seller = state.sellers.find(s => s.id === deal.sellerId);
+        const sellerMarginRate = deal.sellerMarginRate || 10;
+        const supplyPrice = deal.supplyPrice || 0;
+        
+        const pgFee = Math.round(ds.totalSales * 0.04);
+        const sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
+        const sellerTax = Math.round(sellerMargin * 0.033);
+        const sellerNet = sellerMargin - sellerTax;
+        const supplierTotal = supplyPrice * ds.totalQty;
+        const moyeoraProfit = ds.totalSales - pgFee - sellerNet - supplierTotal;
+        
+        return `
+          <div style="background: var(--gray-50); border-radius: 12px; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div>
+                <div style="font-weight: 600; color: var(--gray-800);">${deal.title || deal.brandName}</div>
+                <div style="font-size: 12px; color: var(--gray-500);">셀러: ${seller?.name || '-'} | ${ds.orderCount}건 / ${ds.totalQty}개</div>
+              </div>
+              <div style="font-size: 18px; font-weight: 700; color: var(--success);">${formatNumber(ds.totalSales)}원</div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 11px;">
+              <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
+                <div style="color: var(--gray-500);">PG수수료(4%)</div>
+                <div style="font-weight: 600; color: var(--danger);">-${formatNumber(pgFee)}원</div>
+              </div>
+              <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
+                <div style="color: var(--gray-500);">셀러정산(${sellerMarginRate}%)</div>
+                <div style="font-weight: 600; color: #8b5cf6;">${formatNumber(sellerNet)}원</div>
+              </div>
+              <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
+                <div style="color: var(--gray-500);">공급사정산</div>
+                <div style="font-weight: 600; color: #f59e0b;">${formatNumber(supplierTotal)}원</div>
+              </div>
+              <div style="background: white; padding: 8px; border-radius: 6px; text-align: center;">
+                <div style="color: var(--gray-500);">모여라딜 수익</div>
+                <div style="font-weight: 600; color: ${moyeoraProfit >= 0 ? 'var(--success)' : 'var(--danger)'};">${formatNumber(moyeoraProfit)}원</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
     </div>
   `;
 }
 
-// 카페24 매핑 적용
+// 카페24 매핑 일괄 적용
 async function applyCafe24Mapping() {
-  const selectedDeal = document.querySelector('input[name="mappingDeal"]:checked');
+  const mappedGroups = Object.values(cafe24GroupedData).filter(g => g.mappedDealId);
   
-  if (!selectedDeal) {
-    showToast('매핑할 공구를 선택해주세요');
+  if (mappedGroups.length === 0) {
+    showToast('매핑된 그룹이 없습니다');
     return;
   }
   
-  if (cafe24UploadedData.length === 0) {
-    showToast('카페24 엑셀을 먼저 업로드해주세요');
-    return;
-  }
+  // 공구별로 집계
+  const dealUpdates = {};
   
-  const dealId = selectedDeal.value;
-  const deal = state.deals.find(d => d.id === dealId);
-  
-  if (!deal) {
-    showToast('공구를 찾을 수 없습니다');
-    return;
-  }
-  
-  // 매출 계산
-  const totalQty = cafe24UploadedData.reduce((sum, d) => sum + d.qty, 0);
-  const totalSales = cafe24UploadedData.reduce((sum, d) => sum + d.price, 0);
-  
-  // 마진 계산
-  const sellerMarginRate = deal.sellerMarginRate || 10;
-  const supplyPrice = deal.supplyPrice || 0;
-  const pgFee = Math.round(totalSales * 0.04);
-  const sellerMargin = Math.round(totalSales * sellerMarginRate / 100);
-  const sellerTax = Math.round(sellerMargin * 0.033);
-  const sellerNet = sellerMargin - sellerTax;
-  const supplierTotal = supplyPrice * totalQty;
-  const moyeoraProfit = totalSales - pgFee - sellerNet - supplierTotal;
+  mappedGroups.forEach(group => {
+    const dealId = group.mappedDealId;
+    if (!dealUpdates[dealId]) {
+      dealUpdates[dealId] = {
+        totalSales: 0,
+        totalQty: 0,
+        orderCount: 0
+      };
+    }
+    dealUpdates[dealId].totalSales += group.totalSales;
+    dealUpdates[dealId].totalQty += group.totalQty;
+    dealUpdates[dealId].orderCount += group.orders.length;
+  });
   
   try {
-    // Firebase 업데이트
-    await db.collection('deals').doc(dealId).update({
-      cafe24Mapped: true,
-      cafe24MappedAt: new Date().toISOString(),
-      totalSales: totalSales,
-      totalQty: totalQty,
-      orderCount: cafe24UploadedData.length,
-      pgFee: pgFee,
-      sellerSettlementAmount: sellerNet,
-      supplierSettlementAmount: supplierTotal,
-      moyeoraProfit: moyeoraProfit,
-      status: 'completed'
-    });
+    // 각 공구별로 Firebase 업데이트
+    for (const [dealId, data] of Object.entries(dealUpdates)) {
+      const deal = state.deals.find(d => d.id === dealId);
+      if (!deal) continue;
+      
+      const sellerMarginRate = deal.sellerMarginRate || 10;
+      const supplyPrice = deal.supplyPrice || 0;
+      
+      const pgFee = Math.round(data.totalSales * 0.04);
+      const sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
+      const sellerTax = Math.round(sellerMargin * 0.033);
+      const sellerNet = sellerMargin - sellerTax;
+      const supplierTotal = supplyPrice * data.totalQty;
+      const moyeoraProfit = data.totalSales - pgFee - sellerNet - supplierTotal;
+      
+      await db.collection('deals').doc(dealId).update({
+        cafe24Mapped: true,
+        cafe24MappedAt: new Date().toISOString(),
+        totalSales: data.totalSales,
+        totalQty: data.totalQty,
+        orderCount: data.orderCount,
+        pgFee: pgFee,
+        sellerSettlementAmount: sellerNet,
+        supplierSettlementAmount: supplierTotal,
+        moyeoraProfit: moyeoraProfit,
+        status: 'completed'
+      });
+    }
     
-    showToast('카페24 매출이 연동되었습니다!');
+    const updateCount = Object.keys(dealUpdates).length;
+    showToast(`${updateCount}개 공구에 매출이 연동되었습니다!`);
     document.getElementById('modal').style.display = 'none';
     cafe24UploadedData = [];
+    cafe24GroupedData = {};
     renderSettlement();
     
   } catch (e) {
@@ -9122,7 +9220,7 @@ function renderDealManagement() {
   
   app.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">진행 중 공구관리</h1>
+      <h1 class="page-title">공구 현황/체크리스트</h1>
       <p class="page-desc">공구별 샘플전달, 결제링크전달, 컨텐츠전달을 관리합니다. (파트너 페이지에 연동)</p>
     </div>
     
@@ -15877,7 +15975,7 @@ function renderDealCenter() {
   app.innerHTML = `
     <div class="page-header" style="display: flex; justify-content: space-between; align-items: center;">
       <div>
-        <h1 class="page-title">공구 센터</h1>
+        <h1 class="page-title">공구 제안 관리</h1>
         <p style="color: var(--gray-500); margin-top: 4px;">공급사 긴급요청 접수 → 셀러에게 제안 → 공구 성사를 관리합니다.</p>
       </div>
       <button onclick="openAdminProposalModal()" style="
@@ -18993,7 +19091,20 @@ function renderSalesDashboard() {
     ${(() => {
       // 로그인한 사용자 찾기
       const currentMember = memberStats.find(m => m.id === currentUser?.odiyaId || m.loginId === currentUser?.loginId);
-      const otherMembers = memberStats.filter(m => m.id !== currentMember?.id);
+      let otherMembers = memberStats.filter(m => m.id !== currentMember?.id);
+      
+      // 저장된 순서 적용
+      const savedOrder = JSON.parse(localStorage.getItem('memberCardOrder') || '[]');
+      if (savedOrder.length > 0) {
+        otherMembers = otherMembers.sort((a, b) => {
+          const aIdx = savedOrder.indexOf(a.id);
+          const bIdx = savedOrder.indexOf(b.id);
+          if (aIdx === -1 && bIdx === -1) return 0;
+          if (aIdx === -1) return 1;
+          if (bIdx === -1) return -1;
+          return aIdx - bIdx;
+        });
+      }
       
       // 멤버 카드 생성 함수
       const renderMemberCard = (m, isMe = false) => {
@@ -19455,9 +19566,28 @@ function initMemberDragDrop() {
       
       this.style.borderTop = '';
       this.style.borderBottom = '';
+      
+      // 새 순서 저장
+      saveMemberCardOrder();
     });
   });
 }
+
+// 팀원 카드 순서 저장
+function saveMemberCardOrder() {
+  const container = document.getElementById('teamMembersContainer');
+  if (!container) return;
+  
+  const order = [];
+  container.querySelectorAll('.draggable-member').forEach(el => {
+    const memberId = el.getAttribute('data-member-id');
+    if (memberId) order.push(memberId);
+  });
+  
+  localStorage.setItem('memberCardOrder', JSON.stringify(order));
+  showToast('순서가 저장되었습니다');
+}
+
 // 목표 계산기 모달
 function openGoalCalculator() {
   // 관리자 인증 확인
@@ -22303,27 +22433,27 @@ function getProcessContent() {
 function getMenuContent() {
   return `
     <div style="display: grid; gap: 16px;">
-      <!-- 공구 협상 -->
+      <!-- 공구센터 -->
       <div style="background: white; border: 1px solid var(--gray-200); border-radius: 10px; overflow: hidden;">
         <div style="background: var(--primary); color: white; padding: 12px 16px; font-weight: 700; font-size: 14px;">
-          공구 협상
+          공구센터
         </div>
         <div style="padding: 16px;">
           <div style="display: grid; gap: 12px;">
             <div style="display: flex; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
-              <div style="font-weight: 600; color: var(--primary); min-width: 80px; font-size: 13px;">공구 캘린더</div>
+              <div style="font-weight: 600; color: var(--primary); min-width: 110px; font-size: 13px;">공구 캘린더</div>
               <div style="font-size: 12px; color: var(--gray-600);">공구를 등록하고 캘린더에서 한눈에 확인해요. 날짜 클릭해서 새 공구를 등록할 수 있어요.</div>
             </div>
             <div style="display: flex; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
-              <div style="font-weight: 600; color: var(--primary); min-width: 80px; font-size: 13px;">공구 관리</div>
+              <div style="font-weight: 600; color: var(--primary); min-width: 110px; font-size: 13px;">공구 현황/체크리스트</div>
               <div style="font-size: 12px; color: var(--gray-600);">등록된 공구를 리스트로 관리해요. 상태, 기간, 매출 등을 확인합니다.</div>
             </div>
             <div style="display: flex; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
-              <div style="font-weight: 600; color: var(--primary); min-width: 80px; font-size: 13px;">공구 센터</div>
+              <div style="font-weight: 600; color: var(--primary); min-width: 110px; font-size: 13px;">공구 제안 관리</div>
               <div style="font-size: 12px; color: var(--gray-600);">공급사 긴급요청 접수, 셀러에게 제안, 공구 성사를 관리해요.</div>
             </div>
             <div style="display: flex; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
-              <div style="font-weight: 600; color: var(--primary); min-width: 80px; font-size: 13px;">정산 관리</div>
+              <div style="font-weight: 600; color: var(--primary); min-width: 110px; font-size: 13px;">정산 관리</div>
               <div style="font-size: 12px; color: var(--gray-600);">카페24 매출 연동, 공급사/셀러 정산을 처리해요.</div>
             </div>
           </div>
