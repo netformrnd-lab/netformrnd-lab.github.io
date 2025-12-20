@@ -6332,90 +6332,188 @@ function openCafe24MappingModal() {
 let cafe24UploadedData = [];
 let cafe24GroupedData = {};
 
-// 카페24 엑셀 파싱 (자동 분류)
+// 카페24 엑셀 파싱 (자동 분류) - 상품DB 매칭 + Firebase 저장
 async function parseCafe24Excel(input) {
   const file = input.files[0];
   if (!file) return;
-  
+
   const statusEl = document.getElementById('cafe24UploadStatus');
   statusEl.innerHTML = '<span style="color: var(--primary);">📂 파일 분석 중...</span>';
-  
+
   try {
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data, { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-    
-    if (rows.length < 2) {
+    const rows = XLSX.utils.sheet_to_json(sheet);
+
+    if (rows.length === 0) {
       statusEl.innerHTML = '<span style="color: var(--danger);">❌ 데이터가 없습니다</span>';
       return;
     }
-    
-    // 헤더 분석 (카페24 기본 양식 기준)
-    const headers = rows[0].map(h => String(h || '').trim());
-    const productNameIdx = headers.findIndex(h => h.includes('상품명(관리용)') || h.includes('상품명'));
-    const supplierIdx = headers.findIndex(h => h.includes('공급사'));
-    const orderIdIdx = headers.findIndex(h => h.includes('주문번호'));
-    const qtyIdx = headers.findIndex(h => h.includes('수량'));
-    const totalPriceIdx = headers.findIndex(h => h.includes('총 결제금액') || h.includes('결제금액'));
-    const unitPriceIdx = headers.findIndex(h => h.includes('판매가'));
-    
-    // 데이터 파싱 & 그룹화
+
+    console.log('첫 행:', rows[0]);
+
+    // 공급사 타입 매핑 생성
+    const supplierTypeMap = {};
+    (state.suppliers || []).forEach(s => {
+      supplierTypeMap[s.name.trim().toLowerCase()] = s.supplierType || 'external';
+    });
+
+    // 데이터 파싱 & 그룹화 & Firebase 저장
     cafe24UploadedData = [];
     cafe24GroupedData = {};
-    
-    for (let i = 1; i < rows.length; i++) {
+    const orderMap = new Map();
+    let uploadedCount = 0;
+
+    statusEl.innerHTML = '<span style="color: var(--primary);">💾 Firebase에 저장 중...</span>';
+
+    for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || row.length === 0) continue;
-      
-      const productName = String(row[productNameIdx] || '').trim();
-      const supplier = String(row[supplierIdx] || '').trim();
-      const qty = parseInt(row[qtyIdx]) || 1;
-      const totalPrice = parseInt(String(row[totalPriceIdx] || '0').replace(/[^0-9]/g, '')) || 0;
-      const orderId = String(row[orderIdIdx] || '');
-      
-      if (!productName) continue;
-      
-      // 그룹 키 생성 (상품명 기준)
-      const groupKey = productName;
-      
+
+      const orderId = row['주문번호'] || '';
+      const productNo = row['상품번호'] || (i + 1);
+      if (!orderId) continue;
+
+      const docId = `${orderId}_${productNo}`;
+      if (orderMap.has(docId)) continue;
+
+      // 데이터 추출
+      const supplierName = (row['공급사'] || '').trim();
+      const rawSellerName = (row['상품명(관리용)'] || '').trim();
+      const sellerName = extractSellerName(rawSellerName);
+      const productNameBasic = (row['주문상품명(기본)'] || '').trim();
+      const productOption = (row['주문상품명(옵션포함)'] || '').trim();
+      const quantity = parseInt(row['수량']) || 1;
+      const unitPrice = parseCafe24Amount(row['판매가'] || 0);
+      const totalAmount = parseCafe24Amount(row['총주문금액'] || 0);
+      const paymentMethod = row['결제수단'] || '';
+
+      // 자사/타사 구분
+      const supplierKey = supplierName.toLowerCase();
+      const productType = supplierTypeMap[supplierKey] === 'inhouse' ? 'inhouse' : 'external';
+
+      // PG수수료
+      const isCard = paymentMethod.includes('카드') || paymentMethod.includes('신용');
+      const pgFee = isCard ? Math.round(totalAmount * 0.04) : 0;
+
+      // 주문 날짜 추출
+      let orderDate = '';
+      if (orderId.length >= 8) {
+        const dateStr = orderId.substring(0, 8);
+        if (/^\d{8}$/.test(dateStr)) {
+          orderDate = `${dateStr.substring(0,4)}-${dateStr.substring(4,6)}-${dateStr.substring(6,8)}T00:00:00`;
+        }
+      }
+
+      // Firebase 저장용 데이터
+      const orderData = {
+        order_id: orderId,
+        product_no: String(productNo),
+        order_date: orderDate,
+        supplier_name: supplierName,
+        seller_name: sellerName,
+        seller_full_name: rawSellerName,
+        product_type: productType,
+        product_name: productNameBasic,
+        product_option: productOption,
+        quantity: quantity,
+        unit_price: unitPrice,
+        total_amount: totalAmount,
+        payment_status: totalAmount > 0 ? 'F' : 'T',
+        payment_method: paymentMethod,
+        pg_fee: pgFee,
+        buyer_name: row['수령인'] || '',
+        buyer_phone: row['수령인 휴대전화'] || '',
+        shipping_address: row['수령인 주소(전체)'] || '',
+        synced_at: new Date().toISOString()
+      };
+
+      // Firebase에 저장
+      try {
+        await db.collection('cafe24_orders').doc(docId).set(orderData, { merge: true });
+        uploadedCount++;
+      } catch (err) {
+        console.error('저장 실패:', docId, err);
+      }
+
+      // 🎯 주문상품명(옵션포함)으로 상품DB 매칭
+      let matchedProduct = null;
+      let matchedDeal = null;
+
+      if (productOption) {
+        // 상품DB에서 매칭 시도 (유사도 기반)
+        const products = state.products || [];
+        for (const product of products) {
+          const prodName = (product.name || '').toLowerCase();
+          const optionLower = productOption.toLowerCase();
+
+          // "최저가" 등 제거하고 비교
+          const cleanOption = optionLower.replace(/최저가|특가|할인/g, '').trim();
+          const cleanProdName = prodName.replace(/최저가|특가|할인/g, '').trim();
+
+          if (cleanOption.includes(cleanProdName) || cleanProdName.includes(cleanOption)) {
+            matchedProduct = product;
+            // 해당 상품의 완료된 공구 찾기
+            const productDeals = (state.deals || []).filter(d =>
+              d.productId === product.id &&
+              (d.status === 'completed' || d.status === 'settled' || (d.endDate && new Date(d.endDate) < new Date()))
+            ).sort((a, b) => new Date(b.endDate) - new Date(a.endDate));
+
+            if (productDeals.length > 0) {
+              matchedDeal = productDeals[0]; // 가장 최근 완료 공구
+            }
+            break;
+          }
+        }
+      }
+
+      // 그룹화 (주문상품명(옵션포함) 기준)
+      const groupKey = productOption || productNameBasic;
       if (!cafe24GroupedData[groupKey]) {
         cafe24GroupedData[groupKey] = {
-          productName: productName,
-          supplier: supplier,
+          productName: groupKey,
+          productBasicName: productNameBasic,
+          supplier: supplierName,
+          sellerName: sellerName,
           orders: [],
           totalQty: 0,
           totalSales: 0,
-          mappedDealId: null
+          mappedDealId: matchedDeal?.id || null,
+          matchedProductName: matchedProduct?.name || null,
+          autoMatched: !!matchedDeal
         };
       }
-      
-      cafe24GroupedData[groupKey].orders.push({ orderId, qty, price: totalPrice });
-      cafe24GroupedData[groupKey].totalQty += qty;
-      cafe24GroupedData[groupKey].totalSales += totalPrice;
+
+      cafe24GroupedData[groupKey].orders.push({ orderId, qty: quantity, price: totalAmount });
+      cafe24GroupedData[groupKey].totalQty += quantity;
+      cafe24GroupedData[groupKey].totalSales += totalAmount;
+
+      orderMap.set(docId, orderData);
     }
-    
+
     const groupCount = Object.keys(cafe24GroupedData).length;
+    const autoMatchedCount = Object.values(cafe24GroupedData).filter(g => g.autoMatched).length;
     const totalOrders = Object.values(cafe24GroupedData).reduce((sum, g) => sum + g.orders.length, 0);
     const totalSales = Object.values(cafe24GroupedData).reduce((sum, g) => sum + g.totalSales, 0);
-    
+
     statusEl.innerHTML = `
       <div style="background: #dcfce7; padding: 12px; border-radius: 8px; text-align: left;">
-        <div style="font-weight: 600; color: var(--success); margin-bottom: 8px;">✅ 자동 분류 완료</div>
+        <div style="font-weight: 600; color: var(--success); margin-bottom: 8px;">✅ 업로드 및 자동 매칭 완료</div>
         <div style="font-size: 12px; color: var(--gray-600);">
-          • <strong>${groupCount}개</strong> 그룹으로 분류됨<br>
-          • 총 주문: <strong>${totalOrders}건</strong><br>
+          • Firebase 저장: <strong>${uploadedCount}건</strong><br>
+          • 그룹 분류: <strong>${groupCount}개</strong><br>
+          • 자동 매칭: <strong style="color: #059669;">${autoMatchedCount}개</strong> / ${groupCount}개<br>
           • 총 매출: <strong>${formatNumber(totalSales)}원</strong>
         </div>
       </div>
     `;
-    
+
     // 그룹 목록 표시
     renderCafe24Groups();
-    
+
   } catch (e) {
     console.error('Excel parse error:', e);
-    statusEl.innerHTML = '<span style="color: var(--danger);">❌ 파일 읽기 실패. 올바른 엑셀 파일인지 확인해주세요.</span>';
+    statusEl.innerHTML = '<span style="color: var(--danger);">❌ 파일 처리 실패: ' + e.message + '</span>';
   }
 }
 
@@ -6423,64 +6521,50 @@ async function parseCafe24Excel(input) {
 function renderCafe24Groups() {
   const groupSection = document.getElementById('cafe24GroupSection');
   const groupList = document.getElementById('cafe24GroupList');
-  
+
   if (Object.keys(cafe24GroupedData).length === 0) {
     groupSection.style.display = 'none';
     return;
   }
-  
+
   groupSection.style.display = 'block';
-  
+
   // 완료된 공구 목록
   const completedDeals = (state.deals || []).filter(d => {
     const status = d.status;
     return status === 'completed' || status === 'settled' || d.endDate && new Date(d.endDate) < new Date();
   }).sort((a, b) => new Date(b.endDate) - new Date(a.endDate));
-  
+
   const groups = Object.entries(cafe24GroupedData);
-  
+
   groupList.innerHTML = groups.map(([key, group], idx) => {
-    // 자동 매칭 시도 (상품명에서 셀러 이름 추출)
-    let autoMatchedDealId = '';
-    const productNameLower = group.productName.toLowerCase();
-    
-    for (const deal of completedDeals) {
-      const dealTitle = (deal.title || '').toLowerCase();
-      const seller = state.sellers.find(s => s.id === deal.sellerId);
-      const sellerName = (seller?.name || '').toLowerCase();
-      
-      // 상품명에 셀러 이름이나 공구명이 포함되어 있으면 자동 매칭
-      if (productNameLower.includes(sellerName) || 
-          dealTitle.includes(productNameLower.split('/')[0]) ||
-          productNameLower.includes(dealTitle.split('/')[0])) {
-        if (!deal.cafe24Mapped) {
-          autoMatchedDealId = deal.id;
-          group.mappedDealId = deal.id;
-          break;
-        }
-      }
-    }
-    
+    const autoMatched = group.autoMatched;
+    const borderColor = autoMatched ? '#059669' : '#e5e7eb';
+    const bgColor = autoMatched ? '#f0fdf4' : 'white';
+
     return `
-      <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px;" data-group-key="${key}">
+      <div style="background: ${bgColor}; border: 2px solid ${borderColor}; border-radius: 12px; padding: 16px;" data-group-key="${key}">
         <div style="display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center;">
           <div>
-            <div style="font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
-              ${group.productName}
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              ${autoMatched ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 자동매칭</span>' : '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">⚠ 수동선택</span>'}
+              <span style="font-weight: 600; color: var(--gray-800);">${group.productName}</span>
             </div>
             <div style="font-size: 12px; color: var(--gray-500);">
-              공급사: ${group.supplier || '-'} | 
-              <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> / 
+              ${group.matchedProductName ? `<span style="color: #059669;">✓ ${group.matchedProductName}</span> | ` : ''}
+              셀러: <strong>${group.sellerName || '-'}</strong> |
+              공급사: ${group.supplier || '-'} |
+              <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> /
               <span style="color: var(--success); font-weight: 600;">${formatNumber(group.totalSales)}원</span>
             </div>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 12px; color: var(--gray-500);">→</span>
-            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-width: 200px;">
+            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-width: 200px; ${autoMatched ? 'border-color: #059669;' : ''}">
               <option value="">-- 공구 선택 --</option>
               ${completedDeals.map(d => {
                 const seller = state.sellers.find(s => s.id === d.sellerId);
-                const isSelected = d.id === autoMatchedDealId;
+                const isSelected = d.id === group.mappedDealId;
                 const isMapped = d.cafe24Mapped;
                 return `<option value="${d.id}" ${isSelected ? 'selected' : ''} ${isMapped ? 'disabled' : ''}>
                   ${d.title || d.brandName || '-'} (${seller?.name || '-'}) ${isMapped ? '✅' : ''}
@@ -6492,7 +6576,7 @@ function renderCafe24Groups() {
       </div>
     `;
   }).join('');
-  
+
   updateMappingStatus();
   updateSettlementPreview();
 }
@@ -6602,48 +6686,59 @@ function updateSettlementPreview() {
   `;
 }
 
-// 카페24 매핑 일괄 적용
+// 카페24 매핑 일괄 적용 + 정산서 자동 생성
 async function applyCafe24Mapping() {
   const mappedGroups = Object.values(cafe24GroupedData).filter(g => g.mappedDealId);
-  
+
   if (mappedGroups.length === 0) {
     showToast('매핑된 그룹이 없습니다');
     return;
   }
-  
+
+  if (!confirm(`${mappedGroups.length}개 그룹을 공구와 매핑하고 정산서를 자동 생성하시겠습니까?`)) return;
+
   // 공구별로 집계
   const dealUpdates = {};
-  
+
   mappedGroups.forEach(group => {
     const dealId = group.mappedDealId;
     if (!dealUpdates[dealId]) {
       dealUpdates[dealId] = {
         totalSales: 0,
         totalQty: 0,
-        orderCount: 0
+        orderCount: 0,
+        sellerName: group.sellerName,
+        supplier: group.supplier
       };
     }
     dealUpdates[dealId].totalSales += group.totalSales;
     dealUpdates[dealId].totalQty += group.totalQty;
     dealUpdates[dealId].orderCount += group.orders.length;
   });
-  
+
   try {
-    // 각 공구별로 Firebase 업데이트
+    showToast('📋 정산서 자동 생성 중...');
+
+    // 각 공구별로 Firebase 업데이트 + 정산서 생성
     for (const [dealId, data] of Object.entries(dealUpdates)) {
       const deal = state.deals.find(d => d.id === dealId);
       if (!deal) continue;
-      
-      const sellerMarginRate = deal.sellerMarginRate || 10;
-      const supplyPrice = deal.supplyPrice || 0;
-      
+
+      const seller = state.sellers.find(s => s.id === deal.sellerId);
+      const supplier = state.suppliers.find(s => s.id === deal.supplierId);
+      const product = state.products.find(p => p.id === deal.productId);
+
+      const sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+      const supplyPrice = deal.supplyPrice || product?.supplyPrice || 0;
+
       const pgFee = Math.round(data.totalSales * 0.04);
       const sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
       const sellerTax = Math.round(sellerMargin * 0.033);
       const sellerNet = sellerMargin - sellerTax;
       const supplierTotal = supplyPrice * data.totalQty;
       const moyeoraProfit = data.totalSales - pgFee - sellerNet - supplierTotal;
-      
+
+      // 공구 업데이트
       await db.collection('deals').doc(dealId).update({
         cafe24Mapped: true,
         cafe24MappedAt: new Date().toISOString(),
@@ -6656,18 +6751,75 @@ async function applyCafe24Mapping() {
         moyeoraProfit: moyeoraProfit,
         status: 'completed'
       });
+
+      // 🎯 정산서 자동 생성
+      const today = new Date().toISOString().split('T')[0];
+      const productType = supplier?.supplierType || 'external';
+
+      // 1. 셀러 정산서 생성
+      const sellerSettlementId = `${dealId}_seller`;
+      const sellerSettlementData = {
+        id: sellerSettlementId,
+        dealId: dealId,
+        dealPeriod: `${deal.startDate || ''} ~ ${deal.endDate || ''}`,
+        sellerName: seller?.name || data.sellerName || '-',
+        brandName: deal.brandName || supplier?.name || data.supplier || '-',
+        productType: productType,
+        totalQuantity: data.totalQty,
+        salesAmount: data.totalSales,
+        marginRate: sellerMarginRate,
+        marginAmount: sellerMargin,
+        withholdingTax: sellerTax,
+        actualPayment: sellerNet,
+        settlementDate: today,
+        isCompleted: false,
+        isSellerCompleted: false,
+        createdAt: new Date().toISOString(),
+        createdBy: 'auto_cafe24_mapping'
+      };
+
+      await db.collection('sellerSettlements').doc(sellerSettlementId).set(sellerSettlementData, { merge: true });
+
+      // 2. 타사 상품인 경우 공급사 정산서도 생성
+      if (productType === 'external' && supplier) {
+        const supplierSettlementId = `${dealId}_supplier`;
+        const totalSupplyAmount = Math.round(supplierTotal / 1.1); // 부가세 제외
+        const totalVatAmount = supplierTotal - totalSupplyAmount; // 부가세
+
+        const supplierSettlementData = {
+          id: supplierSettlementId,
+          dealId: dealId,
+          dealPeriod: `${deal.startDate || ''} ~ ${deal.endDate || ''}`,
+          sellerName: seller?.name || data.sellerName || '-',
+          brandName: supplier?.name || data.supplier || '-',
+          supplierName: supplier?.name || data.supplier || '-',
+          totalQuantity: data.totalQty,
+          supplyPrice: supplyPrice,
+          totalSupplyAmount: totalSupplyAmount,
+          totalVatAmount: totalVatAmount,
+          totalAmount: supplierTotal,
+          settlementDate: today,
+          isCompleted: false,
+          createdAt: new Date().toISOString(),
+          createdBy: 'auto_cafe24_mapping'
+        };
+
+        await db.collection('supplierSettlements').doc(supplierSettlementId).set(supplierSettlementData, { merge: true });
+      }
     }
-    
+
     const updateCount = Object.keys(dealUpdates).length;
-    showToast(`${updateCount}개 공구에 매출이 연동되었습니다!`);
+    showToast(`✅ ${updateCount}개 공구 매핑 및 정산서 생성 완료!`);
     document.getElementById('modal').style.display = 'none';
     cafe24UploadedData = [];
     cafe24GroupedData = {};
-    renderSettlement();
-    
+
+    // 매출관리 내역서로 이동
+    switchTab('salesReport');
+
   } catch (e) {
     console.error('Mapping error:', e);
-    showToast('매핑에 실패했습니다');
+    showToast('❌ 매핑에 실패했습니다: ' + e.message);
   }
 }
 
@@ -22063,16 +22215,16 @@ async function uploadCafe24Excel(event) {
         const unitPrice = parseCafe24Amount(row['판매가'] || row['단가'] || 0);
         
         // 결제금액 파싱
-        const totalAmount = parseCafe24Amount(row['총 결제금액(KRW)'] || row['총 결제금액'] || 0);
-        const orderAmount = parseCafe24Amount(row['총 주문금액(KRW)'] || row['총 주문금액'] || 0);
-        
+        const totalAmount = parseCafe24Amount(row['총 결제금액(KRW)'] || row['총 결제금액'] || row['총주문금액'] || 0);
+        const orderAmount = parseCafe24Amount(row['총 주문금액(KRW)'] || row['총 주문금액'] || row['총주문금액'] || 0);
+
         // 결제상태 (결제금액 > 0 이면 결제완료)
         const paymentStatus = totalAmount > 0 ? 'F' : 'T';
-        
+
         // 수령인 정보
         const buyerName = row['수령인'] || row['주문자명'] || '';
         const buyerPhone = row['수령인 휴대전화'] || row['연락처'] || '';
-        
+
         // 상품명
         const productName = row['주문상품명(기본)'] || row['주문상품명'] || '';
         const productOption = row['주문상품명(옵션포함)'] || '';
