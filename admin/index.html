@@ -4,6 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모여라딜 - 관리자 시스템</title>
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/admin/manifest.json">
+
+  <!-- 테마 컬러 -->
+  <meta name="theme-color" content="#fc9600">
+
+  <!-- iOS Safari 지원 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="모여라딜">
+  <link rel="apple-touch-icon" href="/admin/icon-192.png">
+
+  <!-- 스플래시 스크린 (iOS) -->
+  <link rel="apple-touch-startup-image" href="/admin/icon-512.png">
+
+  <!-- 앱 설명 -->
+  <meta name="description" content="모여라딜 영업 관리 시스템 - 언제 어디서나 영업 활동">
+
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
   <style>
     :root {
@@ -1885,6 +1904,175 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
 });
+
+// ========== PWA Service Worker 등록 ==========
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/admin/sw.js')
+      .then(registration => {
+        console.log('✅ Service Worker 등록 성공:', registration.scope);
+
+        // 업데이트 확인
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // 새 버전 사용 가능
+              if (confirm('새로운 버전이 있습니다. 업데이트하시겠습니까?')) {
+                window.location.reload();
+              }
+            }
+          });
+        });
+      })
+      .catch(error => {
+        console.log('❌ Service Worker 등록 실패:', error);
+      });
+  });
+}
+
+// PWA 설치 프롬프트
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+  // 기본 설치 프롬프트 방지
+  e.preventDefault();
+  deferredPrompt = e;
+
+  // 설치 버튼 표시 (로그인 후에만)
+  if (document.getElementById('app-wrapper').style.display !== 'none') {
+    showInstallPrompt();
+  }
+});
+
+function showInstallPrompt() {
+  // 이미 설치된 경우 표시 안 함
+  if (window.matchMedia('(display-mode: standalone)').matches) {
+    return;
+  }
+
+  // 설치 배너 생성
+  const banner = document.createElement('div');
+  banner.id = 'pwa-install-banner';
+  banner.style.cssText = `
+    position: fixed;
+    bottom: 80px;
+    left: 16px;
+    right: 16px;
+    background: linear-gradient(135deg, #fc9600, #e08600);
+    color: white;
+    padding: 16px 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(252, 150, 0, 0.4);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideUp 0.3s ease;
+  `;
+
+  banner.innerHTML = `
+    <div style="flex: 1;">
+      <div style="font-weight: 700; font-size: 15px; margin-bottom: 4px;">📱 앱으로 설치하기</div>
+      <div style="font-size: 13px; opacity: 0.9;">홈 화면에 추가하여 더 빠르게 접근하세요</div>
+    </div>
+    <button onclick="installPWA()" style="background: white; color: #fc9600; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer; white-space: nowrap;">설치</button>
+    <button onclick="document.getElementById('pwa-install-banner').remove()" style="background: rgba(255,255,255,0.2); color: white; border: none; padding: 10px 12px; border-radius: 8px; font-size: 18px; cursor: pointer; line-height: 1;">×</button>
+  `;
+
+  document.body.appendChild(banner);
+}
+
+async function installPWA() {
+  if (!deferredPrompt) {
+    return;
+  }
+
+  // 설치 프롬프트 표시
+  deferredPrompt.prompt();
+
+  // 사용자 선택 대기
+  const { outcome } = await deferredPrompt.userChoice;
+
+  if (outcome === 'accepted') {
+    console.log('✅ PWA 설치 완료');
+  } else {
+    console.log('❌ PWA 설치 취소');
+  }
+
+  deferredPrompt = null;
+  document.getElementById('pwa-install-banner')?.remove();
+}
+
+// 앱 설치 완료 후
+window.addEventListener('appinstalled', () => {
+  console.log('✅ 앱이 홈 화면에 추가되었습니다!');
+  document.getElementById('pwa-install-banner')?.remove();
+  showToast('✅ 앱이 홈 화면에 추가되었습니다!');
+});
+
+// iOS Safari 설치 안내 (PWA API 미지원)
+if (isIOS() && !isInStandaloneMode()) {
+  setTimeout(() => {
+    if (document.getElementById('app-wrapper').style.display !== 'none') {
+      showIOSInstallPrompt();
+    }
+  }, 3000);
+}
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+}
+
+function isInStandaloneMode() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+}
+
+function showIOSInstallPrompt() {
+  const banner = document.createElement('div');
+  banner.id = 'ios-install-banner';
+  banner.style.cssText = `
+    position: fixed;
+    bottom: 80px;
+    left: 16px;
+    right: 16px;
+    background: linear-gradient(135deg, #fc9600, #e08600);
+    color: white;
+    padding: 16px 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(252, 150, 0, 0.4);
+    z-index: 1000;
+    animation: slideUp 0.3s ease;
+  `;
+
+  banner.innerHTML = `
+    <div style="margin-bottom: 12px;">
+      <div style="font-weight: 700; font-size: 15px; margin-bottom: 4px;">📱 앱으로 설치하기</div>
+      <div style="font-size: 13px; opacity: 0.9; line-height: 1.5;">
+        1. 하단의 <strong>공유</strong> 버튼 (<svg width="16" height="16" viewBox="0 0 24 24" fill="white" style="vertical-align: middle;"><path d="M16 5l-1.42 1.42-1.59-1.59V16h-1.98V4.83L9.42 6.42 8 5l4-4 4 4zm4 5v11c0 1.1-.9 2-2 2H6c-1.11 0-2-.9-2-2V10c0-1.11.89-2 2-2h3v2H6v11h12V10h-3V8h3c1.1 0 2 .89 2 2z"/></svg>) 터치<br>
+        2. <strong>홈 화면에 추가</strong> 선택
+      </div>
+    </div>
+    <button onclick="document.getElementById('ios-install-banner').remove()" style="background: white; color: #fc9600; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer; width: 100%;">확인</button>
+  `;
+
+  document.body.appendChild(banner);
+}
+
+// 슬라이드 업 애니메이션
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+`;
+document.head.appendChild(style);
 
 // ========== 모바일 FAB 토글 ==========
 function toggleMobileFAB() {
