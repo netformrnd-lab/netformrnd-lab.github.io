@@ -1402,6 +1402,9 @@
               <div class="nav-item" data-tab="cafe24Stats" onclick="switchTab('cafe24Stats')" style="font-size: 13px;">
                 <span>📈 매출 통계</span>
               </div>
+              <div class="nav-item" data-tab="cafe24Settings" onclick="switchTab('cafe24Settings')" style="font-size: 13px;">
+                <span>⚙️ API 연동 설정</span>
+              </div>
             </div>
           </div>
 
@@ -5067,6 +5070,7 @@ function render() {
     case 'cafe24Dashboard': renderCafe24Dashboard(); break;
     case 'cafe24Orders': renderCafe24Orders(); break;
     case 'cafe24Stats': renderCafe24Stats(); break;
+    case 'cafe24Settings': renderCafe24Settings(); break;
   }
 }
 
@@ -20938,6 +20942,350 @@ function toggleCafe24Menu() {
     submenu.style.display = 'none';
     arrow.style.transform = 'rotate(0deg)';
   }
+}
+
+// ==================== 카페24 API 설정 ====================
+const CAFE24_CONFIG = {
+  clientId: 'Ag6Iw2O9NNFqjAb7037UOD',
+  clientSecret: 'eeolPKxRyk0jWeRJOSeL9J',
+  redirectUri: window.location.origin + '/admin/', // 현재 어드민 페이지 URL
+  scope: 'mall.read_order,mall.read_product,mall.read_customer'
+};
+
+// 카페24 설정 페이지 렌더링
+async function renderCafe24Settings() {
+  const app = document.getElementById('app');
+
+  // Firestore에서 저장된 설정 불러오기
+  let savedConfig = { mallId: '', accessToken: '', lastSync: null };
+  try {
+    const doc = await db.collection('settings').doc('cafe24').get();
+    if (doc.exists) {
+      savedConfig = doc.data();
+    }
+  } catch (err) {
+    console.error('설정 로드 오류:', err);
+  }
+
+  const isConnected = !!savedConfig.accessToken;
+  const lastSyncText = savedConfig.lastSync
+    ? new Date(savedConfig.lastSync).toLocaleString('ko-KR')
+    : '없음';
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">⚙️ 카페24 API 연동 설정</h1>
+      <p class="page-desc">카페24 쇼핑몰과 실시간 데이터 동기화</p>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px;">
+      <div style="display: flex; align-items: center; gap: 12px; padding: 16px; background: ${isConnected ? 'var(--success-light)' : 'var(--warning-light)'}; border-radius: 8px; margin-bottom: 20px;">
+        <div style="font-size: 32px;">${isConnected ? '✅' : '⚠️'}</div>
+        <div style="flex: 1;">
+          <div style="font-weight: 600; font-size: 15px; color: var(--gray-900); margin-bottom: 4px;">
+            ${isConnected ? '카페24 연동 완료' : '카페24 연동 필요'}
+          </div>
+          <div style="font-size: 13px; color: var(--gray-600);">
+            ${isConnected ? `마지막 동기화: ${lastSyncText}` : 'Mall ID를 입력하고 인증을 진행해주세요'}
+          </div>
+        </div>
+        ${isConnected ? `<button onclick="disconnectCafe24()" class="btn btn-sm" style="background: var(--danger); color: white;">연동 해제</button>` : ''}
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Mall ID (쇼핑몰 아이디)</label>
+        <input type="text" id="cafe24MallId" class="form-input" placeholder="예: myshop123" value="${savedConfig.mallId || ''}" ${isConnected ? 'disabled' : ''}>
+        <p style="font-size: 12px; color: var(--gray-500); margin-top: 6px;">
+          💡 카페24 관리자 > 쇼핑몰 설정에서 확인할 수 있습니다
+        </p>
+      </div>
+
+      ${!isConnected ? `
+        <button onclick="startCafe24Auth()" class="btn btn-primary" style="width: 100%;">
+          🔗 카페24 인증 시작
+        </button>
+      ` : `
+        <div style="display: flex; gap: 12px;">
+          <button onclick="syncCafe24Orders()" class="btn btn-primary" style="flex: 1;">
+            🔄 주문 데이터 동기화
+          </button>
+          <button onclick="viewCafe24Logs()" class="btn btn-secondary">
+            📋 동기화 로그
+          </button>
+        </div>
+      `}
+    </div>
+
+    ${isConnected ? `
+      <div class="card">
+        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">⚙️ 자동 동기화 설정</h3>
+
+        <div class="form-group">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="cafe24AutoSync" onchange="toggleAutoSync()" ${savedConfig.autoSync ? 'checked' : ''} style="width: 18px; height: 18px;">
+            <span style="font-size: 14px; font-weight: 500;">자동 동기화 활성화</span>
+          </label>
+          <p style="font-size: 12px; color: var(--gray-500); margin-top: 6px; margin-left: 26px;">
+            1시간마다 자동으로 카페24 주문 데이터를 가져옵니다
+          </p>
+        </div>
+
+        <div style="margin-top: 16px; padding: 12px; background: var(--gray-50); border-radius: 8px;">
+          <div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">연동 정보</div>
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; font-size: 13px;">
+            <div style="color: var(--gray-500);">Mall ID:</div>
+            <div style="font-weight: 600;">${savedConfig.mallId}</div>
+            <div style="color: var(--gray-500);">Client ID:</div>
+            <div style="font-family: monospace; font-size: 12px;">${CAFE24_CONFIG.clientId}</div>
+            <div style="color: var(--gray-500);">Redirect URI:</div>
+            <div style="font-family: monospace; font-size: 12px;">${CAFE24_CONFIG.redirectUri}</div>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    <div class="card" style="margin-top: 16px;">
+      <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px;">📖 연동 가이드</h3>
+      <ol style="font-size: 13px; line-height: 1.8; color: var(--gray-700); padding-left: 20px;">
+        <li>카페24 개발자센터(<a href="https://developers.cafe24.com" target="_blank" style="color: var(--primary);">developers.cafe24.com</a>)에 로그인</li>
+        <li>앱 등록 시 Redirect URI를 <code style="background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 12px;">${CAFE24_CONFIG.redirectUri}</code>로 설정</li>
+        <li>위 Mall ID 입력 후 "카페24 인증 시작" 버튼 클릭</li>
+        <li>카페24 로그인 및 권한 승인</li>
+        <li>"주문 데이터 동기화" 버튼으로 데이터 가져오기</li>
+      </ol>
+    </div>
+  `;
+}
+
+// 카페24 OAuth 인증 시작
+async function startCafe24Auth() {
+  const mallId = document.getElementById('cafe24MallId').value.trim();
+
+  if (!mallId) {
+    alert('Mall ID를 입력해주세요.');
+    return;
+  }
+
+  // Mall ID를 Firestore에 임시 저장
+  try {
+    await db.collection('settings').doc('cafe24').set({
+      mallId: mallId,
+      authStarted: new Date().toISOString()
+    }, { merge: true });
+  } catch (err) {
+    console.error('설정 저장 오류:', err);
+  }
+
+  // OAuth 인증 URL 생성
+  const authUrl = `https://${mallId}.cafe24api.com/api/v2/oauth/authorize?` +
+    `response_type=code&` +
+    `client_id=${CAFE24_CONFIG.clientId}&` +
+    `redirect_uri=${encodeURIComponent(CAFE24_CONFIG.redirectUri)}&` +
+    `scope=${CAFE24_CONFIG.scope}`;
+
+  // 새 창으로 인증 페이지 열기
+  window.location.href = authUrl;
+}
+
+// OAuth 콜백 처리 (페이지 로드 시 자동 실행)
+async function handleCafe24Callback() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+
+  if (!code) return; // 콜백이 아니면 종료
+
+  try {
+    // Firestore에서 Mall ID 가져오기
+    const doc = await db.collection('settings').doc('cafe24').get();
+    if (!doc.exists || !doc.data().mallId) {
+      alert('Mall ID를 찾을 수 없습니다. 다시 시도해주세요.');
+      return;
+    }
+
+    const mallId = doc.data().mallId;
+
+    // Access Token 발급
+    const tokenResponse = await fetch(`https://${mallId}.cafe24api.com/api/v2/oauth/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: CAFE24_CONFIG.redirectUri,
+        client_id: CAFE24_CONFIG.clientId,
+        client_secret: CAFE24_CONFIG.clientSecret
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      throw new Error('토큰 발급 실패: ' + tokenResponse.statusText);
+    }
+
+    const tokenData = await tokenResponse.json();
+
+    // Access Token을 Firestore에 저장
+    await db.collection('settings').doc('cafe24').set({
+      mallId: mallId,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      tokenExpiry: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
+      connectedAt: new Date().toISOString()
+    }, { merge: true });
+
+    // URL에서 code 파라미터 제거
+    window.history.replaceState({}, document.title, window.location.pathname);
+
+    alert('✅ 카페24 연동이 완료되었습니다!');
+    renderCafe24Settings();
+
+  } catch (err) {
+    console.error('OAuth 콜백 오류:', err);
+    alert('❌ 인증 중 오류가 발생했습니다: ' + err.message);
+  }
+}
+
+// 카페24 주문 데이터 동기화
+async function syncCafe24Orders() {
+  if (!confirm('카페24에서 최신 주문 데이터를 가져오시겠습니까?')) return;
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '🔄 동기화 중...';
+
+  try {
+    // Firestore에서 설정 가져오기
+    const doc = await db.collection('settings').doc('cafe24').get();
+    if (!doc.exists || !doc.data().accessToken) {
+      alert('먼저 카페24 인증을 진행해주세요.');
+      return;
+    }
+
+    const { mallId, accessToken } = doc.data();
+
+    // 최근 30일 주문 데이터 가져오기
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30);
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const endDateStr = new Date().toISOString().split('T')[0];
+
+    // 카페24 API 호출
+    const ordersResponse = await fetch(
+      `https://${mallId}.cafe24api.com/api/v2/admin/orders?` +
+      `start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`,
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'X-Cafe24-Api-Version': '2024-03-01'
+        }
+      }
+    );
+
+    if (!ordersResponse.ok) {
+      throw new Error('주문 데이터 조회 실패: ' + ordersResponse.statusText);
+    }
+
+    const ordersData = await ordersResponse.json();
+    const orders = ordersData.orders || [];
+
+    // Firestore에 저장
+    let savedCount = 0;
+    const batch = db.batch();
+
+    for (const order of orders) {
+      const docRef = db.collection('cafe24_orders').doc(order.order_id);
+      batch.set(docRef, {
+        order_id: order.order_id,
+        order_date: order.order_date,
+        member_id: order.member_id,
+        billing_name: order.billing_name,
+        total_amount: parseFloat(order.order_price_amount || 0),
+        payment_status: order.payment_status,
+        order_status: order.order_status,
+        items: order.items || [],
+        synced_at: new Date().toISOString()
+      }, { merge: true });
+
+      savedCount++;
+
+      // Firestore는 한 번에 500개까지만 batch 가능
+      if (savedCount % 500 === 0) {
+        await batch.commit();
+      }
+    }
+
+    // 남은 데이터 커밋
+    if (savedCount % 500 !== 0) {
+      await batch.commit();
+    }
+
+    // 마지막 동기화 시간 업데이트
+    await db.collection('settings').doc('cafe24').update({
+      lastSync: new Date().toISOString(),
+      lastSyncCount: savedCount
+    });
+
+    alert(`✅ 총 ${savedCount}건의 주문 데이터를 동기화했습니다!`);
+    renderCafe24Settings();
+
+  } catch (err) {
+    console.error('동기화 오류:', err);
+    alert('❌ 동기화 중 오류가 발생했습니다: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 주문 데이터 동기화';
+  }
+}
+
+// 카페24 연동 해제
+async function disconnectCafe24() {
+  if (!confirm('카페24 연동을 해제하시겠습니까?')) return;
+
+  try {
+    await db.collection('settings').doc('cafe24').update({
+      accessToken: null,
+      refreshToken: null,
+      tokenExpiry: null,
+      disconnectedAt: new Date().toISOString()
+    });
+
+    alert('✅ 카페24 연동이 해제되었습니다.');
+    renderCafe24Settings();
+  } catch (err) {
+    console.error('연동 해제 오류:', err);
+    alert('❌ 연동 해제 중 오류가 발생했습니다.');
+  }
+}
+
+// 자동 동기화 토글
+async function toggleAutoSync() {
+  const checked = document.getElementById('cafe24AutoSync').checked;
+
+  try {
+    await db.collection('settings').doc('cafe24').update({
+      autoSync: checked,
+      autoSyncUpdatedAt: new Date().toISOString()
+    });
+
+    if (checked) {
+      alert('✅ 자동 동기화가 활성화되었습니다. (1시간마다 실행)');
+    }
+  } catch (err) {
+    console.error('자동 동기화 설정 오류:', err);
+    alert('❌ 설정 저장 중 오류가 발생했습니다.');
+  }
+}
+
+// 동기화 로그 보기
+function viewCafe24Logs() {
+  alert('동기화 로그 기능은 추후 업데이트 예정입니다.');
+}
+
+// 페이지 로드 시 OAuth 콜백 처리
+if (window.location.pathname.includes('/admin/')) {
+  handleCafe24Callback();
 }
 
 // ==================== 카페24 매출 대시보드 ====================
