@@ -1949,6 +1949,25 @@
             </div>
           </div>
 
+          <!-- 그로스보드파티 섹션 -->
+          <div class="nav-section" style="margin-top: 12px;">
+            <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #10b981, #059669); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);" onclick="toggleOKRMenu()">
+              <span style="font-weight: 600; color: white;">🎯 그로스보드파티</span>
+              <span id="okr-menu-arrow" style="transition: transform 0.2s; color: white; transform: rotate(180deg);">▼</span>
+            </div>
+            <div id="okr-submenu" style="display: block; padding-left: 8px;">
+              <div class="nav-item" data-tab="okrDashboard" onclick="switchTab('okrDashboard')" style="font-size: 13px;">
+                <span>📊 OKR 대시보드</span>
+              </div>
+              <div class="nav-item" data-tab="okrManagement" onclick="switchTab('okrManagement')" style="font-size: 13px;">
+                <span>✏️ OKR 관리</span>
+              </div>
+              <div class="nav-item" data-tab="okrReview" onclick="switchTab('okrReview')" style="font-size: 13px;">
+                <span>📈 분기별 리뷰</span>
+              </div>
+            </div>
+          </div>
+
           <!-- 관리자 섹션 (닫힌 상태, 비밀번호 필요) -->
           <div class="nav-section" style="margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
             <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #374151, #4b5563); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" onclick="toggleAdminMenu()">
@@ -2029,6 +2048,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
 
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 <script>
@@ -5890,6 +5910,9 @@ function render() {
     case 'cafe24Stats': renderCafe24Stats(); break;
     case 'cafe24Settings': renderCafe24Settings(); break;
     case 'guide': renderGuide(); break;
+    case 'okrDashboard': renderOKRDashboard(); break;
+    case 'okrManagement': renderOKRManagement(); break;
+    case 'okrReview': renderOKRReview(); break;
   }
 }
 
@@ -21917,6 +21940,18 @@ function toggleCafe24Menu() {
   }
 }
 
+function toggleOKRMenu() {
+  const submenu = document.getElementById('okr-submenu');
+  const arrow = document.getElementById('okr-menu-arrow');
+  if (submenu.style.display === 'none') {
+    submenu.style.display = 'block';
+    arrow.style.transform = 'rotate(180deg)';
+  } else {
+    submenu.style.display = 'none';
+    arrow.style.transform = 'rotate(0deg)';
+  }
+}
+
 // ==================== 카페24 API 설정 ====================
 const CAFE24_CONFIG = {
   clientId: 'Ag6Iw2O9NNFqjAb7037UOD',
@@ -24750,6 +24785,904 @@ function getToolsContent() {
     </div>
   `;
 }
+
+// ========================================
+// OKR 관리 시스템
+// ========================================
+
+// OKR 분기 계산 함수
+function getQuarter(date = new Date()) {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const quarter = Math.ceil(month / 3);
+  return { year, quarter, label: `${year}년 ${quarter}분기` };
+}
+
+function getQuarterOptions() {
+  const options = [];
+  const currentYear = new Date().getFullYear();
+
+  for (let year = currentYear - 1; year <= currentYear + 1; year++) {
+    for (let quarter = 1; quarter <= 4; quarter++) {
+      options.push({
+        value: `${year}-Q${quarter}`,
+        label: `${year}년 ${quarter}분기`
+      });
+    }
+  }
+
+  return options;
+}
+
+// OKR 대시보드 렌더링
+function renderOKRDashboard() {
+  const app = document.getElementById('app');
+  const currentQuarter = getQuarter();
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">🎯 그로스보드파티 OKR 대시보드</h1>
+      <p style="color: var(--gray-600); margin-top: 8px;">${currentQuarter.label} - 팀원들의 성장과 개선을 함께 확인하세요</p>
+    </div>
+
+    <div class="content">
+      <div id="okr-dashboard-content">
+        <div class="loading" style="text-align: center; padding: 40px;">
+          <div class="loading-spinner"></div>
+          <p style="margin-top: 16px; color: var(--gray-600);">OKR 데이터를 불러오는 중...</p>
+        </div>
+      </div>
+    </div>
+  `;
+
+  loadOKRDashboard();
+}
+
+async function loadOKRDashboard() {
+  try {
+    const currentQuarter = getQuarter();
+    const quarterKey = `${currentQuarter.year}-Q${currentQuarter.quarter}`;
+
+    // Firebase에서 현재 분기 OKR 데이터 로드
+    const okrSnapshot = await db.collection('okrs').where('quarter', '==', quarterKey).get();
+    const teamSnapshot = await db.collection('teamMembers').get();
+
+    const okrs = [];
+    okrSnapshot.forEach(doc => {
+      okrs.push({ id: doc.id, ...doc.data() });
+    });
+
+    const teamMembers = [];
+    teamSnapshot.forEach(doc => {
+      teamMembers.push({ id: doc.id, ...doc.data() });
+    });
+
+    renderOKRDashboardContent(okrs, teamMembers, quarterKey);
+  } catch (error) {
+    console.error('OKR 데이터 로드 오류:', error);
+    document.getElementById('okr-dashboard-content').innerHTML = `
+      <div style="text-align: center; padding: 40px; color: var(--danger);">
+        데이터 로드 중 오류가 발생했습니다.
+      </div>
+    `;
+  }
+}
+
+function renderOKRDashboardContent(okrs, teamMembers, quarterKey) {
+  const content = document.getElementById('okr-dashboard-content');
+
+  if (okrs.length === 0) {
+    content.innerHTML = `
+      <div style="text-align: center; padding: 60px; background: var(--gray-50); border-radius: 12px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">📝</div>
+        <p style="font-size: 16px; color: var(--gray-700); margin-bottom: 8px;">아직 등록된 OKR이 없습니다</p>
+        <p style="font-size: 14px; color: var(--gray-500); margin-bottom: 24px;">OKR 관리 메뉴에서 목표를 등록해보세요</p>
+        <button onclick="switchTab('okrManagement')" style="background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          OKR 등록하기
+        </button>
+      </div>
+    `;
+    return;
+  }
+
+  // 팀원별로 OKR 그룹화
+  const okrByMember = {};
+  teamMembers.forEach(member => {
+    okrByMember[member.id] = {
+      member: member,
+      okrs: okrs.filter(okr => okr.memberId === member.id)
+    };
+  });
+
+  let html = `
+    <div style="display: grid; gap: 20px;">
+  `;
+
+  Object.values(okrByMember).forEach(({ member, okrs: memberOkrs }) => {
+    if (memberOkrs.length === 0) return;
+
+    const avgProgress = memberOkrs.reduce((sum, okr) => sum + (okr.progress || 0), 0) / memberOkrs.length;
+    const progressColor = avgProgress >= 70 ? 'var(--success)' : avgProgress >= 40 ? 'var(--warning)' : 'var(--danger)';
+
+    html += `
+      <div style="background: white; border-radius: 12px; padding: 24px; border: 1px solid var(--gray-200);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <div>
+            <h3 style="font-size: 18px; font-weight: 700; color: var(--gray-900);">${member.name}</h3>
+            <p style="font-size: 14px; color: var(--gray-600); margin-top: 4px;">${member.position || '팀원'}</p>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-size: 32px; font-weight: 700; color: ${progressColor};">${avgProgress.toFixed(0)}%</div>
+            <div style="font-size: 12px; color: var(--gray-500);">평균 달성률</div>
+          </div>
+        </div>
+
+        <div style="display: grid; gap: 12px;">
+          ${memberOkrs.map(okr => `
+            <div style="background: var(--gray-50); border-radius: 8px; padding: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                <div style="flex: 1;">
+                  <div style="font-size: 14px; font-weight: 600; color: var(--gray-900); margin-bottom: 4px;">
+                    ${okr.objective}
+                  </div>
+                  ${okr.keyResults ? `
+                    <div style="margin-top: 8px; padding-left: 12px; border-left: 2px solid var(--gray-300);">
+                      ${okr.keyResults.map(kr => `
+                        <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px;">
+                          • ${kr.description} (목표: ${kr.target})
+                        </div>
+                      `).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+                <div style="text-align: right; margin-left: 16px;">
+                  <div style="font-size: 20px; font-weight: 700; color: ${okr.progress >= 70 ? 'var(--success)' : okr.progress >= 40 ? 'var(--warning)' : 'var(--danger)'};">
+                    ${okr.progress || 0}%
+                  </div>
+                </div>
+              </div>
+
+              <div style="background: var(--gray-200); height: 8px; border-radius: 4px; overflow: hidden; margin-top: 8px;">
+                <div style="background: ${okr.progress >= 70 ? 'var(--success)' : okr.progress >= 40 ? 'var(--warning)' : 'var(--danger)'}; height: 100%; width: ${okr.progress || 0}%; transition: width 0.3s;"></div>
+              </div>
+
+              ${okr.improvements ? `
+                <div style="margin-top: 12px; padding: 10px; background: white; border-radius: 6px; border-left: 3px solid var(--primary);">
+                  <div style="font-size: 11px; font-weight: 600; color: var(--primary); margin-bottom: 4px;">💡 개선 노력</div>
+                  <div style="font-size: 12px; color: var(--gray-700);">${okr.improvements}</div>
+                </div>
+              ` : ''}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  });
+
+  html += `
+      <div style="background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; padding: 24px; color: white; text-align: center;">
+        <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 8px;">그로스보드파티는 포기하지 않고 개선한 노력을 중요하게 봅니다</h3>
+        <p style="font-size: 14px; opacity: 0.9;">결과보다 과정, 완벽함보다 성장을 응원합니다! 🎉</p>
+      </div>
+    </div>
+  `;
+
+  content.innerHTML = html;
+}
+
+// OKR 관리 페이지 렌더링
+function renderOKRManagement() {
+  const app = document.getElementById('app');
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">✏️ OKR 관리</h1>
+      <p style="color: var(--gray-600); margin-top: 8px;">팀원별 목표를 설정하고 관리하세요</p>
+    </div>
+
+    <div class="content">
+      <div style="background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px;">
+        <button onclick="openOKRModal()" style="background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          + 새 OKR 등록
+        </button>
+      </div>
+
+      <div id="okr-list-content">
+        <div class="loading" style="text-align: center; padding: 40px;">
+          <div class="loading-spinner"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  loadOKRList();
+}
+
+async function loadOKRList() {
+  try {
+    const okrSnapshot = await db.collection('okrs').orderBy('createdAt', 'desc').get();
+    const teamSnapshot = await db.collection('teamMembers').get();
+
+    const okrs = [];
+    okrSnapshot.forEach(doc => {
+      okrs.push({ id: doc.id, ...doc.data() });
+    });
+
+    const teamMembers = {};
+    teamSnapshot.forEach(doc => {
+      teamMembers[doc.id] = doc.data();
+    });
+
+    renderOKRList(okrs, teamMembers);
+  } catch (error) {
+    console.error('OKR 목록 로드 오류:', error);
+  }
+}
+
+function renderOKRList(okrs, teamMembers) {
+  const content = document.getElementById('okr-list-content');
+
+  if (okrs.length === 0) {
+    content.innerHTML = `
+      <div style="text-align: center; padding: 60px; background: var(--gray-50); border-radius: 12px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">📝</div>
+        <p style="font-size: 16px; color: var(--gray-700);">등록된 OKR이 없습니다</p>
+        <p style="font-size: 14px; color: var(--gray-500); margin-top: 8px;">새 OKR을 등록해보세요</p>
+      </div>
+    `;
+    return;
+  }
+
+  let html = '<div style="display: grid; gap: 16px;">';
+
+  okrs.forEach(okr => {
+    const member = teamMembers[okr.memberId] || { name: '알 수 없음' };
+    const progressColor = okr.progress >= 70 ? 'var(--success)' : okr.progress >= 40 ? 'var(--warning)' : 'var(--danger)';
+
+    html += `
+      <div style="background: white; border-radius: 12px; padding: 20px; border: 1px solid var(--gray-200);">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span style="background: var(--primary-light); color: var(--primary); padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;">
+                ${okr.quarter}
+              </span>
+              <span style="font-size: 14px; font-weight: 600; color: var(--gray-900);">${member.name}</span>
+            </div>
+            <div style="font-size: 16px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px;">
+              ${okr.objective}
+            </div>
+            ${okr.keyResults ? `
+              <div style="margin-top: 8px; padding-left: 12px; border-left: 2px solid var(--gray-300);">
+                ${okr.keyResults.map((kr, idx) => `
+                  <div style="font-size: 13px; color: var(--gray-700); margin-bottom: 4px;">
+                    KR${idx + 1}: ${kr.description} <span style="color: var(--primary); font-weight: 600;">(목표: ${kr.target})</span>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+          <div style="text-align: right; margin-left: 20px;">
+            <div style="font-size: 24px; font-weight: 700; color: ${progressColor}; margin-bottom: 4px;">
+              ${okr.progress || 0}%
+            </div>
+            <div style="font-size: 11px; color: var(--gray-500);">달성률</div>
+          </div>
+        </div>
+
+        <div style="background: var(--gray-200); height: 6px; border-radius: 3px; overflow: hidden; margin-bottom: 12px;">
+          <div style="background: ${progressColor}; height: 100%; width: ${okr.progress || 0}%; transition: width 0.3s;"></div>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+          <button onclick="editOKR('${okr.id}')" style="flex: 1; background: var(--gray-100); color: var(--gray-700); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+            수정
+          </button>
+          <button onclick="updateOKRProgress('${okr.id}')" style="flex: 1; background: var(--primary-light); color: var(--primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+            진행률 업데이트
+          </button>
+          <button onclick="deleteOKR('${okr.id}')" style="background: var(--danger-light); color: var(--danger); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+            삭제
+          </button>
+        </div>
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+// OKR 등록/수정 모달
+async function openOKRModal(okrId = null) {
+  const teamSnapshot = await db.collection('teamMembers').get();
+  const teamMembers = [];
+  teamSnapshot.forEach(doc => {
+    teamMembers.push({ id: doc.id, ...doc.data() });
+  });
+
+  let okr = {
+    memberId: '',
+    quarter: `${getQuarter().year}-Q${getQuarter().quarter}`,
+    objective: '',
+    keyResults: [
+      { description: '', target: '', current: 0 }
+    ],
+    progress: 0,
+    improvements: ''
+  };
+
+  if (okrId) {
+    const doc = await db.collection('okrs').doc(okrId).get();
+    if (doc.exists) {
+      okr = { id: doc.id, ...doc.data() };
+    }
+  }
+
+  const quarterOptions = getQuarterOptions();
+
+  const modal = document.getElementById('modal');
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">
+      <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin-bottom: 20px;">
+        ${okrId ? 'OKR 수정' : '새 OKR 등록'}
+      </h2>
+
+      <div style="display: grid; gap: 16px;">
+        <div>
+          <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+            분기 선택 *
+          </label>
+          <select id="okr-quarter" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            ${quarterOptions.map(opt => `
+              <option value="${opt.value}" ${opt.value === okr.quarter ? 'selected' : ''}>
+                ${opt.label}
+              </option>
+            `).join('')}
+          </select>
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+            팀원 선택 *
+          </label>
+          <select id="okr-member" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            <option value="">팀원을 선택하세요</option>
+            ${teamMembers.map(member => `
+              <option value="${member.id}" ${member.id === okr.memberId ? 'selected' : ''}>
+                ${member.name} - ${member.position || '팀원'}
+              </option>
+            `).join('')}
+          </select>
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+            Objective (목표) *
+          </label>
+          <input type="text" id="okr-objective" value="${okr.objective}" placeholder="예: 매출 200% 성장 달성" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" />
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+            Key Results (핵심 결과)
+          </label>
+          <div id="key-results-container">
+            ${okr.keyResults.map((kr, idx) => `
+              <div class="key-result-item" style="background: var(--gray-50); padding: 12px; border-radius: 8px; margin-bottom: 8px;">
+                <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 8px;">KR ${idx + 1}</div>
+                <input type="text" class="kr-description" value="${kr.description}" placeholder="예: 신규 고객 50명 확보" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px; margin-bottom: 8px;" />
+                <input type="text" class="kr-target" value="${kr.target}" placeholder="목표 수치 (예: 50명)" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;" />
+              </div>
+            `).join('')}
+          </div>
+          <button onclick="addKeyResult()" style="width: 100%; background: var(--gray-100); color: var(--gray-700); border: none; padding: 10px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; margin-top: 8px;">
+            + Key Result 추가
+          </button>
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+            개선 노력 및 시도한 것들
+          </label>
+          <textarea id="okr-improvements" placeholder="포기하지 않고 개선을 위해 어떤 노력을 했나요?" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; min-height: 100px; resize: vertical;">${okr.improvements || ''}</textarea>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; margin-top: 24px;">
+        <button onclick="closeModal()" style="flex: 1; background: var(--gray-200); color: var(--gray-700); border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          취소
+        </button>
+        <button onclick="saveOKR('${okrId || ''}')" style="flex: 1; background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          저장
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function addKeyResult() {
+  const container = document.getElementById('key-results-container');
+  const count = container.children.length + 1;
+
+  const div = document.createElement('div');
+  div.className = 'key-result-item';
+  div.style.cssText = 'background: var(--gray-50); padding: 12px; border-radius: 8px; margin-bottom: 8px;';
+  div.innerHTML = `
+    <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 8px;">KR ${count}</div>
+    <input type="text" class="kr-description" placeholder="예: 신규 고객 50명 확보" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px; margin-bottom: 8px;" />
+    <input type="text" class="kr-target" placeholder="목표 수치 (예: 50명)" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;" />
+  `;
+
+  container.appendChild(div);
+}
+
+async function saveOKR(okrId) {
+  const quarter = document.getElementById('okr-quarter').value;
+  const memberId = document.getElementById('okr-member').value;
+  const objective = document.getElementById('okr-objective').value.trim();
+  const improvements = document.getElementById('okr-improvements').value.trim();
+
+  if (!memberId || !objective) {
+    alert('팀원과 목표를 입력해주세요.');
+    return;
+  }
+
+  const keyResults = [];
+  const krItems = document.querySelectorAll('.key-result-item');
+  krItems.forEach(item => {
+    const description = item.querySelector('.kr-description').value.trim();
+    const target = item.querySelector('.kr-target').value.trim();
+    if (description && target) {
+      keyResults.push({ description, target, current: 0 });
+    }
+  });
+
+  const okrData = {
+    quarter,
+    memberId,
+    objective,
+    keyResults,
+    improvements,
+    progress: 0,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    if (okrId) {
+      await db.collection('okrs').doc(okrId).update(okrData);
+      showToast('OKR이 수정되었습니다.');
+    } else {
+      okrData.createdAt = new Date().toISOString();
+      await db.collection('okrs').add(okrData);
+      showToast('OKR이 등록되었습니다.');
+    }
+
+    closeModal();
+    loadOKRList();
+  } catch (error) {
+    console.error('OKR 저장 오류:', error);
+    alert('저장 중 오류가 발생했습니다.');
+  }
+}
+
+async function editOKR(okrId) {
+  await openOKRModal(okrId);
+}
+
+async function deleteOKR(okrId) {
+  if (!confirm('이 OKR을 삭제하시겠습니까?')) return;
+
+  try {
+    await db.collection('okrs').doc(okrId).delete();
+    showToast('OKR이 삭제되었습니다.');
+    loadOKRList();
+  } catch (error) {
+    console.error('OKR 삭제 오류:', error);
+    alert('삭제 중 오류가 발생했습니다.');
+  }
+}
+
+async function updateOKRProgress(okrId) {
+  const doc = await db.collection('okrs').doc(okrId).get();
+  if (!doc.exists) return;
+
+  const okr = doc.data();
+
+  const modal = document.getElementById('modal');
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 500px;">
+      <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin-bottom: 20px;">
+        진행률 업데이트
+      </h2>
+
+      <div style="background: var(--gray-50); padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+        <div style="font-size: 14px; font-weight: 600; color: var(--gray-900); margin-bottom: 8px;">
+          ${okr.objective}
+        </div>
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+          현재 달성률 (%)
+        </label>
+        <input type="number" id="okr-progress" value="${okr.progress || 0}" min="0" max="100" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" />
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+          개선 노력 업데이트
+        </label>
+        <textarea id="okr-improvements-update" placeholder="이번 기간 동안 어떤 개선 노력을 했나요?" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; min-height: 100px; resize: vertical;">${okr.improvements || ''}</textarea>
+      </div>
+
+      <div style="display: flex; gap: 12px;">
+        <button onclick="closeModal()" style="flex: 1; background: var(--gray-200); color: var(--gray-700); border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          취소
+        </button>
+        <button onclick="saveOKRProgress('${okrId}')" style="flex: 1; background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          저장
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function saveOKRProgress(okrId) {
+  const progress = parseInt(document.getElementById('okr-progress').value);
+  const improvements = document.getElementById('okr-improvements-update').value.trim();
+
+  if (isNaN(progress) || progress < 0 || progress > 100) {
+    alert('진행률은 0~100 사이의 숫자여야 합니다.');
+    return;
+  }
+
+  try {
+    await db.collection('okrs').doc(okrId).update({
+      progress,
+      improvements,
+      updatedAt: new Date().toISOString()
+    });
+
+    showToast('진행률이 업데이트되었습니다.');
+    closeModal();
+    loadOKRList();
+  } catch (error) {
+    console.error('진행률 업데이트 오류:', error);
+    alert('업데이트 중 오류가 발생했습니다.');
+  }
+}
+
+// 분기별 리뷰 페이지
+function renderOKRReview() {
+  const app = document.getElementById('app');
+  const quarterOptions = getQuarterOptions();
+  const currentQuarter = getQuarter();
+  const currentQuarterKey = `${currentQuarter.year}-Q${currentQuarter.quarter}`;
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">📈 분기별 OKR 리뷰</h1>
+      <p style="color: var(--gray-600); margin-top: 8px;">그로스보드파티 발표 자료를 확인하고 PPT로 다운로드하세요</p>
+    </div>
+
+    <div class="content">
+      <div style="background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px;">
+        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+          <select id="quarter-select" style="flex: 1; min-width: 200px; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            ${quarterOptions.map(opt => `
+              <option value="${opt.value}" ${opt.value === currentQuarterKey ? 'selected' : ''}>
+                ${opt.label}
+              </option>
+            `).join('')}
+          </select>
+          <button onclick="loadQuarterReview()" style="background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+            조회
+          </button>
+          <button onclick="downloadOKRPPT()" style="background: var(--success); color: white; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+            📥 PPT 다운로드
+          </button>
+        </div>
+      </div>
+
+      <div id="quarter-review-content">
+        <div class="loading" style="text-align: center; padding: 40px;">
+          <div class="loading-spinner"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  loadQuarterReview();
+}
+
+async function loadQuarterReview() {
+  const quarterSelect = document.getElementById('quarter-select');
+  const quarter = quarterSelect ? quarterSelect.value : `${getQuarter().year}-Q${getQuarter().quarter}`;
+
+  try {
+    const okrSnapshot = await db.collection('okrs').where('quarter', '==', quarter).get();
+    const teamSnapshot = await db.collection('teamMembers').get();
+
+    const okrs = [];
+    okrSnapshot.forEach(doc => {
+      okrs.push({ id: doc.id, ...doc.data() });
+    });
+
+    const teamMembers = {};
+    teamSnapshot.forEach(doc => {
+      teamMembers[doc.id] = doc.data();
+    });
+
+    renderQuarterReview(okrs, teamMembers, quarter);
+  } catch (error) {
+    console.error('분기 리뷰 로드 오류:', error);
+  }
+}
+
+function renderQuarterReview(okrs, teamMembers, quarter) {
+  const content = document.getElementById('quarter-review-content');
+
+  if (okrs.length === 0) {
+    content.innerHTML = `
+      <div style="text-align: center; padding: 60px; background: var(--gray-50); border-radius: 12px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">📊</div>
+        <p style="font-size: 16px; color: var(--gray-700);">해당 분기에 등록된 OKR이 없습니다</p>
+      </div>
+    `;
+    return;
+  }
+
+  // 팀원별로 그룹화
+  const okrByMember = {};
+  Object.keys(teamMembers).forEach(memberId => {
+    const memberOkrs = okrs.filter(okr => okr.memberId === memberId);
+    if (memberOkrs.length > 0) {
+      okrByMember[memberId] = {
+        member: teamMembers[memberId],
+        okrs: memberOkrs
+      };
+    }
+  });
+
+  let html = `
+    <div style="background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; padding: 40px; color: white; text-align: center; margin-bottom: 24px;">
+      <h2 style="font-size: 28px; font-weight: 700; margin-bottom: 12px;">🎯 ${quarter} 그로스보드파티</h2>
+      <p style="font-size: 16px; opacity: 0.95;">넷폼알앤디 - 모여라딜 팀 OKR 리뷰</p>
+    </div>
+
+    <div style="display: grid; gap: 24px;">
+  `;
+
+  Object.values(okrByMember).forEach(({ member, okrs: memberOkrs }) => {
+    const avgProgress = memberOkrs.reduce((sum, okr) => sum + (okr.progress || 0), 0) / memberOkrs.length;
+
+    html += `
+      <div style="background: white; border-radius: 12px; padding: 32px; border: 2px solid var(--gray-200); page-break-inside: avoid;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <h3 style="font-size: 24px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px;">${member.name}</h3>
+          <p style="font-size: 16px; color: var(--gray-600);">${member.position || '팀원'}</p>
+          <div style="font-size: 48px; font-weight: 700; color: ${avgProgress >= 70 ? 'var(--success)' : avgProgress >= 40 ? 'var(--warning)' : 'var(--danger)'}; margin-top: 16px;">
+            ${avgProgress.toFixed(0)}%
+          </div>
+          <div style="font-size: 14px; color: var(--gray-600); margin-top: 4px;">평균 목표 달성률</div>
+        </div>
+
+        ${memberOkrs.map((okr, idx) => `
+          <div style="background: var(--gray-50); border-radius: 12px; padding: 24px; margin-bottom: ${idx < memberOkrs.length - 1 ? '20px' : '0'};">
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 12px; font-weight: 600; color: var(--primary); margin-bottom: 8px;">목표 ${idx + 1}</div>
+              <div style="font-size: 18px; font-weight: 700; color: var(--gray-900);">${okr.objective}</div>
+            </div>
+
+            ${okr.keyResults && okr.keyResults.length > 0 ? `
+              <div style="margin-bottom: 16px;">
+                <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">핵심 결과 (Key Results)</div>
+                ${okr.keyResults.map((kr, krIdx) => `
+                  <div style="background: white; padding: 12px; border-radius: 8px; margin-bottom: 8px;">
+                    <div style="font-size: 14px; color: var(--gray-800);">
+                      <strong>KR${krIdx + 1}:</strong> ${kr.description}
+                    </div>
+                    <div style="font-size: 13px; color: var(--primary); margin-top: 4px;">
+                      목표: ${kr.target}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">달성률</div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="flex: 1; background: var(--gray-200); height: 12px; border-radius: 6px; overflow: hidden;">
+                  <div style="background: ${okr.progress >= 70 ? 'var(--success)' : okr.progress >= 40 ? 'var(--warning)' : 'var(--danger)'}; height: 100%; width: ${okr.progress || 0}%;"></div>
+                </div>
+                <div style="font-size: 20px; font-weight: 700; color: ${okr.progress >= 70 ? 'var(--success)' : okr.progress >= 40 ? 'var(--warning)' : 'var(--danger)'}; min-width: 60px; text-align: right;">
+                  ${okr.progress || 0}%
+                </div>
+              </div>
+            </div>
+
+            ${okr.improvements ? `
+              <div style="background: white; border-left: 4px solid var(--primary); padding: 16px; border-radius: 8px;">
+                <div style="font-size: 12px; font-weight: 600; color: var(--primary); margin-bottom: 8px;">💡 개선 노력 & 시도한 것들</div>
+                <div style="font-size: 14px; color: var(--gray-800); line-height: 1.6; white-space: pre-wrap;">${okr.improvements}</div>
+              </div>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+  });
+
+  html += `
+      <div style="background: linear-gradient(135deg, #fc9600, #e08600); border-radius: 12px; padding: 32px; color: white; text-align: center;">
+        <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 12px;">🌟 그로스보드파티의 핵심 가치</h3>
+        <p style="font-size: 16px; opacity: 0.95; line-height: 1.6;">
+          우리는 결과보다 <strong>과정</strong>을 중요하게 봅니다.<br/>
+          완벽함보다 <strong>성장</strong>을 응원합니다.<br/>
+          포기하지 않고 <strong>개선</strong>을 위해 노력하는 모든 분들을 응원합니다! 🎉
+        </p>
+      </div>
+    </div>
+  `;
+
+  content.innerHTML = html;
+}
+
+// PPT 다운로드 기능
+async function downloadOKRPPT() {
+  const quarterSelect = document.getElementById('quarter-select');
+  const quarter = quarterSelect ? quarterSelect.value : `${getQuarter().year}-Q${getQuarter().quarter}`;
+
+  try {
+    showToast('PPT를 생성하는 중입니다...');
+
+    const okrSnapshot = await db.collection('okrs').where('quarter', '==', quarter).get();
+    const teamSnapshot = await db.collection('teamMembers').get();
+
+    const okrs = [];
+    okrSnapshot.forEach(doc => {
+      okrs.push({ id: doc.id, ...doc.data() });
+    });
+
+    const teamMembers = {};
+    teamSnapshot.forEach(doc => {
+      teamMembers[doc.id] = doc.data();
+    });
+
+    if (okrs.length === 0) {
+      alert('해당 분기에 등록된 OKR이 없습니다.');
+      return;
+    }
+
+    const pptx = new PptxGenJS();
+
+    // 표지 슬라이드
+    let slide = pptx.addSlide();
+    slide.background = { color: '10b981' };
+    slide.addText('🎯 그로스보드파티', {
+      x: 0.5, y: 1.5, w: 9, h: 1,
+      fontSize: 44, bold: true, color: 'FFFFFF', align: 'center'
+    });
+    slide.addText(`${quarter} OKR 리뷰`, {
+      x: 0.5, y: 2.5, w: 9, h: 0.6,
+      fontSize: 28, color: 'FFFFFF', align: 'center'
+    });
+    slide.addText('넷폼알앤디 - 모여라딜 팀', {
+      x: 0.5, y: 3.5, w: 9, h: 0.5,
+      fontSize: 20, color: 'FFFFFF', align: 'center'
+    });
+
+    // 팀원별 슬라이드
+    const okrByMember = {};
+    Object.keys(teamMembers).forEach(memberId => {
+      const memberOkrs = okrs.filter(okr => okr.memberId === memberId);
+      if (memberOkrs.length > 0) {
+        okrByMember[memberId] = {
+          member: teamMembers[memberId],
+          okrs: memberOkrs
+        };
+      }
+    });
+
+    Object.values(okrByMember).forEach(({ member, okrs: memberOkrs }) => {
+      const avgProgress = memberOkrs.reduce((sum, okr) => sum + (okr.progress || 0), 0) / memberOkrs.length;
+
+      // 팀원 개요 슬라이드
+      slide = pptx.addSlide();
+      slide.addText(member.name, {
+        x: 0.5, y: 0.5, w: 9, h: 0.6,
+        fontSize: 36, bold: true, color: '1f2937'
+      });
+      slide.addText(member.position || '팀원', {
+        x: 0.5, y: 1.2, w: 9, h: 0.4,
+        fontSize: 20, color: '6b7280'
+      });
+      slide.addText(`평균 달성률: ${avgProgress.toFixed(0)}%`, {
+        x: 0.5, y: 2.0, w: 9, h: 0.8,
+        fontSize: 48, bold: true, color: avgProgress >= 70 ? '10b981' : avgProgress >= 40 ? 'fc9600' : 'f04452'
+      });
+
+      // 각 OKR별 슬라이드
+      memberOkrs.forEach((okr, idx) => {
+        slide = pptx.addSlide();
+
+        slide.addText(`${member.name} - 목표 ${idx + 1}`, {
+          x: 0.5, y: 0.3, w: 9, h: 0.4,
+          fontSize: 20, color: '6b7280'
+        });
+
+        slide.addText(okr.objective, {
+          x: 0.5, y: 0.8, w: 9, h: 0.6,
+          fontSize: 28, bold: true, color: '1f2937'
+        });
+
+        let yPos = 1.6;
+
+        if (okr.keyResults && okr.keyResults.length > 0) {
+          slide.addText('핵심 결과 (Key Results)', {
+            x: 0.5, y: yPos, w: 9, h: 0.3,
+            fontSize: 16, bold: true, color: '4b5563'
+          });
+          yPos += 0.4;
+
+          okr.keyResults.forEach((kr, krIdx) => {
+            slide.addText(`KR${krIdx + 1}: ${kr.description}`, {
+              x: 0.7, y: yPos, w: 8.8, h: 0.3,
+              fontSize: 14, color: '374151'
+            });
+            slide.addText(`목표: ${kr.target}`, {
+              x: 0.7, y: yPos + 0.25, w: 8.8, h: 0.25,
+              fontSize: 12, color: 'fc9600'
+            });
+            yPos += 0.6;
+          });
+        }
+
+        yPos += 0.2;
+        slide.addText(`달성률: ${okr.progress || 0}%`, {
+          x: 0.5, y: yPos, w: 9, h: 0.5,
+          fontSize: 32, bold: true, color: okr.progress >= 70 ? '10b981' : okr.progress >= 40 ? 'fc9600' : 'f04452'
+        });
+
+        yPos += 0.7;
+        if (okr.improvements) {
+          slide.addText('💡 개선 노력 & 시도한 것들', {
+            x: 0.5, y: yPos, w: 9, h: 0.3,
+            fontSize: 16, bold: true, color: 'fc9600'
+          });
+          yPos += 0.4;
+          slide.addText(okr.improvements, {
+            x: 0.5, y: yPos, w: 9, h: 2,
+            fontSize: 14, color: '374151', valign: 'top'
+          });
+        }
+      });
+    });
+
+    // 마무리 슬라이드
+    slide = pptx.addSlide();
+    slide.background = { color: 'fc9600' };
+    slide.addText('🌟 그로스보드파티의 핵심 가치', {
+      x: 0.5, y: 1.5, w: 9, h: 0.6,
+      fontSize: 28, bold: true, color: 'FFFFFF', align: 'center'
+    });
+    slide.addText('우리는 결과보다 과정을 중요하게 봅니다.\n완벽함보다 성장을 응원합니다.\n포기하지 않고 개선을 위해 노력하는 모든 분들을 응원합니다! 🎉', {
+      x: 0.5, y: 2.5, w: 9, h: 1.5,
+      fontSize: 18, color: 'FFFFFF', align: 'center', lineSpacing: 32
+    });
+
+    await pptx.writeFile({ fileName: `그로스보드파티_${quarter}_OKR리뷰.pptx` });
+    showToast('PPT 다운로드가 완료되었습니다!');
+  } catch (error) {
+    console.error('PPT 생성 오류:', error);
+    alert('PPT 생성 중 오류가 발생했습니다: ' + error.message);
+  }
+}
+
 </script>
 
 </body>
