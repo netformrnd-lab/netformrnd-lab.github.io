@@ -7409,15 +7409,29 @@ async function parseCafe24Excel(input) {
         console.error('저장 실패:', docId, err);
       }
 
-      // 🎯 주문상품명(옵션포함)으로 상품DB 매칭
+      // 🎯 카페24 상품코드로 상품DB 매칭 (우선순위 1: 상품코드 정확 매칭)
       let matchedProduct = null;
       let matchedDeal = null;
 
-      if (productOption) {
-        // 상품DB에서 매칭 시도 (유사도 기반)
-        const products = state.products || [];
-        for (const product of products) {
-          const prodName = (product.name || '').toLowerCase();
+      // 1차: 상품코드로 정확 매칭 (카페24 상품번호)
+      if (productNo) {
+        const productNoStr = String(productNo).trim();
+        const supplierProducts = state.supplierProducts || [];
+
+        matchedProduct = supplierProducts.find(p => {
+          return p.cafe24ProductNo && String(p.cafe24ProductNo).trim() === productNoStr;
+        });
+
+        if (matchedProduct) {
+          console.log(`✅ 상품코드 매칭 성공: ${productNo} → ${matchedProduct.productName}`);
+        }
+      }
+
+      // 2차: 상품코드 매칭 실패 시 상품명 유사도로 폴백
+      if (!matchedProduct && productOption) {
+        const supplierProducts = state.supplierProducts || [];
+        for (const product of supplierProducts) {
+          const prodName = (product.productName || '').toLowerCase();
           const optionLower = productOption.toLowerCase();
 
           // "최저가" 등 제거하고 비교
@@ -7426,17 +7440,33 @@ async function parseCafe24Excel(input) {
 
           if (cleanOption.includes(cleanProdName) || cleanProdName.includes(cleanOption)) {
             matchedProduct = product;
-            // 해당 상품의 완료된 공구 찾기
-            const productDeals = (state.deals || []).filter(d =>
-              d.productId === product.id &&
-              (d.status === 'completed' || d.status === 'settled' || (d.endDate && new Date(d.endDate) < new Date()))
-            ).sort((a, b) => new Date(b.endDate) - new Date(a.endDate));
-
-            if (productDeals.length > 0) {
-              matchedDeal = productDeals[0]; // 가장 최근 완료 공구
-            }
+            console.log(`⚠️ 상품명 매칭 (폴백): ${productOption} → ${product.productName}`);
             break;
           }
+        }
+      }
+
+      // 매칭된 상품으로 완료된 공구 찾기
+      if (matchedProduct) {
+        const productDeals = (state.deals || []).filter(d => {
+          // selectedProducts 배열에서 매칭된 상품 ID가 있는지 확인
+          if (!d.selectedProducts || !Array.isArray(d.selectedProducts)) return false;
+
+          const hasProduct = d.selectedProducts.some(item => {
+            const pid = typeof item === 'string' ? item : item.productId;
+            return pid === matchedProduct.id;
+          });
+
+          // 완료된 공구만 필터링
+          const isCompleted = d.status === 'completed' ||
+                            d.status === 'settled' ||
+                            (d.endDate && new Date(d.endDate) < new Date());
+
+          return hasProduct && isCompleted;
+        }).sort((a, b) => new Date(b.endDate || 0) - new Date(a.endDate || 0));
+
+        if (productDeals.length > 0) {
+          matchedDeal = productDeals[0]; // 가장 최근 완료 공구
         }
       }
 
@@ -9230,6 +9260,7 @@ function renderProductDB() {
                 <th>공급사</th>
                 <th>대표상품</th>
                 <th>상품명(SKU)</th>
+                <th>카페24 코드</th>
                 <th style="text-align: right;">정가(V+)</th>
                 <th style="text-align: right;">공구판매가</th>
                 <th style="text-align: right;">공급가(V+)</th>
@@ -9260,6 +9291,9 @@ function renderProductDB() {
                       <span style="color: var(--info); font-size: 13px;">${p.representativeProduct || '-'}</span>
                     </td>
                     <td><strong>${p.productName || '-'}</strong></td>
+                    <td>
+                      ${p.cafe24ProductNo ? `<code style="background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${p.cafe24ProductNo}</code>` : '<span style="color: var(--gray-400);">-</span>'}
+                    </td>
                     <td style="text-align: right;">${Number(p.originalPrice || p.retailPrice || 0).toLocaleString()}원</td>
                     <td style="text-align: right;">${Number(p.salePrice || 0).toLocaleString()}원</td>
                     <td style="text-align: right;">${Number(p.supplyPrice || 0) > 0 ? Number(p.supplyPrice).toLocaleString() + '원' : '-'}</td>
@@ -9296,13 +9330,13 @@ function clearProductDBSearch() {
 // 공급사 상품 DB 양식 다운로드
 function downloadProductDBTemplate() {
   // 양식 시트
-  const headers = ['공급사명', '대표상품', '상품명(SKU)', '정가(V+)', '공구판매가', '공급가(V+)', '수수료율(%)'];
-  const notice = ['', '', '', '', '', '※ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK', ''];
-  const example = ['예시공급사', '스킨케어 세트', '스킨케어 세트 100ml SKU-001', '50000', '40000', '35000', ''];
-  const example2 = ['예시공급사', '스킨케어 세트', '스킨케어 세트 200ml SKU-002', '70000', '55000', '', '15'];
+  const headers = ['공급사명', '대표상품', '상품명(SKU)', '카페24 상품번호', '정가(V+)', '공구판매가', '공급가(V+)', '수수료율(%)'];
+  const notice = ['', '', '', '', '', '', '※ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK', ''];
+  const example = ['예시공급사', '스킨케어 세트', '스킨케어 세트 100ml SKU-001', 'P0000AAA', '50000', '40000', '35000', ''];
+  const example2 = ['예시공급사', '스킨케어 세트', '스킨케어 세트 200ml SKU-002', 'P0000BBB', '70000', '55000', '', '15'];
   const wsData = [headers, notice, example, example2];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{ wch: 15 }, { wch: 18 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 12 }];
+  ws['!cols'] = [{ wch: 15 }, { wch: 18 }, { wch: 28 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 12 }];
   
   // 안내 시트
   const guideData = [
@@ -9312,10 +9346,11 @@ function downloadProductDBTemplate() {
     ['A. 공급사명 *', '등록된 공급사명과 동일하게 입력해야 자동 매칭됩니다.'],
     ['B. 대표상품 *', '정산 시 같은 대표상품으로 묶어서 집계됩니다. (예: "스킨케어 세트")'],
     ['C. 상품명(SKU) *', '옵션/용량 등 구체적인 상품명 또는 SKU (예: "스킨케어 세트 100ml SKU-001")'],
-    ['D. 정가(V+)', '소비자 정가 (VAT 포함)'],
-    ['E. 공구판매가', '공동구매 판매 가격'],
-    ['F. 공급가(V+)', '공급사로부터 받는 공급 단가 (VAT 포함) ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
-    ['G. 수수료율(%)', '판매 수수료율 ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
+    ['D. 카페24 상품번호', '⭐ 카페24 엑셀의 상품번호와 자동 매칭됩니다 (예: P0000AAA, P0000BBB)'],
+    ['E. 정가(V+)', '소비자 정가 (VAT 포함)'],
+    ['F. 공구판매가', '공동구매 판매 가격'],
+    ['G. 공급가(V+)', '공급사로부터 받는 공급 단가 (VAT 포함) ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
+    ['H. 수수료율(%)', '판매 수수료율 ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
     [''],
     ['▶ 자동 계산 안내'],
     ['✅ 공급가 입력 시', '→ 수수료율 자동 계산: (판매가 - 공급가) ÷ 판매가 × 100'],
@@ -9531,12 +9566,13 @@ async function uploadProductDBExcel() {
       const brandName = row[0];
       const representativeProduct = row[1];  // 대표상품
       const productName = row[2];
+      const cafe24ProductNo = row[3] ? String(row[3]).trim() : null;  // 카페24 상품번호
       if (!brandName || !productName) continue;
-      
-      const originalPrice = Number(row[3]) || 0;
-      const salePrice = Number(row[4]) || 0;
-      const supplyPrice = Number(row[5]) || 0;
-      let commission = Number(row[6]) || 0;
+
+      const originalPrice = Number(row[4]) || 0;
+      const salePrice = Number(row[5]) || 0;
+      const supplyPrice = Number(row[6]) || 0;
+      let commission = Number(row[7]) || 0;
       
       // 자동 계산
       if (supplyPrice && !commission && salePrice) {
@@ -9556,6 +9592,7 @@ async function uploadProductDBExcel() {
         brandName,
         representativeProduct: representativeProduct || productName,  // 대표상품 (없으면 상품명으로)
         productName,
+        cafe24ProductNo,
         originalPrice,
         supplyPrice: finalSupplyPrice,
         salePrice,
@@ -10340,7 +10377,13 @@ function openProductDBModal(productId = null) {
           <label class="form-label">상품명(SKU) *</label>
           <input type="text" class="form-input" id="pdb-name" value="${p.productName || ''}" required placeholder="예: 스킨케어 세트 100ml SKU-001">
         </div>
-        
+
+        <div class="form-group">
+          <label class="form-label">카페24 상품번호</label>
+          <input type="text" class="form-input" id="pdb-cafe24-code" value="${p.cafe24ProductNo || ''}" placeholder="카페24 상품코드 (예: P0000AAA)">
+          <small style="color: var(--gray-500); font-size: 11px;">카페24 엑셀의 상품번호와 자동 매칭됩니다</small>
+        </div>
+
         <div class="form-group">
           <label class="form-label">정가 (V+, 원)</label>
           <input type="number" class="form-input" id="pdb-original" value="${p.originalPrice || p.retailPrice || ''}" placeholder="소비자 정가">
@@ -10414,6 +10457,7 @@ async function submitProductDBForm(e, id) {
     supplierType: document.getElementById('pdb-type').value,
     representativeProduct: document.getElementById('pdb-representative').value,
     productName: document.getElementById('pdb-name').value,
+    cafe24ProductNo: document.getElementById('pdb-cafe24-code').value.trim() || null,
     originalPrice: Number(document.getElementById('pdb-original').value) || 0,
     salePrice: Number(document.getElementById('pdb-sale').value) || 0,
     supplyPrice: Number(document.getElementById('pdb-supply').value) || 0,
