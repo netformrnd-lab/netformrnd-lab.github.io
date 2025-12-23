@@ -2991,6 +2991,13 @@ async function changePassword() {
 document.addEventListener('DOMContentLoaded', () => {
   loadAdminPassword();
   checkLoginStatus();
+
+  // 카페24 자동 동기화 초기화 (로그인 후 실행)
+  setTimeout(() => {
+    if (state.isLoggedIn) {
+      initCafe24AutoSync();
+    }
+  }, 2000); // 2초 후 실행 (Firebase 로드 대기)
 });
 
 // Firebase 설정
@@ -7409,64 +7416,47 @@ async function parseCafe24Excel(input) {
         console.error('저장 실패:', docId, err);
       }
 
-      // 🎯 카페24 상품코드로 상품DB 매칭 (우선순위 1: 상품코드 정확 매칭)
-      let matchedProduct = null;
+      // 🎯 셀러명과 상품명으로 종료된 공구 찾기
       let matchedDeal = null;
 
-      // 1차: 상품코드로 정확 매칭 (카페24 상품번호)
-      if (productNo) {
-        const productNoStr = String(productNo).trim();
-        const supplierProducts = state.supplierProducts || [];
-
-        matchedProduct = supplierProducts.find(p => {
-          return p.cafe24ProductNo && String(p.cafe24ProductNo).trim() === productNoStr;
+      if (sellerName && productOption) {
+        // 종료된 공구만 필터링
+        const completedDeals = (state.deals || []).filter(d => {
+          const isCompleted = d.status === 'completed' ||
+                            d.status === 'settled' ||
+                            (d.endDate && new Date(d.endDate) < new Date());
+          return isCompleted;
         });
 
-        if (matchedProduct) {
-          console.log(`✅ 상품코드 매칭 성공: ${productNo} → ${matchedProduct.productName}`);
-        }
-      }
+        // 셀러명으로 먼저 필터링
+        const sellerDeals = completedDeals.filter(d => {
+          const dealSeller = state.sellers.find(s => s.id === d.sellerId);
+          const dealSellerName = dealSeller?.nickname || dealSeller?.name || '';
+          return dealSellerName.toLowerCase().includes(sellerName.toLowerCase()) ||
+                 sellerName.toLowerCase().includes(dealSellerName.toLowerCase());
+        });
 
-      // 2차: 상품코드 매칭 실패 시 상품명 유사도로 폴백
-      if (!matchedProduct && productOption) {
-        const supplierProducts = state.supplierProducts || [];
-        for (const product of supplierProducts) {
-          const prodName = (product.productName || '').toLowerCase();
+        // 상품명 유사도로 매칭
+        for (const deal of sellerDeals) {
+          const dealName = (deal.name || '').toLowerCase();
           const optionLower = productOption.toLowerCase();
 
           // "최저가" 등 제거하고 비교
           const cleanOption = optionLower.replace(/최저가|특가|할인/g, '').trim();
-          const cleanProdName = prodName.replace(/최저가|특가|할인/g, '').trim();
+          const cleanDealName = dealName.replace(/최저가|특가|할인/g, '').trim();
 
-          if (cleanOption.includes(cleanProdName) || cleanProdName.includes(cleanOption)) {
-            matchedProduct = product;
-            console.log(`⚠️ 상품명 매칭 (폴백): ${productOption} → ${product.productName}`);
+          if (cleanOption.includes(cleanDealName) || cleanDealName.includes(cleanOption)) {
+            matchedDeal = deal;
+            console.log(`✅ 공구 매칭 성공: ${sellerName} / ${productOption} → ${deal.name}`);
             break;
           }
         }
-      }
 
-      // 매칭된 상품으로 완료된 공구 찾기
-      if (matchedProduct) {
-        const productDeals = (state.deals || []).filter(d => {
-          // selectedProducts 배열에서 매칭된 상품 ID가 있는지 확인
-          if (!d.selectedProducts || !Array.isArray(d.selectedProducts)) return false;
-
-          const hasProduct = d.selectedProducts.some(item => {
-            const pid = typeof item === 'string' ? item : item.productId;
-            return pid === matchedProduct.id;
-          });
-
-          // 완료된 공구만 필터링
-          const isCompleted = d.status === 'completed' ||
-                            d.status === 'settled' ||
-                            (d.endDate && new Date(d.endDate) < new Date());
-
-          return hasProduct && isCompleted;
-        }).sort((a, b) => new Date(b.endDate || 0) - new Date(a.endDate || 0));
-
-        if (productDeals.length > 0) {
-          matchedDeal = productDeals[0]; // 가장 최근 완료 공구
+        // 매칭 실패 시 가장 최근 종료된 공구 자동 선택 (같은 셀러)
+        if (!matchedDeal && sellerDeals.length > 0) {
+          sellerDeals.sort((a, b) => new Date(b.endDate || 0) - new Date(a.endDate || 0));
+          matchedDeal = sellerDeals[0];
+          console.log(`⚠️ 자동 매칭 (최근 공구): ${sellerName} → ${matchedDeal.name}`);
         }
       }
 
@@ -7482,8 +7472,9 @@ async function parseCafe24Excel(input) {
           totalQty: 0,
           totalSales: 0,
           mappedDealId: matchedDeal?.id || null,
-          matchedProductName: matchedProduct?.name || null,
-          autoMatched: !!matchedDeal
+          matchedDealName: matchedDeal?.name || null,
+          autoMatched: !!matchedDeal,
+          confirmed: false  // 확정 여부
         };
       }
 
@@ -7542,19 +7533,22 @@ function renderCafe24Groups() {
 
   groupList.innerHTML = groups.map(([key, group], idx) => {
     const autoMatched = group.autoMatched;
-    const borderColor = autoMatched ? '#059669' : '#e5e7eb';
-    const bgColor = autoMatched ? '#f0fdf4' : 'white';
+    const confirmed = group.confirmed || false;
+    const borderColor = confirmed ? '#3b82f6' : (autoMatched ? '#059669' : '#e5e7eb');
+    const bgColor = confirmed ? '#eff6ff' : (autoMatched ? '#f0fdf4' : 'white');
 
     return `
       <div style="background: ${bgColor}; border: 2px solid ${borderColor}; border-radius: 12px; padding: 16px;" data-group-key="${key}">
-        <div style="display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center;">
+        <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;">
           <div>
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-              ${autoMatched ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 자동매칭</span>' : '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">⚠ 수동선택</span>'}
+              ${confirmed ? '<span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 확정</span>' : ''}
+              ${autoMatched && !confirmed ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 자동매칭</span>' : ''}
+              ${!autoMatched && !confirmed ? '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">⚠ 수동선택</span>' : ''}
               <span style="font-weight: 600; color: var(--gray-800);">${group.productName}</span>
             </div>
             <div style="font-size: 12px; color: var(--gray-500);">
-              ${group.matchedProductName ? `<span style="color: #059669;">✓ ${group.matchedProductName}</span> | ` : ''}
+              ${group.matchedDealName ? `<span style="color: #059669;">✓ ${group.matchedDealName}</span> | ` : ''}
               셀러: <strong>${group.sellerName || '-'}</strong> |
               공급사: ${group.supplier || '-'} |
               <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> /
@@ -7563,7 +7557,7 @@ function renderCafe24Groups() {
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 12px; color: var(--gray-500);">→</span>
-            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-width: 200px; ${autoMatched ? 'border-color: #059669;' : ''}">
+            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-width: 250px; ${autoMatched ? 'border-color: #059669;' : ''}" ${confirmed ? 'disabled' : ''}>
               <option value="">-- 공구 선택 --</option>
               ${completedDeals.map(d => {
                 const seller = state.sellers.find(s => s.id === d.sellerId);
@@ -7572,10 +7566,22 @@ function renderCafe24Groups() {
                 // 현재 선택된 항목은 disabled 하지 않음
                 const shouldDisable = isMapped && !isSelected;
                 return `<option value="${d.id}" ${isSelected ? 'selected' : ''} ${shouldDisable ? 'disabled' : ''}>
-                  ${d.title || d.brandName || '-'} (${seller?.name || '-'}) ${isMapped ? '✅' : ''}
+                  ${d.name || d.title || d.brandName || '-'} (${seller?.name || '-'}) ${isMapped ? '✅' : ''}
                 </option>`;
               }).join('')}
             </select>
+          </div>
+          <div>
+            ${!confirmed && group.mappedDealId ? `
+              <button onclick="confirmGroupMapping('${key}')" class="btn btn-sm btn-primary" style="padding: 8px 16px;">
+                ✓ 확정
+              </button>
+            ` : ''}
+            ${confirmed ? `
+              <button onclick="unconfirmGroupMapping('${key}')" class="btn btn-sm btn-secondary" style="padding: 8px 16px;">
+                ↩ 취소
+              </button>
+            ` : ''}
           </div>
         </div>
       </div>
@@ -7590,8 +7596,43 @@ function renderCafe24Groups() {
 function updateGroupMapping(groupKey, dealId) {
   if (cafe24GroupedData[groupKey]) {
     cafe24GroupedData[groupKey].mappedDealId = dealId || null;
+
+    // 매칭된 공구명도 저장
+    if (dealId) {
+      const deal = state.deals.find(d => d.id === dealId);
+      cafe24GroupedData[groupKey].matchedDealName = deal?.name || null;
+    } else {
+      cafe24GroupedData[groupKey].matchedDealName = null;
+    }
   }
   // UI 다시 렌더링
+  renderCafe24Groups();
+}
+
+// 그룹 매핑 확정
+function confirmGroupMapping(groupKey) {
+  if (!cafe24GroupedData[groupKey]) return;
+
+  const group = cafe24GroupedData[groupKey];
+  if (!group.mappedDealId) {
+    alert('먼저 공구를 선택해주세요.');
+    return;
+  }
+
+  // 확정 표시
+  group.confirmed = true;
+
+  showToast('✅ 매칭이 확정되었습니다');
+  renderCafe24Groups();
+}
+
+// 그룹 매핑 확정 취소
+function unconfirmGroupMapping(groupKey) {
+  if (!cafe24GroupedData[groupKey]) return;
+
+  cafe24GroupedData[groupKey].confirmed = false;
+
+  showToast('↩ 확정이 취소되었습니다');
   renderCafe24Groups();
 }
 
@@ -7599,13 +7640,18 @@ function updateGroupMapping(groupKey, dealId) {
 function updateMappingStatus() {
   const statusEl = document.getElementById('cafe24MappingStatus');
   const btn = document.getElementById('cafe24MappingBtn');
-  
+
   const groups = Object.values(cafe24GroupedData);
-  const mappedCount = groups.filter(g => g.mappedDealId).length;
   const totalCount = groups.length;
-  
-  statusEl.innerHTML = `매핑됨: <strong>${mappedCount}</strong> / ${totalCount} 그룹`;
-  btn.disabled = mappedCount === 0;
+  const mappedCount = groups.filter(g => g.mappedDealId).length;
+  const confirmedCount = groups.filter(g => g.confirmed).length;
+
+  statusEl.innerHTML = `
+    <span>매핑: <strong>${mappedCount}</strong> / ${totalCount}</span>
+    <span style="margin-left: 12px; color: #3b82f6;">확정: <strong>${confirmedCount}</strong> / ${mappedCount}</span>
+  `;
+  btn.disabled = confirmedCount === 0;
+  btn.textContent = confirmedCount > 0 ? `✓ ${confirmedCount}개 정산서 생성` : '정산서 생성';
 }
 
 // 정산 미리보기 업데이트
@@ -7693,14 +7739,22 @@ function updateSettlementPreview() {
 
 // 카페24 매핑 일괄 적용 + 정산서 자동 생성
 async function applyCafe24Mapping() {
-  const mappedGroups = Object.values(cafe24GroupedData).filter(g => g.mappedDealId);
+  // 확정된 그룹만 필터링
+  const confirmedGroups = Object.values(cafe24GroupedData).filter(g => g.confirmed && g.mappedDealId);
+  const unconfirmedGroups = Object.values(cafe24GroupedData).filter(g => !g.confirmed && g.mappedDealId);
 
-  if (mappedGroups.length === 0) {
-    showToast('매핑된 그룹이 없습니다');
+  if (confirmedGroups.length === 0) {
+    if (unconfirmedGroups.length > 0) {
+      showToast(`⚠️ 먼저 매칭을 확정해주세요 (${unconfirmedGroups.length}개 미확정)`);
+    } else {
+      showToast('확정된 매칭이 없습니다');
+    }
     return;
   }
 
-  if (!confirm(`${mappedGroups.length}개 그룹을 공구와 매핑하고 정산서를 자동 생성하시겠습니까?`)) return;
+  if (!confirm(`✅ 확정된 ${confirmedGroups.length}개 그룹의 정산서를 자동 생성하시겠습니까?${unconfirmedGroups.length > 0 ? `\n\n⚠️ ${unconfirmedGroups.length}개 미확정 그룹은 제외됩니다.` : ''}`)) return;
+
+  const mappedGroups = confirmedGroups;
 
   // 공구별로 집계
   const dealUpdates = {};
@@ -9260,7 +9314,6 @@ function renderProductDB() {
                 <th>공급사</th>
                 <th>대표상품</th>
                 <th>상품명(SKU)</th>
-                <th>카페24 코드</th>
                 <th style="text-align: right;">정가(V+)</th>
                 <th style="text-align: right;">공구판매가</th>
                 <th style="text-align: right;">공급가(V+)</th>
@@ -9291,9 +9344,6 @@ function renderProductDB() {
                       <span style="color: var(--info); font-size: 13px;">${p.representativeProduct || '-'}</span>
                     </td>
                     <td><strong>${p.productName || '-'}</strong></td>
-                    <td>
-                      ${p.cafe24ProductNo ? `<code style="background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${p.cafe24ProductNo}</code>` : '<span style="color: var(--gray-400);">-</span>'}
-                    </td>
                     <td style="text-align: right;">${Number(p.originalPrice || p.retailPrice || 0).toLocaleString()}원</td>
                     <td style="text-align: right;">${Number(p.salePrice || 0).toLocaleString()}원</td>
                     <td style="text-align: right;">${Number(p.supplyPrice || 0) > 0 ? Number(p.supplyPrice).toLocaleString() + '원' : '-'}</td>
@@ -9330,13 +9380,13 @@ function clearProductDBSearch() {
 // 공급사 상품 DB 양식 다운로드
 function downloadProductDBTemplate() {
   // 양식 시트
-  const headers = ['공급사명', '대표상품', '상품명(SKU)', '카페24 상품번호', '정가(V+)', '공구판매가', '공급가(V+)', '수수료율(%)'];
-  const notice = ['', '', '', '', '', '', '※ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK', ''];
-  const example = ['예시공급사', '스킨케어 세트', '스킨케어 세트 100ml SKU-001', 'P0000AAA', '50000', '40000', '35000', ''];
-  const example2 = ['예시공급사', '스킨케어 세트', '스킨케어 세트 200ml SKU-002', 'P0000BBB', '70000', '55000', '', '15'];
+  const headers = ['공급사명', '대표상품', '상품명(SKU)', '정가(V+)', '공구판매가', '공급가(V+)', '수수료율(%)'];
+  const notice = ['', '', '', '', '', '※ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK', ''];
+  const example = ['예시공급사', '스킨케어 세트', '스킨케어 세트 100ml SKU-001', '50000', '40000', '35000', ''];
+  const example2 = ['예시공급사', '스킨케어 세트', '스킨케어 세트 200ml SKU-002', '70000', '55000', '', '15'];
   const wsData = [headers, notice, example, example2];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{ wch: 15 }, { wch: 18 }, { wch: 28 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 12 }];
+  ws['!cols'] = [{ wch: 15 }, { wch: 18 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 12 }];
   
   // 안내 시트
   const guideData = [
@@ -9346,11 +9396,10 @@ function downloadProductDBTemplate() {
     ['A. 공급사명 *', '등록된 공급사명과 동일하게 입력해야 자동 매칭됩니다.'],
     ['B. 대표상품 *', '정산 시 같은 대표상품으로 묶어서 집계됩니다. (예: "스킨케어 세트")'],
     ['C. 상품명(SKU) *', '옵션/용량 등 구체적인 상품명 또는 SKU (예: "스킨케어 세트 100ml SKU-001")'],
-    ['D. 카페24 상품번호', '⭐ 카페24 엑셀의 상품번호와 자동 매칭됩니다 (예: P0000AAA, P0000BBB)'],
-    ['E. 정가(V+)', '소비자 정가 (VAT 포함)'],
-    ['F. 공구판매가', '공동구매 판매 가격'],
-    ['G. 공급가(V+)', '공급사로부터 받는 공급 단가 (VAT 포함) ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
-    ['H. 수수료율(%)', '판매 수수료율 ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
+    ['D. 정가(V+)', '소비자 정가 (VAT 포함)'],
+    ['E. 공구판매가', '공동구매 판매 가격'],
+    ['F. 공급가(V+)', '공급사로부터 받는 공급 단가 (VAT 포함) ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
+    ['G. 수수료율(%)', '판매 수수료율 ⭐ 공급가 또는 수수료율 둘 중 하나만 입력하면 OK'],
     [''],
     ['▶ 자동 계산 안내'],
     ['✅ 공급가 입력 시', '→ 수수료율 자동 계산: (판매가 - 공급가) ÷ 판매가 × 100'],
@@ -9566,13 +9615,12 @@ async function uploadProductDBExcel() {
       const brandName = row[0];
       const representativeProduct = row[1];  // 대표상품
       const productName = row[2];
-      const cafe24ProductNo = row[3] ? String(row[3]).trim() : null;  // 카페24 상품번호
       if (!brandName || !productName) continue;
 
-      const originalPrice = Number(row[4]) || 0;
-      const salePrice = Number(row[5]) || 0;
-      const supplyPrice = Number(row[6]) || 0;
-      let commission = Number(row[7]) || 0;
+      const originalPrice = Number(row[3]) || 0;
+      const salePrice = Number(row[4]) || 0;
+      const supplyPrice = Number(row[5]) || 0;
+      let commission = Number(row[6]) || 0;
       
       // 자동 계산
       if (supplyPrice && !commission && salePrice) {
@@ -9592,7 +9640,6 @@ async function uploadProductDBExcel() {
         brandName,
         representativeProduct: representativeProduct || productName,  // 대표상품 (없으면 상품명으로)
         productName,
-        cafe24ProductNo,
         originalPrice,
         supplyPrice: finalSupplyPrice,
         salePrice,
@@ -10379,12 +10426,6 @@ function openProductDBModal(productId = null) {
         </div>
 
         <div class="form-group">
-          <label class="form-label">카페24 상품번호</label>
-          <input type="text" class="form-input" id="pdb-cafe24-code" value="${p.cafe24ProductNo || ''}" placeholder="카페24 상품코드 (예: P0000AAA)">
-          <small style="color: var(--gray-500); font-size: 11px;">카페24 엑셀의 상품번호와 자동 매칭됩니다</small>
-        </div>
-
-        <div class="form-group">
           <label class="form-label">정가 (V+, 원)</label>
           <input type="number" class="form-input" id="pdb-original" value="${p.originalPrice || p.retailPrice || ''}" placeholder="소비자 정가">
         </div>
@@ -10457,7 +10498,6 @@ async function submitProductDBForm(e, id) {
     supplierType: document.getElementById('pdb-type').value,
     representativeProduct: document.getElementById('pdb-representative').value,
     productName: document.getElementById('pdb-name').value,
-    cafe24ProductNo: document.getElementById('pdb-cafe24-code').value.trim() || null,
     originalPrice: Number(document.getElementById('pdb-original').value) || 0,
     salePrice: Number(document.getElementById('pdb-sale').value) || 0,
     supplyPrice: Number(document.getElementById('pdb-supply').value) || 0,
@@ -22533,6 +22573,17 @@ async function renderCafe24Settings() {
           <p style="font-size: 12px; color: var(--gray-500); margin-top: 6px; margin-left: 26px;">
             1시간마다 자동으로 카페24 주문 데이터를 가져옵니다
           </p>
+          ${savedConfig.autoSync ? `
+            <div style="margin-top: 12px; padding: 12px; background: var(--success-light); border-radius: 8px; margin-left: 26px;">
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--success);">
+                <span>🔄</span>
+                <span style="font-weight: 600;">자동 동기화 실행 중</span>
+              </div>
+              <div style="font-size: 12px; color: var(--gray-600); margin-top: 4px;">
+                다음 동기화는 약 1시간 후에 실행됩니다
+              </div>
+            </div>
+          ` : ''}
         </div>
 
         <div style="margin-top: 16px; padding: 12px; background: var(--gray-50); border-radius: 8px;">
@@ -22772,18 +22823,21 @@ async function testCafe24Connection() {
 }
 
 // 카페24 주문 데이터 동기화
-async function syncCafe24Orders() {
-  if (!confirm('카페24에서 최신 주문 데이터를 가져오시겠습니까?')) return;
+async function syncCafe24Orders(isAuto = false) {
+  // 수동 실행 시에만 확인
+  if (!isAuto && !confirm('카페24에서 최신 주문 데이터를 가져오시겠습니까?')) return;
 
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = '🔄 동기화 중...';
+  const btn = isAuto ? null : event.target;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '🔄 동기화 중...';
+  }
 
   try {
     // Firestore에서 설정 가져오기
     const doc = await db.collection('settings').doc('cafe24').get();
     if (!doc.exists || !doc.data().accessToken) {
-      alert('먼저 카페24 인증을 진행해주세요.');
+      if (!isAuto) alert('먼저 카페24 인증을 진행해주세요.');
       return;
     }
 
@@ -22874,15 +22928,23 @@ async function syncCafe24Orders() {
       lastSyncCount: savedCount
     });
 
-    alert(`✅ 총 ${savedCount}건의 주문 데이터를 동기화했습니다!`);
-    renderCafe24Settings();
+    if (!isAuto) {
+      alert(`✅ 총 ${savedCount}건의 주문 데이터를 동기화했습니다!`);
+      renderCafe24Settings();
+    } else {
+      console.log(`✅ [자동 동기화] ${savedCount}건의 주문 데이터를 동기화했습니다 (${new Date().toLocaleString('ko-KR')})`);
+    }
 
   } catch (err) {
     console.error('동기화 오류:', err);
-    alert('❌ 동기화 중 오류가 발생했습니다: ' + err.message);
+    if (!isAuto) {
+      alert('❌ 동기화 중 오류가 발생했습니다: ' + err.message);
+    }
   } finally {
-    btn.disabled = false;
-    btn.textContent = '🔄 주문 데이터 동기화';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🔄 주문 데이터 동기화';
+    }
   }
 }
 
@@ -22918,10 +22980,62 @@ async function toggleAutoSync() {
 
     if (checked) {
       alert('✅ 자동 동기화가 활성화되었습니다. (1시간마다 실행)');
+      startCafe24AutoSync(); // 자동 동기화 시작
+    } else {
+      stopCafe24AutoSync(); // 자동 동기화 중지
+      alert('⏸️ 자동 동기화가 비활성화되었습니다.');
     }
   } catch (err) {
     console.error('자동 동기화 설정 오류:', err);
     alert('❌ 설정 저장 중 오류가 발생했습니다.');
+  }
+}
+
+// 자동 동기화 타이머 변수
+let cafe24AutoSyncInterval = null;
+
+// 자동 동기화 시작
+function startCafe24AutoSync() {
+  // 기존 타이머가 있으면 중지
+  if (cafe24AutoSyncInterval) {
+    clearInterval(cafe24AutoSyncInterval);
+  }
+
+  console.log('🔄 카페24 자동 동기화 시작 (1시간 간격)');
+
+  // 1시간(3600000ms)마다 자동 동기화 실행
+  cafe24AutoSyncInterval = setInterval(async () => {
+    console.log('⏰ 카페24 자동 동기화 실행 시작...');
+    try {
+      await syncCafe24Orders(true); // isAuto = true
+    } catch (err) {
+      console.error('자동 동기화 실행 오류:', err);
+    }
+  }, 60 * 60 * 1000); // 1시간 = 60분 × 60초 × 1000ms
+
+  // 즉시 한 번 실행 (선택사항)
+  // syncCafe24Orders(true);
+}
+
+// 자동 동기화 중지
+function stopCafe24AutoSync() {
+  if (cafe24AutoSyncInterval) {
+    clearInterval(cafe24AutoSyncInterval);
+    cafe24AutoSyncInterval = null;
+    console.log('⏸️ 카페24 자동 동기화 중지');
+  }
+}
+
+// 페이지 로드 시 자동 동기화 설정 확인 및 시작
+async function initCafe24AutoSync() {
+  try {
+    const doc = await db.collection('settings').doc('cafe24').get();
+    if (doc.exists && doc.data().autoSync === true && doc.data().accessToken) {
+      console.log('✅ 카페24 자동 동기화 설정 확인됨, 시작합니다...');
+      startCafe24AutoSync();
+    }
+  } catch (err) {
+    console.error('자동 동기화 초기화 오류:', err);
   }
 }
 
