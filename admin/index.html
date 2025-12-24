@@ -7181,243 +7181,250 @@ function getChannelIcon(link) {
 function renderSettlement() {
   const app = document.getElementById('app');
   const today = new Date();
-  
+
   // 정산 대상: status가 completed/settled이거나 endDate가 지난 모든 공구
   const completedDeals = (state.deals || []).filter(d => {
     const status = d.status;
     const endDate = d.endDate ? new Date(d.endDate) : null;
     return status === 'completed' || status === 'settled' || (endDate && endDate < today);
   });
-  const pendingSettlement = completedDeals.filter(d => !d.supplierSettled || !d.sellerSettled);
-  const fullySettled = completedDeals.filter(d => d.supplierSettled && d.sellerSettled);
 
-  // 매출 KPI 계산 (sellerSettlements 기준)
+  // 자사/타사 구분 함수
+  const isExternalDeal = (d) => {
+    const supplier = state.suppliers?.find(s => s.id === d.supplierId);
+    return supplier?.supplierType === 'external' || d.productType === 'external';
+  };
+
+  // 정산 완료 여부 체크
+  const isFullySettled = (d) => {
+    if (isExternalDeal(d)) {
+      return d.supplierSettled && d.sellerSettled;
+    }
+    return d.sellerSettled;
+  };
+
+  const pendingSettlement = completedDeals.filter(d => !isFullySettled(d));
+  const fullySettled = completedDeals.filter(d => isFullySettled(d));
+
+  // 매출 KPI 계산 (cafe24_orders 기준)
+  const cafe24Orders = state.cafe24Orders || [];
+  const totalSalesAmount = cafe24Orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const totalPgFee = Math.round(totalSalesAmount * 0.04);
+
+  // 정산대기 금액 (pendingSettlement 기준)
+  const totalPendingAmount = pendingSettlement.reduce((sum, d) => sum + (Number(d.totalSales) || 0), 0);
+
+  // 순이익 계산
   const allSellerSettlements = state.sellerSettlements || [];
   const allSupplierSettlements = state.supplierSettlements || [];
-
-  const totalSalesAmount = allSellerSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const totalPgFee = Math.round(totalSalesAmount * 0.04);
   const totalSellerPayout = allSellerSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
   const totalSupplierPayout = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
-
-  const pendingSellerAmount = allSellerSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
-  const pendingSupplierAmount = allSupplierSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
-  const totalPendingAmount = pendingSellerAmount + pendingSupplierAmount;
-
   const netProfit = totalSalesAmount - totalPgFee - totalSellerPayout - totalSupplierPayout;
-  const profitRate = totalSalesAmount > 0 ? ((netProfit / totalSalesAmount) * 100).toFixed(1) : 0;
 
-  // 마감 후 1일 지난 공구 (정산 필요 알림)
-  const dealsNeedingSettlement = (state.deals || []).filter(d => {
-    if (d.status === 'settled') return false; // 이미 정산 완료
-    const endDate = new Date(d.endDate);
-    const daysSince = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
-    return daysSince >= 1; // 마감 1일 이상 지남
-  });
-  
+  // 마감일 기준 D+ 계산
+  const getDaysOverdue = (endDate) => {
+    if (!endDate) return 0;
+    return Math.floor((today - new Date(endDate)) / (1000 * 60 * 60 * 24));
+  };
+
   app.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">정산 관리</h1>
-      <p class="page-desc">공구 마감 후 3~7일 이내 정산을 권장합니다</p>
+    <div class="page-header" style="margin-bottom: 24px;">
+      <h1 class="page-title" style="font-size: 24px; font-weight: 700;">정산 관리</h1>
+      <p style="color: var(--gray-500); font-size: 14px; margin-top: 4px;">공구 마감 후 3~7일 이내 정산 권장</p>
     </div>
-    
-    ${dealsNeedingSettlement.length > 0 ? `
-    <!-- 마감 공구 자동 알림 -->
-    <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #f59e0b; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
-      <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-        <div>
-          <div style="font-weight: 700; color: #d97706; margin-bottom: 8px;">⏰ 정산 대기 공구 ${dealsNeedingSettlement.length}건</div>
-          <div style="font-size: 13px; color: #92400e; line-height: 1.6;">
-            마감 후 1일 이상 지난 공구입니다. 정산을 진행해주세요.<br>
-            ${dealsNeedingSettlement.slice(0, 3).map(d => {
-              const seller = state.sellers.find(s => s.id === d.sellerId);
-              return `• ${d.brandName || d.productName || '-'} (${seller?.name || '-'})`;
-            }).join('<br>')}
-            ${dealsNeedingSettlement.length > 3 ? `<br>...외 ${dealsNeedingSettlement.length - 3}건` : ''}
-          </div>
+
+    <!-- 빠른 액션 -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px;">
+      <button onclick="openCafe24MappingModal()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: white; border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='#3b82f6'" onmouseout="this.style.borderColor='var(--gray-200)'">
+        <span style="font-size: 24px;">📊</span>
+        <div style="text-align: left;">
+          <div style="font-weight: 600; color: var(--gray-800);">카페24 매출 연동</div>
+          <div style="font-size: 12px; color: var(--gray-500);">엑셀 업로드 → 자동 매핑</div>
         </div>
-        <button onclick="openUnifiedSettlementModal(null, '${dealsNeedingSettlement[0]?.id || ''}')" style="padding: 10px 16px; background: #d97706; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; white-space: nowrap;">
-          정산 추가
-        </button>
-      </div>
+      </button>
+      <button onclick="generateManagementReport()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: white; border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='#22c55e'" onmouseout="this.style.borderColor='var(--gray-200)'">
+        <span style="font-size: 24px;">📋</span>
+        <div style="text-align: left;">
+          <div style="font-weight: 600; color: var(--gray-800);">경영팀 정산서</div>
+          <div style="font-size: 12px; color: var(--gray-500);">전체 내역 다운로드</div>
+        </div>
+      </button>
     </div>
-    ` : ''}
-    
-    <!-- 카페24 매출 연동 & 정산서 다운로드 -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
-      <div style="background: linear-gradient(135deg, #dbeafe, #e0e7ff); border: 1px solid #3b82f6; border-radius: 12px; padding: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; height: 100%;">
-          <div>
-            <div style="font-weight: 700; color: #1d4ed8; margin-bottom: 4px;">📊 카페24 매출 연동</div>
-            <div style="font-size: 13px; color: #1e40af;">
-              카페24 주문 엑셀 업로드 → 공구 매핑
-            </div>
-          </div>
-          <button onclick="openCafe24MappingModal()" style="padding: 10px 16px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
-            📥 엑셀 업로드
-          </button>
-        </div>
+
+    <!-- 간결한 KPI -->
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
+      <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid var(--gray-200);">
+        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">총 매출</div>
+        <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${formatNumber(totalSalesAmount)}원</div>
       </div>
-      <div style="background: linear-gradient(135deg, #dcfce7, #bbf7d0); border: 1px solid #22c55e; border-radius: 12px; padding: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; height: 100%;">
-          <div>
-            <div style="font-weight: 700; color: #15803d; margin-bottom: 4px;">📋 경영팀 정산서</div>
-            <div style="font-size: 13px; color: #166534;">
-              전체 정산 내역 엑셀 다운로드
-            </div>
-          </div>
-          <button onclick="generateManagementReport('xlsx')" style="padding: 10px 16px; background: #22c55e; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
-            📥 다운로드
-          </button>
-        </div>
+      <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid var(--gray-200);">
+        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">정산대기</div>
+        <div style="font-size: 18px; font-weight: 700; color: #f59e0b;">${formatNumber(totalPendingAmount)}원</div>
       </div>
-    </div>
-    
-    <!-- 매출 KPI 대시보드 -->
-    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px;">
-      <div style="padding: 16px; background: linear-gradient(135deg, #3b82f6, #2563eb); border-radius: 12px; color: white;">
-        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">총 매출</div>
-        <div style="font-size: 20px; font-weight: 700;">${formatNumber(totalSalesAmount)}원</div>
-        <div style="font-size: 11px; opacity: 0.8;">${allSellerSettlements.length}건</div>
+      <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid var(--gray-200);">
+        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">순이익</div>
+        <div style="font-size: 18px; font-weight: 700; color: ${netProfit >= 0 ? '#10b981' : '#ef4444'};">${formatNumber(netProfit)}원</div>
       </div>
-      <div style="padding: 16px; background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 12px; color: white;">
-        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">정산대기 금액</div>
-        <div style="font-size: 20px; font-weight: 700;">${formatNumber(totalPendingAmount)}원</div>
-        <div style="font-size: 11px; opacity: 0.8;">셀러+공급사</div>
-      </div>
-      <div style="padding: 16px; background: linear-gradient(135deg, #ef4444, #dc2626); border-radius: 12px; color: white;">
-        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">PG수수료 (4%)</div>
-        <div style="font-size: 20px; font-weight: 700;">${formatNumber(totalPgFee)}원</div>
-        <div style="font-size: 11px; opacity: 0.8;">카드결제 기준</div>
-      </div>
-      <div style="padding: 16px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; color: white;">
-        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">순이익</div>
-        <div style="font-size: 20px; font-weight: 700;">${formatNumber(netProfit)}원</div>
-        <div style="font-size: 11px; opacity: 0.8;">이익률 ${profitRate}%</div>
-      </div>
-      <div style="padding: 16px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border-radius: 12px; color: white;">
-        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">정산 현황</div>
-        <div style="font-size: 20px; font-weight: 700;">${pendingSettlement.length} / ${completedDeals.length}</div>
-        <div style="font-size: 11px; opacity: 0.8;">대기 / 전체</div>
+      <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid var(--gray-200);">
+        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">진행률</div>
+        <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${fullySettled.length}/${completedDeals.length}</div>
       </div>
     </div>
 
-    <div class="card">
-      <h2 class="card-title" style="color: var(--primary)">⏰ 정산 대기</h2>
+    <!-- 정산 대기 -->
+    <div style="margin-bottom: 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <h2 style="font-size: 16px; font-weight: 600; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">
+          <span style="color: #f59e0b;">⏳</span> 정산 대기
+          <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 10px; font-size: 12px;">${pendingSettlement.length}</span>
+        </h2>
+      </div>
 
       ${pendingSettlement.length === 0 ? `
-        <div class="empty-state">
-          <div class="icon">🎉</div>
-          <div class="text">정산 대기 중인 공구가 없습니다</div>
+        <div style="background: white; border-radius: 12px; padding: 40px; text-align: center; border: 1px solid var(--gray-200);">
+          <div style="font-size: 32px; margin-bottom: 8px;">🎉</div>
+          <div style="color: var(--gray-500);">정산 대기 중인 공구가 없습니다</div>
         </div>
       ` : `
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>공구명</th>
-              <th>공구기간</th>
-              <th>구분</th>
-              <th>공급사</th>
-              <th>셀러</th>
-              <th>마감일</th>
-              <th style="text-align: center;">공급사 정산</th>
-              <th style="text-align: center;">셀러 정산</th>
-              <th style="text-align: center;">정산서</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pendingSettlement.sort((a,b) => new Date(a.endDate) - new Date(b.endDate)).map(d => {
-              const supplier = state.suppliers?.find(s => s.id === d.supplierId);
-              const isExternal = supplier?.supplierType === 'external' || d.productType === 'external';
-              const sellerName = getSellerName(d.sellerId);
-              const supplierName = getSupplierName(d.supplierId);
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          ${pendingSettlement.sort((a,b) => new Date(a.endDate) - new Date(b.endDate)).map(d => {
+            const isExternal = isExternalDeal(d);
+            const sellerName = getSellerName(d.sellerId);
+            const supplierName = getSupplierName(d.supplierId);
+            const daysOverdue = getDaysOverdue(d.endDate);
+            const isUrgent = daysOverdue >= 7;
+            const isWarning = daysOverdue >= 3 && daysOverdue < 7;
 
-              return `
-                <tr>
-                  <td><strong>${d.title || d.brandName || '-'}</strong></td>
-                  <td style="font-size: 11px; color: var(--gray-600);">${formatDateKR(d.startDate)} ~ ${formatDateKR(d.endDate)}</td>
-                  <td>
-                    <span style="background: ${isExternal ? '#fef3c7' : '#dbeafe'}; color: ${isExternal ? '#92400e' : '#1d4ed8'}; padding: 2px 8px; border-radius: 4px; font-size: 11px;">
+            return `
+              <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid ${isUrgent ? '#fecaca' : isWarning ? '#fed7aa' : 'var(--gray-200)'}; ${isUrgent ? 'border-left: 4px solid #ef4444;' : isWarning ? 'border-left: 4px solid #f59e0b;' : ''}">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                    <!-- 타사/자사 뱃지 -->
+                    <span style="background: ${isExternal ? '#fef3c7' : '#dbeafe'}; color: ${isExternal ? '#92400e' : '#1d4ed8'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap;">
                       ${isExternal ? '타사' : '자사'}
                     </span>
-                  </td>
-                  <td>${isExternal ? supplierName : '-'}</td>
-                  <td>${sellerName}</td>
-                  <td>${formatDateKR(d.endDate)}</td>
-                  <td style="text-align: center;">
-                    ${isExternal ? `
-                      <label class="checkbox-wrapper" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="event.stopPropagation(); updateSettlement('${d.id}', 'supplierSettled', ${!d.supplierSettled})">
-                        <input type="checkbox" ${d.supplierSettled ? 'checked' : ''} onclick="event.stopPropagation()">
-                        <span>${d.supplierSettled ? '완료' : '대기'}</span>
-                      </label>
-                    ` : '<span style="color: var(--gray-400);">-</span>'}
-                  </td>
-                  <td style="text-align: center;">
-                    <label class="checkbox-wrapper" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="event.stopPropagation(); updateSettlement('${d.id}', 'sellerSettled', ${!d.sellerSettled})">
-                      <input type="checkbox" ${d.sellerSettled ? 'checked' : ''} onclick="event.stopPropagation()">
-                      <span>${d.sellerSettled ? '완료' : '대기'}</span>
-                    </label>
-                  </td>
-                  <td style="text-align: center;">
-                    <button onclick="viewSettlementReport('${d.id}')" class="btn btn-sm btn-secondary" style="font-size: 11px;">📋 보기</button>
-                  </td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
+                    <!-- 공구 정보 -->
+                    <div style="flex: 1; min-width: 0;">
+                      <div style="font-weight: 600; color: var(--gray-800); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${d.title || d.brandName || '-'}</div>
+                      <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">
+                        ${isExternal ? supplierName + ' · ' : ''}${sellerName} · ${formatDateKR(d.endDate)} 마감
+                      </div>
+                    </div>
+                  </div>
+                  <!-- D+ 표시 -->
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    ${daysOverdue > 0 ? `
+                      <span style="background: ${isUrgent ? '#fee2e2' : isWarning ? '#ffedd5' : '#f3f4f6'}; color: ${isUrgent ? '#dc2626' : isWarning ? '#ea580c' : '#6b7280'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;">
+                        D+${daysOverdue}
+                      </span>
+                    ` : ''}
+                    <button onclick="viewSettlementReport('${d.id}')" style="padding: 8px 12px; background: var(--gray-100); border: none; border-radius: 8px; cursor: pointer; font-size: 12px; color: var(--gray-600);">
+                      정산서
+                    </button>
+                    <button onclick="completeSettlement('${d.id}', ${isExternal})" style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">
+                      완료
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
       `}
     </div>
 
+    <!-- 정산 완료 -->
     ${fullySettled.length > 0 ? `
-      <div class="card">
-        <h2 class="card-title" style="color: var(--success)">✅ 정산 완료</h2>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>공구명</th>
-              <th>공구기간</th>
-              <th>구분</th>
-              <th>공급사</th>
-              <th>셀러</th>
-              <th>마감일</th>
-              <th style="text-align: center;">정산서</th>
-              <th style="text-align: center;">되돌리기</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${fullySettled.map(d => {
-              const supplier = state.suppliers?.find(s => s.id === d.supplierId);
-              const isExternal = supplier?.supplierType === 'external' || d.productType === 'external';
-              return `
-                <tr style="opacity: 0.7">
-                  <td>${d.title || d.brandName || '-'}</td>
-                  <td style="font-size: 11px; color: var(--gray-600);">${formatDateKR(d.startDate)} ~ ${formatDateKR(d.endDate)}</td>
-                  <td>
-                    <span style="background: ${isExternal ? '#fef3c7' : '#dbeafe'}; color: ${isExternal ? '#92400e' : '#1d4ed8'}; padding: 2px 8px; border-radius: 4px; font-size: 11px;">
+      <div>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <h2 style="font-size: 16px; font-weight: 600; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">
+            <span style="color: #10b981;">✓</span> 정산 완료
+            <span style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 10px; font-size: 12px;">${fullySettled.length}</span>
+          </h2>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          ${fullySettled.slice(0, 5).map(d => {
+            const isExternal = isExternalDeal(d);
+            const sellerName = getSellerName(d.sellerId);
+            const supplierName = getSupplierName(d.supplierId);
+
+            return `
+              <div style="background: var(--gray-50); border-radius: 12px; padding: 12px 16px; border: 1px solid var(--gray-200);">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                  <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                    <span style="background: ${isExternal ? '#fef3c7' : '#dbeafe'}; color: ${isExternal ? '#92400e' : '#1d4ed8'}; padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;">
                       ${isExternal ? '타사' : '자사'}
                     </span>
-                  </td>
-                  <td>${isExternal ? getSupplierName(d.supplierId) : '-'}</td>
-                  <td>${getSellerName(d.sellerId)}</td>
-                  <td>${formatDateKR(d.endDate)}</td>
-                  <td style="text-align: center;">
-                    <button onclick="viewSettlementReport('${d.id}')" class="btn btn-sm btn-secondary" style="font-size: 11px;">📋 보기</button>
-                  </td>
-                  <td style="text-align: center;">
-                    <button onclick="revertSettlementToPending('${d.id}')" class="btn btn-sm" style="font-size: 11px; background: #f59e0b; color: white;">↩️ 대기</button>
-                  </td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
+                    <div style="flex: 1;">
+                      <span style="font-size: 13px; color: var(--gray-700);">${d.title || d.brandName || '-'}</span>
+                      <span style="font-size: 11px; color: var(--gray-400); margin-left: 8px;">${isExternal ? supplierName + ' · ' : ''}${sellerName}</span>
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <button onclick="viewSettlementReport('${d.id}')" style="padding: 6px 10px; background: white; border: 1px solid var(--gray-300); border-radius: 6px; cursor: pointer; font-size: 11px; color: var(--gray-600);">
+                      보기
+                    </button>
+                    <button onclick="revertSettlementToPending('${d.id}')" style="padding: 6px 10px; background: white; border: 1px solid var(--gray-300); border-radius: 6px; cursor: pointer; font-size: 11px; color: var(--gray-500);">
+                      ↩
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+          ${fullySettled.length > 5 ? `
+            <div style="text-align: center; padding: 8px; color: var(--gray-500); font-size: 12px;">
+              +${fullySettled.length - 5}개 더보기
+            </div>
+          ` : ''}
+        </div>
       </div>
     ` : ''}
   `;
 }
 
 // ========== 정산 관리 함수 ==========
+
+// 정산 완료 처리 (버튼 클릭)
+async function completeSettlement(dealId, isExternal) {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const deal = state.deals.find(d => d.id === dealId);
+  if (!deal) return;
+
+  // 현재 상태 확인
+  const currentlySettled = isExternal
+    ? (deal.supplierSettled && deal.sellerSettled)
+    : deal.sellerSettled;
+
+  const newStatus = !currentlySettled;
+  const confirmMsg = newStatus
+    ? '이 공구를 정산 완료 처리하시겠습니까?'
+    : '정산을 대기 상태로 되돌리시겠습니까?';
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const updateData = isExternal
+      ? { supplierSettled: newStatus, sellerSettled: newStatus }
+      : { sellerSettled: newStatus };
+
+    if (newStatus) {
+      updateData.status = 'settled';
+    }
+
+    await db.collection('deals').doc(dealId).update(updateData);
+
+    // state 즉시 업데이트 (리렌더 없이)
+    Object.assign(deal, updateData);
+
+    showToast(newStatus ? '✅ 정산 완료 처리됨' : '⏳ 정산 대기로 변경됨');
+    renderSettlement();
+  } catch (err) {
+    console.error('정산 처리 실패:', err);
+    showToast('❌ 처리에 실패했습니다');
+  }
+}
 
 // 정산완료 → 대기로 되돌리기
 async function revertSettlementToPending(dealId) {
@@ -7473,16 +7480,22 @@ function viewSettlementReport(dealId) {
     ? totalSales - supplierPayout - sellerPayout - pgFee  // 타사
     : totalSales - sellerPayout - pgFee;                   // 자사
 
+  // 판매 상품 목록 (selectedProducts 또는 cafe24 매핑 데이터에서)
+  const productsList = selectedProducts.length > 0
+    ? selectedProducts
+    : (deal.products || []);
+
   const m = document.getElementById('modal');
   m.style.display = 'flex';
   m.innerHTML = `
-    <div class="modal-content" style="max-width: 600px;">
-      <div class="modal-header">
+    <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow: auto;">
+      <div class="modal-header" style="position: sticky; top: 0; background: white; z-index: 10;">
         <h2>📋 정산서 - ${deal.title || deal.brandName}</h2>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
+        <button class="modal-close" onclick="closeModal()" style="background: none; border: none; font-size: 28px; cursor: pointer; color: var(--gray-500); padding: 0; line-height: 1;">&times;</button>
       </div>
 
       <div style="padding: 20px;">
+        <!-- 공구 기본 정보 -->
         <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
             <div><span style="color: var(--gray-500);">공구명:</span> <strong>${deal.title || deal.brandName}</strong></div>
@@ -7493,40 +7506,159 @@ function viewSettlementReport(dealId) {
           </div>
         </div>
 
-        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px;">
-          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--primary);">💰 정산 내역</h3>
+        <!-- 판매 상품 목록 -->
+        ${productsList.length > 0 ? `
+          <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--gray-700);">📦 판매 상품</h3>
+            <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: var(--gray-50); border-bottom: 2px solid var(--gray-200);">
+                  <th style="padding: 10px 8px; text-align: left; font-weight: 600; color: var(--gray-600);">상품명</th>
+                  <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">수량</th>
+                  <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">판매가</th>
+                  ${isExternal ? `<th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">공급가</th>` : ''}
+                </tr>
+              </thead>
+              <tbody>
+                ${productsList.map(p => `
+                  <tr style="border-bottom: 1px solid var(--gray-100);">
+                    <td style="padding: 10px 8px; color: var(--gray-700);">${p.productName || p.name || '-'}</td>
+                    <td style="padding: 10px 8px; text-align: right;">${p.quantity || 1}개</td>
+                    <td style="padding: 10px 8px; text-align: right;">${formatNumber(p.amount || p.unitPrice || 0)}원</td>
+                    ${isExternal ? `<td style="padding: 10px 8px; text-align: right; color: #92400e;">${formatNumber(p.supplyPrice || supplyPrice)}원</td>` : ''}
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot>
+                <tr style="background: var(--gray-50); font-weight: 600;">
+                  <td style="padding: 10px 8px;">합계</td>
+                  <td style="padding: 10px 8px; text-align: right;">${totalQty}개</td>
+                  <td style="padding: 10px 8px; text-align: right;">${formatNumber(totalSales)}원</td>
+                  ${isExternal ? `<td style="padding: 10px 8px; text-align: right; color: #92400e;">${formatNumber(supplierAmount)}원</td>` : ''}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ` : `
+          <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 16px; text-align: center; color: var(--gray-500);">
+            판매 상품 정보가 없습니다. 카페24 매출 연동을 진행해주세요.
+          </div>
+        `}
+
+        ${isExternal ? `
+          <!-- 타사: 셀러 정산 -->
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #1d4ed8;">👤 셀러 정산 (${seller?.name || '-'})</h3>
+            <table style="width: 100%; font-size: 13px;">
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">총 판매금액</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(totalSales)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진율</td>
+                <td style="padding: 8px 0; text-align: right;">${sellerMarginRate}%</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진금액</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(sellerMargin)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #dc2626;">원천세 (3.3%)</td>
+                <td style="padding: 8px 0; text-align: right; color: #dc2626;">-${formatNumber(sellerTax)}원</td>
+              </tr>
+              <tr style="background: #dbeafe;">
+                <td style="padding: 10px 0; font-weight: 700; color: #1d4ed8;">셀러 실지급액</td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 700; font-size: 15px; color: #1d4ed8;">${formatNumber(sellerPayout)}원</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- 타사: 공급사 정산 -->
+          <div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #92400e;">🏭 공급사 정산 (${supplier?.name || '-'})</h3>
+            <table style="width: 100%; font-size: 13px;">
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">공급단가</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(supplyPrice)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">총 수량</td>
+                <td style="padding: 8px 0; text-align: right;">${totalQty}개</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">공급가액</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(supplierAmount)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">부가세 (10%)</td>
+                <td style="padding: 8px 0; text-align: right;">+${formatNumber(supplierVat)}원</td>
+              </tr>
+              <tr style="background: #fef3c7;">
+                <td style="padding: 10px 0; font-weight: 700; color: #92400e;">공급사 실지급액</td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 700; font-size: 15px; color: #92400e;">${formatNumber(supplierPayout)}원</td>
+              </tr>
+            </table>
+          </div>
+        ` : `
+          <!-- 자사: 셀러 정산만 -->
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #1d4ed8;">👤 셀러 정산 (${seller?.name || '-'})</h3>
+            <table style="width: 100%; font-size: 13px;">
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">총 판매금액</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(totalSales)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진율</td>
+                <td style="padding: 8px 0; text-align: right;">${sellerMarginRate}%</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진금액</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(sellerMargin)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #dc2626;">원천세 (3.3%)</td>
+                <td style="padding: 8px 0; text-align: right; color: #dc2626;">-${formatNumber(sellerTax)}원</td>
+              </tr>
+              <tr style="background: #dbeafe;">
+                <td style="padding: 10px 0; font-weight: 700; color: #1d4ed8;">셀러 실지급액</td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 700; font-size: 15px; color: #1d4ed8;">${formatNumber(sellerPayout)}원</td>
+              </tr>
+            </table>
+          </div>
+        `}
+
+        <!-- 모여라딜 순이익 -->
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--primary);">💰 모여라딜 정산</h3>
           <table style="width: 100%; font-size: 13px;">
             <tr style="border-bottom: 1px solid var(--gray-100);">
               <td style="padding: 8px 0; color: var(--gray-600);">총 판매금액</td>
               <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(totalSales)}원</td>
             </tr>
             <tr style="border-bottom: 1px solid var(--gray-100);">
-              <td style="padding: 8px 0; color: var(--gray-600);">총 수량</td>
-              <td style="padding: 8px 0; text-align: right;">${totalQty}개</td>
-            </tr>
-            <tr style="border-bottom: 1px solid var(--gray-100);">
               <td style="padding: 8px 0; color: #dc2626;">PG수수료 (4%)</td>
               <td style="padding: 8px 0; text-align: right; color: #dc2626;">-${formatNumber(pgFee)}원</td>
             </tr>
             ${isExternal ? `
-              <tr style="border-bottom: 1px solid var(--gray-100); background: #fffbeb;">
-                <td style="padding: 8px 0; color: #92400e;">공급사 정산금액 (V+)</td>
+              <tr style="border-bottom: 1px solid var(--gray-100);">
+                <td style="padding: 8px 0; color: #92400e;">공급사 지급액</td>
                 <td style="padding: 8px 0; text-align: right; color: #92400e;">-${formatNumber(supplierPayout)}원</td>
               </tr>
             ` : ''}
-            <tr style="border-bottom: 1px solid var(--gray-100); background: #eff6ff;">
-              <td style="padding: 8px 0; color: #1d4ed8;">셀러 정산금액 (${sellerMarginRate}% - 원천세)</td>
+            <tr style="border-bottom: 1px solid var(--gray-100);">
+              <td style="padding: 8px 0; color: #1d4ed8;">셀러 지급액</td>
               <td style="padding: 8px 0; text-align: right; color: #1d4ed8;">-${formatNumber(sellerPayout)}원</td>
             </tr>
             <tr style="background: ${netProfit >= 0 ? '#dcfce7' : '#fee2e2'};">
-              <td style="padding: 12px 0; font-weight: 700; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">모여라딜 순이익</td>
-              <td style="padding: 12px 0; text-align: right; font-weight: 700; font-size: 16px; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">${formatNumber(netProfit)}원</td>
+              <td style="padding: 12px 0; font-weight: 700; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">순이익</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 700; font-size: 18px; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">${formatNumber(netProfit)}원</td>
             </tr>
           </table>
         </div>
 
-        <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-          <button onclick="closeModal()" class="btn btn-secondary">닫기</button>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button onclick="closeModal()" class="btn btn-secondary" style="padding: 10px 20px; cursor: pointer;">닫기</button>
         </div>
       </div>
     </div>
@@ -8146,14 +8278,16 @@ async function applyCafe24Mapping() {
       // 1. 셀러 정산서 생성 (상품별 정보 포함)
       const sellerSettlementId = `${dealId}_seller`;
 
-      // 상품별 마진 계산
+      // 상품별 마진 계산 (공급단가 포함)
       const salesItems = (data.products || []).map(p => {
         const itemMargin = Math.round((p.amount || 0) * sellerMarginRate / 100);
         const itemTax = Math.round(itemMargin * 0.033);
+        const itemUnitPrice = p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0;
         return {
           productName: p.productName || '-',
           quantity: p.quantity || 0,
-          unitPrice: p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0,
+          unitPrice: itemUnitPrice,
+          supplyPrice: supplyPrice,  // 공급단가 추가
           amount: p.amount || 0,
           marginRate: sellerMarginRate,
           marginAmount: itemMargin,
@@ -8171,6 +8305,7 @@ async function applyCafe24Mapping() {
         productType: productType,
         totalQuantity: data.totalQty,
         salesAmount: data.totalSales,
+        supplyPrice: supplyPrice,  // 공급단가 추가 (정산서 레벨)
         marginRate: sellerMarginRate,
         marginAmount: sellerMargin,
         withholdingTax: sellerTax,
@@ -12338,8 +12473,19 @@ function generateManagementReport() {
                   }
                   
                   const totalActualPayment = Number(s.actualPayment) || 0;
-                  const supplierTotalAmount = matchingSupplier ? Number(matchingSupplier.totalAmount) || 0 : 0;
-                  
+
+                  // 공급가액 계산 (matchingSupplier 없어도 s.supplyPrice로 계산)
+                  const settlementSupplyPrice = Number(s.supplyPrice) || (matchingSupplier ? Number(matchingSupplier.supplyPrice) : 0) || 0;
+                  const totalQty = Number(s.totalQuantity) || 0;
+                  const calcSupplyAmount = settlementSupplyPrice > 0 ? Math.round(settlementSupplyPrice * totalQty) : 0;
+                  const calcVatAmount = Math.round(calcSupplyAmount * 0.1);
+                  const calcSupplierTotal = calcSupplyAmount + calcVatAmount;
+
+                  // matchingSupplier 있으면 그 값 사용, 없으면 계산값 사용
+                  const supplyAmountDisplay = matchingSupplier ? Number(matchingSupplier.totalSupplyAmount || 0) : calcSupplyAmount;
+                  const vatAmountDisplay = matchingSupplier ? Number(matchingSupplier.totalVatAmount || 0) : calcVatAmount;
+                  const supplierTotalAmount = matchingSupplier ? Number(matchingSupplier.totalAmount || 0) : calcSupplierTotal;
+
                   if (sellerItems.length === 0) {
                     // 품목 정보 없는 경우
                     return '<tr>' +
@@ -12348,16 +12494,16 @@ function generateManagementReport() {
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; font-size: 8px;">' + (s.dealPeriod || '-') + '</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; color: #9ca3af;">(품목정보없음)</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">-</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">' + (s.totalQuantity || 0) + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">' + totalQty + '</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">' + Number(s.salesAmount || 0).toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-50);">' + Number(s.marginAmount || 0).toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-50);">' + Number(s.withholdingTax || 0).toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-50);">' + totalActualPayment.toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #d1fae5; font-weight: 700; color: #065f46;">' + totalActualPayment.toLocaleString() + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (matchingSupplier ? Number(matchingSupplier.totalSupplyAmount || 0).toLocaleString() : '-') + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (matchingSupplier ? Number(matchingSupplier.totalVatAmount || 0).toLocaleString() : '-') + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + supplierTotalAmount.toLocaleString() + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-100); font-weight: 700; color: var(--gray-600);">' + supplierTotalAmount.toLocaleString() + '원</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (supplyAmountDisplay > 0 ? supplyAmountDisplay.toLocaleString() + '원' : '-') + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (vatAmountDisplay > 0 ? vatAmountDisplay.toLocaleString() + '원' : '-') + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (supplierTotalAmount > 0 ? supplierTotalAmount.toLocaleString() + '원' : '-') + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-100); font-weight: 700; color: var(--gray-600);">' + (supplierTotalAmount > 0 ? supplierTotalAmount.toLocaleString() + '원' : '-') + '</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; font-size: 8px;">' + (s.settlementDate || '-') + '</td>' +
                       '</tr>';
                   } else {
@@ -12380,9 +12526,9 @@ function generateManagementReport() {
                       const itemTax = Math.round(itemMargin * 0.033);
                       const itemSubtotal = Number(item.actualPayment) || (itemMargin - itemTax);
                       
-                      // 공급사 정산 계산
-                      const supplyPrice = Number(item.supplyPrice) || unitPrice;
-                      const supplyAmount = Math.round(supplyPrice * qty / 1.1);
+                      // 공급사 정산 계산 (item.supplyPrice → s.supplyPrice → matchingSupplier.supplyPrice → 0)
+                      const supplyPrice = Number(item.supplyPrice) || Number(s.supplyPrice) || (matchingSupplier ? Number(matchingSupplier.supplyPrice) : 0) || 0;
+                      const supplyAmount = supplyPrice > 0 ? Math.round(supplyPrice * qty) : 0;
                       const vatAmount = Math.round(supplyAmount * 0.1);
                       const itemSupplierTotal = supplyAmount + vatAmount;
                       
