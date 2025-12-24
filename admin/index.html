@@ -9376,32 +9376,41 @@ function handleSellerListExcelFile(file) {
       const headers = jsonData[0].map(h => String(h).trim());
       const rows = jsonData.slice(1).filter(row => row.some(cell => cell));
       
-      // 새 양식: 카테고리, 계정명, 채널, 계정링크, 팔로워(만), 비고
+      // 새 양식: 카테고리, 계정명, 채널, 계정링크, 팔로워(만), 제안, 컨택, 계약, 비고
       const colMap = {
         category: headers.findIndex(h => h.includes('카테고리') || h.toLowerCase().includes('category')),
         accountName: headers.findIndex(h => h.includes('계정명') || h.includes('이름') || h.toLowerCase().includes('name') || h.toLowerCase().includes('account')),
         channel: headers.findIndex(h => h.includes('채널') || h.toLowerCase().includes('channel')),
         accountLink: headers.findIndex(h => h.includes('계정링크') || h.includes('링크') || h.toLowerCase().includes('link')),
         followers: headers.findIndex(h => h.includes('팔로워') || h.toLowerCase().includes('follower')),
+        proposed: headers.findIndex(h => h.includes('제안') || h.toLowerCase().includes('proposed')),
+        contacted: headers.findIndex(h => h.includes('컨택') || h.toLowerCase().includes('contact')),
+        contracted: headers.findIndex(h => h.includes('계약') || h.toLowerCase().includes('contract')),
         notes: headers.findIndex(h => h.includes('비고') || h.includes('메모') || h.toLowerCase().includes('note'))
       };
-      
+
+      // O 또는 o를 true로 변환
+      const isChecked = (val) => val && String(val).toUpperCase().trim() === 'O';
+
       sellerListExcelData = rows.map(row => ({
         category: colMap.category >= 0 ? String(row[colMap.category] || '').trim() : '',
         accountName: colMap.accountName >= 0 ? String(row[colMap.accountName] || '').trim() : '',
         channel: colMap.channel >= 0 ? String(row[colMap.channel] || '').trim() : '',
         accountLink: colMap.accountLink >= 0 ? String(row[colMap.accountLink] || '').trim() : '',
         followers: colMap.followers >= 0 ? Number(row[colMap.followers]) || 0 : 0,
+        proposed: colMap.proposed >= 0 ? isChecked(row[colMap.proposed]) : false,
+        contacted: colMap.contacted >= 0 ? isChecked(row[colMap.contacted]) : false,
+        contracted: colMap.contracted >= 0 ? isChecked(row[colMap.contracted]) : false,
         notes: colMap.notes >= 0 ? String(row[colMap.notes] || '').trim() : ''
       })).filter(item => item.accountName);
-      
+
       const previewDiv = document.getElementById('sellerList-excel-preview');
       const countSpan = document.getElementById('sellerList-preview-count');
       const thead = document.querySelector('#sellerList-preview-table thead');
       const tbody = document.querySelector('#sellerList-preview-table tbody');
-      
+
       countSpan.textContent = `(${sellerListExcelData.length}건)`;
-      thead.innerHTML = '<tr><th>카테고리</th><th>계정명</th><th>채널</th><th>계정링크</th><th>팔로워(만)</th><th>비고</th></tr>';
+      thead.innerHTML = '<tr><th>카테고리</th><th>계정명</th><th>채널</th><th>계정링크</th><th>팔로워</th><th>제안</th><th>컨택</th><th>계약</th><th>비고</th></tr>';
       tbody.innerHTML = sellerListExcelData.slice(0, 10).map(s => `
         <tr>
           <td>${s.category}</td>
@@ -9409,9 +9418,12 @@ function handleSellerListExcelFile(file) {
           <td>${s.channel}</td>
           <td>${s.accountLink}</td>
           <td>${s.followers || '-'}</td>
+          <td style="text-align:center;color:${s.proposed ? '#16a34a' : '#ccc'}">${s.proposed ? '✓' : '-'}</td>
+          <td style="text-align:center;color:${s.contacted ? '#2563eb' : '#ccc'}">${s.contacted ? '✓' : '-'}</td>
+          <td style="text-align:center;color:${s.contracted ? '#7c3aed' : '#ccc'}">${s.contracted ? '✓' : '-'}</td>
           <td>${s.notes}</td>
         </tr>
-      `).join('') + (sellerListExcelData.length > 10 ? `<tr><td colspan="6" style="text-align:center;color:var(--gray-500)">... 외 ${sellerListExcelData.length - 10}건</td></tr>` : '');
+      `).join('') + (sellerListExcelData.length > 10 ? `<tr><td colspan="9" style="text-align:center;color:var(--gray-500)">... 외 ${sellerListExcelData.length - 10}건</td></tr>` : '');
       
       previewDiv.style.display = 'block';
       showToast(`${sellerListExcelData.length}건의 데이터를 불러왔습니다`);
@@ -9465,9 +9477,10 @@ async function submitBulkSellerList() {
       // createdBy, createdAt 자동 추가
       data.createdBy = currentUserEmail;
       data.createdAt = now;
-      data.contacted = false;
-      data.proposed = false;
-      data.contracted = false;
+      // 엑셀에서 값이 없으면 기본값 false
+      data.proposed = data.proposed || false;
+      data.contacted = data.contacted || false;
+      data.contracted = data.contracted || false;
       await db.collection('sellerList').add(data);
       successCount++;
     } catch(e) {
@@ -9896,15 +9909,16 @@ function formatFollowers(num) {
 function downloadSellerListTemplate() {
   // 카테고리 옵션
   const categoryOptions = ['화장품/미용', '생활/건강', '출산/육아', '스포츠/레저', '가구/인테리어', '디지털/가전', '여행/문화', '패션의류', '식품'];
-  
+
   // 양식 시트
-  const headers = ['카테고리', '계정명', '채널', '계정링크', '팔로워(만)', '비고'];
-  const example = ['화장품/미용', '뷰티인플루언서', '인스타그램', 'https://instagram.com/beauty', '5.2', 'VIP 셀러'];
-  const example2 = ['식품', '맛집탐방', '유튜브', 'https://youtube.com/@matjip', '12', '구독자 12만'];
-  const wsData = [headers, example, example2];
+  const headers = ['카테고리', '계정명', '채널', '계정링크', '팔로워(만)', '제안', '컨택', '계약', '비고'];
+  const example = ['화장품/미용', '뷰티인플루언서', '인스타그램', 'https://instagram.com/beauty', '5.2', 'O', '', '', 'VIP 셀러'];
+  const example2 = ['식품', '맛집탐방', '유튜브', 'https://youtube.com/@matjip', '12', 'O', 'O', '', '구독자 12만'];
+  const example3 = ['생활/건강', '건강지킴이', '네이버블로그', 'https://blog.naver.com/health', '3.5', 'O', 'O', 'O', '계약완료'];
+  const wsData = [headers, example, example2, example3];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
-  ws['!cols'] = [{ wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 30 }, { wch: 12 }, { wch: 20 }];
-  
+  ws['!cols'] = [{ wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 30 }, { wch: 12 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 20 }];
+
   // 안내 시트
   const guideData = [
     ['📋 셀러 리스트 등록 양식 안내'],
@@ -9915,7 +9929,14 @@ function downloadSellerListTemplate() {
     ['C. 채널', '인스타그램, 유튜브, 네이버블로그, 네이버카페, 틱톡, 카카오, 기타'],
     ['D. 계정링크', '셀러의 SNS 또는 블로그 URL'],
     ['E. 팔로워(만) *', '만 단위로 입력 (1만명=1, 5천명=0.5, 52000명=5.2)'],
-    ['F. 비고', '추가 메모'],
+    ['F. 제안', '제안 완료시 O 입력 (빈칸 = 미제안)'],
+    ['G. 컨택', '컨택 완료시 O 입력 (빈칸 = 미컨택)'],
+    ['H. 계약', '계약 완료시 O 입력 (빈칸 = 미계약)'],
+    ['I. 비고', '추가 메모'],
+    [''],
+    ['▶ 제안/컨택/계약 입력 방법'],
+    ['완료된 경우', '→ O (대문자 O)'],
+    ['미완료인 경우', '→ 빈칸으로 두기'],
     [''],
     ['▶ 팔로워 입력 예시'],
     ['1만명', '→ 1'],
@@ -9928,7 +9949,7 @@ function downloadSellerListTemplate() {
   ];
   const wsGuide = XLSX.utils.aoa_to_sheet(guideData);
   wsGuide['!cols'] = [{ wch: 20 }, { wch: 60 }];
-  
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '셀러리스트양식');
   XLSX.utils.book_append_sheet(wb, wsGuide, '📖 작성안내');
