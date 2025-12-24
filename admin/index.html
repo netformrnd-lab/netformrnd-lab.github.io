@@ -9709,7 +9709,14 @@ function renderSellerList() {
     ` : ''}
     
     <div class="card">
-      <h3 class="card-title">탐색 셀러 목록</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="card-title" style="margin-bottom: 0;">탐색 셀러 목록</h3>
+        <div id="sellerlist-delete-actions" style="display: none;">
+          <span id="sellerlist-selected-count" style="font-size: 13px; color: var(--gray-600); margin-right: 12px;">0개 선택</span>
+          <button class="btn btn-secondary btn-sm" onclick="clearSellerListSelection()" style="margin-right: 8px;">선택 해제</button>
+          <button class="btn btn-sm" style="background: #ef4444; color: white;" onclick="deleteSelectedSellerList()">🗑 선택 삭제</button>
+        </div>
+      </div>
       ${filteredSellers.length === 0 ? `
         <div class="empty-state">
           <div class="icon">👤</div>
@@ -9722,6 +9729,9 @@ function renderSellerList() {
         <table class="data-table">
           <thead>
             <tr>
+              <th style="width: 40px; text-align: center;">
+                <input type="checkbox" id="sellerlist-select-all" onchange="toggleSelectAllSellerList(this.checked)" style="width: 18px; height: 18px; cursor: pointer;">
+              </th>
               <th>카테고리</th>
               <th>계정명</th>
               <th>채널</th>
@@ -9770,6 +9780,9 @@ function renderSellerList() {
                 
                 return `
               <tr style="${rowBg}">
+                <td style="text-align: center;">
+                  <input type="checkbox" class="sellerlist-checkbox" data-id="${s.id}" onchange="toggleSelectSellerList('${s.id}')" style="width: 18px; height: 18px; cursor: pointer;">
+                </td>
                 <td>${s.category ? `<span class="status-badge status-confirmed" style="font-size: 11px;">${s.category}</span>` : '-'}</td>
                 <td>
                   <div>
@@ -9839,6 +9852,91 @@ function clearSellerListSearch() {
 function filterSellerListByStatus(status) {
   window.sellerListStatusFilter = status;
   renderSellerList();
+}
+
+// 셀러 리스트 선택 삭제 기능
+window.selectedSellerListIds = new Set();
+
+function toggleSelectAllSellerList(checked) {
+  const checkboxes = document.querySelectorAll('.sellerlist-checkbox');
+  checkboxes.forEach(cb => {
+    cb.checked = checked;
+    const id = cb.dataset.id;
+    if (checked) {
+      window.selectedSellerListIds.add(id);
+    } else {
+      window.selectedSellerListIds.delete(id);
+    }
+  });
+  updateSellerListSelectionUI();
+}
+
+function toggleSelectSellerList(id) {
+  if (window.selectedSellerListIds.has(id)) {
+    window.selectedSellerListIds.delete(id);
+  } else {
+    window.selectedSellerListIds.add(id);
+  }
+  updateSellerListSelectionUI();
+}
+
+function updateSellerListSelectionUI() {
+  const count = window.selectedSellerListIds.size;
+  const actionsDiv = document.getElementById('sellerlist-delete-actions');
+  const countSpan = document.getElementById('sellerlist-selected-count');
+  const selectAllCheckbox = document.getElementById('sellerlist-select-all');
+
+  if (actionsDiv) {
+    actionsDiv.style.display = count > 0 ? 'flex' : 'none';
+  }
+  if (countSpan) {
+    countSpan.textContent = `${count}개 선택`;
+  }
+
+  // 전체 선택 체크박스 상태 업데이트
+  const allCheckboxes = document.querySelectorAll('.sellerlist-checkbox');
+  if (selectAllCheckbox && allCheckboxes.length > 0) {
+    selectAllCheckbox.checked = count === allCheckboxes.length;
+    selectAllCheckbox.indeterminate = count > 0 && count < allCheckboxes.length;
+  }
+}
+
+function clearSellerListSelection() {
+  window.selectedSellerListIds.clear();
+  const checkboxes = document.querySelectorAll('.sellerlist-checkbox');
+  checkboxes.forEach(cb => cb.checked = false);
+  const selectAllCheckbox = document.getElementById('sellerlist-select-all');
+  if (selectAllCheckbox) selectAllCheckbox.checked = false;
+  updateSellerListSelectionUI();
+}
+
+async function deleteSelectedSellerList() {
+  const ids = Array.from(window.selectedSellerListIds);
+  if (ids.length === 0) {
+    showToast('삭제할 셀러를 선택해주세요');
+    return;
+  }
+
+  const confirmMsg = ids.length === 1
+    ? '선택한 셀러를 삭제하시겠습니까?'
+    : `선택한 ${ids.length}명의 셀러를 모두 삭제하시겠습니까?`;
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const batch = db.batch();
+    ids.forEach(id => {
+      const ref = db.collection('sellerList').doc(id);
+      batch.delete(ref);
+    });
+    await batch.commit();
+
+    window.selectedSellerListIds.clear();
+    showToast(`${ids.length}명의 셀러가 삭제되었습니다`);
+  } catch (e) {
+    console.error('셀러 삭제 오류:', e);
+    showToast('삭제 중 오류가 발생했습니다');
+  }
 }
 
 // 팔로워 수 포맷 (만 단위 저장 기준)
