@@ -23260,11 +23260,43 @@ async function renderCafe24Dashboard() {
     
     // 🎯 전체 PG수수료 계산
     const totalPgFee = monthOrders.reduce((sum, o) => sum + (Number(o.pg_fee) || 0), 0);
-    
+
     // 이번 달 정산 상태 확인
     const currentMonthSettlement = settlements.find(s => s.period === currentMonth);
-    
+
     const recentOrders = orders.slice(0, 5);
+
+    // 📊 차트용 데이터 계산
+    const dailySalesMap = {};
+    const monthlySalesMap = {};
+    orders.forEach(o => {
+      if (!o.order_date) return;
+      const date = o.order_date.split('T')[0];
+      const month = date.substring(0, 7);
+      const amount = Number(o.total_amount) || 0;
+      dailySalesMap[date] = (dailySalesMap[date] || 0) + amount;
+      monthlySalesMap[month] = (monthlySalesMap[month] || 0) + amount;
+    });
+
+    const chartLast14Days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      chartLast14Days.push({ date: dateStr, label: (d.getMonth() + 1) + '/' + d.getDate(), sales: dailySalesMap[dateStr] || 0 });
+    }
+
+    const chartLast6Months = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      const monthStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+      chartLast6Months.push({ month: monthStr, label: (d.getMonth() + 1) + '월', sales: monthlySalesMap[monthStr] || 0 });
+    }
+
+    const chartMaxDaily = Math.max(...chartLast14Days.map(d => d.sales), 1);
+    const chartMaxMonthly = Math.max(...chartLast6Months.map(d => d.sales), 1);
+    const chartTotalSales = orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    const chartAvgOrder = orders.length > 0 ? Math.round(chartTotalSales / orders.length) : 0;
     
     app.innerHTML = `
       <div class="page-header">
@@ -23321,78 +23353,43 @@ async function renderCafe24Dashboard() {
       </div>
       
       <!-- 매출 통계 차트 -->
-      ${(() => {
-        const dailySales = {};
-        const monthlySalesData = {};
-        orders.forEach(o => {
-          if (!o.order_date) return;
-          const date = o.order_date.split('T')[0];
-          const month = date.substring(0, 7);
-          const amount = Number(o.total_amount) || 0;
-          dailySales[date] = (dailySales[date] || 0) + amount;
-          monthlySalesData[month] = (monthlySalesData[month] || 0) + amount;
-        });
-
-        const last14Days = [];
-        for (let i = 13; i >= 0; i--) {
-          const d = new Date(today);
-          d.setDate(d.getDate() - i);
-          const dateStr = d.toISOString().split('T')[0];
-          last14Days.push({ date: dateStr, label: \`\${d.getMonth() + 1}/\${d.getDate()}\`, sales: dailySales[dateStr] || 0 });
-        }
-
-        const last6Months = [];
-        for (let i = 5; i >= 0; i--) {
-          const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-          const monthStr = \`\${d.getFullYear()}-\${String(d.getMonth() + 1).padStart(2, '0')}\`;
-          last6Months.push({ month: monthStr, label: \`\${d.getMonth() + 1}월\`, sales: monthlySalesData[monthStr] || 0 });
-        }
-
-        const maxDaily = Math.max(...last14Days.map(d => d.sales), 1);
-        const maxMonthly = Math.max(...last6Months.map(d => d.sales), 1);
-        const totalSales = orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
-        const avgOrder = orders.length > 0 ? Math.round(totalSales / orders.length) : 0;
-
-        return \`
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
-            <div class="card">
-              <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">📊 최근 14일 일별 매출</h3>
-              <div style="display: flex; align-items: flex-end; gap: 4px; height: 120px;">
-                \${last14Days.map(d => {
-                  const height = maxDaily > 0 ? (d.sales / maxDaily * 100) : 0;
-                  return \`<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;">
-                    <div style="width: 100%; background: linear-gradient(180deg, #3b82f6, #2563eb); border-radius: 3px 3px 0 0; height: \${Math.max(height, 2)}px;" title="\${d.date}: \${formatNumber(d.sales)}원"></div>
-                    <div style="font-size: 8px; color: var(--gray-400);">\${d.label}</div>
-                  </div>\`;
-                }).join('')}
-              </div>
-            </div>
-            <div class="card">
-              <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">📅 최근 6개월 월별 매출</h3>
-              <div style="display: flex; align-items: flex-end; gap: 8px; height: 120px;">
-                \${last6Months.map(d => {
-                  const height = maxMonthly > 0 ? (d.sales / maxMonthly * 100) : 0;
-                  return \`<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;">
-                    <div style="font-size: 10px; font-weight: 600; color: var(--gray-600);">\${formatNumber(d.sales / 10000)}만</div>
-                    <div style="width: 100%; background: linear-gradient(180deg, #10b981, #059669); border-radius: 4px 4px 0 0; height: \${Math.max(height, 4)}px;" title="\${d.month}: \${formatNumber(d.sales)}원"></div>
-                    <div style="font-size: 11px; color: var(--gray-500);">\${d.label}</div>
-                  </div>\`;
-                }).join('')}
-              </div>
-            </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+        <div class="card">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">📊 최근 14일 일별 매출</h3>
+          <div style="display: flex; align-items: flex-end; gap: 4px; height: 120px;">
+            ${chartLast14Days.map(d => {
+              const height = chartMaxDaily > 0 ? (d.sales / chartMaxDaily * 100) : 0;
+              return '<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;">' +
+                '<div style="width: 100%; background: linear-gradient(180deg, #3b82f6, #2563eb); border-radius: 3px 3px 0 0; height: ' + Math.max(height, 2) + 'px;" title="' + d.date + ': ' + formatNumber(d.sales) + '원"></div>' +
+                '<div style="font-size: 8px; color: var(--gray-400);">' + d.label + '</div>' +
+              '</div>';
+            }).join('')}
           </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
-            <div style="padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
-              <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">총 매출액</div>
-              <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">\${formatNumber(totalSales)}원</div>
-            </div>
-            <div style="padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
-              <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">평균 주문금액</div>
-              <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">\${formatNumber(avgOrder)}원</div>
-            </div>
+        </div>
+        <div class="card">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">📅 최근 6개월 월별 매출</h3>
+          <div style="display: flex; align-items: flex-end; gap: 8px; height: 120px;">
+            ${chartLast6Months.map(d => {
+              const height = chartMaxMonthly > 0 ? (d.sales / chartMaxMonthly * 100) : 0;
+              return '<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;">' +
+                '<div style="font-size: 10px; font-weight: 600; color: var(--gray-600);">' + formatNumber(d.sales / 10000) + '만</div>' +
+                '<div style="width: 100%; background: linear-gradient(180deg, #10b981, #059669); border-radius: 4px 4px 0 0; height: ' + Math.max(height, 4) + 'px;" title="' + d.month + ': ' + formatNumber(d.sales) + '원"></div>' +
+                '<div style="font-size: 11px; color: var(--gray-500);">' + d.label + '</div>' +
+              '</div>';
+            }).join('')}
           </div>
-        \`;
-      })()}
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+        <div style="padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">총 매출액</div>
+          <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">${formatNumber(chartTotalSales)}원</div>
+        </div>
+        <div style="padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">평균 주문금액</div>
+          <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">${formatNumber(chartAvgOrder)}원</div>
+        </div>
+      </div>
       
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
