@@ -7083,20 +7083,50 @@ function renderSettlement() {
   const pendingSettlement = completedDeals.filter(d => !isFullySettled(d));
   const fullySettled = completedDeals.filter(d => isFullySettled(d));
 
-  // 매출 KPI 계산 (cafe24_orders 기준)
+  // ========== 매출 KPI 계산 (sellerSettlements 기준으로 변경) ==========
+  const allSellerSettlements = state.sellerSettlements || [];
+  const allSupplierSettlements = state.supplierSettlements || [];
   const cafe24Orders = state.cafe24Orders || [];
-  const totalSalesAmount = cafe24Orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+
+  // 자사 상품 정산
+  const inhouseSettlements = allSellerSettlements.filter(s => s.productType === 'inhouse');
+  const inhouseSalesAmount = inhouseSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const inhouseMarginAmount = inhouseSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+  const inhouseActualPayment = inhouseSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const inhousePendingCount = inhouseSettlements.filter(s => !s.isCompleted).length;
+
+  // 타사 상품 정산
+  const externalSettlements = allSellerSettlements.filter(s => s.productType === 'external');
+  const externalSalesAmount = externalSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const externalMarginAmount = externalSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+  const externalActualPayment = externalSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const externalPendingCount = externalSettlements.filter(s => !s.isCompleted).length;
+
+  // 공급사 정산
+  const supplierTotalAmount = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+
+  // 총 매출 (cafe24 또는 sellerSettlements 중 큰 값 사용)
+  const cafe24TotalSales = cafe24Orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const settlementTotalSales = inhouseSalesAmount + externalSalesAmount;
+  const totalSalesAmount = Math.max(cafe24TotalSales, settlementTotalSales);
+
   const totalPgFee = Math.round(totalSalesAmount * 0.04);
 
   // 정산대기 금액 (pendingSettlement 기준)
   const totalPendingAmount = pendingSettlement.reduce((sum, d) => sum + (Number(d.totalSales) || 0), 0);
 
   // 순이익 계산
-  const allSellerSettlements = state.sellerSettlements || [];
-  const allSupplierSettlements = state.supplierSettlements || [];
-  const totalSellerPayout = allSellerSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
-  const totalSupplierPayout = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+  const totalSellerPayout = inhouseActualPayment + externalActualPayment;
+  const totalSupplierPayout = supplierTotalAmount;
   const netProfit = totalSalesAmount - totalPgFee - totalSellerPayout - totalSupplierPayout;
+
+  // 자사 순이익
+  const inhousePgFee = Math.round(inhouseSalesAmount * 0.04);
+  const inhouseProfit = inhouseSalesAmount - inhouseActualPayment - inhousePgFee;
+
+  // 타사 순이익 (매출 - 공급사정산 - 셀러정산 - PG수수료)
+  const externalPgFee = Math.round(externalSalesAmount * 0.04);
+  const externalProfit = externalSalesAmount - supplierTotalAmount - externalActualPayment - externalPgFee;
 
   // 마감일 기준 D+ 계산
   const getDaysOverdue = (endDate) => {
@@ -7145,6 +7175,63 @@ function renderSettlement() {
       <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid var(--gray-200);">
         <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">진행률</div>
         <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${fullySettled.length}/${completedDeals.length}</div>
+      </div>
+    </div>
+
+    <!-- 자사/타사 매출 대시보드 -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+      <!-- 자사 상품 대시보드 -->
+      <div style="background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-radius: 16px; padding: 20px; border: 1px solid #bfdbfe;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+          <h3 style="font-size: 15px; font-weight: 700; color: #1e40af; margin: 0; display: flex; align-items: center; gap: 8px;">
+            🏠 자사 상품
+            <span style="background: #1e40af; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">${inhouseSettlements.length}건</span>
+          </h3>
+          ${inhousePendingCount > 0 ? `<span style="background: #fef3c7; color: #92400e; padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 600;">대기 ${inhousePendingCount}건</span>` : ''}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">판매금액</div>
+            <div style="font-size: 16px; font-weight: 700; color: #1e40af;">${formatNumber(inhouseSalesAmount)}원</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">셀러지급액</div>
+            <div style="font-size: 16px; font-weight: 700; color: #6b7280;">${formatNumber(inhouseActualPayment)}원</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center;">
+            <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">순이익</div>
+            <div style="font-size: 16px; font-weight: 700; color: ${inhouseProfit >= 0 ? '#10b981' : '#ef4444'};">${formatNumber(inhouseProfit)}원</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 타사 상품 대시보드 -->
+      <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 16px; padding: 20px; border: 1px solid #fcd34d;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+          <h3 style="font-size: 15px; font-weight: 700; color: #92400e; margin: 0; display: flex; align-items: center; gap: 8px;">
+            🏭 타사 상품
+            <span style="background: #92400e; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">${externalSettlements.length}건</span>
+          </h3>
+          ${externalPendingCount > 0 ? `<span style="background: #fee2e2; color: #dc2626; padding: 3px 10px; border-radius: 8px; font-size: 11px; font-weight: 600;">대기 ${externalPendingCount}건</span>` : ''}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+          <div style="background: white; border-radius: 10px; padding: 10px; text-align: center;">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">판매금액</div>
+            <div style="font-size: 14px; font-weight: 700; color: #92400e;">${formatNumber(externalSalesAmount)}원</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 10px; text-align: center;">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">공급사정산</div>
+            <div style="font-size: 14px; font-weight: 700; color: #dc2626;">${formatNumber(supplierTotalAmount)}원</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 10px; text-align: center;">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">셀러지급액</div>
+            <div style="font-size: 14px; font-weight: 700; color: #6b7280;">${formatNumber(externalActualPayment)}원</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 10px; text-align: center;">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">순이익</div>
+            <div style="font-size: 14px; font-weight: 700; color: ${externalProfit >= 0 ? '#10b981' : '#ef4444'};">${formatNumber(externalProfit)}원</div>
+          </div>
+        </div>
       </div>
     </div>
 
