@@ -7376,30 +7376,42 @@ function viewSettlementReport(dealId) {
     productGroups[productKey].orders.push(order);
   });
 
-  // selectedProducts와 매칭하여 마진율/공급단가 가져오기
+  // cafe24 주문의 supply_price, margin_rate 또는 selectedProducts에서 매칭
   const productsList = Object.values(productGroups).map(group => {
-    // 상품명 부분 매칭으로 selectedProducts에서 찾기
-    let matchedProduct = null;
-    for (const sp of selectedProducts) {
-      const spName = (sp.productName || '').toLowerCase();
-      const groupName = (group.productName || '').toLowerCase();
-      // 부분 문자열 매칭 (어느 방향이든)
-      if (groupName.includes(spName) || spName.includes(groupName) ||
-          groupName.replace(/[^가-힣a-z0-9]/gi, '').includes(spName.replace(/[^가-힣a-z0-9]/gi, ''))) {
-        matchedProduct = sp;
-        break;
+    // 1. 먼저 cafe24 주문에서 직접 가져온 데이터 확인
+    const firstOrder = group.orders[0] || {};
+    let marginRate = Number(firstOrder.margin_rate) || 0;
+    let supplyPrice = Number(firstOrder.supply_price) || 0;
+
+    // 2. cafe24 데이터가 없으면 selectedProducts에서 매칭
+    if (!marginRate || !supplyPrice) {
+      for (const sp of selectedProducts) {
+        const spName = (sp.productName || '').toLowerCase();
+        const groupName = (group.productName || '').toLowerCase();
+        if (groupName.includes(spName) || spName.includes(groupName) ||
+            groupName.replace(/[^가-힣a-z0-9]/gi, '').includes(spName.replace(/[^가-힣a-z0-9]/gi, ''))) {
+          if (!marginRate) marginRate = sp.marginRate || 0;
+          if (!supplyPrice) supplyPrice = sp.supplyPrice || 0;
+          break;
+        }
       }
     }
 
-    const marginRate = matchedProduct?.marginRate || deal.sellerMarginRate || 10;
-    const supplyPrice = matchedProduct?.supplyPrice || deal.supplyPrice || 0;
+    // 3. 기본값 적용
+    marginRate = marginRate || deal.sellerMarginRate || 10;
+    supplyPrice = supplyPrice || deal.supplyPrice || 0;
+
     const marginAmount = Math.round(group.totalAmount * marginRate / 100);
     const supplyTotal = supplyPrice * group.quantity;
+    const unitPrice = group.orders.length > 0
+      ? Math.round(group.totalAmount / group.quantity)
+      : 0;
 
     return {
       productName: group.productName,
       quantity: group.quantity,
       amount: group.totalAmount,
+      unitPrice: unitPrice,
       marginRate: marginRate,
       supplyPrice: supplyPrice,
       supplyTotal: supplyTotal,
@@ -7456,10 +7468,11 @@ function viewSettlementReport(dealId) {
           <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
             <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--gray-700);">📦 판매 상품</h3>
             <div style="overflow-x: auto;">
-              <table style="width: 100%; font-size: 12px; border-collapse: collapse; min-width: 600px;">
+              <table style="width: 100%; font-size: 12px; border-collapse: collapse; min-width: 700px;">
                 <thead>
                   <tr style="background: var(--gray-50); border-bottom: 2px solid var(--gray-200);">
                     <th style="padding: 10px 6px; text-align: left; font-weight: 600; color: var(--gray-600);">상품명</th>
+                    <th style="padding: 10px 6px; text-align: right; font-weight: 600; color: var(--gray-600);">단가</th>
                     <th style="padding: 10px 6px; text-align: right; font-weight: 600; color: var(--gray-600);">수량</th>
                     <th style="padding: 10px 6px; text-align: right; font-weight: 600; color: var(--gray-600);">판매금액</th>
                     ${isExternal ? `<th style="padding: 10px 6px; text-align: right; font-weight: 600; color: var(--gray-600);">공급가</th>` : ''}
@@ -7471,6 +7484,7 @@ function viewSettlementReport(dealId) {
                   ${productsList.map(p => `
                     <tr style="border-bottom: 1px solid var(--gray-100);">
                       <td style="padding: 10px 6px; color: var(--gray-700); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${p.productName}">${p.productName}</td>
+                      <td style="padding: 10px 6px; text-align: right;">${formatNumber(p.unitPrice)}원</td>
                       <td style="padding: 10px 6px; text-align: right;">${p.quantity}개</td>
                       <td style="padding: 10px 6px; text-align: right; font-weight: 500;">${formatNumber(p.amount)}원</td>
                       ${isExternal ? `<td style="padding: 10px 6px; text-align: right; color: #92400e;">${formatNumber(p.supplyTotal)}원</td>` : ''}
@@ -7482,6 +7496,7 @@ function viewSettlementReport(dealId) {
                 <tfoot>
                   <tr style="background: var(--gray-100); font-weight: 600;">
                     <td style="padding: 12px 6px;">합계</td>
+                    <td style="padding: 12px 6px; text-align: right;"></td>
                     <td style="padding: 12px 6px; text-align: right;">${totalQty}개</td>
                     <td style="padding: 12px 6px; text-align: right;">${formatNumber(totalSales)}원</td>
                     ${isExternal ? `<td style="padding: 12px 6px; text-align: right; color: #92400e;">${formatNumber(totalSupplyAmount)}원</td>` : ''}
@@ -7724,6 +7739,7 @@ async function parseCafe24Excel(input) {
       if (orderMap.has(docId)) continue;
 
       // 데이터 추출 (여러 가능한 컬럼명 지원)
+      const productCode = (row['자체상품코드'] || row['상품코드'] || '').trim(); // 공구상품DB 매칭용
       const supplierName = (row['공급사'] || row['공급사명'] || '').trim();
       const rawSellerName = (row['상품명(관리용)'] || row['관리용 상품명'] || '').trim();
       const sellerName = extractSellerName(rawSellerName);
@@ -7740,12 +7756,34 @@ async function parseCafe24Excel(input) {
       );
       const paymentMethod = row['결제수단'] || row['결제방법'] || '';
 
+      // 🎯 자체상품코드로 상품DB에서 공급단가/마진율 매칭
+      let matchedProduct = null;
+      if (productCode) {
+        matchedProduct = (state.products || []).find(p =>
+          (p.productName || '').includes(productCode) ||
+          productCode.includes(p.productName || '') ||
+          (p.productCode || '') === productCode
+        );
+      }
+      // 상품명으로도 매칭 시도
+      if (!matchedProduct && productOption) {
+        matchedProduct = (state.products || []).find(p =>
+          productOption.toLowerCase().includes((p.productName || '').toLowerCase()) ||
+          (p.productName || '').toLowerCase().includes(productOption.toLowerCase())
+        );
+      }
+
+      const matchedSupplyPrice = matchedProduct?.supplyPrice || 0;
+      const matchedMarginRate = matchedProduct?.marginRate || 0;
+
       // 디버깅: 첫 번째 행에서 금액 관련 컬럼 확인
       if (i === 0) {
         console.log('금액 컬럼 확인:', {
           totalAmount,
           quantity,
           unitPrice,
+          productCode,
+          matchedProduct: matchedProduct?.productName,
           '가능한 금액 컬럼들': Object.keys(row).filter(k => k.includes('금액') || k.includes('결제') || k.includes('합계'))
         });
       }
@@ -7772,6 +7810,7 @@ async function parseCafe24Excel(input) {
         order_id: orderId,
         product_no: String(productNo),
         order_date: orderDate,
+        product_code: productCode, // 자체상품코드
         supplier_name: supplierName,
         seller_name: sellerName,
         seller_full_name: rawSellerName,
@@ -7781,6 +7820,8 @@ async function parseCafe24Excel(input) {
         quantity: quantity,
         unit_price: unitPrice,
         total_amount: totalAmount,
+        supply_price: matchedSupplyPrice, // 상품DB에서 매칭된 공급단가
+        margin_rate: matchedMarginRate, // 상품DB에서 매칭된 마진율
         payment_status: totalAmount > 0 ? 'F' : 'T',
         payment_method: paymentMethod,
         pg_fee: pgFee,
@@ -7842,14 +7883,18 @@ async function parseCafe24Excel(input) {
         }
       }
 
-      // 그룹화 (주문상품명(옵션포함) 기준)
-      const groupKey = productOption || productNameBasic;
+      // 그룹화 (자체상품코드 또는 주문상품명 기준)
+      const groupKey = productCode || productOption || productNameBasic;
       if (!cafe24GroupedData[groupKey]) {
         cafe24GroupedData[groupKey] = {
+          productCode: productCode, // 자체상품코드
           productName: groupKey,
           productBasicName: productNameBasic,
+          productOption: productOption,
           supplier: supplierName,
           sellerName: sellerName,
+          supplyPrice: matchedSupplyPrice, // 상품DB 매칭 공급단가
+          marginRate: matchedMarginRate, // 상품DB 매칭 마진율
           orders: [],
           totalQty: 0,
           totalSales: 0,
@@ -7860,9 +7905,16 @@ async function parseCafe24Excel(input) {
         };
       }
 
-      cafe24GroupedData[groupKey].orders.push({ orderId, qty: quantity, price: totalAmount });
+      cafe24GroupedData[groupKey].orders.push({ orderId, qty: quantity, price: totalAmount, unitPrice });
       cafe24GroupedData[groupKey].totalQty += quantity;
       cafe24GroupedData[groupKey].totalSales += totalAmount;
+      // 공급단가/마진율이 아직 없으면 업데이트
+      if (!cafe24GroupedData[groupKey].supplyPrice && matchedSupplyPrice) {
+        cafe24GroupedData[groupKey].supplyPrice = matchedSupplyPrice;
+      }
+      if (!cafe24GroupedData[groupKey].marginRate && matchedMarginRate) {
+        cafe24GroupedData[groupKey].marginRate = matchedMarginRate;
+      }
 
       orderMap.set(docId, orderData);
     }
