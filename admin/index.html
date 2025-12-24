@@ -25839,8 +25839,29 @@ async function renderProductDataManager() {
       }
     });
 
-    // 6. 공구와 매칭
+    // 6. 공구 상품 목록 생성 (selectedProducts 기반)
+    const dealProducts = [];
+    deals.forEach(deal => {
+      if (deal.selectedProducts && deal.selectedProducts.length > 0) {
+        deal.selectedProducts.forEach(sp => {
+          dealProducts.push({
+            dealId: deal.id,
+            dealTitle: deal.title || '',
+            sellerId: deal.sellerId,
+            sellerName: sellers.find(s => s.id === deal.sellerId)?.name || '',
+            productName: sp.productName || sp.name || '',
+            sku: sp.sku || sp.productName || '',
+            supplyPrice: Number(sp.supplyPrice) || 0,
+            marginRate: Number(sp.marginRate) || Number(deal.sellerMarginRate) || 0
+          });
+        });
+      }
+    });
+
+    // 7. 공구와 매칭
     Object.values(productGroups).forEach(group => {
+      group.dataSource = 'cafe24'; // 데이터 출처 표시
+
       // 셀러명으로 공구 찾기
       const seller = sellers.find(s =>
         s.nickname?.toLowerCase() === group.sellerName.toLowerCase() ||
@@ -25939,8 +25960,10 @@ async function renderProductDataManager() {
             <thead>
               <tr style="background: var(--gray-50);">
                 <th style="width: 50px; text-align: center;">#</th>
+                <th style="width: 80px; text-align: center;">데이터<br>출처</th>
                 <th style="min-width: 100px;">셀러명</th>
-                <th style="min-width: 200px;">상품명</th>
+                <th style="min-width: 200px;">상품명<br>(카페24 주문)</th>
+                <th style="min-width: 180px; background: #f0fdf4;">공구 상품 SKU<br>(매칭)</th>
                 <th style="width: 80px; text-align: center;">구분</th>
                 <th style="width: 80px; text-align: right;">판매단가</th>
                 <th style="width: 60px; text-align: center;">수량</th>
@@ -25961,40 +25984,67 @@ async function renderProductDataManager() {
                   ? '<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:10px;font-size:11px;">✓ 완료</span>'
                   : '<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:10px;font-size:11px;">⚠ 미완료</span>';
 
-                return `
-                  <tr data-idx="${idx}" data-key="${p.sellerName}___${p.productName}" data-type="${p.productType}">
-                    <td style="text-align: center; color: var(--gray-500);">${idx + 1}</td>
-                    <td style="font-weight: 600;">${p.sellerName}</td>
-                    <td style="font-size: 12px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${p.productName}">${p.productName}</td>
+                // 해당 셀러의 공구 상품 목록
+                const sellerDealProducts = dealProducts.filter(dp =>
+                  dp.sellerName.toLowerCase() === p.sellerName.toLowerCase()
+                );
+
+                // 공구 상품 매칭 드롭다운 생성
+                let dealProductOptions = '<option value="">선택...</option>';
+                sellerDealProducts.forEach(dp => {
+                  const selected = p.supplyPrice === dp.supplyPrice ? 'selected' : '';
+                  dealProductOptions += \`<option value="\${dp.sku}" data-supply="\${dp.supplyPrice}" data-margin="\${dp.marginRate}" \${selected}>
+                    \${dp.sku} (공급가: \${dp.supplyPrice.toLocaleString()}원)
+                  </option>\`;
+                });
+
+                return \`
+                  <tr data-idx="\${idx}" data-key="\${p.sellerName}___\${p.productName}" data-type="\${p.productType}">
+                    <td style="text-align: center; color: var(--gray-500);">\${idx + 1}</td>
                     <td style="text-align: center;">
-                      <span style="background: ${p.productType === 'external' ? '#fef3c7' : '#dbeafe'}; color: ${p.productType === 'external' ? '#92400e' : '#1d4ed8'}; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
-                        ${p.productType === 'external' ? '타사' : '자사'}
+                      <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
+                        카페24
                       </span>
                     </td>
-                    <td style="text-align: right;">${p.unitPrice.toLocaleString()}원</td>
-                    <td style="text-align: center;">${p.quantity}</td>
-                    <td style="text-align: right; font-weight: 600;">${p.totalAmount.toLocaleString()}원</td>
+                    <td style="font-weight: 600;">\${p.sellerName}</td>
+                    <td style="font-size: 12px; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="\${p.productName}">\${p.productName}</td>
+                    <td style="background: #f9fafb;">
+                      <select class="pdm-deal-product-select" data-key="\${p.sellerName}___\${p.productName}"
+                        style="width: 100%; font-size: 12px; border: 1px solid #d1d5db; border-radius: 4px; padding: 4px;"
+                        onchange="matchDealProduct(this)" \${sellerDealProducts.length === 0 ? 'disabled' : ''}>
+                        \${dealProductOptions}
+                      </select>
+                      \${sellerDealProducts.length === 0 ? '<div style="font-size: 11px; color: #9ca3af; margin-top: 2px;">공구 상품 없음</div>' : ''}
+                    </td>
+                    <td style="text-align: center;">
+                      <span style="background: \${p.productType === 'external' ? '#fef3c7' : '#dbeafe'}; color: \${p.productType === 'external' ? '#92400e' : '#1d4ed8'}; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
+                        \${p.productType === 'external' ? '타사' : '자사'}
+                      </span>
+                    </td>
+                    <td style="text-align: right;">\${p.unitPrice.toLocaleString()}원</td>
+                    <td style="text-align: center;">\${p.quantity}</td>
+                    <td style="text-align: right; font-weight: 600;">\${p.totalAmount.toLocaleString()}원</td>
                     <td style="text-align: center; background: #fffbeb;">
-                      <input type="number" class="pdm-margin-input" data-key="${p.sellerName}___${p.productName}"
-                        value="${p.marginRate}" step="0.1" min="0" max="100"
+                      <input type="number" class="pdm-margin-input" data-key="\${p.sellerName}___\${p.productName}"
+                        value="\${p.marginRate}" step="0.1" min="0" max="100"
                         style="width: 60px; text-align: center; border: 1px solid #e5e7eb; border-radius: 4px; padding: 4px;"
                         onchange="updateProductCalc(this)">
                     </td>
                     <td style="text-align: right; background: #fffbeb;">
-                      <input type="number" class="pdm-supply-input" data-key="${p.sellerName}___${p.productName}"
-                        value="${p.supplyPrice}" step="100" min="0"
+                      <input type="number" class="pdm-supply-input" data-key="\${p.sellerName}___\${p.productName}"
+                        value="\${p.supplyPrice}" step="100" min="0"
                         style="width: 90px; text-align: right; border: 1px solid #e5e7eb; border-radius: 4px; padding: 4px;"
-                        onchange="updateProductCalc(this)" ${p.productType === 'inhouse' ? 'disabled placeholder="자사"' : ''}>
+                        onchange="updateProductCalc(this)" \${p.productType === 'inhouse' ? 'disabled placeholder="자사"' : ''}>
                     </td>
                     <td style="text-align: right; background: #f0fdf4; font-weight: 500; color: #166534;" class="pdm-margin-amount">
-                      ${marginAmount.toLocaleString()}원
+                      \${marginAmount.toLocaleString()}원
                     </td>
                     <td style="text-align: right; background: #eef2ff; color: #4338ca;" class="pdm-supply-total">
-                      ${p.productType === 'external' ? supplyTotal.toLocaleString() + '원' : '-'}
+                      \${p.productType === 'external' ? supplyTotal.toLocaleString() + '원' : '-'}
                     </td>
-                    <td style="text-align: center;">${statusBadge}</td>
+                    <td style="text-align: center;">\${statusBadge}</td>
                   </tr>
-                `;
+                \`;
               }).join('')}
             </tbody>
           </table>
@@ -26005,6 +26055,8 @@ async function renderProductDataManager() {
       <div style="margin-top: 16px; padding: 16px; background: #f0f9ff; border-radius: 12px; border-left: 4px solid #3b82f6;">
         <div style="font-weight: 600; color: #1d4ed8; margin-bottom: 8px;">💡 사용 가이드</div>
         <ul style="font-size: 13px; color: #1e40af; margin: 0; padding-left: 20px; line-height: 1.8;">
+          <li><strong>데이터 출처</strong>: 현재는 카페24 주문 데이터만 표시됩니다 (향후 공구 데이터도 추가 예정)</li>
+          <li><strong>공구 상품 SKU 매칭</strong>: 드롭다운에서 공구 상품을 선택하면 공급단가와 마진율이 자동으로 입력됩니다</li>
           <li><strong>마진율(%)</strong>: 셀러에게 지급할 수수료율 (판매금액 × 마진율 = 마진금액)</li>
           <li><strong>공급가(V+)</strong>: 타사 상품의 공급사 지급 단가 (부가세 포함)</li>
           <li><strong>💾 전체 저장</strong>: 수정한 마진율/공급단가를 카페24 주문 데이터에 일괄 반영</li>
@@ -26016,6 +26068,7 @@ async function renderProductDataManager() {
     // 전역에 데이터 저장
     window.pdmProductList = productList;
     window.pdmOrders = orders;
+    window.pdmDealProducts = dealProducts;
 
   } catch (err) {
     console.error(err);
@@ -26089,6 +26142,50 @@ function updateProductCalc(input) {
 
   // 입력 필드 배경색 변경 (수정됨 표시)
   input.style.background = '#fef9c3';
+}
+
+// 공구 상품 매칭 시 공급단가/마진율 자동 입력
+function matchDealProduct(select) {
+  const selectedOption = select.options[select.selectedIndex];
+  if (!selectedOption || !selectedOption.value) return;
+
+  const row = select.closest('tr');
+  const key = select.dataset.key;
+  const product = window.pdmProductList?.find(p => `${p.sellerName}___${p.productName}` === key);
+  if (!product) return;
+
+  // 선택한 공구 상품의 공급단가와 마진율 가져오기
+  const supplyPrice = Number(selectedOption.dataset.supply) || 0;
+  const marginRate = Number(selectedOption.dataset.margin) || 0;
+
+  // 입력 필드에 값 설정
+  const marginInput = row.querySelector('.pdm-margin-input');
+  const supplyInput = row.querySelector('.pdm-supply-input');
+
+  if (marginInput) {
+    marginInput.value = marginRate;
+    marginInput.style.background = '#dcfce7'; // 초록색 배경 (매칭됨 표시)
+  }
+
+  if (supplyInput && !supplyInput.disabled) {
+    supplyInput.value = supplyPrice;
+    supplyInput.style.background = '#dcfce7'; // 초록색 배경 (매칭됨 표시)
+  }
+
+  // 계산 업데이트
+  const marginAmountCell = row.querySelector('.pdm-margin-amount');
+  const supplyTotalCell = row.querySelector('.pdm-supply-total');
+
+  const marginAmount = Math.round(product.totalAmount * marginRate / 100);
+  marginAmountCell.textContent = marginAmount.toLocaleString() + '원';
+
+  if (product.productType === 'external') {
+    const supplyTotal = supplyPrice * product.quantity;
+    supplyTotalCell.textContent = supplyTotal.toLocaleString() + '원';
+  }
+
+  // 토스트 메시지
+  showToast(`공구 상품 매칭 완료: 공급단가 ${supplyPrice.toLocaleString()}원, 마진율 ${marginRate}%`, 'success');
 }
 
 // 전체 저장
