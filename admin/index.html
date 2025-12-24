@@ -11343,7 +11343,7 @@ function openProductDBModal(productId = null) {
           </div>
           <div class="form-group">
             <label class="form-label">수수료율 (%)</label>
-            <input type="number" class="form-input" id="pdb-commission" value="${p.commission || ''}" step="0.1" placeholder="수수료" oninput="calcProductDBSupply()">
+            <input type="number" class="form-input" id="pdb-commission" value="${p.commission || ''}" step="any" min="0" max="100" placeholder="수수료" oninput="calcProductDBSupply()">
             <small style="color: var(--gray-500); font-size: 11px;">공급단가와 둘 중 하나만 입력</small>
           </div>
         </div>
@@ -12726,15 +12726,18 @@ function generateManagementReport() {
                 let items = s.salesItems || s.items || [];
 
                 // 2. salesItems가 없으면 공구 관리(deals)에서 상품 정보 연동
+                let matchingDeal = null;
                 if (items.length === 0 && s.dealPeriod) {
-                  const matchingDeal = state.deals.find(d => {
+                  matchingDeal = state.deals.find(d => {
                     const dealPeriod = d.startDate + '~' + d.endDate;
                     return dealPeriod === s.dealPeriod ||
                            (d.brandName === s.brandName) ||
                            (d.sellerName && d.sellerName.includes(s.sellerName));
                   });
-                  if (matchingDeal && matchingDeal.products && matchingDeal.products.length > 0) {
-                    items = matchingDeal.products.map(p => ({
+                  // selectedProducts 우선 사용 (공구 수정에서 입력한 마진율 포함)
+                  const dealProducts = matchingDeal?.selectedProducts || matchingDeal?.products || [];
+                  if (matchingDeal && dealProducts.length > 0) {
+                    items = dealProducts.map(p => ({
                       productName: p.productName || p.name,
                       unitPrice: Number(p.salePrice) || Number(p.price) || 0,
                       quantity: 0,
@@ -12746,8 +12749,23 @@ function generateManagementReport() {
                   }
                 }
 
-                // 기본 마진율 (전체 정산의 마진율)
-                const defaultMarginRate = Number(s.marginRate) || (Number(s.salesAmount) > 0 ? Math.round(Number(s.marginAmount) / Number(s.salesAmount) * 100) : 10);
+                // 기본 마진율: 공구의 selectedProducts 마진율 > 정산서 마진율 > 계산값 > 10%
+                let defaultMarginRate = 10;
+                // 1) 공구의 selectedProducts에서 마진율 가져오기
+                if (matchingDeal?.selectedProducts?.length > 0) {
+                  const productsWithMargin = matchingDeal.selectedProducts.filter(p => p.marginRate && Number(p.marginRate) > 0);
+                  if (productsWithMargin.length > 0) {
+                    defaultMarginRate = Math.round(productsWithMargin.reduce((sum, p) => sum + Number(p.marginRate), 0) / productsWithMargin.length * 10) / 10;
+                  }
+                }
+                // 2) 정산서에 마진율이 저장되어 있으면 사용
+                if (defaultMarginRate === 10 && Number(s.marginRate) > 0) {
+                  defaultMarginRate = Number(s.marginRate);
+                }
+                // 3) 판매금액과 마진금액으로 역산
+                if (defaultMarginRate === 10 && Number(s.salesAmount) > 0 && Number(s.marginAmount) > 0) {
+                  defaultMarginRate = Math.round(Number(s.marginAmount) / Number(s.salesAmount) * 100);
+                }
 
                 if (items.length === 0) {
                   return '<tr>' +
@@ -12889,7 +12907,24 @@ function generateManagementReport() {
 
                     const totalActualPayment = Number(s.actualPayment) || 0;
                     const totalQty = Number(s.totalQuantity) || 0;
-                    const defaultMarginRate = Number(s.marginRate) || (Number(s.salesAmount) > 0 ? Math.round(Number(s.marginAmount) / Number(s.salesAmount) * 100) : 10);
+
+                    // 기본 마진율: 공구의 selectedProducts 마진율 > 정산서 마진율 > 계산값 > 10%
+                    let defaultMarginRate = 10;
+                    // 1) 공구의 selectedProducts에서 마진율 가져오기
+                    if (matchingDeal?.selectedProducts?.length > 0) {
+                      const productsWithMargin = matchingDeal.selectedProducts.filter(p => p.marginRate && Number(p.marginRate) > 0);
+                      if (productsWithMargin.length > 0) {
+                        defaultMarginRate = Math.round(productsWithMargin.reduce((sum, p) => sum + Number(p.marginRate), 0) / productsWithMargin.length * 10) / 10;
+                      }
+                    }
+                    // 2) 정산서에 마진율이 저장되어 있으면 사용
+                    if (defaultMarginRate === 10 && Number(s.marginRate) > 0) {
+                      defaultMarginRate = Number(s.marginRate);
+                    }
+                    // 3) 판매금액과 마진금액으로 역산
+                    if (defaultMarginRate === 10 && Number(s.salesAmount) > 0 && Number(s.marginAmount) > 0) {
+                      defaultMarginRate = Math.round(Number(s.marginAmount) / Number(s.salesAmount) * 100);
+                    }
 
                     // 🔥 공급단가 찾기 - deals.selectedProducts에서 가져오기
                     const getSupplyPriceForItem = (itemName) => {
@@ -17906,8 +17941,21 @@ function openUnifiedSettlementModal(item = null, dealId = null) {
     const productType = deal.productType || supplier?.supplierType || 'inhouse';
     toggleProductType(productType);
 
-    // 4. 마진율 자동 입력 (공구에 설정된 마진율 > 셀러 기본 마진율 > 10%)
-    const marginRate = deal.marginRate || deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+    // 4. 마진율 자동 입력 (공구 상품별 마진율 우선 사용)
+    // selectedProducts에서 첫 번째 상품의 마진율 또는 평균 마진율 사용
+    let marginRate = 10; // 기본값
+    if (deal.selectedProducts && deal.selectedProducts.length > 0) {
+      const productsWithMargin = deal.selectedProducts.filter(p => p.marginRate && Number(p.marginRate) > 0);
+      if (productsWithMargin.length > 0) {
+        // 상품별 마진율의 평균 계산
+        const avgMarginRate = productsWithMargin.reduce((sum, p) => sum + Number(p.marginRate), 0) / productsWithMargin.length;
+        marginRate = Math.round(avgMarginRate * 10) / 10; // 소수점 1자리
+      }
+    }
+    // selectedProducts에 마진율이 없으면 기존 방식 폴백
+    if (marginRate === 10 && (deal.marginRate || deal.sellerMarginRate || seller?.defaultMarginRate)) {
+      marginRate = deal.marginRate || deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+    }
     document.getElementById('us-marginRate').value = marginRate;
 
     // 5. 판매금액/수량 자동 입력 (공구에 저장된 값이 있으면)
