@@ -7646,45 +7646,176 @@ async function revertSettlementToPending(dealId) {
   }
 }
 
+// ==================== 정산 삭제 확인 모달 ====================
+// 삭제 확인 모달 표시 (삭제 입력 필요)
+function showDeleteConfirmModal(options) {
+  const { title, message, deleteType, onConfirm } = options;
+
+  document.getElementById('modal').innerHTML = `
+    <div class="modal-content" style="max-width: 480px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-bottom: 2px solid #fca5a5;">
+        <h2 style="color: #dc2626; display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 24px;">⚠️</span> ${title}
+        </h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+          <p style="color: #991b1b; font-size: 14px; margin: 0; line-height: 1.6;">
+            ${message}
+          </p>
+        </div>
+
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px;">
+            삭제 방법 선택
+          </label>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 10px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="deleteMethod" value="soft" checked style="accent-color: #f59e0b;">
+              <div>
+                <strong style="color: #374151;">🔄 소프트 삭제 (권장)</strong>
+                <p style="margin: 4px 0 0; font-size: 12px; color: #6b7280;">데이터 초기화만 진행, 복구 가능</p>
+              </div>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="deleteMethod" value="hard" style="accent-color: #dc2626;">
+              <div>
+                <strong style="color: #dc2626;">🗑️ 완전 삭제</strong>
+                <p style="margin: 4px 0 0; font-size: 12px; color: #991b1b;">데이터베이스에서 영구 삭제, 복구 불가</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px;">
+            🔒 삭제 확인 (아래에 <span style="color: #dc2626; font-weight: 700;">삭제</span>를 입력하세요)
+          </label>
+          <input type="text" id="deleteConfirmInput" class="form-input" placeholder="삭제"
+            style="border: 2px solid #fca5a5; font-size: 16px; text-align: center;"
+            oninput="checkDeleteInput()">
+          <p style="font-size: 11px; color: #9ca3af; margin-top: 6px; text-align: center;">
+            실수로 삭제하는 것을 방지하기 위해 "삭제"를 입력해야 합니다
+          </p>
+        </div>
+
+        <div class="modal-footer" style="padding: 0; border: none; gap: 12px;">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">
+            취소
+          </button>
+          <button type="button" id="confirmDeleteBtn" class="btn" disabled
+            style="flex: 1; background: #d1d5db; color: #6b7280; cursor: not-allowed;"
+            onclick="executeDelete('${deleteType}')">
+            🔒 삭제 잠금
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // 삭제 콜백 저장
+  window._pendingDeleteCallback = onConfirm;
+
+  document.getElementById('modal').classList.add('active');
+}
+
+// 삭제 입력 확인
+function checkDeleteInput() {
+  const input = document.getElementById('deleteConfirmInput');
+  const btn = document.getElementById('confirmDeleteBtn');
+
+  if (input.value === '삭제') {
+    btn.disabled = false;
+    btn.style.background = '#dc2626';
+    btn.style.color = '#fff';
+    btn.style.cursor = 'pointer';
+    btn.innerHTML = '🗑️ 삭제 실행';
+  } else {
+    btn.disabled = true;
+    btn.style.background = '#d1d5db';
+    btn.style.color = '#6b7280';
+    btn.style.cursor = 'not-allowed';
+    btn.innerHTML = '🔒 삭제 잠금';
+  }
+}
+
+// 삭제 실행
+async function executeDelete(deleteType) {
+  const method = document.querySelector('input[name="deleteMethod"]:checked')?.value || 'soft';
+
+  if (window._pendingDeleteCallback) {
+    await window._pendingDeleteCallback(method);
+    window._pendingDeleteCallback = null;
+  }
+
+  closeModal();
+}
+
 // 정산 데이터 삭제 (대기 상태에서 삭제하고 다시 등록 가능하게)
 async function deleteSettlementData(dealId) {
   if (!canEdit()) { showNoPermission(); return; }
 
-  if (!confirm('이 공구의 정산 데이터를 삭제하시겠습니까?\n\n카페24 매핑 데이터가 초기화되며, 다시 등록할 수 있습니다.')) return;
-
-  try {
-    const deal = state.deals.find(d => d.id === dealId);
-    if (!deal) {
-      showToast('❌ 공구를 찾을 수 없습니다');
-      return;
-    }
-
-    // 카페24 매핑 데이터 초기화
-    await db.collection('deals').doc(dealId).update({
-      cafe24Mapped: false,
-      totalSales: 0,
-      totalQty: 0,
-      supplierSettled: false,
-      sellerSettled: false,
-      status: 'completed'
-    });
-
-    // state 즉시 업데이트
-    Object.assign(deal, {
-      cafe24Mapped: false,
-      totalSales: 0,
-      totalQty: 0,
-      supplierSettled: false,
-      sellerSettled: false,
-      status: 'completed'
-    });
-
-    showToast('✅ 정산 데이터가 삭제되었습니다');
-    renderSettlement();
-  } catch (err) {
-    console.error('정산 데이터 삭제 실패:', err);
-    showToast('❌ 삭제에 실패했습니다');
+  const deal = state.deals.find(d => d.id === dealId);
+  if (!deal) {
+    showToast('❌ 공구를 찾을 수 없습니다');
+    return;
   }
+
+  showDeleteConfirmModal({
+    title: '정산 데이터 삭제',
+    message: `<strong>${deal.brandName || '알 수 없는 브랜드'}</strong>의 정산 데이터를 삭제합니다.<br><br>
+      • 카페24 매핑 데이터가 초기화됩니다<br>
+      • 정산 상태가 리셋됩니다<br>
+      • 이 작업은 신중하게 진행해주세요`,
+    deleteType: 'settlementData',
+    onConfirm: async (method) => {
+      try {
+        if (method === 'hard') {
+          // 완전 삭제: 관련 정산서도 삭제
+          const sellerSettlements = (state.sellerSettlements || []).filter(s =>
+            s.brandName === deal.brandName && s.dealPeriod === (deal.startDate + '~' + deal.endDate)
+          );
+          const supplierSettlements = (state.supplierSettlements || []).filter(s =>
+            s.brandName === deal.brandName && s.dealPeriod === (deal.startDate + '~' + deal.endDate)
+          );
+
+          for (const s of sellerSettlements) {
+            await db.collection('sellerSettlements').doc(s.id).delete();
+          }
+          for (const s of supplierSettlements) {
+            await db.collection('supplierSettlements').doc(s.id).delete();
+          }
+        }
+
+        // 카페24 매핑 데이터 초기화
+        await db.collection('deals').doc(dealId).update({
+          cafe24Mapped: false,
+          totalSales: 0,
+          totalQty: 0,
+          supplierSettled: false,
+          sellerSettled: false,
+          status: 'completed'
+        });
+
+        // state 즉시 업데이트
+        Object.assign(deal, {
+          cafe24Mapped: false,
+          totalSales: 0,
+          totalQty: 0,
+          supplierSettled: false,
+          sellerSettled: false,
+          status: 'completed'
+        });
+
+        showToast(`✅ 정산 데이터가 ${method === 'hard' ? '완전' : ''} 삭제되었습니다`);
+        renderSettlement();
+      } catch (err) {
+        console.error('정산 데이터 삭제 실패:', err);
+        showToast('❌ 삭제에 실패했습니다');
+      }
+    }
+  });
 }
 
 // 수동 입력 정산 데이터 일괄 삭제 (카페24 데이터만 유지)
@@ -18161,19 +18292,32 @@ async function submitUnifiedSettlement(e, id) {
 
 // 정산 삭제
 async function deleteSettlement(id) {
- // 🔒 권한 체크
- if (!canEdit()) { showNoPermission(); return; }
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
-  if (!confirm('이 정산을 삭제하시겠습니까?')) return;
-  try {
-    await db.collection('sellerSettlements').doc(id).delete();
-    showToast('삭제되었습니다');
-    closeModal();
-    renderSalesManagement();
-  } catch (err) {
-    showToast('삭제에 실패했습니다');
+
+  const settlement = state.sellerSettlements.find(s => s.id === id);
+  if (!settlement) {
+    showToast('❌ 정산 정보를 찾을 수 없습니다');
+    return;
   }
+
+  showDeleteConfirmModal({
+    title: '정산서 삭제',
+    message: `<strong>${settlement.sellerName || '알 수 없음'}</strong>의 <strong>${settlement.brandName || ''}</strong> 정산서를 삭제합니다.<br><br>
+      • 정산기간: ${settlement.dealPeriod || '-'}<br>
+      • 실지급액: ${Number(settlement.actualPayment || 0).toLocaleString()}원<br>
+      • 이 작업은 되돌릴 수 없습니다`,
+    deleteType: 'settlement',
+    onConfirm: async (method) => {
+      try {
+        await db.collection('sellerSettlements').doc(id).delete();
+        showToast('✅ 정산서가 삭제되었습니다');
+        renderSalesManagement();
+      } catch (err) {
+        showToast('삭제에 실패했습니다');
+      }
+    }
+  });
 }
 
 // ==================== 개별 정산서 생성 ====================
