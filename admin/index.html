@@ -16918,31 +16918,91 @@ function openUnifiedSettlementModal(item = null, dealId = null) {
     document.getElementById('inhouse-inputs-section').style.display = type === 'inhouse' ? 'block' : 'none';
   };
   
-  // 캘린더에서 공구 선택 시 자동 입력
+  // 캘린더에서 공구 선택 시 자동 입력 (상품DB, 마진율 등 포함)
   window.onSelectDealForSettlement = function(dealId) {
     if (!dealId) return;
-    
+
     const deal = (state.deals || []).find(d => d.id === dealId);
     if (!deal) return;
-    
+
     const seller = state.sellers.find(s => s.id === deal.sellerId);
-    
-    // 정보 자동 입력
+    const supplier = state.suppliers?.find(sp => sp.id === deal.supplierId);
+
+    // 1. 기본 정보 자동 입력
     document.getElementById('us-dealId').value = deal.id;
     document.getElementById('us-sellerName').value = seller?.name || deal.sellerName || '';
     document.getElementById('us-brandName').value = deal.brandName || '';
-    
-    // 공구기간
+
+    // 2. 공구기간
     if (deal.startDate && deal.endDate) {
       document.getElementById('us-dealPeriod').value = deal.startDate + '~' + deal.endDate;
     }
-    
-    // 브랜드 변경 트리거 (상품 목록 갱신)
+
+    // 3. 상품 유형 자동 선택 (자사/타사)
+    const productType = deal.productType || supplier?.supplierType || 'inhouse';
+    toggleProductType(productType);
+
+    // 4. 마진율 자동 입력 (공구에 설정된 마진율 > 셀러 기본 마진율 > 10%)
+    const marginRate = deal.marginRate || deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+    document.getElementById('us-marginRate').value = marginRate;
+
+    // 5. 판매금액/수량 자동 입력 (공구에 저장된 값이 있으면)
+    if (deal.totalSales || deal.totalQty) {
+      if (productType === 'inhouse') {
+        document.getElementById('us-totalQuantity-inhouse').value = deal.totalQty || '';
+        document.getElementById('us-salesAmount-inhouse').value = deal.totalSales || '';
+      }
+    }
+
+    // 6. 브랜드 변경 트리거 (상품 목록 갱신)
     if (deal.brandName) {
       onBrandChange(deal.brandName);
     }
-    
-    showToast('공구 정보가 자동 입력되었습니다');
+
+    // 7. 공구에 선택된 상품이 있으면 해당 상품 정보도 표시
+    if (deal.selectedProducts && deal.selectedProducts.length > 0 && productType === 'external') {
+      setTimeout(() => {
+        const container = document.getElementById('product-quantity-inputs');
+        const dealProducts = deal.selectedProducts;
+
+        // 상품DB에서 매칭되는 상품 찾기
+        const matchedProducts = [];
+        dealProducts.forEach(dp => {
+          const dbProduct = supplierProducts.find(p =>
+            p.id === dp.productId ||
+            p.productName === dp.productName ||
+            (p.brandName === deal.brandName && p.productName?.includes(dp.productName?.split(' ')[0]))
+          );
+          if (dbProduct) {
+            matchedProducts.push({
+              ...dbProduct,
+              quantity: dp.quantity || 0,
+              marginRate: dp.marginRate || marginRate
+            });
+          }
+        });
+
+        if (matchedProducts.length > 0) {
+          container.innerHTML = matchedProducts.map(p => `
+            <div class="form-row" style="align-items: center; margin-bottom: 8px;">
+              <div style="flex: 3;"><input type="text" class="form-input" value="${p.productName}" data-product-id="${p.id}" readonly style="background: #fff;"></div>
+              <div style="flex: 1;"><input type="number" class="form-input product-qty" data-supply="${p.supplyPrice}" data-sale="${p.salePrice}" value="${p.quantity}" placeholder="수량" min="0" oninput="calculateSupplierTotals()"></div>
+              <div style="flex: 1; text-align: right; font-size: 12px; color: var(--gray-600);">${Number(p.supplyPrice).toLocaleString()}원</div>
+            </div>
+          `).join('');
+
+          // 총액 자동 계산
+          calculateSupplierTotals();
+        }
+      }, 100);
+    }
+
+    // 8. 마진 계산 트리거
+    setTimeout(() => {
+      calculateMarginFromRate();
+    }, 150);
+
+    showToast('공구 정보가 자동 입력되었습니다 (상품/마진율 포함)');
   };
   
   // 공급사 총액 계산
@@ -26664,13 +26724,22 @@ var DEAL_TASK_TEMPLATES = {
 // 그로스 대시보드 - 목표 + OKR 통합
 // ========================================
 
-// 연도별 목표 설정
+// ========================================
+// 그로스보드 전략 목표
+// ========================================
+// 그로스보드 핵심 목적: 매출 상승을 위한 두 가지 축의 비율 배분
+// 1. 고객과 모여라딜 팀원 여정 고도화 (그로스)
+// 2. 영업활동 (세일즈)
+//
+// 25년도: MVP 잡기 위해 고객/모여라딜 여정 고도화 90%
+// 26년도~: 영업활동 70%, 고객/모여라딜 여정 고도화 30%
+
 var YEARLY_GOALS = {
-  2025: { target: 100000000, growth: 50, sales: 50, label: '2025년' },  // 1억 (테스트)
-  2026: { target: 300000000, growth: 40, sales: 60, label: '2026년' },  // 3억
-  2027: { target: 1000000000, growth: 30, sales: 70, label: '2027년' }, // 10억
-  2028: { target: 3000000000, growth: 25, sales: 75, label: '2028년' }, // 30억
-  ultimate: { target: 5000000000, label: '최종 목표' }  // 50억
+  2025: { target: 100000000, growth: 90, sales: 10, label: '2025년', description: 'MVP 완성 - 고객/팀원 여정 고도화 집중' },  // 1억
+  2026: { target: 300000000, growth: 30, sales: 70, label: '2026년', description: '영업 본격화 - 셀러/공급사 확대' },  // 3억
+  2027: { target: 1000000000, growth: 30, sales: 70, label: '2027년', description: '스케일업 - 지속적 영업 확대' }, // 10억
+  2028: { target: 3000000000, growth: 25, sales: 75, label: '2028년', description: '안정적 성장 궤도' }, // 30억
+  ultimate: { target: 5000000000, label: '최종 목표', description: '연 매출 50억 달성' }  // 50억
 };
 
 function renderGrowthDashboard() {
@@ -26754,6 +26823,36 @@ function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, 
 
   var html = '';
 
+  // ===== 0. 그로스보드 핵심 목적 =====
+  html += '<div style="background: linear-gradient(135deg, #10b981, #059669); border-radius: 20px; padding: 24px; margin-bottom: 24px; color: white;">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: flex-start;">';
+  html += '<div style="flex: 1;">';
+  html += '<div style="font-size: 22px; font-weight: 800; margin-bottom: 12px;">그로스보드가 왜 필요한가?</div>';
+  html += '<div style="font-size: 15px; line-height: 1.8; opacity: 0.95;">';
+  html += '<p style="margin-bottom: 8px;"><strong>최종 목표는 매출 상승</strong>입니다.</p>';
+  html += '<p style="margin-bottom: 8px;">이를 위해 <strong>두 가지 축의 비율을 잘 배분</strong>해야 합니다:</p>';
+  html += '<div style="display: flex; gap: 16px; margin-top: 12px;">';
+  html += '<div style="background: rgba(255,255,255,0.2); border-radius: 8px; padding: 12px; flex: 1;">';
+  html += '<div style="font-weight: 700;">1. 고객과 모여라딜 팀원 여정 고도화</div>';
+  html += '<div style="font-size: 13px; opacity: 0.9;">MVP 완성, UX 개선, 프로세스 최적화</div>';
+  html += '</div>';
+  html += '<div style="background: rgba(255,255,255,0.2); border-radius: 8px; padding: 12px; flex: 1;">';
+  html += '<div style="font-weight: 700;">2. 영업활동</div>';
+  html += '<div style="font-size: 13px; opacity: 0.9;">셀러/공급사 확보, 공구 진행, 정산 관리</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '<div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; min-width: 200px; margin-left: 20px;">';
+  html += '<div style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">📅 연도별 비율 전략</div>';
+  html += '<div style="font-size: 13px; line-height: 2;">';
+  html += '<div><strong>25년</strong>: 여정고도화 90% / 영업 10%</div>';
+  html += '<div><strong>26년~</strong>: 여정고도화 30% / 영업 70%</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+
   // ===== 1. 최종 목표 트래커 (50억) =====
   html += '<div style="background: linear-gradient(135deg, #1e3a8a, #3b82f6); border-radius: 20px; padding: 28px; margin-bottom: 24px; color: white;">';
   html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
@@ -26768,7 +26867,7 @@ function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, 
   html += '<div style="font-size: 13px; opacity: 0.8;">' + totalSales.toLocaleString() + '원</div>';
   html += '</div>';
   html += '</div>';
-  
+
   // 50억 프로그레스
   var ultimate50Progress = Math.min(100, (totalSales / ultimateGoal) * 100);
   html += '<div style="background: rgba(255,255,255,0.2); height: 16px; border-radius: 8px; overflow: hidden; margin-bottom: 12px;">';
@@ -26805,37 +26904,55 @@ function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, 
   });
   html += '</div>';
 
-  // ===== 3. 그로스 vs 영업 비율 =====
+  // ===== 3. 그로스 vs 영업 비율 (팀원 실천 가이드 포함) =====
   html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px;">';
-  
-  // 그로스 (성장)
+
+  // 그로스 (성장) - 고객/팀원 여정 고도화
   html += '<div style="background: linear-gradient(135deg, #dcfce7, #bbf7d0); border-radius: 16px; padding: 24px;">';
   html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">';
-  html += '<div><div style="font-size: 20px; font-weight: 700; color: #16a34a;">🌱 그로스 (성장)</div>';
-  html += '<div style="font-size: 13px; color: #15803d; margin-top: 4px;">브랜드 인지도, 콘텐츠, 마케팅</div></div>';
+  html += '<div><div style="font-size: 20px; font-weight: 700; color: #16a34a;">🌱 고객/팀원 여정 고도화</div>';
+  html += '<div style="font-size: 13px; color: #15803d; margin-top: 4px;">MVP 완성, 프로세스 최적화, UX 개선</div></div>';
   html += '<div style="font-size: 36px; font-weight: 800; color: #16a34a;">' + yearGoal.growth + '%</div>';
   html += '</div>';
-  html += '<div style="background: white; border-radius: 10px; padding: 14px;">';
-  html += '<div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">핵심 지표</div>';
-  html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
-  html += '<span style="font-size: 12px; padding: 6px 12px; background: #dcfce7; color: #16a34a; border-radius: 6px;">📈 브랜드 인지도</span>';
-  html += '<span style="font-size: 12px; padding: 6px 12px; background: #dcfce7; color: #16a34a; border-radius: 6px;">🎬 콘텐츠 품질</span>';
-  html += '<span style="font-size: 12px; padding: 6px 12px; background: #dcfce7; color: #16a34a; border-radius: 6px;">🔄 재구매율</span>';
-  html += '</div></div></div>';
-  
-  // 영업
-  html += '<div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border-radius: 16px; padding: 24px;">';
-  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">';
-  html += '<div><div style="font-size: 20px; font-weight: 700; color: #2563eb;">💼 영업 (실행)</div>';
-  html += '<div style="font-size: 13px; color: #1d4ed8; margin-top: 4px;">셀러/공급사 입점, 공구 진행</div></div>';
-  html += '<div style="font-size: 36px; font-weight: 800; color: #2563eb;">' + yearGoal.sales + '%</div>';
+  html += '<div style="background: white; border-radius: 10px; padding: 14px; margin-bottom: 12px;">';
+  html += '<div style="font-size: 13px; font-weight: 600; color: #16a34a; margin-bottom: 10px;">💡 팀원 실천 가이드</div>';
+  html += '<ul style="margin: 0; padding-left: 18px; font-size: 13px; color: #15803d; line-height: 1.8;">';
+  html += '<li>공구 진행 중 불편한 점 발견 시 즉시 기록</li>';
+  html += '<li>반복 작업은 자동화 가능한지 검토</li>';
+  html += '<li>셀러/공급사 피드백 수집 및 공유</li>';
+  html += '<li>어드민 사용성 개선 아이디어 제안</li>';
+  html += '</ul>';
   html += '</div>';
   html += '<div style="background: white; border-radius: 10px; padding: 14px;">';
-  html += '<div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">핵심 지표</div>';
-  html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
-  html += '<span style="font-size: 12px; padding: 6px 12px; background: #dbeafe; color: #2563eb; border-radius: 6px;">👥 셀러 ' + sellers.length + '명</span>';
-  html += '<span style="font-size: 12px; padding: 6px 12px; background: #dbeafe; color: #2563eb; border-radius: 6px;">📦 공구 ' + deals.length + '건</span>';
-  html += '<span style="font-size: 12px; padding: 6px 12px; background: #dbeafe; color: #2563eb; border-radius: 6px;">💰 정산 ' + settlements.length + '건</span>';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">현재 상태</div>';
+  html += '<div style="display: flex; flex-wrap: wrap; gap: 6px;">';
+  html += '<span style="font-size: 11px; padding: 4px 10px; background: #dcfce7; color: #16a34a; border-radius: 4px;">📈 브랜드 인지도</span>';
+  html += '<span style="font-size: 11px; padding: 4px 10px; background: #dcfce7; color: #16a34a; border-radius: 4px;">🎬 콘텐츠 품질</span>';
+  html += '<span style="font-size: 11px; padding: 4px 10px; background: #dcfce7; color: #16a34a; border-radius: 4px;">🔄 재구매율</span>';
+  html += '</div></div></div>';
+
+  // 영업활동
+  html += '<div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border-radius: 16px; padding: 24px;">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">';
+  html += '<div><div style="font-size: 20px; font-weight: 700; color: #2563eb;">💼 영업활동</div>';
+  html += '<div style="font-size: 13px; color: #1d4ed8; margin-top: 4px;">셀러/공급사 확보, 공구 진행, 정산 관리</div></div>';
+  html += '<div style="font-size: 36px; font-weight: 800; color: #2563eb;">' + yearGoal.sales + '%</div>';
+  html += '</div>';
+  html += '<div style="background: white; border-radius: 10px; padding: 14px; margin-bottom: 12px;">';
+  html += '<div style="font-size: 13px; font-weight: 600; color: #2563eb; margin-bottom: 10px;">💡 팀원 실천 가이드</div>';
+  html += '<ul style="margin: 0; padding-left: 18px; font-size: 13px; color: #1d4ed8; line-height: 1.8;">';
+  html += '<li>주 N회 신규 셀러/공급사 발굴 활동</li>';
+  html += '<li>기존 셀러 재참여 유도 연락</li>';
+  html += '<li>공구 완료 후 7일 내 정산 처리</li>';
+  html += '<li>공구 진행 중 매출 현황 주간 체크</li>';
+  html += '</ul>';
+  html += '</div>';
+  html += '<div style="background: white; border-radius: 10px; padding: 14px;">';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">현재 실적</div>';
+  html += '<div style="display: flex; flex-wrap: wrap; gap: 6px;">';
+  html += '<span style="font-size: 11px; padding: 4px 10px; background: #dbeafe; color: #2563eb; border-radius: 4px;">👥 셀러 ' + sellers.length + '명</span>';
+  html += '<span style="font-size: 11px; padding: 4px 10px; background: #dbeafe; color: #2563eb; border-radius: 4px;">📦 공구 ' + deals.length + '건</span>';
+  html += '<span style="font-size: 11px; padding: 4px 10px; background: #dbeafe; color: #2563eb; border-radius: 4px;">💰 정산 ' + settlements.length + '건</span>';
   html += '</div></div></div>';
   html += '</div>';
 
@@ -26934,45 +27051,103 @@ function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, 
 
   // ===== 6. 업무가이드 섹션 (접힌 상태) =====
   html += '<div id="growth-guide-section" style="display: none; margin-top: 24px;">';
+
+  // 그로스보드 핵심 목적 (재확인)
   html += '<div style="background: linear-gradient(135deg, #10b981, #059669); border-radius: 20px; padding: 32px; margin-bottom: 24px; color: white;">';
-  html += '<h2 style="font-size: 24px; font-weight: 800; margin-bottom: 16px;">🌟 그로스보드의 핵심 가치</h2>';
-  html += '<div style="font-size: 18px; line-height: 1.8; opacity: 0.95;">';
-  html += '<p style="margin-bottom: 12px;"><strong>"포기하지 않고 개선한 노력"</strong>을 가장 중요하게 생각합니다.</p>';
-  html += '<p>결과만이 아닌, 목표를 향해 달려가는 과정에서의 시도와 학습을 기록하세요.</p>';
+  html += '<h2 style="font-size: 24px; font-weight: 800; margin-bottom: 16px;">그로스보드의 핵심 목적</h2>';
+  html += '<div style="font-size: 16px; line-height: 1.8; opacity: 0.95;">';
+  html += '<p style="margin-bottom: 12px;"><strong>매출 상승</strong>을 위해 두 가지 축의 비율을 잘 배분합니다:</p>';
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">';
+  html += '<div style="background: rgba(255,255,255,0.2); border-radius: 12px; padding: 16px;">';
+  html += '<div style="font-size: 18px; font-weight: 700; margin-bottom: 8px;">1. 고객/팀원 여정 고도화</div>';
+  html += '<div style="font-size: 14px; opacity: 0.9;">MVP 완성, UX 개선, 프로세스 최적화</div>';
+  html += '</div>';
+  html += '<div style="background: rgba(255,255,255,0.2); border-radius: 12px; padding: 16px;">';
+  html += '<div style="font-size: 18px; font-weight: 700; margin-bottom: 8px;">2. 영업활동</div>';
+  html += '<div style="font-size: 14px; opacity: 0.9;">셀러/공급사 확보, 공구 진행, 매출 실현</div>';
+  html += '</div>';
+  html += '</div>';
   html += '</div></div>';
 
+  // 연도별 전략 비율
   html += '<div style="background: white; border-radius: 16px; padding: 28px; margin-bottom: 24px;">';
-  html += '<h3 style="font-size: 20px; font-weight: 700; margin-bottom: 20px;">🎯 목표 구조</h3>';
-  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
-  
-  html += '<div style="background: linear-gradient(135deg, #dcfce7, #bbf7d0); border-radius: 12px; padding: 20px;">';
-  html += '<div style="font-size: 18px; font-weight: 700; color: #16a34a; margin-bottom: 12px;">🌱 그로스 (성장)</div>';
-  html += '<ul style="margin: 0; padding-left: 20px; color: #15803d; line-height: 2;">';
-  html += '<li>브랜드 인지도 향상</li><li>콘텐츠 품질 개선</li><li>마케팅 효율화</li><li>고객 재구매율 향상</li>';
-  html += '</ul></div>';
-  
-  html += '<div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border-radius: 12px; padding: 20px;">';
-  html += '<div style="font-size: 18px; font-weight: 700; color: #2563eb; margin-bottom: 12px;">💼 영업 (실행)</div>';
-  html += '<ul style="margin: 0; padding-left: 20px; color: #1d4ed8; line-height: 2;">';
-  html += '<li>셀러 입점 확대</li><li>공급사 확보</li><li>공구 진행</li><li>정산 관리</li>';
-  html += '</ul></div>';
-  html += '</div>';
+  html += '<h3 style="font-size: 20px; font-weight: 700; margin-bottom: 20px;">📅 연도별 전략 비율</h3>';
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px;">';
 
-  html += '<div style="background: var(--gray-50); border-radius: 12px; padding: 20px; margin-top: 20px;">';
-  html += '<h4 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">📈 연도별 매출 목표</h4>';
-  html += '<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">';
-  html += '<div style="background: white; padding: 12px 20px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);"><div style="font-size: 12px; color: var(--gray-500);">2026년</div><div style="font-size: 20px; font-weight: 700;">3억</div></div>';
-  html += '<span style="font-size: 20px; color: var(--gray-400);">→</span>';
-  html += '<div style="background: white; padding: 12px 20px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);"><div style="font-size: 12px; color: var(--gray-500);">2027년</div><div style="font-size: 20px; font-weight: 700;">10억</div></div>';
-  html += '<span style="font-size: 20px; color: var(--gray-400);">→</span>';
-  html += '<div style="background: white; padding: 12px 20px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);"><div style="font-size: 12px; color: var(--gray-500);">2028년</div><div style="font-size: 20px; font-weight: 700;">30억</div></div>';
-  html += '<span style="font-size: 20px; color: var(--gray-400);">→</span>';
-  html += '<div style="background: linear-gradient(135deg, #fbbf24, #f59e0b); padding: 12px 20px; border-radius: 8px; text-align: center; color: white;"><div style="font-size: 12px; opacity: 0.9;">최종 목표</div><div style="font-size: 24px; font-weight: 800;">50억</div></div>';
+  // 2025년
+  html += '<div style="background: #fef3c7; border-radius: 12px; padding: 20px; border: 2px solid #fbbf24;">';
+  html += '<div style="font-size: 14px; font-weight: 600; color: #92400e; margin-bottom: 8px;">2025년 (현재)</div>';
+  html += '<div style="font-size: 18px; font-weight: 700; color: #78350f; margin-bottom: 12px;">MVP 완성 집중</div>';
+  html += '<div style="display: flex; gap: 12px;">';
+  html += '<div style="flex: 1; background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center;">';
+  html += '<div style="font-size: 28px; font-weight: 800; color: #16a34a;">90%</div>';
+  html += '<div style="font-size: 12px; color: #15803d;">여정 고도화</div></div>';
+  html += '<div style="flex: 1; background: #dbeafe; padding: 12px; border-radius: 8px; text-align: center;">';
+  html += '<div style="font-size: 28px; font-weight: 800; color: #2563eb;">10%</div>';
+  html += '<div style="font-size: 12px; color: #1d4ed8;">영업활동</div></div>';
+  html += '</div></div>';
+
+  // 2026년~
+  html += '<div style="background: #dbeafe; border-radius: 12px; padding: 20px; border: 2px solid #3b82f6;">';
+  html += '<div style="font-size: 14px; font-weight: 600; color: #1d4ed8; margin-bottom: 8px;">2026년~</div>';
+  html += '<div style="font-size: 18px; font-weight: 700; color: #1e3a8a; margin-bottom: 12px;">영업 본격화</div>';
+  html += '<div style="display: flex; gap: 12px;">';
+  html += '<div style="flex: 1; background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center;">';
+  html += '<div style="font-size: 28px; font-weight: 800; color: #16a34a;">30%</div>';
+  html += '<div style="font-size: 12px; color: #15803d;">여정 고도화</div></div>';
+  html += '<div style="flex: 1; background: white; padding: 12px; border-radius: 8px; text-align: center; border: 2px solid #3b82f6;">';
+  html += '<div style="font-size: 28px; font-weight: 800; color: #2563eb;">70%</div>';
+  html += '<div style="font-size: 12px; color: #1d4ed8;">영업활동</div></div>';
   html += '</div></div>';
   html += '</div>';
 
+  // 매출 로드맵
+  html += '<div style="background: var(--gray-50); border-radius: 12px; padding: 20px;">';
+  html += '<h4 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">📈 매출 로드맵</h4>';
+  html += '<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">';
+  html += '<div style="background: #fef3c7; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid #fbbf24;"><div style="font-size: 11px; color: #92400e;">2025년</div><div style="font-size: 18px; font-weight: 700; color: #78350f;">1억</div></div>';
+  html += '<span style="font-size: 18px; color: var(--gray-400);">→</span>';
+  html += '<div style="background: white; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);"><div style="font-size: 11px; color: var(--gray-500);">2026년</div><div style="font-size: 18px; font-weight: 700;">3억</div></div>';
+  html += '<span style="font-size: 18px; color: var(--gray-400);">→</span>';
+  html += '<div style="background: white; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);"><div style="font-size: 11px; color: var(--gray-500);">2027년</div><div style="font-size: 18px; font-weight: 700;">10억</div></div>';
+  html += '<span style="font-size: 18px; color: var(--gray-400);">→</span>';
+  html += '<div style="background: white; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);"><div style="font-size: 11px; color: var(--gray-500);">2028년</div><div style="font-size: 18px; font-weight: 700;">30억</div></div>';
+  html += '<span style="font-size: 18px; color: var(--gray-400);">→</span>';
+  html += '<div style="background: linear-gradient(135deg, #fbbf24, #f59e0b); padding: 12px 16px; border-radius: 8px; text-align: center; color: white;"><div style="font-size: 11px; opacity: 0.9;">최종</div><div style="font-size: 20px; font-weight: 800;">50억</div></div>';
+  html += '</div></div>';
+  html += '</div>';
+
+  // 팀원 실천 체크리스트
+  html += '<div style="background: linear-gradient(135deg, #dbeafe, #e0e7ff); border-radius: 16px; padding: 28px; margin-bottom: 24px;">';
+  html += '<h3 style="font-size: 20px; font-weight: 700; color: #1e3a8a; margin-bottom: 20px;">✅ 팀원 실천 체크리스트</h3>';
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
+
+  // 여정 고도화 실천
+  html += '<div style="background: white; border-radius: 12px; padding: 20px;">';
+  html += '<div style="font-size: 16px; font-weight: 700; color: #16a34a; margin-bottom: 12px;">🌱 여정 고도화 실천</div>';
+  html += '<ul style="margin: 0; padding-left: 20px; font-size: 14px; color: var(--gray-700); line-height: 2;">';
+  html += '<li>공구 진행 중 불편한 점 즉시 기록</li>';
+  html += '<li>반복 작업 자동화 아이디어 제안</li>';
+  html += '<li>셀러/공급사 피드백 수집 및 공유</li>';
+  html += '<li>어드민 사용성 개선 의견 제시</li>';
+  html += '<li>신규 기능 요청사항 정리</li>';
+  html += '</ul></div>';
+
+  // 영업활동 실천
+  html += '<div style="background: white; border-radius: 12px; padding: 20px;">';
+  html += '<div style="font-size: 16px; font-weight: 700; color: #2563eb; margin-bottom: 12px;">💼 영업활동 실천</div>';
+  html += '<ul style="margin: 0; padding-left: 20px; font-size: 14px; color: var(--gray-700); line-height: 2;">';
+  html += '<li>주간 신규 셀러/공급사 발굴</li>';
+  html += '<li>기존 셀러 재참여 유도 연락</li>';
+  html += '<li>공구 완료 후 7일 내 정산 처리</li>';
+  html += '<li>매출 현황 주간 체크 및 보고</li>';
+  html += '<li>시장/경쟁사 동향 파악</li>';
+  html += '</ul></div>';
+  html += '</div></div>';
+
+  // OKR 작성 가이드
   html += '<div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 16px; padding: 28px;">';
-  html += '<h3 style="font-size: 20px; font-weight: 700; color: #92400e; margin-bottom: 20px;">💡 좋은 OKR 작성 팁</h3>';
+  html += '<h3 style="font-size: 20px; font-weight: 700; color: #92400e; margin-bottom: 20px;">💡 좋은 OKR 작성법</h3>';
   html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
   html += '<div style="background: white; border-radius: 12px; padding: 20px;">';
   html += '<div style="font-size: 16px; font-weight: 700; color: #16a34a; margin-bottom: 12px;">✅ 좋은 예시</div>';
@@ -27012,76 +27187,125 @@ function renderGrowthGuide() {
   app.innerHTML = `
     <div class="page-header">
       <h1 style="font-size: 24px; font-weight: 700;">📖 그로스보드 업무가이드</h1>
-      <p style="color: var(--gray-600); margin-top: 8px;">효과적인 성장 관리를 위한 사용법을 안내합니다</p>
+      <p style="color: var(--gray-600); margin-top: 8px;">매출 상승을 위한 두 가지 축의 비율 배분 전략</p>
     </div>
-    
+
     <div class="content">
-      <!-- 핵심 철학 -->
+      <!-- 핵심 목적 -->
       <div style="background: linear-gradient(135deg, #10b981, #059669); border-radius: 20px; padding: 32px; margin-bottom: 24px; color: white;">
-        <h2 style="font-size: 24px; font-weight: 800; margin-bottom: 16px;">🌟 그로스보드의 핵심 가치</h2>
-        <div style="font-size: 18px; line-height: 1.8; opacity: 0.95;">
-          <p style="margin-bottom: 12px;"><strong>"포기하지 않고 개선한 노력"</strong>을 가장 중요하게 생각합니다.</p>
-          <p>결과만이 아닌, 목표를 향해 달려가는 과정에서의 시도와 학습을 기록하세요.</p>
+        <h2 style="font-size: 24px; font-weight: 800; margin-bottom: 16px;">그로스보드가 왜 필요한가?</h2>
+        <div style="font-size: 16px; line-height: 1.8; opacity: 0.95;">
+          <p style="margin-bottom: 12px;"><strong>최종 목표는 매출 상승</strong>입니다.</p>
+          <p style="margin-bottom: 16px;">이를 위해 <strong>두 가지 축의 비율을 잘 배분</strong>해야 합니다:</p>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div style="background: rgba(255,255,255,0.2); border-radius: 12px; padding: 16px;">
+              <div style="font-size: 18px; font-weight: 700; margin-bottom: 8px;">1. 고객/팀원 여정 고도화</div>
+              <div style="font-size: 14px; opacity: 0.9;">MVP 완성, UX 개선, 프로세스 최적화</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.2); border-radius: 12px; padding: 16px;">
+              <div style="font-size: 18px; font-weight: 700; margin-bottom: 8px;">2. 영업활동</div>
+              <div style="font-size: 14px; opacity: 0.9;">셀러/공급사 확보, 공구 진행, 매출 실현</div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- 목표 구조 -->
+      <!-- 연도별 전략 비율 -->
       <div style="background: white; border-radius: 16px; padding: 28px; margin-bottom: 24px;">
-        <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 20px;">🎯 목표 구조 이해하기</h3>
-        
+        <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 20px;">📅 연도별 전략 비율</h3>
+
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px;">
-          <div style="background: linear-gradient(135deg, #dcfce7, #bbf7d0); border-radius: 12px; padding: 20px;">
-            <div style="font-size: 18px; font-weight: 700; color: #16a34a; margin-bottom: 12px;">🌱 그로스 (성장)</div>
-            <ul style="margin: 0; padding-left: 20px; color: #15803d; line-height: 2;">
-              <li>브랜드 인지도 향상</li>
-              <li>콘텐츠 품질 개선</li>
-              <li>마케팅 효율화</li>
-              <li>고객 재구매율 향상</li>
-            </ul>
-            <div style="margin-top: 16px; padding: 12px; background: white; border-radius: 8px;">
-              <div style="font-size: 12px; color: var(--gray-500);">2026년 비중</div>
-              <div style="font-size: 24px; font-weight: 700; color: #16a34a;">40%</div>
+          <!-- 2025년 -->
+          <div style="background: #fef3c7; border-radius: 12px; padding: 20px; border: 2px solid #fbbf24;">
+            <div style="font-size: 14px; font-weight: 600; color: #92400e; margin-bottom: 8px;">2025년 (현재)</div>
+            <div style="font-size: 18px; font-weight: 700; color: #78350f; margin-bottom: 12px;">MVP 완성 집중</div>
+            <div style="display: flex; gap: 12px;">
+              <div style="flex: 1; background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 28px; font-weight: 800; color: #16a34a;">90%</div>
+                <div style="font-size: 12px; color: #15803d;">여정 고도화</div>
+              </div>
+              <div style="flex: 1; background: #dbeafe; padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 28px; font-weight: 800; color: #2563eb;">10%</div>
+                <div style="font-size: 12px; color: #1d4ed8;">영업활동</div>
+              </div>
             </div>
           </div>
-          
-          <div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border-radius: 12px; padding: 20px;">
-            <div style="font-size: 18px; font-weight: 700; color: #2563eb; margin-bottom: 12px;">💼 영업 (실행)</div>
-            <ul style="margin: 0; padding-left: 20px; color: #1d4ed8; line-height: 2;">
-              <li>셀러 입점 확대</li>
-              <li>공급사 확보</li>
-              <li>공구 진행</li>
-              <li>정산 관리</li>
-            </ul>
-            <div style="margin-top: 16px; padding: 12px; background: white; border-radius: 8px;">
-              <div style="font-size: 12px; color: var(--gray-500);">2026년 비중</div>
-              <div style="font-size: 24px; font-weight: 700; color: #2563eb;">60%</div>
+
+          <!-- 2026년~ -->
+          <div style="background: #dbeafe; border-radius: 12px; padding: 20px; border: 2px solid #3b82f6;">
+            <div style="font-size: 14px; font-weight: 600; color: #1d4ed8; margin-bottom: 8px;">2026년~</div>
+            <div style="font-size: 18px; font-weight: 700; color: #1e3a8a; margin-bottom: 12px;">영업 본격화</div>
+            <div style="display: flex; gap: 12px;">
+              <div style="flex: 1; background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="font-size: 28px; font-weight: 800; color: #16a34a;">30%</div>
+                <div style="font-size: 12px; color: #15803d;">여정 고도화</div>
+              </div>
+              <div style="flex: 1; background: white; padding: 12px; border-radius: 8px; text-align: center; border: 2px solid #3b82f6;">
+                <div style="font-size: 28px; font-weight: 800; color: #2563eb;">70%</div>
+                <div style="font-size: 12px; color: #1d4ed8;">영업활동</div>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- 연도별 목표 -->
+        <!-- 매출 로드맵 -->
         <div style="background: var(--gray-50); border-radius: 12px; padding: 20px;">
-          <h4 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">📈 연도별 매출 목표</h4>
+          <h4 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">📈 매출 로드맵</h4>
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-            <div style="background: white; padding: 12px 20px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);">
-              <div style="font-size: 12px; color: var(--gray-500);">2026년</div>
-              <div style="font-size: 20px; font-weight: 700;">3억</div>
+            <div style="background: #fef3c7; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid #fbbf24;">
+              <div style="font-size: 11px; color: #92400e;">2025년</div>
+              <div style="font-size: 18px; font-weight: 700; color: #78350f;">1억</div>
             </div>
-            <span style="font-size: 20px; color: var(--gray-400);">→</span>
-            <div style="background: white; padding: 12px 20px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);">
-              <div style="font-size: 12px; color: var(--gray-500);">2027년</div>
-              <div style="font-size: 20px; font-weight: 700;">10억</div>
+            <span style="font-size: 18px; color: var(--gray-400);">→</span>
+            <div style="background: white; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);">
+              <div style="font-size: 11px; color: var(--gray-500);">2026년</div>
+              <div style="font-size: 18px; font-weight: 700;">3억</div>
             </div>
-            <span style="font-size: 20px; color: var(--gray-400);">→</span>
-            <div style="background: white; padding: 12px 20px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);">
-              <div style="font-size: 12px; color: var(--gray-500);">2028년</div>
-              <div style="font-size: 20px; font-weight: 700;">30억</div>
+            <span style="font-size: 18px; color: var(--gray-400);">→</span>
+            <div style="background: white; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);">
+              <div style="font-size: 11px; color: var(--gray-500);">2027년</div>
+              <div style="font-size: 18px; font-weight: 700;">10억</div>
             </div>
-            <span style="font-size: 20px; color: var(--gray-400);">→</span>
-            <div style="background: linear-gradient(135deg, #fbbf24, #f59e0b); padding: 12px 20px; border-radius: 8px; text-align: center; color: white;">
-              <div style="font-size: 12px; opacity: 0.9;">최종 목표</div>
+            <span style="font-size: 18px; color: var(--gray-400);">→</span>
+            <div style="background: white; padding: 12px 16px; border-radius: 8px; text-align: center; border: 2px solid var(--gray-200);">
+              <div style="font-size: 11px; color: var(--gray-500);">2028년</div>
+              <div style="font-size: 18px; font-weight: 700;">30억</div>
+            </div>
+            <span style="font-size: 18px; color: var(--gray-400);">→</span>
+            <div style="background: linear-gradient(135deg, #fbbf24, #f59e0b); padding: 12px 16px; border-radius: 8px; text-align: center; color: white;">
+              <div style="font-size: 11px; opacity: 0.9;">최종</div>
               <div style="font-size: 24px; font-weight: 800;">50억</div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 팀원 실천 체크리스트 -->
+      <div style="background: linear-gradient(135deg, #dbeafe, #e0e7ff); border-radius: 16px; padding: 28px; margin-bottom: 24px;">
+        <h3 style="font-size: 20px; font-weight: 700; color: #1e3a8a; margin-bottom: 20px;">✅ 팀원 실천 체크리스트</h3>
+        <p style="font-size: 14px; color: #1d4ed8; margin-bottom: 20px;">팀원 모두가 아래 내용을 알고 행동과 실천을 할 수 있어야 합니다.</p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div style="background: white; border-radius: 12px; padding: 20px;">
+            <div style="font-size: 16px; font-weight: 700; color: #16a34a; margin-bottom: 12px;">🌱 여정 고도화 실천</div>
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px; color: var(--gray-700); line-height: 2;">
+              <li>공구 진행 중 불편한 점 즉시 기록</li>
+              <li>반복 작업 자동화 아이디어 제안</li>
+              <li>셀러/공급사 피드백 수집 및 공유</li>
+              <li>어드민 사용성 개선 의견 제시</li>
+              <li>신규 기능 요청사항 정리</li>
+            </ul>
+          </div>
+
+          <div style="background: white; border-radius: 12px; padding: 20px;">
+            <div style="font-size: 16px; font-weight: 700; color: #2563eb; margin-bottom: 12px;">💼 영업활동 실천</div>
+            <ul style="margin: 0; padding-left: 20px; font-size: 14px; color: var(--gray-700); line-height: 2;">
+              <li>주간 신규 셀러/공급사 발굴</li>
+              <li>기존 셀러 재참여 유도 연락</li>
+              <li>공구 완료 후 7일 내 정산 처리</li>
+              <li>매출 현황 주간 체크 및 보고</li>
+              <li>시장/경쟁사 동향 파악</li>
+            </ul>
           </div>
         </div>
       </div>
