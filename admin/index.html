@@ -26457,6 +26457,9 @@ function renderGuide() {
 function switchGuideTab(tab) {
   guideTab = tab;
   renderGuide();
+  if (tab === 'tools') {
+    setTimeout(() => loadFeatureRequests(), 100);
+  }
 }
 
 // 본질 메시지 탭
@@ -27038,6 +27041,62 @@ function getToolsContent() {
         </div>
       </div>
 
+      <!-- 기능 추가 요청 -->
+      <div style="background: white; border: 1px solid var(--gray-200); border-radius: 10px; overflow: hidden;">
+        <div style="background: #ec4899; color: white; padding: 12px 16px; font-weight: 700; font-size: 14px;">
+          💡 기능 추가 요청
+        </div>
+        <div style="padding: 16px;">
+          <p style="font-size: 12px; color: var(--gray-600); margin: 0 0 12px 0;">
+            불편한 점이나 추가되었으면 하는 기능을 자유롭게 작성해주세요!
+          </p>
+          <div id="feature-request-form">
+            <div style="margin-bottom: 12px;">
+              <label style="font-size: 12px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 6px;">요청 유형</label>
+              <select id="feature-request-type" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                <option value="feature">✨ 새 기능 추가</option>
+                <option value="improve">🔧 기존 기능 개선</option>
+                <option value="bug">🐛 버그/오류 신고</option>
+                <option value="inconvenient">😤 불편한 점</option>
+                <option value="other">💬 기타 의견</option>
+              </select>
+            </div>
+            <div style="margin-bottom: 12px;">
+              <label style="font-size: 12px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 6px;">내용</label>
+              <textarea id="feature-request-content" placeholder="어떤 기능이 필요하신가요? 불편한 점이 있으신가요?" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-height: 100px; resize: vertical; font-family: inherit;"></textarea>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="font-size: 12px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 6px;">작성자 (선택)</label>
+              <input type="text" id="feature-request-author" placeholder="이름 또는 닉네임" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px;">
+            </div>
+            <button onclick="submitFeatureRequest()" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #ec4899, #db2777); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+              📮 요청 제출하기
+            </button>
+          </div>
+          <div id="feature-request-success" style="display: none; text-align: center; padding: 20px;">
+            <div style="font-size: 48px; margin-bottom: 12px;">🎉</div>
+            <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">요청이 접수되었어요!</div>
+            <div style="font-size: 12px; color: var(--gray-500);">소중한 의견 감사합니다. 검토 후 반영할게요.</div>
+            <button onclick="resetFeatureRequestForm()" style="margin-top: 16px; padding: 10px 20px; background: var(--gray-100); color: var(--gray-700); border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+              ✏️ 다른 요청 작성하기
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 기능 요청 목록 -->
+      <div style="background: white; border: 1px solid var(--gray-200); border-radius: 10px; overflow: hidden;">
+        <div style="background: var(--gray-100); padding: 12px 16px; font-weight: 700; font-size: 14px; color: var(--gray-700); display: flex; justify-content: space-between; align-items: center;">
+          <span>📋 접수된 요청 목록</span>
+          <button onclick="loadFeatureRequests()" style="background: white; border: 1px solid var(--gray-300); padding: 6px 12px; border-radius: 6px; font-size: 11px; cursor: pointer;">🔄 새로고침</button>
+        </div>
+        <div id="feature-requests-list" style="padding: 16px; max-height: 300px; overflow-y: auto;">
+          <div style="text-align: center; color: var(--gray-400); font-size: 13px; padding: 20px;">
+            로딩 중...
+          </div>
+        </div>
+      </div>
+
       <!-- 용어 설명 -->
       <div style="background: var(--gray-50); border-radius: 10px; padding: 16px; border: 1px solid var(--gray-200);">
         <div style="font-size: 13px; font-weight: 700; color: var(--gray-700); margin-bottom: 10px;">용어 설명</div>
@@ -27052,6 +27111,115 @@ function getToolsContent() {
       </div>
     </div>
   `;
+}
+
+// ========================================
+// 기능 요청 시스템
+// ========================================
+
+// 기능 요청 제출
+async function submitFeatureRequest() {
+  const type = document.getElementById('feature-request-type').value;
+  const content = document.getElementById('feature-request-content').value.trim();
+  const author = document.getElementById('feature-request-author').value.trim();
+
+  if (!content) {
+    alert('내용을 입력해주세요!');
+    return;
+  }
+
+  try {
+    await db.collection('feature_requests').add({
+      type: type,
+      content: content,
+      author: author || '익명',
+      status: 'pending',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    document.getElementById('feature-request-form').style.display = 'none';
+    document.getElementById('feature-request-success').style.display = 'block';
+    loadFeatureRequests();
+  } catch (e) {
+    console.error('기능 요청 저장 오류:', e);
+    alert('저장 중 오류가 발생했습니다. 다시 시도해주세요.');
+  }
+}
+
+// 폼 초기화
+function resetFeatureRequestForm() {
+  document.getElementById('feature-request-type').value = 'feature';
+  document.getElementById('feature-request-content').value = '';
+  document.getElementById('feature-request-author').value = '';
+  document.getElementById('feature-request-form').style.display = 'block';
+  document.getElementById('feature-request-success').style.display = 'none';
+}
+
+// 기능 요청 목록 로드
+async function loadFeatureRequests() {
+  const listEl = document.getElementById('feature-requests-list');
+  if (!listEl) return;
+
+  try {
+    const snapshot = await db.collection('feature_requests')
+      .orderBy('createdAt', 'desc')
+      .limit(20)
+      .get();
+
+    if (snapshot.empty) {
+      listEl.innerHTML = `
+        <div style="text-align: center; color: var(--gray-400); font-size: 13px; padding: 20px;">
+          아직 접수된 요청이 없어요. 첫 번째 요청을 남겨주세요! 🙌
+        </div>
+      `;
+      return;
+    }
+
+    const typeLabels = {
+      feature: '✨ 새 기능',
+      improve: '🔧 개선',
+      bug: '🐛 버그',
+      inconvenient: '😤 불편',
+      other: '💬 기타'
+    };
+
+    const statusLabels = {
+      pending: { text: '검토중', color: '#f59e0b', bg: '#fef3c7' },
+      planned: { text: '예정됨', color: '#3b82f6', bg: '#dbeafe' },
+      done: { text: '완료', color: '#10b981', bg: '#d1fae5' },
+      rejected: { text: '보류', color: '#6b7280', bg: '#f3f4f6' }
+    };
+
+    let html = '';
+    snapshot.forEach(doc => {
+      const req = doc.data();
+      const status = statusLabels[req.status] || statusLabels.pending;
+      const date = req.createdAt ? new Date(req.createdAt.toDate()).toLocaleDateString('ko-KR') : '-';
+
+      html += `
+        <div style="background: var(--gray-50); border-radius: 8px; padding: 12px; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <span style="font-size: 11px; background: white; padding: 2px 8px; border-radius: 4px; color: var(--gray-600);">${typeLabels[req.type] || '💬 기타'}</span>
+              <span style="font-size: 11px; background: ${status.bg}; color: ${status.color}; padding: 2px 8px; border-radius: 4px; font-weight: 600;">${status.text}</span>
+            </div>
+            <span style="font-size: 10px; color: var(--gray-400);">${date}</span>
+          </div>
+          <div style="font-size: 13px; color: var(--gray-700); line-height: 1.5; white-space: pre-wrap;">${req.content}</div>
+          <div style="font-size: 11px; color: var(--gray-400); margin-top: 8px;">by ${req.author || '익명'}</div>
+        </div>
+      `;
+    });
+
+    listEl.innerHTML = html;
+  } catch (e) {
+    console.error('기능 요청 목록 로드 오류:', e);
+    listEl.innerHTML = `
+      <div style="text-align: center; color: var(--gray-400); font-size: 13px; padding: 20px;">
+        목록을 불러오는데 실패했어요. 새로고침을 눌러주세요.
+      </div>
+    `;
+  }
 }
 
 // ========================================
