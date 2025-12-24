@@ -7318,6 +7318,9 @@ function renderSettlement() {
                         D+${daysOverdue}
                       </span>
                     ` : ''}
+                    <button onclick="deleteSettlementData('${d.id}')" style="padding: 8px 10px; background: white; border: 1px solid #fca5a5; border-radius: 8px; cursor: pointer; font-size: 12px; color: #dc2626;" title="정산 데이터 삭제">
+                      🗑
+                    </button>
                     <button onclick="viewSettlementReport('${d.id}')" style="padding: 8px 12px; background: var(--gray-100); border: none; border-radius: 8px; cursor: pointer; font-size: 12px; color: var(--gray-600);">
                       정산서
                     </button>
@@ -7446,6 +7449,47 @@ async function revertSettlementToPending(dealId) {
   }
 }
 
+// 정산 데이터 삭제 (대기 상태에서 삭제하고 다시 등록 가능하게)
+async function deleteSettlementData(dealId) {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  if (!confirm('이 공구의 정산 데이터를 삭제하시겠습니까?\n\n카페24 매핑 데이터가 초기화되며, 다시 등록할 수 있습니다.')) return;
+
+  try {
+    const deal = state.deals.find(d => d.id === dealId);
+    if (!deal) {
+      showToast('❌ 공구를 찾을 수 없습니다');
+      return;
+    }
+
+    // 카페24 매핑 데이터 초기화
+    await db.collection('deals').doc(dealId).update({
+      cafe24Mapped: false,
+      totalSales: 0,
+      totalQty: 0,
+      supplierSettled: false,
+      sellerSettled: false,
+      status: 'completed'
+    });
+
+    // state 즉시 업데이트
+    Object.assign(deal, {
+      cafe24Mapped: false,
+      totalSales: 0,
+      totalQty: 0,
+      supplierSettled: false,
+      sellerSettled: false,
+      status: 'completed'
+    });
+
+    showToast('✅ 정산 데이터가 삭제되었습니다');
+    renderSettlement();
+  } catch (err) {
+    console.error('정산 데이터 삭제 실패:', err);
+    showToast('❌ 삭제에 실패했습니다');
+  }
+}
+
 // 정산서 보기
 function viewSettlementReport(dealId) {
   const deal = state.deals.find(d => d.id === dealId);
@@ -7566,12 +7610,12 @@ function viewSettlementReport(dealId) {
     : totalSales - sellerPayout - pgFee;
 
   const m = document.getElementById('modal');
-  m.style.display = 'flex';
+  m.className = 'modal show';
   m.innerHTML = `
     <div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow: auto;">
       <div class="modal-header" style="position: sticky; top: 0; background: white; z-index: 10;">
         <h2>📋 정산서 - ${deal.title || deal.brandName}</h2>
-        <button class="modal-close" onclick="closeModal()" style="background: none; border: none; font-size: 28px; cursor: pointer; color: var(--gray-500); padding: 0; line-height: 1;">&times;</button>
+        <button class="modal-close" onclick="closeModal()">×</button>
       </div>
 
       <div style="padding: 20px;">
