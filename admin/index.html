@@ -1936,9 +1936,6 @@
               <div class="nav-item" data-tab="cafe24Orders" onclick="switchTab('cafe24Orders')" style="font-size: 13px;">
                 <span>📦 주문 관리</span>
               </div>
-              <div class="nav-item" data-tab="cafe24Stats" onclick="switchTab('cafe24Stats')" style="font-size: 13px;">
-                <span>📈 매출 통계</span>
-              </div>
               <div class="nav-item" data-tab="cafe24Settings" onclick="switchTab('cafe24Settings')" style="font-size: 13px;">
                 <span>⚙️ API 연동 설정</span>
               </div>
@@ -7065,7 +7062,23 @@ function renderSettlement() {
   });
   const pendingSettlement = completedDeals.filter(d => !d.supplierSettled || !d.sellerSettled);
   const fullySettled = completedDeals.filter(d => d.supplierSettled && d.sellerSettled);
-  
+
+  // 매출 KPI 계산 (sellerSettlements 기준)
+  const allSellerSettlements = state.sellerSettlements || [];
+  const allSupplierSettlements = state.supplierSettlements || [];
+
+  const totalSalesAmount = allSellerSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const totalPgFee = Math.round(totalSalesAmount * 0.04);
+  const totalSellerPayout = allSellerSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const totalSupplierPayout = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+
+  const pendingSellerAmount = allSellerSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const pendingSupplierAmount = allSupplierSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
+  const totalPendingAmount = pendingSellerAmount + pendingSupplierAmount;
+
+  const netProfit = totalSalesAmount - totalPgFee - totalSellerPayout - totalSupplierPayout;
+  const profitRate = totalSalesAmount > 0 ? ((netProfit / totalSalesAmount) * 100).toFixed(1) : 0;
+
   // 마감 후 1일 지난 공구 (정산 필요 알림)
   const dealsNeedingSettlement = (state.deals || []).filter(d => {
     if (d.status === 'settled') return false; // 이미 정산 완료
@@ -7132,18 +7145,32 @@ function renderSettlement() {
       </div>
     </div>
     
-    <div class="stats-row" style="grid-template-columns: repeat(3, 1fr);">
-      <div class="stat-card highlight">
-        <div class="stat-label">정산 대기</div>
-        <div class="stat-value">${pendingSettlement.length}</div>
+    <!-- 매출 KPI 대시보드 -->
+    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px;">
+      <div style="padding: 16px; background: linear-gradient(135deg, #3b82f6, #2563eb); border-radius: 12px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">총 매출</div>
+        <div style="font-size: 20px; font-weight: 700;">${formatNumber(totalSalesAmount)}원</div>
+        <div style="font-size: 11px; opacity: 0.8;">${allSellerSettlements.length}건</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">정산 완료</div>
-        <div class="stat-value">${fullySettled.length}</div>
+      <div style="padding: 16px; background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 12px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">정산대기 금액</div>
+        <div style="font-size: 20px; font-weight: 700;">${formatNumber(totalPendingAmount)}원</div>
+        <div style="font-size: 11px; opacity: 0.8;">셀러+공급사</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">전체 완료</div>
-        <div class="stat-value">${completedDeals.length}</div>
+      <div style="padding: 16px; background: linear-gradient(135deg, #ef4444, #dc2626); border-radius: 12px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">PG수수료 (4%)</div>
+        <div style="font-size: 20px; font-weight: 700;">${formatNumber(totalPgFee)}원</div>
+        <div style="font-size: 11px; opacity: 0.8;">카드결제 기준</div>
+      </div>
+      <div style="padding: 16px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">순이익</div>
+        <div style="font-size: 20px; font-weight: 700;">${formatNumber(netProfit)}원</div>
+        <div style="font-size: 11px; opacity: 0.8;">이익률 ${profitRate}%</div>
+      </div>
+      <div style="padding: 16px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border-radius: 12px; color: white;">
+        <div style="font-size: 12px; opacity: 0.9; margin-bottom: 4px;">정산 현황</div>
+        <div style="font-size: 20px; font-weight: 700;">${pendingSettlement.length} / ${completedDeals.length}</div>
+        <div style="font-size: 11px; opacity: 0.8;">대기 / 전체</div>
       </div>
     </div>
     
@@ -23293,129 +23320,79 @@ async function renderCafe24Dashboard() {
         </div>
       </div>
       
-      <!-- 셀러별 정산 관리 -->
-      <div class="card" style="margin-bottom: 24px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-          <h3 style="font-size: 16px; font-weight: 600;">👤 ${today.getFullYear()}년 ${today.getMonth() + 1}월 셀러별 정산</h3>
-          <button onclick="showCafe24SettlementHistory()" class="btn btn-secondary">📋 전체 정산 내역</button>
-        </div>
-        
-        ${Object.keys(monthSellerStats).length === 0 
-          ? '<div style="text-align: center; padding: 40px; color: var(--gray-400);">이번 달 주문 데이터가 없습니다</div>'
-          : `
-            <div class="table-wrapper">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>셀러</th>
-                    <th>구분</th>
-                    <th>브랜드</th>
-                    <th style="text-align: center;">수량</th>
-                    <th style="text-align: right;">매출액</th>
-                    <th style="text-align: right;">PG수수료</th>
-                    <th style="text-align: center;">정산상태</th>
-                    <th style="text-align: center;">관리</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${Object.entries(monthSellerStats).sort((a, b) => b[1].totalAmount - a[1].totalAmount).map(([seller, stats]) => {
-                    const settlementKey = `${currentMonth}_${seller}`;
-                    const sellerSettlement = settlements.find(s => s.id === settlementKey);
-                    const isCompleted = sellerSettlement?.status === 'completed';
-                    const isExternal = stats.productType === 'external';
-                    return `
-                      <tr>
-                        <td style="font-weight: 600;">${seller}</td>
-                        <td>${isExternal 
-                          ? '<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">타사</span>' 
-                          : '<span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 11px;">자사</span>'}</td>
-                        <td><span style="font-size: 12px; color: var(--gray-600);">${stats.supplierName || '-'}</span></td>
-                        <td style="text-align: center; font-weight: 600; color: #059669;">${stats.totalQuantity}개</td>
-                        <td style="text-align: right; font-weight: 600; color: var(--primary);">${formatNumber(stats.totalAmount)}원</td>
-                        <td style="text-align: right; font-size: 12px; color: #dc2626;">${formatNumber(stats.pgFee)}원</td>
-                        <td style="text-align: center;">
-                          <span style="background: ${isCompleted ? '#dcfce7' : '#fef3c7'}; color: ${isCompleted ? '#166534' : '#92400e'}; padding: 4px 12px; border-radius: 20px; font-size: 12px;">
-                            ${isCompleted ? '✅ 완료' : '⏳ 대기'}
-                          </span>
-                        </td>
-                        <td style="text-align: center;">
-                          ${isCompleted 
-                            ? `<button onclick="cancelCafe24SellerSettlement('${currentMonth}', '${seller}')" class="btn btn-sm btn-secondary">취소</button>`
-                            : `<button onclick="completeCafe24SellerSettlement('${currentMonth}', '${seller}', ${stats.totalAmount}, ${stats.orderCount}, '${isExternal ? 'external' : 'inhouse'}', '${stats.supplierName || ''}')" class="btn btn-sm btn-primary">정산완료</button>`
-                          }
-                        </td>
-                      </tr>
-                    `;
-                  }).join('')}
-                </tbody>
-                <tfoot>
-                  <tr style="background: #f8fafc; font-weight: 700;">
-                    <td colspan="3">전체 합계</td>
-                    <td style="text-align: center; color: #059669;">${monthOrders.reduce((sum, o) => sum + (Number(o.quantity) || 1), 0)}개</td>
-                    <td style="text-align: right; color: var(--primary);">${formatNumber(monthSales)}원</td>
-                    <td style="text-align: right; color: #dc2626;">${formatNumber(totalPgFee)}원</td>
-                    <td colspan="2"></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          `
+      <!-- 매출 통계 차트 -->
+      ${(() => {
+        const dailySales = {};
+        const monthlySalesData = {};
+        orders.forEach(o => {
+          if (!o.order_date) return;
+          const date = o.order_date.split('T')[0];
+          const month = date.substring(0, 7);
+          const amount = Number(o.total_amount) || 0;
+          dailySales[date] = (dailySales[date] || 0) + amount;
+          monthlySalesData[month] = (monthlySalesData[month] || 0) + amount;
+        });
+
+        const last14Days = [];
+        for (let i = 13; i >= 0; i--) {
+          const d = new Date(today);
+          d.setDate(d.getDate() - i);
+          const dateStr = d.toISOString().split('T')[0];
+          last14Days.push({ date: dateStr, label: \`\${d.getMonth() + 1}/\${d.getDate()}\`, sales: dailySales[dateStr] || 0 });
         }
-      </div>
-      
-      <!-- 공급사별 정산 관리 (타사만) - PG수수료 없음 (셀러 정산에서 이미 차감) -->
-      ${Object.keys(monthSupplierStats).length > 0 ? `
-      <div class="card" style="margin-bottom: 24px;">
-        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">🏭 ${today.getFullYear()}년 ${today.getMonth() + 1}월 공급사별 정산 (타사)</h3>
-        <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">💡 공급사 정산에는 PG수수료가 포함되지 않습니다 (셀러 정산에서 차감)</p>
-        <div class="table-wrapper">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>공급사</th>
-                <th style="text-align: center;">수량</th>
-                <th style="text-align: right;">매출액</th>
-                <th style="text-align: center;">정산상태</th>
-                <th style="text-align: center;">관리</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${Object.entries(monthSupplierStats).sort((a, b) => b[1].totalAmount - a[1].totalAmount).map(([supplier, stats]) => {
-                const settlementKey = `${currentMonth}_supplier_${supplier}`;
-                const supplierSettlement = settlements.find(s => s.id === settlementKey);
-                const isCompleted = supplierSettlement?.status === 'completed';
-                return `
-                  <tr>
-                    <td style="font-weight: 600;">${supplier}</td>
-                    <td style="text-align: center; font-weight: 600; color: #059669;">${stats.totalQuantity}개</td>
-                    <td style="text-align: right; font-weight: 600; color: var(--primary);">${formatNumber(stats.totalAmount)}원</td>
-                    <td style="text-align: center;">
-                      <span style="background: ${isCompleted ? '#dcfce7' : '#fef3c7'}; color: ${isCompleted ? '#166534' : '#92400e'}; padding: 4px 12px; border-radius: 20px; font-size: 12px;">
-                        ${isCompleted ? '✅ 완료' : '⏳ 대기'}
-                      </span>
-                    </td>
-                    <td style="text-align: center;">
-                      ${isCompleted 
-                        ? `<button onclick="cancelCafe24SupplierSettlement('${currentMonth}', '${supplier}')" class="btn btn-sm btn-secondary">취소</button>`
-                        : `<button onclick="completeCafe24SupplierSettlement('${currentMonth}', '${supplier}', ${stats.totalAmount}, ${stats.orderCount})" class="btn btn-sm btn-primary">정산완료</button>`
-                      }
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-            <tfoot>
-              <tr style="background: #f8fafc; font-weight: 700;">
-                <td>타사 합계</td>
-                <td style="text-align: center; color: #059669;">${Object.values(monthSupplierStats).reduce((sum, s) => sum + s.totalQuantity, 0)}개</td>
-                <td style="text-align: right; color: var(--primary);">${formatNumber(Object.values(monthSupplierStats).reduce((sum, s) => sum + s.totalAmount, 0))}원</td>
-                <td colspan="2"></td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-      ` : ''}
+
+        const last6Months = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+          const monthStr = \`\${d.getFullYear()}-\${String(d.getMonth() + 1).padStart(2, '0')}\`;
+          last6Months.push({ month: monthStr, label: \`\${d.getMonth() + 1}월\`, sales: monthlySalesData[monthStr] || 0 });
+        }
+
+        const maxDaily = Math.max(...last14Days.map(d => d.sales), 1);
+        const maxMonthly = Math.max(...last6Months.map(d => d.sales), 1);
+        const totalSales = orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+        const avgOrder = orders.length > 0 ? Math.round(totalSales / orders.length) : 0;
+
+        return \`
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+            <div class="card">
+              <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">📊 최근 14일 일별 매출</h3>
+              <div style="display: flex; align-items: flex-end; gap: 4px; height: 120px;">
+                \${last14Days.map(d => {
+                  const height = maxDaily > 0 ? (d.sales / maxDaily * 100) : 0;
+                  return \`<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;">
+                    <div style="width: 100%; background: linear-gradient(180deg, #3b82f6, #2563eb); border-radius: 3px 3px 0 0; height: \${Math.max(height, 2)}px;" title="\${d.date}: \${formatNumber(d.sales)}원"></div>
+                    <div style="font-size: 8px; color: var(--gray-400);">\${d.label}</div>
+                  </div>\`;
+                }).join('')}
+              </div>
+            </div>
+            <div class="card">
+              <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 16px;">📅 최근 6개월 월별 매출</h3>
+              <div style="display: flex; align-items: flex-end; gap: 8px; height: 120px;">
+                \${last6Months.map(d => {
+                  const height = maxMonthly > 0 ? (d.sales / maxMonthly * 100) : 0;
+                  return \`<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                    <div style="font-size: 10px; font-weight: 600; color: var(--gray-600);">\${formatNumber(d.sales / 10000)}만</div>
+                    <div style="width: 100%; background: linear-gradient(180deg, #10b981, #059669); border-radius: 4px 4px 0 0; height: \${Math.max(height, 4)}px;" title="\${d.month}: \${formatNumber(d.sales)}원"></div>
+                    <div style="font-size: 11px; color: var(--gray-500);">\${d.label}</div>
+                  </div>\`;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+            <div style="padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+              <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">총 매출액</div>
+              <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">\${formatNumber(totalSales)}원</div>
+            </div>
+            <div style="padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+              <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">평균 주문금액</div>
+              <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">\${formatNumber(avgOrder)}원</div>
+            </div>
+          </div>
+        \`;
+      })()}
       
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
