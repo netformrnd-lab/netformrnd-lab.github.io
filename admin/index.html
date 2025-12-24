@@ -29674,26 +29674,58 @@ async function openTaskDetailModal(taskId) {
     var doc = await db.collection('tasks').doc(taskId).get();
     if (!doc.exists) { alert('업무를 찾을 수 없습니다.'); return; }
     var task = { id: doc.id, ...doc.data() };
-    
-    // 팀원 목록 + 카테고리 목록 로드
+
+    // 팀원 목록 + 카테고리 목록 + OKR 목록 로드
     var teamMembers = state.teamMembers || [];
     var categories = await loadTaskCategories();
-    
+
+    // 현재 분기 OKR 로드
+    var currentQuarter = getQuarter();
+    var quarterKey = currentQuarter.year + '-Q' + currentQuarter.quarter;
+    var okrSnapshot = await db.collection('okrs').where('quarter', '==', quarterKey).get();
+    var okrs = [];
+    okrSnapshot.forEach(d => okrs.push({ id: d.id, ...d.data() }));
+
     var modal = document.getElementById('modal');
     modal.className = 'modal active';
-    
+
     var html = '<div class="modal-content" style="max-width: 600px; max-height: 90vh; overflow-y: auto;">';
     html += '<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">';
     html += '<h2 style="font-size: 18px; font-weight: 700;">📝 업무 상세</h2>';
     html += '<button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>';
     html += '</div>';
-    
+
     html += '<div style="display: grid; gap: 16px;">';
-    
+
     // 제목
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">업무명</label>';
     html += '<input type="text" id="detail-task-title" value="' + (task.title || '').replace(/"/g, '&quot;') + '" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;" /></div>';
-    
+
+    // 관련 OKR 선택 섹션
+    html += '<div style="background: #E8F3FF; border-radius: 10px; padding: 14px;">';
+    html += '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #0064FF;">🎯 관련 OKR</label>';
+    html += '<select id="detail-task-okr" onchange="updateDetailKROptions()" style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; background: white; margin-bottom: 10px;">';
+    html += '<option value="">OKR 없음 (일반 업무)</option>';
+    okrs.forEach(function(o) {
+      var isSelected = task.okrId === o.id;
+      html += '<option value="' + o.id + '" data-krs=\'' + JSON.stringify(o.keyResults || []).replace(/'/g, "\\'") + '\' ' + (isSelected ? 'selected' : '') + '>' + (o.objective || '') + '</option>';
+    });
+    html += '</select>';
+
+    // KR 선택 드롭다운
+    var showKr = task.okrId ? 'block' : 'none';
+    var selectedOkr = okrs.find(function(o) { return o.id === task.okrId; });
+    var krs = selectedOkr ? (selectedOkr.keyResults || []) : [];
+    html += '<select id="detail-task-kr" style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; background: white; display: ' + showKr + ';">';
+    html += '<option value="">KR 선택 (선택사항)</option>';
+    krs.forEach(function(kr, idx) {
+      var isKrSelected = task.krIndex === idx || task.krIndex === String(idx);
+      html += '<option value="' + idx + '" ' + (isKrSelected ? 'selected' : '') + '>' + (kr.description || 'KR ' + (idx + 1)) + '</option>';
+    });
+    html += '</select>';
+    html += '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">이 업무가 어떤 목표를 위한 것인지 연결하면 OKR 상세에서 활동 내역을 확인할 수 있습니다.</div>';
+    html += '</div>';
+
     // 상태, 우선순위, 구분
     html += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">';
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">상태</label><select id="detail-task-status" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">';
@@ -29713,7 +29745,7 @@ async function openTaskDetailModal(taskId) {
       html += '<option value="' + c + '" ' + (task.category === c ? 'selected' : '') + '>' + c + '</option>';
     });
     html += '</select></div></div>';
-    
+
     // 담당자, 날짜
     html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">';
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">담당자</label>';
@@ -29727,23 +29759,50 @@ async function openTaskDetailModal(taskId) {
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">완료 기한</label>';
     html += '<input type="date" id="detail-task-date" value="' + (task.dueDate || '') + '" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;" /></div>';
     html += '</div>';
-    
+
     // 메모
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">메모</label>';
     html += '<textarea id="detail-task-note" style="width: 100%; height: 120px; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; resize: none;">' + (task.note || '') + '</textarea></div>';
-    
+
     html += '</div>';
-    
+
     html += '<div style="display: flex; gap: 12px; margin-top: 24px;">';
     html += '<button onclick="deleteTaskFromDetail(\'' + taskId + '\')" style="background: #FEE2E2; color: #DC2626; border: none; padding: 12px 20px; border-radius: 10px; cursor: pointer; font-weight: 600;">삭제</button>';
     html += '<div style="flex: 1;"></div>';
     html += '<button onclick="closeModal()" style="background: #F2F4F6; color: #333D4B; border: none; padding: 12px 20px; border-radius: 10px; cursor: pointer; font-weight: 600;">취소</button>';
     html += '<button onclick="saveTaskDetail(\'' + taskId + '\')" style="background: #0064FF; color: white; border: none; padding: 12px 20px; border-radius: 10px; cursor: pointer; font-weight: 600;">저장</button>';
     html += '</div></div>';
-    
+
     modal.innerHTML = html;
   } catch (error) {
     console.error('업무 상세 로드 오류:', error);
+  }
+}
+
+// 업무 상세 모달에서 KR 옵션 업데이트
+function updateDetailKROptions() {
+  var okrSelect = document.getElementById('detail-task-okr');
+  var krSelect = document.getElementById('detail-task-kr');
+  var selectedOption = okrSelect.options[okrSelect.selectedIndex];
+
+  if (!okrSelect.value) {
+    krSelect.style.display = 'none';
+    return;
+  }
+
+  try {
+    var krs = JSON.parse(selectedOption.dataset.krs || '[]');
+    if (krs.length > 0) {
+      krSelect.innerHTML = '<option value="">KR 선택 (선택사항)</option>';
+      krs.forEach(function(kr, idx) {
+        krSelect.innerHTML += '<option value="' + idx + '">' + (kr.description || 'KR ' + (idx + 1)) + '</option>';
+      });
+      krSelect.style.display = 'block';
+    } else {
+      krSelect.style.display = 'none';
+    }
+  } catch (e) {
+    krSelect.style.display = 'none';
   }
 }
 
@@ -29753,14 +29812,26 @@ async function saveTaskDetail(taskId) {
     var taskDoc = await db.collection('tasks').doc(taskId).get();
     var oldTask = taskDoc.data();
     var oldStatus = oldTask?.status || '대기';
-    
+
     var assigneeSelect = document.getElementById('detail-task-assignee');
     var assigneeId = assigneeSelect.value;
     var assigneeName = assigneeSelect.options[assigneeSelect.selectedIndex]?.dataset?.name || '';
-    
+
     var newStatus = document.getElementById('detail-task-status').value;
     var newTitle = document.getElementById('detail-task-title').value;
-    
+
+    // OKR 연결 정보
+    var okrSelect = document.getElementById('detail-task-okr');
+    var krSelect = document.getElementById('detail-task-kr');
+    var okrId = okrSelect ? okrSelect.value : '';
+    var krIndex = krSelect && krSelect.value !== '' ? parseInt(krSelect.value) : null;
+
+    // OKR 이름도 저장 (표시용)
+    var okrName = '';
+    if (okrSelect && okrSelect.value) {
+      okrName = okrSelect.options[okrSelect.selectedIndex]?.textContent || '';
+    }
+
     var updateData = {
       title: newTitle,
       status: newStatus,
@@ -29770,14 +29841,17 @@ async function saveTaskDetail(taskId) {
       note: document.getElementById('detail-task-note').value,
       assigneeId: assigneeId,
       assignee: assigneeName,
+      okrId: okrId,
+      krIndex: krIndex,
+      okrName: okrName,
       updatedAt: new Date().toISOString()
     };
-    
+
     // 완료로 변경 시 completedAt 기록
     if (newStatus === '완료' && oldStatus !== '완료') {
       updateData.completedAt = new Date().toISOString();
     }
-    
+
     await db.collection('tasks').doc(taskId).update(updateData);
     
     // 상태 변경 시 활동 로그 기록
