@@ -9711,9 +9711,10 @@ function renderSellerList() {
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <h3 class="card-title" style="margin-bottom: 0;">탐색 셀러 목록</h3>
-        <div id="sellerlist-delete-actions" style="display: none;">
+        <div id="sellerlist-delete-actions" style="display: none; align-items: center;">
           <span id="sellerlist-selected-count" style="font-size: 13px; color: var(--gray-600); margin-right: 12px;">0개 선택</span>
           <button class="btn btn-secondary btn-sm" onclick="clearSellerListSelection()" style="margin-right: 8px;">선택 해제</button>
+          <button class="btn btn-sm" style="background: #10b981; color: white; margin-right: 8px;" onclick="downloadSelectedSellerList()">📥 엑셀 다운로드</button>
           <button class="btn btn-sm" style="background: #ef4444; color: white;" onclick="deleteSelectedSellerList()">🗑 선택 삭제</button>
         </div>
       </div>
@@ -9908,6 +9909,74 @@ function clearSellerListSelection() {
   const selectAllCheckbox = document.getElementById('sellerlist-select-all');
   if (selectAllCheckbox) selectAllCheckbox.checked = false;
   updateSellerListSelectionUI();
+}
+
+// 선택한 셀러 엑셀 다운로드
+function downloadSelectedSellerList() {
+  const ids = Array.from(window.selectedSellerListIds);
+  if (ids.length === 0) {
+    showToast('다운로드할 셀러를 선택해주세요');
+    return;
+  }
+
+  const selectedSellers = (state.sellerList || []).filter(s => ids.includes(s.id));
+
+  if (selectedSellers.length === 0) {
+    showToast('선택된 셀러 정보를 찾을 수 없습니다');
+    return;
+  }
+
+  // 엑셀 데이터 생성
+  const headers = ['카테고리', '계정명', '채널', '계정링크', '팔로워(만)', '제안여부', '컨택여부', '계약여부', '제안상품', '마진율', '담당자', '비고'];
+
+  const data = selectedSellers.map(s => {
+    // 제안상품 목록
+    const proposedProducts = s.proposedProducts || (s.proposedProduct ? [s.proposedProduct] : []);
+    const productNames = proposedProducts.map(pid => {
+      const prod = (state.supplierProducts || []).find(p => p.id === pid);
+      return prod ? (prod.representativeProduct || prod.productName) : '';
+    }).filter(Boolean).join(', ');
+
+    return [
+      s.category || '',
+      s.accountName || '',
+      s.channel || '',
+      s.accountLink || '',
+      s.followers || '',
+      s.proposed ? 'O' : '',
+      s.contacted ? 'O' : '',
+      s.contracted ? 'O' : '',
+      productNames,
+      s.marginRate ? s.marginRate + '%' : '',
+      s.createdBy ? s.createdBy.split('@')[0] : '',
+      s.notes || ''
+    ];
+  });
+
+  // XLSX 생성
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+  ws['!cols'] = [
+    { wch: 12 }, // 카테고리
+    { wch: 20 }, // 계정명
+    { wch: 10 }, // 채널
+    { wch: 35 }, // 계정링크
+    { wch: 10 }, // 팔로워
+    { wch: 8 },  // 제안
+    { wch: 8 },  // 컨택
+    { wch: 8 },  // 계약
+    { wch: 25 }, // 제안상품
+    { wch: 8 },  // 마진율
+    { wch: 10 }, // 담당자
+    { wch: 30 }  // 비고
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '셀러목록');
+
+  const today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `셀러목록_${selectedSellers.length}건_${today}.xlsx`);
+
+  showToast(`${selectedSellers.length}건 엑셀 다운로드 완료`);
 }
 
 async function deleteSelectedSellerList() {
@@ -26477,6 +26546,10 @@ function initChatbot() {
         <button onclick="askQuestion('메뉴 전체 설명')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
           📚 메뉴 전체 설명
         </button>
+        <div style="border-top: 1px solid var(--gray-200); margin: 8px 0;"></div>
+        <button onclick="showFeatureRequestInChatbot()" style="background: linear-gradient(135deg, #fce7f3, #fbcfe8); border: 1px solid #ec4899; padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: #db2777; font-weight: 600; transition: all 0.2s;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">
+          💡 기능 추가 요청 / 불편사항 신고
+        </button>
       </div>
     </div>
   `;
@@ -26527,6 +26600,80 @@ function sendChatMessage() {
 
   askQuestion(message);
   input.value = '';
+}
+
+// 챗봇 내 기능 요청 폼 표시
+function showFeatureRequestInChatbot() {
+  const messages = document.getElementById('chatbot-messages');
+  messages.innerHTML = `
+    <div style="margin-bottom: 16px;">
+      <div style="background: white; padding: 16px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+        <div style="font-size: 15px; font-weight: 700; color: #db2777; margin-bottom: 12px;">💡 기능 추가 요청</div>
+        <p style="font-size: 12px; color: var(--gray-600); margin-bottom: 16px;">
+          불편한 점이나 추가되었으면 하는 기능을 알려주세요!
+        </p>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 11px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 4px;">요청 유형</label>
+          <select id="chatbot-request-type" style="width: 100%; padding: 8px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
+            <option value="feature">✨ 새 기능 추가</option>
+            <option value="improve">🔧 기존 기능 개선</option>
+            <option value="bug">🐛 버그/오류 신고</option>
+            <option value="inconvenient">😤 불편한 점</option>
+            <option value="other">💬 기타 의견</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 11px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 4px;">내용</label>
+          <textarea id="chatbot-request-content" placeholder="어떤 기능이 필요하신가요?" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; min-height: 80px; resize: vertical; font-family: inherit;"></textarea>
+        </div>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 11px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 4px;">작성자 (선택)</label>
+          <input type="text" id="chatbot-request-author" placeholder="이름" style="width: 100%; padding: 8px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px;">
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button onclick="initChatbot()" style="flex: 1; padding: 10px; background: var(--gray-100); color: var(--gray-600); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">← 돌아가기</button>
+          <button onclick="submitChatbotFeatureRequest()" style="flex: 2; padding: 10px; background: linear-gradient(135deg, #ec4899, #db2777); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">📮 요청 제출</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 챗봇에서 기능 요청 제출
+async function submitChatbotFeatureRequest() {
+  const type = document.getElementById('chatbot-request-type').value;
+  const content = document.getElementById('chatbot-request-content').value.trim();
+  const author = document.getElementById('chatbot-request-author').value.trim();
+
+  if (!content) {
+    alert('내용을 입력해주세요!');
+    return;
+  }
+
+  try {
+    await db.collection('feature_requests').add({
+      type: type,
+      content: content,
+      author: author || '익명',
+      status: 'pending',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    const messages = document.getElementById('chatbot-messages');
+    messages.innerHTML = `
+      <div style="text-align: center; padding: 30px 20px;">
+        <div style="font-size: 48px; margin-bottom: 12px;">🎉</div>
+        <div style="font-size: 15px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">요청이 접수되었어요!</div>
+        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 20px;">소중한 의견 감사합니다.<br>검토 후 반영할게요.</div>
+        <button onclick="initChatbot()" style="padding: 10px 24px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+          ← 처음으로
+        </button>
+      </div>
+    `;
+  } catch (e) {
+    console.error('기능 요청 저장 오류:', e);
+    alert('저장 중 오류가 발생했습니다. 다시 시도해주세요.');
+  }
 }
 
 // 챗봇 답변 생성
