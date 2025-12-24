@@ -25978,9 +25978,14 @@ function renderOKRList(okrs, teamMembers) {
 // OKR에 연결된 업무 보기 모달
 async function showLinkedTasks(okrId, okrTitle) {
   try {
-    var snapshot = await db.collection('tasks').where('linkedOkrId', '==', okrId).get();
-    var tasks = [];
-    snapshot.forEach(doc => tasks.push({ id: doc.id, ...doc.data() }));
+    // linkedOkrId와 기존 okrId 필드 모두 조회 (하위 호환성)
+    var snapshot1 = await db.collection('tasks').where('linkedOkrId', '==', okrId).get();
+    var snapshot2 = await db.collection('tasks').where('okrId', '==', okrId).get();
+
+    var tasksMap = {};
+    snapshot1.forEach(doc => tasksMap[doc.id] = { id: doc.id, ...doc.data() });
+    snapshot2.forEach(doc => tasksMap[doc.id] = { id: doc.id, ...doc.data() });
+    var tasks = Object.values(tasksMap);
     
     var modal = document.getElementById('modal');
     modal.className = 'modal active';
@@ -29770,10 +29775,12 @@ async function openTaskDetailModal(taskId) {
     // 전역에 저장 (연도 변경 시 사용)
     window._taskModalOkrsByYear = okrsByYear;
 
-    // 기존 연결된 OKR의 연도 확인
+    // 기존 연결된 OKR의 연도 확인 (linkedOkrId 우선, 하위 호환으로 okrId도 확인)
+    var taskOkrId = task.linkedOkrId || task.okrId || '';
+    var taskKrIndex = task.linkedKrIndex ?? task.krIndex ?? null;
     var taskOkrYear = currentYear;
-    if (task.okrId) {
-      var linkedOkr = allOkrs.find(function(o) { return o.id === task.okrId; });
+    if (taskOkrId) {
+      var linkedOkr = allOkrs.find(function(o) { return o.id === taskOkrId; });
       if (linkedOkr && linkedOkr.quarter) {
         taskOkrYear = parseInt(linkedOkr.quarter.split('-')[0]);
       }
@@ -29810,7 +29817,7 @@ async function openTaskDetailModal(taskId) {
     html += '<select id="detail-task-okr" onchange="updateDetailKROptions()" style="flex: 1; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white;">';
     html += '<option value="">OKR 없음 (일반 업무)</option>';
     okrs.forEach(function(o) {
-      var isSelected = task.okrId === o.id;
+      var isSelected = taskOkrId === o.id;
       var krsJson = JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;");
       html += '<option value="' + o.id + '" data-krs=\'' + krsJson + '\' ' + (isSelected ? 'selected' : '') + '>[' + (o.quarter || '') + '] ' + (o.objective || '') + '</option>';
     });
@@ -29818,13 +29825,13 @@ async function openTaskDetailModal(taskId) {
     html += '</div>';
 
     // KR 선택 드롭다운
-    var showKr = task.okrId ? 'block' : 'none';
-    var selectedOkr = okrs.find(function(o) { return o.id === task.okrId; });
+    var showKr = taskOkrId ? 'block' : 'none';
+    var selectedOkr = okrs.find(function(o) { return o.id === taskOkrId; });
     var krs = selectedOkr ? (selectedOkr.keyResults || []) : [];
     html += '<select id="detail-task-kr" style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; background: white; display: ' + showKr + ';">';
     html += '<option value="">KR 선택 (선택사항)</option>';
     krs.forEach(function(kr, idx) {
-      var isKrSelected = task.krIndex === idx || task.krIndex === String(idx);
+      var isKrSelected = taskKrIndex === idx || taskKrIndex === String(idx);
       html += '<option value="' + idx + '" ' + (isKrSelected ? 'selected' : '') + '>' + (kr.description || 'KR ' + (idx + 1)) + '</option>';
     });
     html += '</select>';
@@ -29925,16 +29932,20 @@ async function saveTaskDetail(taskId) {
     var newStatus = document.getElementById('detail-task-status').value;
     var newTitle = document.getElementById('detail-task-title').value;
 
-    // OKR 연결 정보
+    // OKR 연결 정보 (linkedOkrId로 통일 - showLinkedTasks와 호환)
     var okrSelect = document.getElementById('detail-task-okr');
     var krSelect = document.getElementById('detail-task-kr');
-    var okrId = okrSelect ? okrSelect.value : '';
-    var krIndex = krSelect && krSelect.value !== '' ? parseInt(krSelect.value) : null;
+    var linkedOkrId = okrSelect ? okrSelect.value : '';
+    var linkedKrIndex = krSelect && krSelect.value !== '' ? parseInt(krSelect.value) : null;
 
-    // OKR 이름도 저장 (표시용)
-    var okrName = '';
+    // OKR/KR 이름도 저장 (표시용)
+    var linkedOkrTitle = '';
+    var linkedKrTitle = '';
     if (okrSelect && okrSelect.value) {
-      okrName = okrSelect.options[okrSelect.selectedIndex]?.textContent || '';
+      linkedOkrTitle = okrSelect.options[okrSelect.selectedIndex]?.textContent || '';
+    }
+    if (krSelect && krSelect.value !== '') {
+      linkedKrTitle = krSelect.options[krSelect.selectedIndex]?.textContent || '';
     }
 
     var updateData = {
@@ -29946,9 +29957,10 @@ async function saveTaskDetail(taskId) {
       note: document.getElementById('detail-task-note').value,
       assigneeId: assigneeId,
       assignee: assigneeName,
-      okrId: okrId,
-      krIndex: krIndex,
-      okrName: okrName,
+      linkedOkrId: linkedOkrId,
+      linkedKrIndex: linkedKrIndex,
+      linkedOkrTitle: linkedOkrTitle,
+      linkedKrTitle: linkedKrTitle,
       updatedAt: new Date().toISOString()
     };
 
