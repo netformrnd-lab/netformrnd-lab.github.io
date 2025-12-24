@@ -116,7 +116,7 @@
             .header-inner { flex-direction: column; gap: 12px; }
             .stats-row { grid-template-columns: 1fr; }
             .table-container { overflow-x: auto; }
-            table { min-width: 900px; }
+            table { min-width: 1100px; }
             .btn-group { flex-direction: column; }
         }
     </style>
@@ -180,9 +180,10 @@
                         <th>셀러</th>
                         <th>공구기간</th>
                         <th>판매상품</th>
-                        <th>단가</th>
+                        <th>판매단가</th>
                         <th>수량</th>
                         <th>판매금액</th>
+                        <th class="supplier-col">공급단가(V+)</th>
                         <th class="supplier-col">공급가액</th>
                         <th class="supplier-col">부가세(10%)</th>
                         <th class="supplier-col">정산금액(V+)</th>
@@ -229,6 +230,7 @@
 
         let settlements = [];
         let products = [];
+        let cafe24Orders = [];
         let currentSupplier = '';
         let selectedSettlements = new Set();
 
@@ -255,6 +257,7 @@
             sessionStorage.removeItem('supplierName');
             currentSupplier = '';
             settlements = [];
+            cafe24Orders = [];
             document.getElementById('loginSection').style.display = 'flex';
             document.getElementById('dashboard').classList.remove('active');
             document.getElementById('userInfo').style.display = 'none';
@@ -274,95 +277,166 @@
                 const productsSnapshot = await db.collection('products').get();
                 products = productsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-                // 타사상품 셀러 정산 데이터 로드
-                const sellerSnapshot = await db.collection('sellerSettlements').get();
-                const sellerData = sellerSnapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(s => s.productType === 'external' && s.brandName === currentSupplier);
+                // 🔥 cafe24_orders에서 해당 공급사(supplier_name) 주문 로드
+                const ordersSnapshot = await db.collection('cafe24_orders')
+                    .orderBy('order_date', 'desc')
+                    .limit(2000)
+                    .get();
 
-                // 공급사 정산 데이터 로드
-                const supplierSnapshot = await db.collection('supplierSettlements').get();
-                const supplierData = supplierSnapshot.docs
+                // supplier_name 또는 brandName이 현재 공급사와 일치하는 주문 필터링
+                cafe24Orders = ordersSnapshot.docs
                     .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(s => s.brandName === currentSupplier || s.supplierName === currentSupplier);
+                    .filter(o => {
+                        const supplierName = (o.supplier_name || '').toLowerCase();
+                        const currentName = currentSupplier.toLowerCase();
+                        return supplierName === currentName || supplierName.includes(currentName) || currentName.includes(supplierName);
+                    });
 
-                // 데이터 병합 및 정리
-                settlements = processSettlements(sellerData, supplierData);
+                console.log(`${currentSupplier} 주문 ${cafe24Orders.length}건 로드됨`);
+
+                // 주문 데이터 기반으로 정산 데이터 생성
+                settlements = processOrdersToSettlements(cafe24Orders);
                 renderSettlements();
             } catch (error) {
                 console.error('Error loading data:', error);
+                alert('데이터 로딩 중 오류가 발생했습니다.');
             }
         }
 
-        function processSettlements(sellerData, supplierData) {
+        // cafe24_orders를 셀러별/기간별로 그룹화하여 정산 데이터 생성
+        function processOrdersToSettlements(orders) {
             const result = [];
 
-            sellerData.forEach(s => {
-                // salesItems 또는 items에서 상품 정보 가져오기
-                let items = s.salesItems || s.items || [];
+            // 셀러별로 그룹화
+            const sellerGroups = {};
+            orders.forEach(order => {
+                const sellerName = order.seller_name || '(미지정)';
+                const orderDate = order.order_date || '';
+                const yearMonth = orderDate.substring(0, 7); // YYYY-MM
 
-                // items가 없으면 단일 상품으로 처리
-                if (items.length === 0) {
-                    items = [{
-                        productName: s.productName || `${currentSupplier} 상품`,
-                        quantity: Number(s.totalQuantity) || 1,
-                        unitPrice: Number(s.salePrice) || 0,
-                        amount: Number(s.salesAmount) || 0,
-                        supplyPrice: Number(s.supplyPrice) || 0
-                    }];
+                const groupKey = `${sellerName}_${yearMonth}`;
+
+                if (!sellerGroups[groupKey]) {
+                    sellerGroups[groupKey] = {
+                        sellerName: sellerName,
+                        yearMonth: yearMonth,
+                        orders: []
+                    };
                 }
+                sellerGroups[groupKey].orders.push(order);
+            });
 
-                // 각 상품에 대해 공급가 계산
-                const processedItems = items.map(item => {
-                    const qty = Number(item.quantity) || 1;
-                    const unitPrice = Number(item.unitPrice) || Number(item.salePrice) || 0;
-                    const salesAmount = Number(item.amount) || (unitPrice * qty);
+            // 각 그룹을 정산 데이터로 변환
+            Object.values(sellerGroups).forEach(group => {
+                const items = [];
 
-                    // 공급단가 찾기
-                    let supplyPrice = Number(item.supplyPrice) || 0;
-                    if (!supplyPrice) {
-                        const matchedProduct = products.find(p =>
-                            p.brandName === currentSupplier &&
-                            (p.productName?.includes(item.productName?.split('(')[0]) ||
-                             item.productName?.includes(p.productName?.split(' ')[0]))
-                        );
+                // 상품별로 집계
+                const productMap = {};
+                group.orders.forEach(order => {
+                    const productName = order.product_name || order.product_option || '상품';
+                    const qty = Number(order.quantity) || 1;
+                    const unitPrice = Number(order.unit_price) || 0;
+                    const totalAmount = Number(order.total_amount) || (unitPrice * qty);
+
+                    // 공급단가 찾기: 1) 주문에 저장된 supply_price, 2) 상품DB에서 매칭
+                    let supplyUnitPrice = Number(order.supply_price) || 0;
+                    if (!supplyUnitPrice) {
+                        const matchedProduct = findMatchingProduct(productName);
                         if (matchedProduct) {
-                            supplyPrice = Number(matchedProduct.supplyPrice) || 0;
+                            supplyUnitPrice = Number(matchedProduct.supplyPrice) || 0;
                         }
                     }
 
-                    // 공급가액 및 부가세 계산
-                    const supplyAmount = supplyPrice > 0 ? supplyPrice * qty : Math.round(salesAmount * 0.7); // 없으면 70%로 추정
+                    const productKey = `${productName}_${unitPrice}_${supplyUnitPrice}`;
+                    if (!productMap[productKey]) {
+                        productMap[productKey] = {
+                            productName: productName,
+                            unitPrice: unitPrice,
+                            supplyUnitPrice: supplyUnitPrice,
+                            quantity: 0,
+                            salesAmount: 0
+                        };
+                    }
+                    productMap[productKey].quantity += qty;
+                    productMap[productKey].salesAmount += totalAmount;
+                });
+
+                // 상품별 정산 계산
+                Object.values(productMap).forEach(item => {
+                    // 공급단가(V+)는 부가세 포함 금액
+                    // 공급가액 = 공급단가 / 1.1 (부가세 제외)
+                    // 부가세 = 공급가액 * 10%
+                    // 정산금액(V+) = 공급가액 + 부가세 = 공급단가
+
+                    const supplyUnitPrice = item.supplyUnitPrice; // V+ 포함 단가
+                    const totalSupplyPriceVat = supplyUnitPrice * item.quantity; // 총 공급단가(V+)
+
+                    // 공급가액 = 공급단가(V+) / 1.1
+                    const supplyAmount = supplyUnitPrice > 0
+                        ? Math.round(totalSupplyPriceVat / 1.1)
+                        : Math.round(item.salesAmount * 0.7); // 공급단가 없으면 판매금액의 70%로 추정
+
+                    // 부가세 = 공급가액 * 10%
                     const vatAmount = Math.round(supplyAmount * 0.1);
+
+                    // 정산금액(V+) = 공급가액 + 부가세
                     const totalPayment = supplyAmount + vatAmount;
 
-                    return {
-                        productName: item.productName || '-',
-                        quantity: qty,
-                        unitPrice: unitPrice,
-                        salesAmount: salesAmount,
-                        supplyPrice: supplyPrice,
+                    items.push({
+                        productName: item.productName,
+                        quantity: item.quantity,
+                        unitPrice: item.unitPrice,
+                        salesAmount: item.salesAmount,
+                        supplyUnitPrice: supplyUnitPrice,
                         supplyAmount: supplyAmount,
                         vatAmount: vatAmount,
                         totalPayment: totalPayment
-                    };
+                    });
                 });
 
+                // 공구기간 계산 (해당 그룹 주문의 최초~최종 날짜)
+                const dates = group.orders.map(o => o.order_date).filter(d => d).sort();
+                const dealPeriod = dates.length > 0
+                    ? `${dates[0].substring(0,10)} ~ ${dates[dates.length-1].substring(0,10)}`
+                    : group.yearMonth;
+
                 result.push({
-                    id: s.id,
-                    sellerName: s.sellerName || '-',
-                    dealPeriod: s.dealPeriod || '-',
-                    settlementDate: s.settlementDate || '-',
-                    isCompleted: s.isCompleted || false,
-                    items: processedItems,
-                    totalSalesAmount: processedItems.reduce((sum, i) => sum + i.salesAmount, 0),
-                    totalSupplyAmount: processedItems.reduce((sum, i) => sum + i.supplyAmount, 0),
-                    totalVatAmount: processedItems.reduce((sum, i) => sum + i.vatAmount, 0),
-                    totalPayment: processedItems.reduce((sum, i) => sum + i.totalPayment, 0)
+                    id: `${group.sellerName}_${group.yearMonth}`,
+                    sellerName: group.sellerName,
+                    dealPeriod: dealPeriod,
+                    settlementDate: '-', // 정산 완료일은 별도 관리
+                    isCompleted: false,
+                    items: items,
+                    totalSalesAmount: items.reduce((sum, i) => sum + i.salesAmount, 0),
+                    totalSupplyAmount: items.reduce((sum, i) => sum + i.supplyAmount, 0),
+                    totalVatAmount: items.reduce((sum, i) => sum + i.vatAmount, 0),
+                    totalPayment: items.reduce((sum, i) => sum + i.totalPayment, 0)
                 });
             });
 
-            return result.sort((a, b) => (b.settlementDate || '').localeCompare(a.settlementDate || ''));
+            return result.sort((a, b) => (b.dealPeriod || '').localeCompare(a.dealPeriod || ''));
+        }
+
+        // 상품 DB에서 매칭되는 상품 찾기
+        function findMatchingProduct(productName) {
+            if (!productName) return null;
+
+            const normalizedName = productName.toLowerCase().replace(/\s+/g, '');
+
+            return products.find(p => {
+                if (!p.brandName || !p.productName) return false;
+
+                // 공급사 매칭
+                const supplierMatch = p.brandName.toLowerCase() === currentSupplier.toLowerCase();
+                if (!supplierMatch) return false;
+
+                // 상품명 매칭 (부분 매칭)
+                const dbProductName = p.productName.toLowerCase().replace(/\s+/g, '');
+                return normalizedName.includes(dbProductName) ||
+                       dbProductName.includes(normalizedName) ||
+                       normalizedName.includes(dbProductName.split('(')[0]) ||
+                       dbProductName.includes(normalizedName.split('(')[0]);
+            });
         }
 
         function renderSettlements() {
@@ -414,6 +488,7 @@
                         <td>${item.unitPrice.toLocaleString()}원</td>
                         <td>${item.quantity}</td>
                         <td class="amount-cell">${item.salesAmount.toLocaleString()}원</td>
+                        <td class="supply-cell">${(item.supplyUnitPrice || 0).toLocaleString()}원</td>
                         <td class="supply-cell">${item.supplyAmount.toLocaleString()}원</td>
                         <td class="vat-cell">${item.vatAmount.toLocaleString()}원</td>
                     `;
@@ -437,6 +512,7 @@
             html += `
                 <tr class="grand-total-row">
                     <td colspan="7" style="text-align: center;">합계</td>
+                    <td class="supply-cell">-</td>
                     <td class="supply-cell">${grandTotalSupply.toLocaleString()}원</td>
                     <td class="vat-cell">${grandTotalVat.toLocaleString()}원</td>
                     <td class="total-cell">${grandTotalPayment.toLocaleString()}원</td>
@@ -493,6 +569,7 @@
                             <td style="text-align: left; font-size: 11px;">${item.productName}</td>
                             <td>${item.quantity}</td>
                             <td>${item.salesAmount.toLocaleString()}원</td>
+                            <td style="background: #fef3c7;">${(item.supplyUnitPrice || 0).toLocaleString()}원</td>
                             <td style="background: #fef3c7;">${item.supplyAmount.toLocaleString()}원</td>
                             <td style="background: #fef3c7;">${item.vatAmount.toLocaleString()}원</td>
                             ${isFirst ? `<td rowspan="${s.items.length}" style="vertical-align: middle; background: #fde68a; font-weight: 700;">${s.totalPayment.toLocaleString()}원</td>` : ''}
@@ -510,7 +587,7 @@
     <title>공급사 정산서 - ${currentSupplier}</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap');
-        body { font-family: 'Noto Sans KR', sans-serif; padding: 40px; max-width: 900px; margin: 0 auto; }
+        body { font-family: 'Noto Sans KR', sans-serif; padding: 40px; max-width: 1000px; margin: 0 auto; }
         .header { text-align: left; border-bottom: 3px solid #f59e0b; padding-bottom: 20px; margin-bottom: 24px; }
         .logo { font-size: 24px; font-weight: 700; color: #f59e0b; }
         .title { font-size: 28px; font-weight: 700; color: #374151; margin-top: 8px; }
@@ -518,7 +595,7 @@
         .info p { margin: 4px 0; font-size: 14px; color: #6b7280; }
         .info strong { color: #374151; }
         .total-amount { font-size: 24px; font-weight: 700; color: #f59e0b; margin: 16px 0; }
-        table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 20px; }
         th { background: #f3f4f6; padding: 10px 6px; border: 1px solid #e5e7eb; font-weight: 600; }
         th.supply { background: #fef3c7; }
         td { padding: 8px 6px; border: 1px solid #e5e7eb; text-align: center; }
@@ -544,9 +621,10 @@
                 <th>판매상품</th>
                 <th>수량</th>
                 <th>판매금액</th>
+                <th class="supply">공급단가(V+)</th>
                 <th class="supply">공급가액</th>
-                <th class="supply">부가세</th>
-                <th class="supply">정산금액</th>
+                <th class="supply">부가세(10%)</th>
+                <th class="supply">정산금액(V+)</th>
                 <th>정산일</th>
             </tr>
         </thead>
@@ -576,7 +654,7 @@
             }
 
             const data = [];
-            data.push(['셀러', '공구기간', '판매상품', '단가', '수량', '판매금액', '공급가액', '부가세', '정산금액', '정산일']);
+            data.push(['셀러', '공구기간', '판매상품', '판매단가', '수량', '판매금액', '공급단가(V+)', '공급가액', '부가세(10%)', '정산금액(V+)', '정산일']);
 
             settlements.forEach(s => {
                 s.items.forEach((item, idx) => {
@@ -587,6 +665,7 @@
                         item.unitPrice,
                         item.quantity,
                         item.salesAmount,
+                        item.supplyUnitPrice || 0,
                         item.supplyAmount,
                         item.vatAmount,
                         idx === 0 ? s.totalPayment : '',
