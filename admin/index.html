@@ -7197,8 +7197,7 @@ function renderSettlement() {
               <th>공급사</th>
               <th>셀러</th>
               <th>마감일</th>
-              <th style="text-align: center;">공급사 정산</th>
-              <th style="text-align: center;">셀러 정산</th>
+              <th style="text-align: center;">정산체크</th>
               <th style="text-align: center;">정산서</th>
             </tr>
           </thead>
@@ -7208,6 +7207,7 @@ function renderSettlement() {
               const isExternal = supplier?.supplierType === 'external' || d.productType === 'external';
               const sellerName = getSellerName(d.sellerId);
               const supplierName = getSupplierName(d.supplierId);
+              const isSettled = isExternal ? (d.supplierSettled && d.sellerSettled) : d.sellerSettled;
 
               return `
                 <tr>
@@ -7222,18 +7222,9 @@ function renderSettlement() {
                   <td>${sellerName}</td>
                   <td>${formatDateKR(d.endDate)}</td>
                   <td style="text-align: center;">
-                    ${isExternal ? `
-                      <label class="checkbox-wrapper" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="event.stopPropagation(); updateSettlement('${d.id}', 'supplierSettled', ${!d.supplierSettled})">
-                        <input type="checkbox" ${d.supplierSettled ? 'checked' : ''} onclick="event.stopPropagation()">
-                        <span>${d.supplierSettled ? '완료' : '대기'}</span>
-                      </label>
-                    ` : '<span style="color: var(--gray-400);">-</span>'}
-                  </td>
-                  <td style="text-align: center;">
-                    <label class="checkbox-wrapper" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="event.stopPropagation(); updateSettlement('${d.id}', 'sellerSettled', ${!d.sellerSettled})">
-                      <input type="checkbox" ${d.sellerSettled ? 'checked' : ''} onclick="event.stopPropagation()">
-                      <span>${d.sellerSettled ? '완료' : '대기'}</span>
-                    </label>
+                    <button onclick="completeSettlement('${d.id}', ${isExternal})" class="btn btn-sm" style="font-size: 11px; background: ${isSettled ? '#dcfce7' : '#fee2e2'}; color: ${isSettled ? '#166534' : '#dc2626'};">
+                      ${isSettled ? '✓ 완료' : '○ 대기'}
+                    </button>
                   </td>
                   <td style="text-align: center;">
                     <button onclick="viewSettlementReport('${d.id}')" class="btn btn-sm btn-secondary" style="font-size: 11px;">📋 보기</button>
@@ -7295,6 +7286,47 @@ function renderSettlement() {
 }
 
 // ========== 정산 관리 함수 ==========
+
+// 정산 완료 처리 (버튼 클릭)
+async function completeSettlement(dealId, isExternal) {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const deal = state.deals.find(d => d.id === dealId);
+  if (!deal) return;
+
+  // 현재 상태 확인
+  const currentlySettled = isExternal
+    ? (deal.supplierSettled && deal.sellerSettled)
+    : deal.sellerSettled;
+
+  const newStatus = !currentlySettled;
+  const confirmMsg = newStatus
+    ? '이 공구를 정산 완료 처리하시겠습니까?'
+    : '정산을 대기 상태로 되돌리시겠습니까?';
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const updateData = isExternal
+      ? { supplierSettled: newStatus, sellerSettled: newStatus }
+      : { sellerSettled: newStatus };
+
+    if (newStatus) {
+      updateData.status = 'settled';
+    }
+
+    await db.collection('deals').doc(dealId).update(updateData);
+
+    // state 즉시 업데이트 (리렌더 없이)
+    Object.assign(deal, updateData);
+
+    showToast(newStatus ? '✅ 정산 완료 처리됨' : '⏳ 정산 대기로 변경됨');
+    renderSettlement();
+  } catch (err) {
+    console.error('정산 처리 실패:', err);
+    showToast('❌ 처리에 실패했습니다');
+  }
+}
 
 // 정산완료 → 대기로 되돌리기
 async function revertSettlementToPending(dealId) {
