@@ -2676,33 +2676,44 @@ function updateSidebarUserProfile() {
   calculateUserGoalRate();
 }
 
-// 사용자 목표 달성률 계산
+// 사용자 목표 달성률 계산 (영업현황과 동일한 로직)
 function calculateUserGoalRate() {
   const user = state.currentUser;
   if (!user) return;
-  
+
   // 목표 데이터
   const goals = state.salesGoals || {};
   const memberGoals = goals.memberGoals || {};
   const myGoal = memberGoals[user.id] || memberGoals[user.loginId] || {};
-  
-  // 정산 데이터에서 내 매출 계산
+
+  // 담당 셀러 목록 (영업현황과 동일한 방식)
+  const mySellers = (state.sellers || []).filter(s => s.registeredBy === user.id);
+  const sellerNames = mySellers.map(s => s.name).filter(Boolean);
+
+  // 정산 데이터 연동 (영업현황과 동일한 방식)
   const allSettlements = state.sellerSettlements || [];
   const mySettlements = allSettlements.filter(s => {
-    const seller = state.sellers.find(sel => sel.id === s.sellerId);
-    return seller && (seller.managerId === user.id || seller.managerId === user.loginId);
+    // 1. registeredBy로 직접 연결
+    if (s.registeredBy === user.id) return true;
+    // 2. 담당 셀러 이름으로 연결
+    const settlementSellerName = s.sellerName || '';
+    return sellerNames.some(name => {
+      if (!name) return false;
+      const namePart = name.split('/')[0];
+      return settlementSellerName.includes(namePart) || settlementSellerName.includes(name);
+    });
   });
-  
+
   const mySales = mySettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  
-  // 개인 목표 또는 팀 목표 사용
-  const targetSales = myGoal.salesAmount || goals.salesAmount || 0;
-  
+
+  // 개인 목표 사용
+  const targetSales = myGoal.salesAmount || 0;
+
   let rate = 0;
   if (targetSales > 0) {
-    rate = Math.min((mySales / targetSales) * 100, 100);
+    rate = (mySales / targetSales) * 100;
   }
-  
+
   const rateEl = document.getElementById('userGoalRate');
   if (rateEl) rateEl.textContent = rate.toFixed(2) + '%';
 }
