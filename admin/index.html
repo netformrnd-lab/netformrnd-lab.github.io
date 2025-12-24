@@ -9580,9 +9580,10 @@ function renderSellerList() {
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <h3 class="card-title" style="margin-bottom: 0;">탐색 셀러 목록</h3>
-        <div id="sellerlist-delete-actions" style="display: none;">
+        <div id="sellerlist-delete-actions" style="display: none; align-items: center;">
           <span id="sellerlist-selected-count" style="font-size: 13px; color: var(--gray-600); margin-right: 12px;">0개 선택</span>
           <button class="btn btn-secondary btn-sm" onclick="clearSellerListSelection()" style="margin-right: 8px;">선택 해제</button>
+          <button class="btn btn-sm" style="background: #10b981; color: white; margin-right: 8px;" onclick="downloadSelectedSellerList()">📥 엑셀 다운로드</button>
           <button class="btn btn-sm" style="background: #ef4444; color: white;" onclick="deleteSelectedSellerList()">🗑 선택 삭제</button>
         </div>
       </div>
@@ -9777,6 +9778,74 @@ function clearSellerListSelection() {
   const selectAllCheckbox = document.getElementById('sellerlist-select-all');
   if (selectAllCheckbox) selectAllCheckbox.checked = false;
   updateSellerListSelectionUI();
+}
+
+// 선택한 셀러 엑셀 다운로드
+function downloadSelectedSellerList() {
+  const ids = Array.from(window.selectedSellerListIds);
+  if (ids.length === 0) {
+    showToast('다운로드할 셀러를 선택해주세요');
+    return;
+  }
+
+  const selectedSellers = (state.sellerList || []).filter(s => ids.includes(s.id));
+
+  if (selectedSellers.length === 0) {
+    showToast('선택된 셀러 정보를 찾을 수 없습니다');
+    return;
+  }
+
+  // 엑셀 데이터 생성
+  const headers = ['카테고리', '계정명', '채널', '계정링크', '팔로워(만)', '제안여부', '컨택여부', '계약여부', '제안상품', '마진율', '담당자', '비고'];
+
+  const data = selectedSellers.map(s => {
+    // 제안상품 목록
+    const proposedProducts = s.proposedProducts || (s.proposedProduct ? [s.proposedProduct] : []);
+    const productNames = proposedProducts.map(pid => {
+      const prod = (state.supplierProducts || []).find(p => p.id === pid);
+      return prod ? (prod.representativeProduct || prod.productName) : '';
+    }).filter(Boolean).join(', ');
+
+    return [
+      s.category || '',
+      s.accountName || '',
+      s.channel || '',
+      s.accountLink || '',
+      s.followers || '',
+      s.proposed ? 'O' : '',
+      s.contacted ? 'O' : '',
+      s.contracted ? 'O' : '',
+      productNames,
+      s.marginRate ? s.marginRate + '%' : '',
+      s.createdBy ? s.createdBy.split('@')[0] : '',
+      s.notes || ''
+    ];
+  });
+
+  // XLSX 생성
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+  ws['!cols'] = [
+    { wch: 12 }, // 카테고리
+    { wch: 20 }, // 계정명
+    { wch: 10 }, // 채널
+    { wch: 35 }, // 계정링크
+    { wch: 10 }, // 팔로워
+    { wch: 8 },  // 제안
+    { wch: 8 },  // 컨택
+    { wch: 8 },  // 계약
+    { wch: 25 }, // 제안상품
+    { wch: 8 },  // 마진율
+    { wch: 10 }, // 담당자
+    { wch: 30 }  // 비고
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '셀러목록');
+
+  const today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `셀러목록_${selectedSellers.length}건_${today}.xlsx`);
+
+  showToast(`${selectedSellers.length}건 엑셀 다운로드 완료`);
 }
 
 async function deleteSelectedSellerList() {
