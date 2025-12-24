@@ -3947,7 +3947,7 @@ function openDealModal(deal = null) {
   if (!canEdit()) { showNoPermission(); return; }
   const m = document.getElementById('modal');
   m.className = 'modal show';
-  
+
   const isEdit = deal !== null;
   const d = deal || {
     title: '', supplierId: '', sellerId: '', startDate: formatDate(new Date()),
@@ -3955,12 +3955,21 @@ function openDealModal(deal = null) {
     supplierSettled: false, sellerSettled: false,
     selectedProducts: [] // 선택된 상품 배열: [{productId, productName, marginRate}]
   };
-  
+
   // 기존 선택된 상품 데이터 (기존 배열 또는 새 객체 배열 형식 모두 지원)
   const selectedProductsData = d.selectedProducts || [];
-  const selectedProductIds = selectedProductsData.map(item => 
+  const selectedProductIds = selectedProductsData.map(item =>
     typeof item === 'string' ? item : item.productId
   );
+
+  // 전역 변수로 선택된 상품 정보 유지 (검색 필터링 시에도 선택 정보 유지)
+  window.selectedDealProducts = selectedProductsData.map(item => {
+    if (typeof item === 'string') {
+      const product = (state.supplierProducts || []).find(p => p.id === item);
+      return { productId: item, productName: product?.productName || '', marginRate: 0 };
+    }
+    return { ...item };
+  });
   
   // 공구 기간 계산
   const getDealDuration = (start, end) => {
@@ -4379,24 +4388,32 @@ function filterProductList() {
   const supplierId = document.getElementById('deal-supplier').value;
   const searchQuery = document.getElementById('product-search').value;
   const container = document.getElementById('deal-product-list');
-  
-  // 현재 체크된 상품 ID와 마진율 정보 저장
-  const checkedProducts = Array.from(document.querySelectorAll('input[name="deal-products"]:checked'))
-    .map(cb => {
-      const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
-      return {
-        productId: cb.value,
-        productName: cb.dataset.name,
-        marginRate: marginInput ? Number(marginInput.value) || 0 : 0
-      };
-    });
-  
+
+  // 현재 DOM에 체크된 상품의 최신 마진율 정보로 전역 변수 업데이트
+  const currentCheckedBoxes = document.querySelectorAll('input[name="deal-products"]:checked');
+  currentCheckedBoxes.forEach(cb => {
+    const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
+    const existingIdx = (window.selectedDealProducts || []).findIndex(p => p.productId === cb.value);
+    const productData = {
+      productId: cb.value,
+      productName: cb.dataset.name,
+      marginRate: marginInput ? Number(marginInput.value) || 0 : 0
+    };
+    if (existingIdx >= 0) {
+      window.selectedDealProducts[existingIdx] = productData;
+    } else {
+      window.selectedDealProducts = window.selectedDealProducts || [];
+      window.selectedDealProducts.push(productData);
+    }
+  });
+
   if (!supplierId) {
     container.innerHTML = '<p style="color: var(--gray-500); text-align: center; padding: 20px;">공급사를 먼저 선택하세요</p>';
     return;
   }
-  
-  container.innerHTML = renderDealProductOptions(supplierId, checkedProducts, searchQuery);
+
+  // 전역 변수에 저장된 선택 정보를 사용하여 렌더링
+  container.innerHTML = renderDealProductOptions(supplierId, window.selectedDealProducts || [], searchQuery);
 }
 
 // 공급사별 상품 옵션 렌더링 (검색 기능 추가)
@@ -4469,15 +4486,39 @@ function updateSelectedProductsDisplay() {
   const checkedBoxes = document.querySelectorAll('input[name="deal-products"]:checked');
   const displayContainer = document.getElementById('selected-products-display');
   const countSpan = document.getElementById('selected-product-count');
-  
-  const selectedProducts = Array.from(checkedBoxes).map(cb => ({
-    id: cb.value,
-    name: cb.dataset.name
-  }));
-  
-  // 카운트 업데이트
-  countSpan.textContent = `(${selectedProducts.length}개 선택)`;
-  
+
+  // 전역 변수 초기화
+  window.selectedDealProducts = window.selectedDealProducts || [];
+
+  // 현재 DOM에 체크된 상품들로 전역 변수 업데이트
+  const currentCheckedIds = [];
+  checkedBoxes.forEach(cb => {
+    currentCheckedIds.push(cb.value);
+    const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
+    const existingIdx = window.selectedDealProducts.findIndex(p => p.productId === cb.value);
+    const productData = {
+      productId: cb.value,
+      productName: cb.dataset.name,
+      marginRate: marginInput ? Number(marginInput.value) || 0 : 0
+    };
+    if (existingIdx >= 0) {
+      window.selectedDealProducts[existingIdx] = productData;
+    } else {
+      window.selectedDealProducts.push(productData);
+    }
+  });
+
+  // DOM에 표시된 체크 해제된 상품들을 전역 변수에서 제거
+  document.querySelectorAll('input[name="deal-products"]:not(:checked)').forEach(cb => {
+    const idx = window.selectedDealProducts.findIndex(p => p.productId === cb.value);
+    if (idx >= 0) {
+      window.selectedDealProducts.splice(idx, 1);
+    }
+  });
+
+  // 카운트 업데이트 (전역 변수 기준)
+  countSpan.textContent = `(${window.selectedDealProducts.length}개 선택)`;
+
   // 마진율 입력 필드 표시/숨김
   document.querySelectorAll('input[name="deal-products"]').forEach(cb => {
     const marginInput = cb.closest('label').querySelector('.margin-rate-input');
@@ -4487,22 +4528,22 @@ function updateSelectedProductsDisplay() {
     // 체크박스 border 업데이트
     cb.closest('label').style.borderColor = cb.checked ? 'var(--primary)' : 'var(--gray-200)';
   });
-  
-  // 태그 표시 업데이트
-  if (selectedProducts.length === 0) {
+
+  // 태그 표시 업데이트 (전역 변수 기준으로 모든 선택 상품 표시)
+  if (window.selectedDealProducts.length === 0) {
     displayContainer.style.display = 'none';
   } else {
     displayContainer.style.display = 'block';
     displayContainer.innerHTML = `
       <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-        ${selectedProducts.map(p => {
-          const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${p.id}"]`);
-          const marginRate = marginInput ? marginInput.value : '';
+        ${window.selectedDealProducts.map(p => {
+          const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${p.productId}"]`);
+          const marginRate = marginInput ? marginInput.value : (p.marginRate || '');
           return `
-          <div class="selected-product-tag" data-id="${p.id}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--primary-light); border: 1px solid var(--primary); border-radius: 20px; font-size: 13px;">
-            <span style="color: var(--primary); font-weight: 500;">${p.name}</span>
+          <div class="selected-product-tag" data-id="${p.productId}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--primary-light); border: 1px solid var(--primary); border-radius: 20px; font-size: 13px;">
+            <span style="color: var(--primary); font-weight: 500;">${p.productName}</span>
             ${marginRate ? `<span style="color: var(--gray-600); font-size: 11px;">(${marginRate}%)</span>` : ''}
-            <button type="button" onclick="removeSelectedProduct('${p.id}')" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 16px; line-height: 1; padding: 0;">×</button>
+            <button type="button" onclick="removeSelectedProduct('${p.productId}')" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 16px; line-height: 1; padding: 0;">×</button>
           </div>
         `}).join('')}
       </div>
@@ -4512,6 +4553,10 @@ function updateSelectedProductsDisplay() {
 
 // 선택된 상품 태그에서 제거
 function removeSelectedProduct(productId) {
+  // 전역 변수에서 먼저 제거 (DOM에 없는 상품도 제거 가능)
+  window.selectedDealProducts = (window.selectedDealProducts || []).filter(p => p.productId !== productId);
+
+  // DOM에 체크박스가 있으면 체크 해제
   const checkbox = document.querySelector(`input[name="deal-products"][value="${productId}"]`);
   if (checkbox) {
     checkbox.checked = false;
@@ -4519,27 +4564,65 @@ function removeSelectedProduct(productId) {
     const label = checkbox.closest('label');
     if (label) {
       label.style.borderColor = 'var(--gray-200)';
+      const marginInput = label.querySelector('.margin-rate-input');
+      if (marginInput) {
+        marginInput.style.display = 'none';
+      }
     }
   }
-  updateSelectedProductsDisplay();
+
+  // 태그 표시 업데이트
+  const displayContainer = document.getElementById('selected-products-display');
+  const countSpan = document.getElementById('selected-product-count');
+
+  countSpan.textContent = `(${window.selectedDealProducts.length}개 선택)`;
+
+  if (window.selectedDealProducts.length === 0) {
+    displayContainer.style.display = 'none';
+  } else {
+    displayContainer.innerHTML = `
+      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+        ${window.selectedDealProducts.map(p => {
+          const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${p.productId}"]`);
+          const marginRate = marginInput ? marginInput.value : (p.marginRate || '');
+          return `
+          <div class="selected-product-tag" data-id="${p.productId}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--primary-light); border: 1px solid var(--primary); border-radius: 20px; font-size: 13px;">
+            <span style="color: var(--primary); font-weight: 500;">${p.productName}</span>
+            ${marginRate ? `<span style="color: var(--gray-600); font-size: 11px;">(${marginRate}%)</span>` : ''}
+            <button type="button" onclick="removeSelectedProduct('${p.productId}')" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 16px; line-height: 1; padding: 0;">×</button>
+          </div>
+        `}).join('')}
+      </div>
+    `;
+  }
 }
 
 function submitDealForm(e, id) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
   e.preventDefault();
-  
-  // 선택된 상품 ID, 마진율, 공급단가 수집
-  const selectedProducts = Array.from(document.querySelectorAll('input[name="deal-products"]:checked'))
-    .map(cb => {
-      const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
-      return {
-        productId: cb.value,
-        productName: cb.dataset.name,
-        marginRate: marginInput ? Number(marginInput.value) || 0 : 0,
-        supplyPrice: Number(cb.dataset.supplyPrice) || 0  // 공급단가 추가
-      };
-    });
+
+  // 전역 변수에서 선택된 상품 가져오기 (DOM에 없는 상품도 포함)
+  // 먼저 현재 DOM에 표시된 체크박스의 최신 마진율 정보로 업데이트
+  const checkedBoxes = document.querySelectorAll('input[name="deal-products"]:checked');
+  checkedBoxes.forEach(cb => {
+    const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
+    const existingIdx = (window.selectedDealProducts || []).findIndex(p => p.productId === cb.value);
+    if (existingIdx >= 0) {
+      window.selectedDealProducts[existingIdx].marginRate = marginInput ? Number(marginInput.value) || 0 : 0;
+    }
+  });
+
+  // 전역 변수에서 선택된 상품 수집 (공급단가 추가)
+  const selectedProducts = (window.selectedDealProducts || []).map(p => {
+    const product = (state.supplierProducts || []).find(sp => sp.id === p.productId);
+    return {
+      productId: p.productId,
+      productName: p.productName,
+      marginRate: p.marginRate || 0,
+      supplyPrice: product ? Number(product.supplyPrice) || 0 : 0
+    };
+  });
   
   // 라디오 버튼에서 상태 값 가져오기
   const statusRadio = document.querySelector('input[name="deal-status"]:checked');
