@@ -7141,7 +7141,7 @@ function renderSettlement() {
     </div>
 
     <!-- 빠른 액션 -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px;">
       <button onclick="openCafe24MappingModal()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: white; border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='#3b82f6'" onmouseout="this.style.borderColor='var(--gray-200)'">
         <span style="font-size: 24px;">📊</span>
         <div style="text-align: left;">
@@ -7154,6 +7154,13 @@ function renderSettlement() {
         <div style="text-align: left;">
           <div style="font-weight: 600; color: var(--gray-800);">경영팀 정산서</div>
           <div style="font-size: 12px; color: var(--gray-500);">전체 내역 다운로드</div>
+        </div>
+      </button>
+      <button onclick="clearManualSettlementData()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: white; border: 2px solid #fca5a5; border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='#ef4444'" onmouseout="this.style.borderColor='#fca5a5'">
+        <span style="font-size: 24px;">🗑️</span>
+        <div style="text-align: left;">
+          <div style="font-weight: 600; color: #dc2626;">수동 데이터 정리</div>
+          <div style="font-size: 12px; color: var(--gray-500);">기존 수동 입력 삭제</div>
         </div>
       </button>
     </div>
@@ -7450,6 +7457,57 @@ async function deleteSettlementData(dealId) {
     renderSettlement();
   } catch (err) {
     console.error('정산 데이터 삭제 실패:', err);
+    showToast('❌ 삭제에 실패했습니다');
+  }
+}
+
+// 수동 입력 정산 데이터 일괄 삭제 (카페24 데이터만 유지)
+async function clearManualSettlementData() {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  // 수동 입력 데이터 개수 확인
+  const manualSellerSettlements = (state.sellerSettlements || []).filter(s => s.source !== 'cafe24');
+  const manualSupplierSettlements = (state.supplierSettlements || []).filter(s => s.source !== 'cafe24');
+  const cafe24SellerSettlements = (state.sellerSettlements || []).filter(s => s.source === 'cafe24');
+  const cafe24SupplierSettlements = (state.supplierSettlements || []).filter(s => s.source === 'cafe24');
+
+  if (manualSellerSettlements.length === 0 && manualSupplierSettlements.length === 0) {
+    showToast('ℹ️ 삭제할 수동 데이터가 없습니다');
+    return;
+  }
+
+  const confirmMsg = `⚠️ 수동 입력 데이터를 모두 삭제하시겠습니까?\n\n` +
+    `삭제 대상:\n` +
+    `- 셀러 정산: ${manualSellerSettlements.length}건\n` +
+    `- 공급사 정산: ${manualSupplierSettlements.length}건\n\n` +
+    `유지 대상 (카페24):\n` +
+    `- 셀러 정산: ${cafe24SellerSettlements.length}건\n` +
+    `- 공급사 정산: ${cafe24SupplierSettlements.length}건\n\n` +
+    `이 작업은 되돌릴 수 없습니다!`;
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    showToast('🔄 수동 데이터 삭제 중...');
+
+    // 셀러 정산 삭제
+    for (const s of manualSellerSettlements) {
+      await db.collection('sellerSettlements').doc(s.id).delete();
+    }
+
+    // 공급사 정산 삭제
+    for (const s of manualSupplierSettlements) {
+      await db.collection('supplierSettlements').doc(s.id).delete();
+    }
+
+    // state 업데이트
+    state.sellerSettlements = cafe24SellerSettlements;
+    state.supplierSettlements = cafe24SupplierSettlements;
+
+    showToast(`✅ 수동 데이터 삭제 완료!\n셀러: ${manualSellerSettlements.length}건, 공급사: ${manualSupplierSettlements.length}건`);
+    renderSettlement();
+  } catch (err) {
+    console.error('수동 데이터 삭제 실패:', err);
     showToast('❌ 삭제에 실패했습니다');
   }
 }
