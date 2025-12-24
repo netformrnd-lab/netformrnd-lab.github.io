@@ -23636,34 +23636,40 @@ async function renderCafe24Dashboard() {
     const paidOrders = orders.filter(o => o.payment_status === 'F' || o.payment_status === '결제완료');
     const totalPaidAmount = paidOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
     
-    // 🎯 셀러별 집계
+    // 🎯 셀러별 집계 (마진금액 포함)
     const sellerStats = {};
     orders.forEach(o => {
       const seller = o.seller_name || '(미지정)';
       if (!sellerStats[seller]) {
-        sellerStats[seller] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, paidAmount: 0, pgFee: 0 };
+        sellerStats[seller] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, paidAmount: 0, pgFee: 0, marginAmount: 0 };
       }
       sellerStats[seller].orderCount += 1;
       sellerStats[seller].totalQuantity += Number(o.quantity) || 1;
       sellerStats[seller].totalAmount += Number(o.total_amount) || 0;
       sellerStats[seller].pgFee += Number(o.pg_fee) || 0;
+      // 마진금액 계산 (margin_rate 사용)
+      const marginRate = Number(o.margin_rate) || 10;
+      sellerStats[seller].marginAmount += Math.round((Number(o.total_amount) || 0) * marginRate / 100);
       if (o.payment_status === 'F') {
         sellerStats[seller].paidAmount += Number(o.total_amount) || 0;
       }
     });
-    
-    // 🎯 공급사별 집계 (타사만)
+
+    // 🎯 공급사별 집계 (타사만, 공급가액 포함)
     const supplierStats = {};
     orders.forEach(o => {
       if (o.product_type === 'external' && o.supplier_name) {
         const supplier = o.supplier_name;
         if (!supplierStats[supplier]) {
-          supplierStats[supplier] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, pgFee: 0 };
+          supplierStats[supplier] = { orderCount: 0, totalQuantity: 0, totalAmount: 0, pgFee: 0, supplyAmount: 0 };
         }
         supplierStats[supplier].orderCount += 1;
         supplierStats[supplier].totalQuantity += Number(o.quantity) || 1;
         supplierStats[supplier].totalAmount += Number(o.total_amount) || 0;
         supplierStats[supplier].pgFee += Number(o.pg_fee) || 0;
+        // 공급가액 계산 (supply_price * quantity)
+        const supplyPrice = Number(o.supply_price) || 0;
+        supplierStats[supplier].supplyAmount += supplyPrice * (Number(o.quantity) || 1);
       }
     });
     
@@ -23836,6 +23842,77 @@ async function renderCafe24Dashboard() {
         </div>
       </div>
       
+      <!-- 셀러별/공급사별 순위 -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+        <!-- 셀러별 순위 -->
+        <div class="card">
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">👤 셀러별 매출 순위</h3>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: var(--gray-50);">
+                  <th style="padding: 8px; text-align: left;">셀러명</th>
+                  <th style="padding: 8px; text-align: right;">판매건</th>
+                  <th style="padding: 8px; text-align: right;">판매금액</th>
+                  <th style="padding: 8px; text-align: right;">마진금액</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(sellerStats)
+                  .sort((a, b) => b[1].totalAmount - a[1].totalAmount)
+                  .slice(0, 10)
+                  .map(([name, stat], idx) => `
+                    <tr style="border-top: 1px solid var(--gray-100);">
+                      <td style="padding: 8px;">
+                        <span style="background: ${idx < 3 ? '#fef3c7' : 'var(--gray-100)'}; color: ${idx < 3 ? '#92400e' : 'var(--gray-600)'}; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-right: 4px;">${idx + 1}</span>
+                        ${name}
+                      </td>
+                      <td style="padding: 8px; text-align: right;">${stat.orderCount}건</td>
+                      <td style="padding: 8px; text-align: right; font-weight: 600;">${formatNumber(stat.totalAmount)}원</td>
+                      <td style="padding: 8px; text-align: right; color: #1d4ed8;">${formatNumber(stat.marginAmount)}원</td>
+                    </tr>
+                  `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 공급사별 순위 -->
+        <div class="card">
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">🏭 공급사별 매출 순위 (타사)</h3>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: var(--gray-50);">
+                  <th style="padding: 8px; text-align: left;">공급사명</th>
+                  <th style="padding: 8px; text-align: right;">판매건</th>
+                  <th style="padding: 8px; text-align: right;">판매금액</th>
+                  <th style="padding: 8px; text-align: right;">공급가액</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(supplierStats).length === 0 ?
+                  '<tr><td colspan="4" style="text-align: center; padding: 20px; color: var(--gray-400);">타사 상품 데이터가 없습니다</td></tr>' :
+                  Object.entries(supplierStats)
+                  .sort((a, b) => b[1].totalAmount - a[1].totalAmount)
+                  .slice(0, 10)
+                  .map(([name, stat], idx) => `
+                    <tr style="border-top: 1px solid var(--gray-100);">
+                      <td style="padding: 8px;">
+                        <span style="background: ${idx < 3 ? '#fef3c7' : 'var(--gray-100)'}; color: ${idx < 3 ? '#92400e' : 'var(--gray-600)'}; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-right: 4px;">${idx + 1}</span>
+                        ${name}
+                      </td>
+                      <td style="padding: 8px; text-align: right;">${stat.orderCount}건</td>
+                      <td style="padding: 8px; text-align: right; font-weight: 600;">${formatNumber(stat.totalAmount)}원</td>
+                      <td style="padding: 8px; text-align: right; color: #92400e;">${formatNumber(stat.supplyAmount)}원</td>
+                    </tr>
+                  `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <h3 style="font-size: 16px; font-weight: 600;">🕐 최근 주문</h3>
