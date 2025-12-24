@@ -8028,14 +8028,16 @@ async function applyCafe24Mapping() {
       // 1. 셀러 정산서 생성 (상품별 정보 포함)
       const sellerSettlementId = `${dealId}_seller`;
 
-      // 상품별 마진 계산
+      // 상품별 마진 계산 (공급단가 포함)
       const salesItems = (data.products || []).map(p => {
         const itemMargin = Math.round((p.amount || 0) * sellerMarginRate / 100);
         const itemTax = Math.round(itemMargin * 0.033);
+        const itemUnitPrice = p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0;
         return {
           productName: p.productName || '-',
           quantity: p.quantity || 0,
-          unitPrice: p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0,
+          unitPrice: itemUnitPrice,
+          supplyPrice: supplyPrice,  // 공급단가 추가
           amount: p.amount || 0,
           marginRate: sellerMarginRate,
           marginAmount: itemMargin,
@@ -8053,6 +8055,7 @@ async function applyCafe24Mapping() {
         productType: productType,
         totalQuantity: data.totalQty,
         salesAmount: data.totalSales,
+        supplyPrice: supplyPrice,  // 공급단가 추가 (정산서 레벨)
         marginRate: sellerMarginRate,
         marginAmount: sellerMargin,
         withholdingTax: sellerTax,
@@ -12220,8 +12223,19 @@ function generateManagementReport() {
                   }
                   
                   const totalActualPayment = Number(s.actualPayment) || 0;
-                  const supplierTotalAmount = matchingSupplier ? Number(matchingSupplier.totalAmount) || 0 : 0;
-                  
+
+                  // 공급가액 계산 (matchingSupplier 없어도 s.supplyPrice로 계산)
+                  const settlementSupplyPrice = Number(s.supplyPrice) || (matchingSupplier ? Number(matchingSupplier.supplyPrice) : 0) || 0;
+                  const totalQty = Number(s.totalQuantity) || 0;
+                  const calcSupplyAmount = settlementSupplyPrice > 0 ? Math.round(settlementSupplyPrice * totalQty) : 0;
+                  const calcVatAmount = Math.round(calcSupplyAmount * 0.1);
+                  const calcSupplierTotal = calcSupplyAmount + calcVatAmount;
+
+                  // matchingSupplier 있으면 그 값 사용, 없으면 계산값 사용
+                  const supplyAmountDisplay = matchingSupplier ? Number(matchingSupplier.totalSupplyAmount || 0) : calcSupplyAmount;
+                  const vatAmountDisplay = matchingSupplier ? Number(matchingSupplier.totalVatAmount || 0) : calcVatAmount;
+                  const supplierTotalAmount = matchingSupplier ? Number(matchingSupplier.totalAmount || 0) : calcSupplierTotal;
+
                   if (sellerItems.length === 0) {
                     // 품목 정보 없는 경우
                     return '<tr>' +
@@ -12230,16 +12244,16 @@ function generateManagementReport() {
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; font-size: 8px;">' + (s.dealPeriod || '-') + '</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; color: #9ca3af;">(품목정보없음)</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">-</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">' + (s.totalQuantity || 0) + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">' + totalQty + '</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center;">' + Number(s.salesAmount || 0).toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-50);">' + Number(s.marginAmount || 0).toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-50);">' + Number(s.withholdingTax || 0).toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-50);">' + totalActualPayment.toLocaleString() + '원</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #d1fae5; font-weight: 700; color: #065f46;">' + totalActualPayment.toLocaleString() + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (matchingSupplier ? Number(matchingSupplier.totalSupplyAmount || 0).toLocaleString() : '-') + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (matchingSupplier ? Number(matchingSupplier.totalVatAmount || 0).toLocaleString() : '-') + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + supplierTotalAmount.toLocaleString() + '원</td>' +
-                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-100); font-weight: 700; color: var(--gray-600);">' + supplierTotalAmount.toLocaleString() + '원</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (supplyAmountDisplay > 0 ? supplyAmountDisplay.toLocaleString() + '원' : '-') + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (vatAmountDisplay > 0 ? vatAmountDisplay.toLocaleString() + '원' : '-') + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: #fffbeb;">' + (supplierTotalAmount > 0 ? supplierTotalAmount.toLocaleString() + '원' : '-') + '</td>' +
+                      '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; background: var(--gray-100); font-weight: 700; color: var(--gray-600);">' + (supplierTotalAmount > 0 ? supplierTotalAmount.toLocaleString() + '원' : '-') + '</td>' +
                       '<td style="padding: 4px 2px; border: 1px solid #e5e7eb; text-align: center; font-size: 8px;">' + (s.settlementDate || '-') + '</td>' +
                       '</tr>';
                   } else {
@@ -12262,9 +12276,9 @@ function generateManagementReport() {
                       const itemTax = Math.round(itemMargin * 0.033);
                       const itemSubtotal = Number(item.actualPayment) || (itemMargin - itemTax);
                       
-                      // 공급사 정산 계산
-                      const supplyPrice = Number(item.supplyPrice) || unitPrice;
-                      const supplyAmount = Math.round(supplyPrice * qty / 1.1);
+                      // 공급사 정산 계산 (item.supplyPrice → s.supplyPrice → matchingSupplier.supplyPrice → 0)
+                      const supplyPrice = Number(item.supplyPrice) || Number(s.supplyPrice) || (matchingSupplier ? Number(matchingSupplier.supplyPrice) : 0) || 0;
+                      const supplyAmount = supplyPrice > 0 ? Math.round(supplyPrice * qty) : 0;
                       const vatAmount = Math.round(supplyAmount * 0.1);
                       const itemSupplierTotal = supplyAmount + vatAmount;
                       
