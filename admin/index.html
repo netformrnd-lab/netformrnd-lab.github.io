@@ -2387,6 +2387,19 @@ function canEdit() {
   return true;
 }
 
+// 🎯 관리자 전용 권한 체크 - admin 역할만 가능
+function isAdminRole() {
+  const user = state.currentAdmin || state.currentUser;
+  if (!user) return false;
+  return user.role === 'admin';
+}
+
+// 🎯 관리자 권한 없음 알림
+function showAdminOnlyPermission() {
+  showToast('🔒 관리자만 사용할 수 있는 기능입니다.');
+  return false;
+}
+
 // 🎯 현재 로그인한 사용자 ID 가져오기
 function getCurrentUserId() {
   const user = state.currentAdmin || state.currentUser;
@@ -2731,7 +2744,7 @@ async function handleAdminLogin(e) {
   
   // 팀원 계정 확인
   const teamMember = state.teamMembers.find(m => m.loginId === loginId && m.loginPw === loginPw);
-  
+
   if (teamMember) {
     // 아이디/비밀번호 저장
     if (rememberMe) {
@@ -2745,10 +2758,17 @@ async function handleAdminLogin(e) {
     }
     // 로그인 성공
     sessionStorage.setItem('moyeora_admin_logged_in', 'true');
-    sessionStorage.setItem('moyeora_admin_user', JSON.stringify({ id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId }));
-    state.currentAdmin = { id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId };
+    sessionStorage.setItem('moyeora_admin_user', JSON.stringify({ id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId, needPasswordChange: teamMember.needPasswordChange }));
+    state.currentAdmin = { id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId, needPasswordChange: teamMember.needPasswordChange };
     state.currentUser = state.currentAdmin;
     showApp();
+
+    // 비밀번호 변경 필요 시 모달 표시
+    if (teamMember.needPasswordChange) {
+      setTimeout(() => {
+        showMustChangePasswordModal();
+      }, 500);
+    }
   } else {
     // 로그인 실패
     loginBtn.classList.remove('loading');
@@ -2765,6 +2785,87 @@ function handleAdminLogout() {
     showLogin();
     document.getElementById('admin-login-id').value = '';
     document.getElementById('admin-login-pw').value = '';
+  }
+}
+
+// 필수 비밀번호 변경 모달 (첫 로그인 시)
+function showMustChangePasswordModal() {
+  const currentUser = state.currentAdmin || state.currentUser || {};
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 420px;">
+      <div class="modal-header">
+        <h2 class="modal-title">🔐 비밀번호 변경 필요</h2>
+      </div>
+      <form onsubmit="saveMustChangePassword(event)">
+        <div style="padding: 20px;">
+          <div style="background: #fef3c7; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <p style="font-size: 14px; color: #92400e; margin: 0;">
+              ⚠️ 관리자가 발급한 임시 비밀번호를 사용 중입니다.<br>
+              보안을 위해 새 비밀번호를 설정해주세요.
+            </p>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label">새 비밀번호</label>
+            <input type="password" class="form-input" id="must-new-pw" placeholder="새 비밀번호 입력" required minlength="4">
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label">새 비밀번호 확인</label>
+            <input type="password" class="form-input" id="must-new-pw-confirm" placeholder="새 비밀번호 재입력" required>
+          </div>
+
+          <div id="must-pw-error" style="color: var(--danger); font-size: 13px; margin-top: 12px; display: none;"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-primary" style="width: 100%;">비밀번호 변경</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+// 필수 비밀번호 저장
+async function saveMustChangePassword(e) {
+  e.preventDefault();
+
+  const currentUser = state.currentAdmin || state.currentUser || {};
+  const newPw = document.getElementById('must-new-pw').value;
+  const confirmPw = document.getElementById('must-new-pw-confirm').value;
+  const errorEl = document.getElementById('must-pw-error');
+
+  if (newPw !== confirmPw) {
+    errorEl.textContent = '새 비밀번호가 일치하지 않습니다.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  if (newPw.length < 4) {
+    errorEl.textContent = '비밀번호는 최소 4자 이상이어야 합니다.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  try {
+    await db.collection('teamMembers').doc(currentUser.id).update({
+      loginPw: newPw,
+      needPasswordChange: false,
+      updatedAt: new Date().toISOString()
+    });
+
+    // 세션 업데이트
+    state.currentAdmin.needPasswordChange = false;
+    sessionStorage.setItem('moyeora_admin_user', JSON.stringify(state.currentAdmin));
+
+    showToast('비밀번호가 변경되었습니다.');
+    closeModal();
+  } catch (err) {
+    console.error(err);
+    errorEl.textContent = '저장에 실패했습니다. 다시 시도해주세요.';
+    errorEl.style.display = 'block';
   }
 }
 
@@ -3424,17 +3525,25 @@ function toggleSellerMenu(event) {
   }
 }
 
-// 관리자 메뉴 토글 (비밀번호 확인 후)
+// 관리자 메뉴 토글 (관리자 권한 필요)
 function toggleAdminMenu() {
+  const currentUser = state.currentAdmin || state.currentUser || {};
+
+  // 관리자 역할만 접근 가능
+  if (currentUser.role !== 'admin') {
+    showToast('🔒 관리자 계정만 접근할 수 있습니다.');
+    return;
+  }
+
   if (!isAdminUnlocked) {
     showAdminPasswordModal();
     return;
   }
-  
+
   adminMenuOpen = !adminMenuOpen;
   const submenu = document.getElementById('admin-submenu');
   const arrow = document.getElementById('admin-menu-arrow');
-  
+
   if (submenu) {
     submenu.style.display = adminMenuOpen ? 'block' : 'none';
     arrow.style.transform = adminMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)';
@@ -20185,10 +20294,21 @@ function openTeamMemberModal(memberId = null) {
               <label class="form-label">아이디 *</label>
               <input type="text" class="form-input" id="memberLoginId" value="${member?.loginId || ''}" placeholder="영문/숫자 조합" required>
             </div>
-            <div class="form-group" style="margin-bottom: 0;">
+            <div class="form-group" style="margin-bottom: 8px;">
               <label class="form-label">비밀번호 *</label>
-              <input type="text" class="form-input" id="memberLoginPw" value="${member?.loginPw || ''}" placeholder="비밀번호" required>
-              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">※ 팀원 활동 추적용 계정입니다</div>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" class="form-input" id="memberLoginPw" value="${member?.loginPw || ''}" placeholder="비밀번호" required style="flex: 1;">
+                <button type="button" onclick="generateTempPassword()" style="padding: 8px 12px; background: var(--info); color: white; border: none; border-radius: 8px; font-size: 12px; cursor: pointer; white-space: nowrap;">
+                  임시발급
+                </button>
+              </div>
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">※ 임시발급 시 팀원이 첫 로그인 후 직접 변경</div>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray-700); cursor: pointer;">
+                <input type="checkbox" id="memberNeedPwChange" ${member?.needPasswordChange ? 'checked' : ''}>
+                <span>첫 로그인 시 비밀번호 변경 필수</span>
+              </label>
             </div>
           </div>
           
@@ -20241,6 +20361,7 @@ async function saveTeamMember(e, memberId) {
     loginPw: document.getElementById('memberLoginPw').value.trim(),
     role: document.getElementById('memberRole').value,
     note: document.getElementById('memberNote').value.trim(),
+    needPasswordChange: document.getElementById('memberNeedPwChange').checked,
     updatedAt: new Date().toISOString()
   };
   
@@ -20264,15 +20385,125 @@ async function saveTeamMember(e, memberId) {
 async function deleteTeamMember(memberId) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
-  
+
   if (!confirm('이 팀원을 삭제하시겠습니까?')) return;
-  
+
   try {
     await db.collection('teamMembers').doc(memberId).delete();
     showToast('팀원이 삭제되었습니다.');
   } catch (err) {
     console.error(err);
     showToast('삭제에 실패했습니다.');
+  }
+}
+
+// 임시 비밀번호 생성
+function generateTempPassword() {
+  const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+  let tempPw = '';
+  for (let i = 0; i < 6; i++) {
+    tempPw += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  document.getElementById('memberLoginPw').value = tempPw;
+  document.getElementById('memberNeedPwChange').checked = true;
+  showToast('임시 비밀번호가 생성되었습니다: ' + tempPw);
+}
+
+// 팀원 비밀번호 변경 모달 (본인 전용)
+function showMyPasswordChangeModal() {
+  const currentUser = state.currentAdmin || state.currentUser || {};
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 420px;">
+      <div class="modal-header">
+        <h2 class="modal-title">🔐 비밀번호 변경</h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <form onsubmit="saveMyPassword(event)">
+        <div style="padding: 20px;">
+          <div style="background: var(--info-light); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <p style="font-size: 14px; color: var(--info); margin: 0;">
+              🔒 새 비밀번호를 설정해주세요.
+            </p>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label">현재 비밀번호</label>
+            <input type="password" class="form-input" id="current-pw" placeholder="현재 비밀번호 입력" required>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label class="form-label">새 비밀번호</label>
+            <input type="password" class="form-input" id="new-pw" placeholder="새 비밀번호 입력" required minlength="4">
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label">새 비밀번호 확인</label>
+            <input type="password" class="form-input" id="new-pw-confirm" placeholder="새 비밀번호 재입력" required>
+          </div>
+
+          <div id="pw-change-error" style="color: var(--danger); font-size: 13px; margin-top: 12px; display: none;"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+          <button type="submit" class="btn btn-primary">변경하기</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+// 팀원 비밀번호 저장
+async function saveMyPassword(e) {
+  e.preventDefault();
+
+  const currentUser = state.currentAdmin || state.currentUser || {};
+  const currentPw = document.getElementById('current-pw').value;
+  const newPw = document.getElementById('new-pw').value;
+  const confirmPw = document.getElementById('new-pw-confirm').value;
+  const errorEl = document.getElementById('pw-change-error');
+
+  // 현재 비밀번호 확인
+  const member = state.teamMembers.find(m => m.id === currentUser.id);
+  if (!member || member.loginPw !== currentPw) {
+    errorEl.textContent = '현재 비밀번호가 일치하지 않습니다.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  // 새 비밀번호 확인
+  if (newPw !== confirmPw) {
+    errorEl.textContent = '새 비밀번호가 일치하지 않습니다.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  if (newPw.length < 4) {
+    errorEl.textContent = '비밀번호는 최소 4자 이상이어야 합니다.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  try {
+    await db.collection('teamMembers').doc(currentUser.id).update({
+      loginPw: newPw,
+      needPasswordChange: false,
+      updatedAt: new Date().toISOString()
+    });
+
+    // 세션 업데이트
+    state.currentAdmin.loginPw = newPw;
+    sessionStorage.setItem('moyeora_admin_user', JSON.stringify(state.currentAdmin));
+
+    showToast('비밀번호가 변경되었습니다.');
+    closeModal();
+  } catch (err) {
+    console.error(err);
+    errorEl.textContent = '저장에 실패했습니다. 다시 시도해주세요.';
+    errorEl.style.display = 'block';
   }
 }
 
@@ -21600,6 +21831,8 @@ function renderCalcScenarios(price, margin, sales) {
 
 // 계산 결과로 목표 설정 적용 - 직접 저장
 async function applyCalculatedGoals() {
+  // 🔒 관리자만 가능
+  if (!isAdminRole()) { showAdminOnlyPermission(); return; }
   const annualTarget = Number(document.getElementById('calc-annualTarget').value) || 0;
   const pricePerItem = Number(document.getElementById('calc-pricePerItem').value) || 0;
   const marginPerItem = Number(document.getElementById('calc-marginPerItem').value) || 0;
@@ -21867,10 +22100,8 @@ function checkAdminPasswordThen(e, callbackFn) {
 
 // 목표 저장
 async function saveSalesGoals() {
- // 🔒 권한 체크
- if (!canEdit()) { showNoPermission(); return; }
-  // 🔒 권한 체크
-  if (!canEdit()) { showNoPermission(); return; }
+  // 🔒 관리자만 가능
+  if (!isAdminRole()) { showAdminOnlyPermission(); return; }
   const goals = {
     suppliers: parseInt(document.getElementById('goal-suppliers').value) || 0,
     sellers: parseInt(document.getElementById('goal-sellers').value) || 0,
@@ -21895,10 +22126,8 @@ async function saveSalesGoals() {
 
 // 팀원별 목표 저장
 async function saveMemberGoals() {
- // 🔒 권한 체크
- if (!canEdit()) { showNoPermission(); return; }
-  // 🔒 권한 체크
-  if (!canEdit()) { showNoPermission(); return; }
+  // 🔒 관리자만 가능
+  if (!isAdminRole()) { showAdminOnlyPermission(); return; }
   const members = state.teamMembers || [];
   const memberGoals = {};
   
@@ -25862,6 +26091,9 @@ function renderOKRDashboardContent(okrs, teamMembers, quarterKey) {
 // OKR 관리 페이지 렌더링
 function renderOKRManagement() {
   const app = document.getElementById('app');
+  const currentUser = state.currentUser || state.currentAdmin || {};
+  const members = state.teamMembers || [];
+  const isAdmin = currentUser.role === 'admin';
 
   app.innerHTML = `
     <div class="page-header">
@@ -25870,10 +26102,18 @@ function renderOKRManagement() {
     </div>
 
     <div class="content">
-      <div style="background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px;">
+      <div style="background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
         <button onclick="openOKRModal()" style="background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
           + 새 OKR 등록
         </button>
+
+        <div style="flex: 1; min-width: 200px;">
+          <select id="okr-member-filter" onchange="loadOKRList()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; background: white;">
+            <option value="mine" ${!isAdmin ? 'selected' : ''}>🎯 내 OKR</option>
+            <option value="all" ${isAdmin ? 'selected' : ''}>👥 전체 팀원</option>
+            ${members.map(m => `<option value="${m.id}">${m.name}</option>`).join('')}
+          </select>
+        </div>
       </div>
 
       <div id="okr-list-content">
@@ -25891,8 +26131,9 @@ async function loadOKRList() {
   try {
     const okrSnapshot = await db.collection('okrs').orderBy('createdAt', 'desc').get();
     const teamSnapshot = await db.collection('teamMembers').get();
+    const taskSnapshot = await db.collection('tasks').get();
 
-    const okrs = [];
+    let okrs = [];
     okrSnapshot.forEach(doc => {
       okrs.push({ id: doc.id, ...doc.data() });
     });
@@ -25900,6 +26141,47 @@ async function loadOKRList() {
     const teamMembers = {};
     teamSnapshot.forEach(doc => {
       teamMembers[doc.id] = doc.data();
+    });
+
+    // 업무 데이터 수집 (달성률 계산용)
+    const allTasks = [];
+    taskSnapshot.forEach(doc => {
+      allTasks.push({ id: doc.id, ...doc.data() });
+    });
+
+    // 필터 적용
+    const filterEl = document.getElementById('okr-member-filter');
+    const filterValue = filterEl ? filterEl.value : 'mine';
+    const currentUser = state.currentUser || state.currentAdmin || {};
+
+    if (filterValue === 'mine') {
+      // 내 OKR만 표시 (memberId가 현재 사용자 id와 일치하는 것)
+      okrs = okrs.filter(okr => okr.memberId === currentUser.id);
+    } else if (filterValue !== 'all') {
+      // 특정 팀원 선택
+      okrs = okrs.filter(okr => okr.memberId === filterValue);
+    }
+
+    // OKR별 달성률을 연결된 업무 상태로 계산
+    okrs = okrs.map(okr => {
+      const linkedTasks = allTasks.filter(t => t.linkedOkrId === okr.id || t.okrId === okr.id);
+      const totalTasks = linkedTasks.length;
+      const completedTasks = linkedTasks.filter(t => t.status === '완료').length;
+
+      // 달성률 = 완료 업무 / 전체 업무 * 100
+      const taskBasedProgress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+      return {
+        ...okr,
+        progress: taskBasedProgress,
+        taskStats: {
+          total: totalTasks,
+          completed: completedTasks,
+          inProgress: linkedTasks.filter(t => t.status === '진행중').length,
+          pending: linkedTasks.filter(t => t.status === '대기').length,
+          onHold: linkedTasks.filter(t => t.status === '보류').length
+        }
+      };
     });
 
     renderOKRList(okrs, teamMembers);
@@ -25945,9 +26227,8 @@ function renderOKRList(okrs, teamMembers) {
               <div style="margin-top: 8px; padding-left: 12px; border-left: 2px solid var(--gray-300);">
                 ${okr.keyResults.map((kr, idx) => `
                   <div style="font-size: 13px; color: var(--gray-700); margin-bottom: 4px;">
-                    KR${idx + 1}: ${kr.description} 
+                    KR${idx + 1}: ${kr.description}
                     <span style="color: var(--gray-500);">목표: ${kr.target}</span>
-                    <span style="color: ${kr.actual >= kr.target ? 'var(--success)' : 'var(--primary)'}; font-weight: 600;">실적: ${kr.actual || 0}</span>
                   </div>
                 `).join('')}
               </div>
@@ -25965,12 +26246,29 @@ function renderOKRList(okrs, teamMembers) {
           <div style="background: ${progressColor}; height: 100%; width: ${okr.progress || 0}%; transition: width 0.3s;"></div>
         </div>
 
+        ${okr.taskStats ? `
+          <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+            <span style="background: #E5E7EB; color: #6B7280; padding: 4px 10px; border-radius: 6px; font-size: 11px;">
+              📋 전체 ${okr.taskStats.total}
+            </span>
+            <span style="background: #FEF3C7; color: #92400E; padding: 4px 10px; border-radius: 6px; font-size: 11px;">
+              ⏳ 대기 ${okr.taskStats.pending}
+            </span>
+            <span style="background: #DBEAFE; color: #1D4ED8; padding: 4px 10px; border-radius: 6px; font-size: 11px;">
+              🔄 진행중 ${okr.taskStats.inProgress}
+            </span>
+            <span style="background: #D1FAE5; color: #047857; padding: 4px 10px; border-radius: 6px; font-size: 11px;">
+              ✅ 완료 ${okr.taskStats.completed}
+            </span>
+            <span style="background: #F3F4F6; color: #6B7684; padding: 4px 10px; border-radius: 6px; font-size: 11px;">
+              ⏸️ 보류 ${okr.taskStats.onHold}
+            </span>
+          </div>
+        ` : ''}
+
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
           <button onclick="editOKR('${okr.id}')" style="background: var(--gray-100); color: var(--gray-700); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
             수정
-          </button>
-          <button onclick="updateOKRProgress('${okr.id}')" style="background: var(--primary-light); color: var(--primary); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
-            진행률 업데이트
           </button>
           <button onclick="showLinkedTasks('${okr.id}', '${okr.objective.replace(/'/g, "\\'")}')" style="background: #E8F3FF; color: #0064FF; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
             📋 연결된 업무
