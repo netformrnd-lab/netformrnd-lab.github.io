@@ -25661,10 +25661,15 @@ function getToolsContent() {
 // ========================================
 
 // OKR 분기 계산 함수
+// OKR 분기 계산 (연 3분기 기준)
+// 1분기: 1-4월, 2분기: 5-8월, 3분기: 9-12월
 function getQuarter(date = new Date()) {
   const year = date.getFullYear();
   const month = date.getMonth() + 1;
-  const quarter = Math.ceil(month / 3);
+  let quarter;
+  if (month <= 4) quarter = 1;
+  else if (month <= 8) quarter = 2;
+  else quarter = 3;
   return { year, quarter, label: `${year}년 ${quarter}분기` };
 }
 
@@ -25672,11 +25677,13 @@ function getQuarterOptions() {
   const options = [];
   const currentYear = new Date().getFullYear();
 
+  // 연 3분기 (1분기: 1-4월, 2분기: 5-8월, 3분기: 9-12월)
   for (let year = currentYear - 1; year <= currentYear + 1; year++) {
-    for (let quarter = 1; quarter <= 4; quarter++) {
+    for (let quarter = 1; quarter <= 3; quarter++) {
+      const quarterLabels = ['1-4월', '5-8월', '9-12월'];
       options.push({
         value: `${year}-Q${quarter}`,
-        label: `${year}년 ${quarter}분기`
+        label: `${year}년 ${quarter}분기 (${quarterLabels[quarter - 1]})`
       });
     }
   }
@@ -29360,42 +29367,67 @@ async function openDayTasksModal(dateStr) {
 // 빠른 업무 추가 모달
 async function openQuickTaskModal(dueDate) {
   dueDate = dueDate || new Date().toISOString().split('T')[0];
-  
-  // 팀원 목록 + 카테고리 목록 + OKR 목록 로드
+
+  // 팀원 목록 + 카테고리 목록 로드
   var teamMembers = state.teamMembers || [];
   var categories = await loadTaskCategories();
   var currentMember = getCurrentMember();
-  
-  // 현재 분기 OKR 로드
-  var currentQuarter = getQuarter();
-  var quarterKey = currentQuarter.year + '-Q' + currentQuarter.quarter;
-  var okrSnapshot = await db.collection('okrs').where('quarter', '==', quarterKey).get();
-  var okrs = [];
-  okrSnapshot.forEach(doc => okrs.push({ id: doc.id, ...doc.data() }));
-  
+
+  // 모든 OKR 로드 (연도별로 그룹화)
+  var currentYear = new Date().getFullYear();
+  var allOkrSnapshot = await db.collection('okrs').get();
+  var allOkrs = [];
+  allOkrSnapshot.forEach(doc => allOkrs.push({ id: doc.id, ...doc.data() }));
+
+  // 연도별로 그룹화
+  var okrsByYear = {};
+  allOkrs.forEach(function(o) {
+    var year = o.quarter ? parseInt(o.quarter.split('-')[0]) : currentYear;
+    if (!okrsByYear[year]) okrsByYear[year] = [];
+    okrsByYear[year].push(o);
+  });
+
+  // 사용 가능한 연도 목록 (현재 연도와 다음 연도)
+  var availableYears = [currentYear, currentYear + 1].filter(y => okrsByYear[y] && okrsByYear[y].length > 0);
+  if (availableYears.length === 0) availableYears = [currentYear];
+
+  // 현재 연도 OKR (기본값)
+  var defaultYear = availableYears.includes(currentYear) ? currentYear : availableYears[0];
+  var okrs = okrsByYear[defaultYear] || [];
+
+  // 전역에 저장 (연도 변경 시 사용)
+  window._taskModalOkrsByYear = okrsByYear;
+
   var modal = document.getElementById('modal');
   modal.className = 'modal active';
   modal.innerHTML = `
     <div class="modal-content" style="max-width: 540px;">
       <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 20px;">📝 새 업무 추가</h2>
-      
+
       <div style="display: grid; gap: 16px;">
         <div>
           <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">업무명 *</label>
           <input type="text" id="quick-task-title" placeholder="업무 제목을 입력하세요" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 14px;" />
         </div>
-        
+
         <!-- 관련 OKR 선택 -->
         <div style="background: #E8F3FF; border-radius: 10px; padding: 14px;">
           <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #0064FF;">🎯 관련 OKR (선택)</label>
-          <select id="quick-task-okr" onchange="updateKROptions()" style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; background: white; margin-bottom: 10px;">
-            <option value="">OKR 없음 (일반 업무)</option>
-            ${okrs.map(o => `<option value="${o.id}" data-krs='${JSON.stringify(o.keyResults || [])}'>${o.objective}</option>`).join('')}
-          </select>
+
+          <!-- 연도 선택 -->
+          <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+            <select id="quick-task-okr-year" onchange="updateQuickTaskOkrList()" style="width: 100px; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white; font-weight: 600;">
+              ${[currentYear, currentYear + 1].map(y => `<option value="${y}" ${y === defaultYear ? 'selected' : ''}>${y}년</option>`).join('')}
+            </select>
+            <select id="quick-task-okr" onchange="updateKROptions()" style="flex: 1; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white;">
+              <option value="">OKR 없음 (일반 업무)</option>
+              ${okrs.map(o => `<option value="${o.id}" data-krs='${JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;")}'>[${o.quarter || ''}] ${o.objective || ''}</option>`).join('')}
+            </select>
+          </div>
           <select id="quick-task-kr" style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; background: white; display: none;">
             <option value="">KR 선택</option>
           </select>
-          <div style="font-size: 11px; color: #6B7684; margin-top: 6px;">이 업무가 어떤 목표를 위한 것인지 연결하면 OKR 상세에서 활동 내역을 확인할 수 있습니다.</div>
+          <div style="font-size: 11px; color: #6B7684; margin-top: 6px;">연도를 선택하면 해당 연도의 OKR 목록이 표시됩니다.</div>
         </div>
         
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
@@ -29477,6 +29509,48 @@ function updateKROptions() {
   } catch (e) {
     krSelect.style.display = 'none';
   }
+}
+
+// 연도 변경 시 OKR 목록 업데이트 (업무 추가 모달)
+function updateQuickTaskOkrList() {
+  var yearSelect = document.getElementById('quick-task-okr-year');
+  var okrSelect = document.getElementById('quick-task-okr');
+  var krSelect = document.getElementById('quick-task-kr');
+
+  if (!yearSelect || !okrSelect) return;
+
+  var selectedYear = parseInt(yearSelect.value);
+  var okrs = window._taskModalOkrsByYear ? (window._taskModalOkrsByYear[selectedYear] || []) : [];
+
+  okrSelect.innerHTML = '<option value="">OKR 없음 (일반 업무)</option>';
+  okrs.forEach(function(o) {
+    var krsJson = JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;");
+    okrSelect.innerHTML += '<option value="' + o.id + '" data-krs=\'' + krsJson + '\'>[' + (o.quarter || '') + '] ' + (o.objective || '') + '</option>';
+  });
+
+  // KR 선택 숨기기
+  if (krSelect) krSelect.style.display = 'none';
+}
+
+// 연도 변경 시 OKR 목록 업데이트 (업무 상세 모달)
+function updateDetailTaskOkrList() {
+  var yearSelect = document.getElementById('detail-task-okr-year');
+  var okrSelect = document.getElementById('detail-task-okr');
+  var krSelect = document.getElementById('detail-task-kr');
+
+  if (!yearSelect || !okrSelect) return;
+
+  var selectedYear = parseInt(yearSelect.value);
+  var okrs = window._taskModalOkrsByYear ? (window._taskModalOkrsByYear[selectedYear] || []) : [];
+
+  okrSelect.innerHTML = '<option value="">OKR 없음 (일반 업무)</option>';
+  okrs.forEach(function(o) {
+    var krsJson = JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;");
+    okrSelect.innerHTML += '<option value="' + o.id + '" data-krs=\'' + krsJson + '\'>[' + (o.quarter || '') + '] ' + (o.objective || '') + '</option>';
+  });
+
+  // KR 선택 숨기기
+  if (krSelect) krSelect.style.display = 'none';
 }
 
 // 카테고리 목록 로드
@@ -29675,16 +29749,37 @@ async function openTaskDetailModal(taskId) {
     if (!doc.exists) { alert('업무를 찾을 수 없습니다.'); return; }
     var task = { id: doc.id, ...doc.data() };
 
-    // 팀원 목록 + 카테고리 목록 + OKR 목록 로드
+    // 팀원 목록 + 카테고리 목록 로드
     var teamMembers = state.teamMembers || [];
     var categories = await loadTaskCategories();
 
-    // 현재 분기 OKR 로드
-    var currentQuarter = getQuarter();
-    var quarterKey = currentQuarter.year + '-Q' + currentQuarter.quarter;
-    var okrSnapshot = await db.collection('okrs').where('quarter', '==', quarterKey).get();
-    var okrs = [];
-    okrSnapshot.forEach(d => okrs.push({ id: d.id, ...d.data() }));
+    // 모든 OKR 로드 (연도별로 그룹화)
+    var currentYear = new Date().getFullYear();
+    var allOkrSnapshot = await db.collection('okrs').get();
+    var allOkrs = [];
+    allOkrSnapshot.forEach(d => allOkrs.push({ id: d.id, ...d.data() }));
+
+    // 연도별로 그룹화
+    var okrsByYear = {};
+    allOkrs.forEach(function(o) {
+      var year = o.quarter ? parseInt(o.quarter.split('-')[0]) : currentYear;
+      if (!okrsByYear[year]) okrsByYear[year] = [];
+      okrsByYear[year].push(o);
+    });
+
+    // 전역에 저장 (연도 변경 시 사용)
+    window._taskModalOkrsByYear = okrsByYear;
+
+    // 기존 연결된 OKR의 연도 확인
+    var taskOkrYear = currentYear;
+    if (task.okrId) {
+      var linkedOkr = allOkrs.find(function(o) { return o.id === task.okrId; });
+      if (linkedOkr && linkedOkr.quarter) {
+        taskOkrYear = parseInt(linkedOkr.quarter.split('-')[0]);
+      }
+    }
+
+    var okrs = okrsByYear[taskOkrYear] || [];
 
     var modal = document.getElementById('modal');
     modal.className = 'modal active';
@@ -29704,13 +29799,23 @@ async function openTaskDetailModal(taskId) {
     // 관련 OKR 선택 섹션
     html += '<div style="background: #E8F3FF; border-radius: 10px; padding: 14px;">';
     html += '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #0064FF;">🎯 관련 OKR</label>';
-    html += '<select id="detail-task-okr" onchange="updateDetailKROptions()" style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; background: white; margin-bottom: 10px;">';
+
+    // 연도 선택 + OKR 선택
+    html += '<div style="display: flex; gap: 8px; margin-bottom: 10px;">';
+    html += '<select id="detail-task-okr-year" onchange="updateDetailTaskOkrList()" style="width: 100px; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white; font-weight: 600;">';
+    [currentYear, currentYear + 1].forEach(function(y) {
+      html += '<option value="' + y + '" ' + (y === taskOkrYear ? 'selected' : '') + '>' + y + '년</option>';
+    });
+    html += '</select>';
+    html += '<select id="detail-task-okr" onchange="updateDetailKROptions()" style="flex: 1; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white;">';
     html += '<option value="">OKR 없음 (일반 업무)</option>';
     okrs.forEach(function(o) {
       var isSelected = task.okrId === o.id;
-      html += '<option value="' + o.id + '" data-krs=\'' + JSON.stringify(o.keyResults || []).replace(/'/g, "\\'") + '\' ' + (isSelected ? 'selected' : '') + '>' + (o.objective || '') + '</option>';
+      var krsJson = JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;");
+      html += '<option value="' + o.id + '" data-krs=\'' + krsJson + '\' ' + (isSelected ? 'selected' : '') + '>[' + (o.quarter || '') + '] ' + (o.objective || '') + '</option>';
     });
     html += '</select>';
+    html += '</div>';
 
     // KR 선택 드롭다운
     var showKr = task.okrId ? 'block' : 'none';
@@ -29723,7 +29828,7 @@ async function openTaskDetailModal(taskId) {
       html += '<option value="' + idx + '" ' + (isKrSelected ? 'selected' : '') + '>' + (kr.description || 'KR ' + (idx + 1)) + '</option>';
     });
     html += '</select>';
-    html += '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">이 업무가 어떤 목표를 위한 것인지 연결하면 OKR 상세에서 활동 내역을 확인할 수 있습니다.</div>';
+    html += '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">연도를 선택하면 해당 연도의 OKR 목록이 표시됩니다.</div>';
     html += '</div>';
 
     // 상태, 우선순위, 구분
