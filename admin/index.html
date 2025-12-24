@@ -4439,16 +4439,20 @@ function renderDealProductOptions(supplierId, selectedIds, searchQuery = '') {
   return products.map(p => {
     const isChecked = selectedProductIds.includes(p.id);
     // 기존 마진율 찾기
-    const existingData = selectedProductsData.find(item => 
+    const existingData = selectedProductsData.find(item =>
       (typeof item === 'string' ? item : item.productId) === p.id
     );
     const marginRate = existingData && typeof existingData === 'object' ? existingData.marginRate || '' : '';
-    
+    const supplyPrice = Number(p.supplyPrice) || 0;
+
     return `
       <label style="display: flex; align-items: center; gap: 12px; padding: 12px; background: white; border-radius: 8px; margin-bottom: 8px; cursor: pointer; border: 2px solid ${isChecked ? 'var(--primary)' : 'var(--gray-200)'};" onclick="this.style.borderColor = this.querySelector('input[type=checkbox]').checked ? 'var(--gray-200)' : 'var(--primary)'">
-        <input type="checkbox" name="deal-products" value="${p.id}" data-name="${p.productName}" ${isChecked ? 'checked' : ''} style="width: 18px; height: 18px;" onchange="updateSelectedProductsDisplay()">
+        <input type="checkbox" name="deal-products" value="${p.id}" data-name="${p.productName}" data-supply-price="${supplyPrice}" ${isChecked ? 'checked' : ''} style="width: 18px; height: 18px;" onchange="updateSelectedProductsDisplay()">
         <div style="flex: 1;">
           <div style="font-weight: 600;">${p.productName}</div>
+          <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">
+            공급단가: <span style="color: ${supplyPrice > 0 ? 'var(--success)' : 'var(--danger)'}; font-weight: 600;">${supplyPrice > 0 ? supplyPrice.toLocaleString() + '원' : '미설정'}</span>
+          </div>
         </div>
         <div style="display: ${isChecked ? 'flex' : 'none'}; align-items: center; gap: 6px;" class="margin-rate-input">
           <span style="font-size: 12px; color: var(--gray-500);">마진율</span>
@@ -4525,14 +4529,15 @@ function submitDealForm(e, id) {
   if (!canEdit()) { showNoPermission(); return; }
   e.preventDefault();
   
-  // 선택된 상품 ID와 마진율 수집
+  // 선택된 상품 ID, 마진율, 공급단가 수집
   const selectedProducts = Array.from(document.querySelectorAll('input[name="deal-products"]:checked'))
     .map(cb => {
       const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
       return {
         productId: cb.value,
         productName: cb.dataset.name,
-        marginRate: marginInput ? Number(marginInput.value) || 0 : 0
+        marginRate: marginInput ? Number(marginInput.value) || 0 : 0,
+        supplyPrice: Number(cb.dataset.supplyPrice) || 0  // 공급단가 추가
       };
     });
   
@@ -7453,8 +7458,11 @@ function viewSettlementReport(dealId) {
   const sellerTax = Math.round(sellerMargin * 0.033);
   const sellerPayout = sellerMargin - sellerTax;
 
-  // 타사: 공급가 계산
-  const supplyPrice = deal.supplyPrice || 0;
+  // 타사: 공급가 계산 (selectedProducts에서 공급단가 가져오기)
+  const selectedProducts = deal.selectedProducts || [];
+  const supplyPrice = selectedProducts.length > 0
+    ? (selectedProducts[0].supplyPrice || deal.supplyPrice || 0)
+    : (deal.supplyPrice || 0);
   const totalQty = deal.totalQty || 0;
   const supplierAmount = isExternal ? (supplyPrice * totalQty) : 0;
   const supplierVat = Math.round(supplierAmount * 0.1);
@@ -7999,8 +8007,11 @@ function updateSettlementPreview() {
         
         const seller = state.sellers.find(s => s.id === deal.sellerId);
         const sellerMarginRate = deal.sellerMarginRate || 10;
-        const supplyPrice = deal.supplyPrice || 0;
-        
+        const dealProducts = deal.selectedProducts || [];
+        const supplyPrice = dealProducts.length > 0
+          ? (dealProducts[0].supplyPrice || deal.supplyPrice || 0)
+          : (deal.supplyPrice || 0);
+
         const pgFee = Math.round(ds.totalSales * 0.04);
         const sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
         const sellerTax = Math.round(sellerMargin * 0.033);
@@ -8098,10 +8109,14 @@ async function applyCafe24Mapping() {
 
       const seller = state.sellers.find(s => s.id === deal.sellerId);
       const supplier = state.suppliers.find(s => s.id === deal.supplierId);
-      const product = state.products.find(p => p.id === deal.productId);
+
+      // 공급단가: selectedProducts에서 먼저 찾고, 없으면 deal.supplyPrice 사용
+      const dealProducts = deal.selectedProducts || [];
+      const supplyPrice = dealProducts.length > 0
+        ? (dealProducts[0].supplyPrice || deal.supplyPrice || 0)
+        : (deal.supplyPrice || 0);
 
       const sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 10;
-      const supplyPrice = deal.supplyPrice || product?.supplyPrice || 0;
 
       const pgFee = Math.round(data.totalSales * 0.04);
       const sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
