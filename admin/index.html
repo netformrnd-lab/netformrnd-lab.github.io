@@ -2727,22 +2727,22 @@ function calculateUserGoalRate() {
 
 async function handleAdminLogin(e) {
   e.preventDefault();
-  
+
   const loginId = document.getElementById('admin-login-id').value.trim();
   const loginPw = document.getElementById('admin-login-pw').value;
   const rememberMe = document.getElementById('admin-remember-me').checked;
   const loginBtn = document.getElementById('admin-login-btn');
   const errorMsg = document.getElementById('admin-login-error');
-  
+
   // 에러 숨기기
   errorMsg.classList.remove('show');
-  
+
   // 로딩 상태
   loginBtn.classList.add('loading');
-  
+
   // 약간의 딜레이 (UX)
   await new Promise(r => setTimeout(r, 300));
-  
+
   // 마스터 계정 확인
   if (loginId === 'admin' && loginPw === 'ahdufk124!') {
     // 아이디/비밀번호 저장
@@ -2762,36 +2762,49 @@ async function handleAdminLogin(e) {
     showApp();
     return;
   }
-  
-  // 팀원 계정 확인
-  const teamMember = state.teamMembers.find(m => m.loginId === loginId && m.loginPw === loginPw);
 
-  if (teamMember) {
-    // 아이디/비밀번호 저장
-    if (rememberMe) {
-      localStorage.setItem('moyeora_admin_saved_id', loginId);
-      localStorage.setItem('moyeora_admin_saved_pw', loginPw);
-      localStorage.setItem('moyeora_admin_remember', 'true');
+  // 팀원 계정 확인 - Firebase에서 직접 로드
+  try {
+    const teamSnapshot = await db.collection('teamMembers').get();
+    const teamMembers = [];
+    teamSnapshot.forEach(doc => {
+      teamMembers.push({ id: doc.id, ...doc.data() });
+    });
+
+    const teamMember = teamMembers.find(m => m.loginId === loginId && m.loginPw === loginPw);
+
+    if (teamMember) {
+      // 아이디/비밀번호 저장
+      if (rememberMe) {
+        localStorage.setItem('moyeora_admin_saved_id', loginId);
+        localStorage.setItem('moyeora_admin_saved_pw', loginPw);
+        localStorage.setItem('moyeora_admin_remember', 'true');
+      } else {
+        localStorage.removeItem('moyeora_admin_saved_id');
+        localStorage.removeItem('moyeora_admin_saved_pw');
+        localStorage.removeItem('moyeora_admin_remember');
+      }
+      // 로그인 성공
+      sessionStorage.setItem('moyeora_admin_logged_in', 'true');
+      sessionStorage.setItem('moyeora_admin_user', JSON.stringify({ id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId, email: teamMember.email }));
+      state.currentAdmin = { id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId, email: teamMember.email };
+      state.currentUser = state.currentAdmin;
+      showApp();
+
+      // 임시 비밀번호 사용 중이면 안내 메시지 표시
+      if (teamMember.needPasswordChange) {
+        setTimeout(() => {
+          showToast('⚠️ 임시 비밀번호 사용 중입니다. 비밀번호를 변경해주세요.');
+        }, 500);
+      }
     } else {
-      localStorage.removeItem('moyeora_admin_saved_id');
-      localStorage.removeItem('moyeora_admin_saved_pw');
-      localStorage.removeItem('moyeora_admin_remember');
+      // 로그인 실패
+      loginBtn.classList.remove('loading');
+      errorMsg.classList.add('show');
+      document.getElementById('admin-login-pw').value = '';
     }
-    // 로그인 성공
-    sessionStorage.setItem('moyeora_admin_logged_in', 'true');
-    sessionStorage.setItem('moyeora_admin_user', JSON.stringify({ id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId, email: teamMember.email }));
-    state.currentAdmin = { id: teamMember.id, name: teamMember.name, role: teamMember.role, loginId: teamMember.loginId, email: teamMember.email };
-    state.currentUser = state.currentAdmin;
-    showApp();
-
-    // 임시 비밀번호 사용 중이면 안내 메시지 표시
-    if (teamMember.needPasswordChange) {
-      setTimeout(() => {
-        showToast('⚠️ 임시 비밀번호 사용 중입니다. 비밀번호를 변경해주세요.');
-      }, 500);
-    }
-  } else {
-    // 로그인 실패
+  } catch (error) {
+    console.error('로그인 오류:', error);
     loginBtn.classList.remove('loading');
     errorMsg.classList.add('show');
     document.getElementById('admin-login-pw').value = '';
