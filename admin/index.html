@@ -7083,18 +7083,20 @@ function renderSettlement() {
   const pendingSettlement = completedDeals.filter(d => !isFullySettled(d));
   const fullySettled = completedDeals.filter(d => isFullySettled(d));
 
-  // 매출 KPI 계산
+  // 매출 KPI 계산 (cafe24_orders 기준)
+  const cafe24Orders = state.cafe24Orders || [];
+  const totalSalesAmount = cafe24Orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const totalPgFee = Math.round(totalSalesAmount * 0.04);
+
+  // 정산대기 금액 (pendingSettlement 기준)
+  const totalPendingAmount = pendingSettlement.reduce((sum, d) => sum + (Number(d.totalSales) || 0), 0);
+
+  // 순이익 계산
   const allSellerSettlements = state.sellerSettlements || [];
   const allSupplierSettlements = state.supplierSettlements || [];
-  const totalSalesAmount = allSellerSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const totalPgFee = Math.round(totalSalesAmount * 0.04);
   const totalSellerPayout = allSellerSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
   const totalSupplierPayout = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
-  const pendingSellerAmount = allSellerSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
-  const pendingSupplierAmount = allSupplierSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
-  const totalPendingAmount = pendingSellerAmount + pendingSupplierAmount;
   const netProfit = totalSalesAmount - totalPgFee - totalSellerPayout - totalSupplierPayout;
-  const profitRate = totalSalesAmount > 0 ? ((netProfit / totalSalesAmount) * 100).toFixed(1) : 0;
 
   // 마감일 기준 D+ 계산
   const getDaysOverdue = (endDate) => {
@@ -7355,16 +7357,22 @@ function viewSettlementReport(dealId) {
     ? totalSales - supplierPayout - sellerPayout - pgFee  // 타사
     : totalSales - sellerPayout - pgFee;                   // 자사
 
+  // 판매 상품 목록 (selectedProducts 또는 cafe24 매핑 데이터에서)
+  const productsList = selectedProducts.length > 0
+    ? selectedProducts
+    : (deal.products || []);
+
   const m = document.getElementById('modal');
   m.style.display = 'flex';
   m.innerHTML = `
-    <div class="modal-content" style="max-width: 600px;">
-      <div class="modal-header">
+    <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow: auto;">
+      <div class="modal-header" style="position: sticky; top: 0; background: white; z-index: 10;">
         <h2>📋 정산서 - ${deal.title || deal.brandName}</h2>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
+        <button class="modal-close" onclick="closeModal()" style="background: none; border: none; font-size: 28px; cursor: pointer; color: var(--gray-500); padding: 0; line-height: 1;">&times;</button>
       </div>
 
       <div style="padding: 20px;">
+        <!-- 공구 기본 정보 -->
         <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
             <div><span style="color: var(--gray-500);">공구명:</span> <strong>${deal.title || deal.brandName}</strong></div>
@@ -7375,40 +7383,159 @@ function viewSettlementReport(dealId) {
           </div>
         </div>
 
-        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px;">
-          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--primary);">💰 정산 내역</h3>
+        <!-- 판매 상품 목록 -->
+        ${productsList.length > 0 ? `
+          <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--gray-700);">📦 판매 상품</h3>
+            <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: var(--gray-50); border-bottom: 2px solid var(--gray-200);">
+                  <th style="padding: 10px 8px; text-align: left; font-weight: 600; color: var(--gray-600);">상품명</th>
+                  <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">수량</th>
+                  <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">판매가</th>
+                  ${isExternal ? `<th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">공급가</th>` : ''}
+                </tr>
+              </thead>
+              <tbody>
+                ${productsList.map(p => `
+                  <tr style="border-bottom: 1px solid var(--gray-100);">
+                    <td style="padding: 10px 8px; color: var(--gray-700);">${p.productName || p.name || '-'}</td>
+                    <td style="padding: 10px 8px; text-align: right;">${p.quantity || 1}개</td>
+                    <td style="padding: 10px 8px; text-align: right;">${formatNumber(p.amount || p.unitPrice || 0)}원</td>
+                    ${isExternal ? `<td style="padding: 10px 8px; text-align: right; color: #92400e;">${formatNumber(p.supplyPrice || supplyPrice)}원</td>` : ''}
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot>
+                <tr style="background: var(--gray-50); font-weight: 600;">
+                  <td style="padding: 10px 8px;">합계</td>
+                  <td style="padding: 10px 8px; text-align: right;">${totalQty}개</td>
+                  <td style="padding: 10px 8px; text-align: right;">${formatNumber(totalSales)}원</td>
+                  ${isExternal ? `<td style="padding: 10px 8px; text-align: right; color: #92400e;">${formatNumber(supplierAmount)}원</td>` : ''}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ` : `
+          <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 16px; text-align: center; color: var(--gray-500);">
+            판매 상품 정보가 없습니다. 카페24 매출 연동을 진행해주세요.
+          </div>
+        `}
+
+        ${isExternal ? `
+          <!-- 타사: 셀러 정산 -->
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #1d4ed8;">👤 셀러 정산 (${seller?.name || '-'})</h3>
+            <table style="width: 100%; font-size: 13px;">
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">총 판매금액</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(totalSales)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진율</td>
+                <td style="padding: 8px 0; text-align: right;">${sellerMarginRate}%</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진금액</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(sellerMargin)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #dc2626;">원천세 (3.3%)</td>
+                <td style="padding: 8px 0; text-align: right; color: #dc2626;">-${formatNumber(sellerTax)}원</td>
+              </tr>
+              <tr style="background: #dbeafe;">
+                <td style="padding: 10px 0; font-weight: 700; color: #1d4ed8;">셀러 실지급액</td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 700; font-size: 15px; color: #1d4ed8;">${formatNumber(sellerPayout)}원</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- 타사: 공급사 정산 -->
+          <div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #92400e;">🏭 공급사 정산 (${supplier?.name || '-'})</h3>
+            <table style="width: 100%; font-size: 13px;">
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">공급단가</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(supplyPrice)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">총 수량</td>
+                <td style="padding: 8px 0; text-align: right;">${totalQty}개</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">공급가액</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(supplierAmount)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #fcd34d;">
+                <td style="padding: 8px 0; color: #92400e;">부가세 (10%)</td>
+                <td style="padding: 8px 0; text-align: right;">+${formatNumber(supplierVat)}원</td>
+              </tr>
+              <tr style="background: #fef3c7;">
+                <td style="padding: 10px 0; font-weight: 700; color: #92400e;">공급사 실지급액</td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 700; font-size: 15px; color: #92400e;">${formatNumber(supplierPayout)}원</td>
+              </tr>
+            </table>
+          </div>
+        ` : `
+          <!-- 자사: 셀러 정산만 -->
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #1d4ed8;">👤 셀러 정산 (${seller?.name || '-'})</h3>
+            <table style="width: 100%; font-size: 13px;">
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">총 판매금액</td>
+                <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(totalSales)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진율</td>
+                <td style="padding: 8px 0; text-align: right;">${sellerMarginRate}%</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #1d4ed8;">마진금액</td>
+                <td style="padding: 8px 0; text-align: right;">${formatNumber(sellerMargin)}원</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #bfdbfe;">
+                <td style="padding: 8px 0; color: #dc2626;">원천세 (3.3%)</td>
+                <td style="padding: 8px 0; text-align: right; color: #dc2626;">-${formatNumber(sellerTax)}원</td>
+              </tr>
+              <tr style="background: #dbeafe;">
+                <td style="padding: 10px 0; font-weight: 700; color: #1d4ed8;">셀러 실지급액</td>
+                <td style="padding: 10px 0; text-align: right; font-weight: 700; font-size: 15px; color: #1d4ed8;">${formatNumber(sellerPayout)}원</td>
+              </tr>
+            </table>
+          </div>
+        `}
+
+        <!-- 모여라딜 순이익 -->
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--primary);">💰 모여라딜 정산</h3>
           <table style="width: 100%; font-size: 13px;">
             <tr style="border-bottom: 1px solid var(--gray-100);">
               <td style="padding: 8px 0; color: var(--gray-600);">총 판매금액</td>
               <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(totalSales)}원</td>
             </tr>
             <tr style="border-bottom: 1px solid var(--gray-100);">
-              <td style="padding: 8px 0; color: var(--gray-600);">총 수량</td>
-              <td style="padding: 8px 0; text-align: right;">${totalQty}개</td>
-            </tr>
-            <tr style="border-bottom: 1px solid var(--gray-100);">
               <td style="padding: 8px 0; color: #dc2626;">PG수수료 (4%)</td>
               <td style="padding: 8px 0; text-align: right; color: #dc2626;">-${formatNumber(pgFee)}원</td>
             </tr>
             ${isExternal ? `
-              <tr style="border-bottom: 1px solid var(--gray-100); background: #fffbeb;">
-                <td style="padding: 8px 0; color: #92400e;">공급사 정산금액 (V+)</td>
+              <tr style="border-bottom: 1px solid var(--gray-100);">
+                <td style="padding: 8px 0; color: #92400e;">공급사 지급액</td>
                 <td style="padding: 8px 0; text-align: right; color: #92400e;">-${formatNumber(supplierPayout)}원</td>
               </tr>
             ` : ''}
-            <tr style="border-bottom: 1px solid var(--gray-100); background: #eff6ff;">
-              <td style="padding: 8px 0; color: #1d4ed8;">셀러 정산금액 (${sellerMarginRate}% - 원천세)</td>
+            <tr style="border-bottom: 1px solid var(--gray-100);">
+              <td style="padding: 8px 0; color: #1d4ed8;">셀러 지급액</td>
               <td style="padding: 8px 0; text-align: right; color: #1d4ed8;">-${formatNumber(sellerPayout)}원</td>
             </tr>
             <tr style="background: ${netProfit >= 0 ? '#dcfce7' : '#fee2e2'};">
-              <td style="padding: 12px 0; font-weight: 700; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">모여라딜 순이익</td>
-              <td style="padding: 12px 0; text-align: right; font-weight: 700; font-size: 16px; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">${formatNumber(netProfit)}원</td>
+              <td style="padding: 12px 0; font-weight: 700; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">순이익</td>
+              <td style="padding: 12px 0; text-align: right; font-weight: 700; font-size: 18px; color: ${netProfit >= 0 ? '#166534' : '#dc2626'};">${formatNumber(netProfit)}원</td>
             </tr>
           </table>
         </div>
 
-        <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-          <button onclick="closeModal()" class="btn btn-secondary">닫기</button>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button onclick="closeModal()" class="btn btn-secondary" style="padding: 10px 20px; cursor: pointer;">닫기</button>
         </div>
       </div>
     </div>
