@@ -1965,6 +1965,9 @@
               <div class="nav-item" data-tab="cafe24Dashboard" onclick="switchTab('cafe24Dashboard')" style="font-size: 13px;">
                 <span>📊 매출 대시보드</span>
               </div>
+              <div class="nav-item" data-tab="orderStatus" onclick="switchTab('orderStatus')" style="font-size: 13px;">
+                <span>📋 주문현황</span>
+              </div>
               <div class="nav-item" data-tab="cafe24Orders" onclick="switchTab('cafe24Orders')" style="font-size: 13px;">
                 <span>📦 주문 관리</span>
               </div>
@@ -6351,6 +6354,7 @@ function render() {
     case 'urgentSales': renderUrgentSales(); break;
     case 'dealCenter': renderDealCenter(); break;
     case 'cafe24Dashboard': renderCafe24Dashboard(); break;
+    case 'orderStatus': renderOrderStatus(); break;
     case 'cafe24Orders': renderCafe24Orders(); break;
     case 'cafe24Stats': renderCafe24Stats(); break;
     case 'cafe24Settings': renderCafe24Settings(); break;
@@ -25197,9 +25201,9 @@ function startCafe24AutoSync() {
     clearInterval(cafe24AutoSyncInterval);
   }
 
-  console.log('🔄 카페24 자동 동기화 시작 (1시간 간격)');
+  console.log('🔄 카페24 자동 동기화 시작 (10분 간격)');
 
-  // 1시간(3600000ms)마다 자동 동기화 실행
+  // 10분(600000ms)마다 자동 동기화 실행
   cafe24AutoSyncInterval = setInterval(async () => {
     console.log('⏰ 카페24 자동 동기화 실행 시작...');
     try {
@@ -25207,7 +25211,7 @@ function startCafe24AutoSync() {
     } catch (err) {
       console.error('자동 동기화 실행 오류:', err);
     }
-  }, 60 * 60 * 1000); // 1시간 = 60분 × 60초 × 1000ms
+  }, 10 * 60 * 1000); // 10분 = 10분 × 60초 × 1000ms
 
   // 즉시 한 번 실행 (선택사항)
   // syncCafe24Orders(true);
@@ -25577,6 +25581,201 @@ async function renderCafe24Dashboard() {
     console.error('카페24 대시보드 로딩 실패:', err);
     app.innerHTML = `<div class="page-header"><h1 class="page-title">📊 카페24 매출 대시보드</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p style="color: var(--gray-500);">데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Dashboard()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
   }
+}
+
+// 주문현황 대시보드
+async function renderOrderStatus() {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">주문 데이터 로딩 중...</p></div>';
+
+  try {
+    // 주문 데이터 로드
+    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
+    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // 오늘 날짜 계산
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
+    // 주문 상태별 분류
+    const statusGroups = {
+      '입금전': orders.filter(o => o.order_status === 'N00'),
+      '결제완료': orders.filter(o => o.order_status === 'N10'),
+      '상품준비중': orders.filter(o => o.order_status === 'N20'),
+      '배송대기': orders.filter(o => o.order_status === 'N21'),
+      '배송중': orders.filter(o => o.order_status === 'N22'),
+      '배송완료': orders.filter(o => o.order_status === 'N30'),
+      '취소': orders.filter(o => ['C00', 'C10', 'C20'].includes(o.order_status)),
+      '교환/반품': orders.filter(o => ['E00', 'E10', 'E20', 'R00', 'R10', 'R20'].includes(o.order_status)),
+    };
+
+    // 오늘의 주문
+    const todayOrders = orders.filter(o => o.order_date && o.order_date.startsWith(todayStr));
+    const todaySales = todayOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+
+    // 최근 24시간 이내 주문
+    const last24Hours = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const last24HoursOrders = orders.filter(o => {
+      if (!o.order_date) return false;
+      const orderDate = new Date(o.order_date);
+      return orderDate >= last24Hours;
+    });
+
+    // 최신 주문 20개
+    const recentOrders = orders.slice(0, 20);
+
+    // 현재 시간
+    const now = new Date();
+    const currentTime = now.toLocaleString('ko-KR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+
+    app.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">📋 주문현황 대시보드</h1>
+        <p style="color: var(--gray-500); margin-top: 4px;">실시간 주문 상태 모니터링 (자동 수집: 10분 간격)</p>
+        <p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">⏰ 마지막 업데이트: ${currentTime}</p>
+      </div>
+
+      <!-- 오늘의 주문 통계 -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+        <div class="card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">오늘의 주문</div>
+          <div style="font-size: 32px; font-weight: 700;">${todayOrders.length}건</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${formatNumber(todaySales)}원</div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">24시간 주문</div>
+          <div style="font-size: 32px; font-weight: 700;">${last24HoursOrders.length}건</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${formatNumber(last24HoursOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원</div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white;">
+          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">전체 주문</div>
+          <div style="font-size: 32px; font-weight: 700;">${orders.length}건</div>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${formatNumber(orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원</div>
+        </div>
+      </div>
+
+      <!-- 주문 상태별 현황 -->
+      <div class="card" style="margin-bottom: 24px;">
+        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">📊 주문 상태별 현황</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
+          ${Object.entries(statusGroups).map(([status, items]) => {
+            const colors = {
+              '입금전': '#6b7684',
+              '결제완료': '#3182f6',
+              '상품준비중': '#fc9600',
+              '배송대기': '#ff9f43',
+              '배송중': '#00c073',
+              '배송완료': '#00b894',
+              '취소': '#f04452',
+              '교환/반품': '#a55eea'
+            };
+            const color = colors[status] || '#8b95a1';
+            return `
+              <div style="background: ${color}15; border: 1px solid ${color}40; border-radius: 8px; padding: 12px; text-align: center;">
+                <div style="font-size: 12px; color: ${color}; margin-bottom: 6px; font-weight: 600;">${status}</div>
+                <div style="font-size: 24px; font-weight: 700; color: ${color};">${items.length}</div>
+                <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">${formatNumber(items.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- 최근 주문 내역 -->
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="font-size: 16px; font-weight: 600;">🕐 최근 주문 (20건)</h3>
+          <button onclick="switchTab('cafe24Orders')" class="btn btn-sm btn-secondary">전체보기 →</button>
+        </div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>주문번호</th>
+                <th>주문일시</th>
+                <th>상품명</th>
+                <th>수령인</th>
+                <th>금액</th>
+                <th>주문상태</th>
+                <th>결제상태</th>
+                <th>셀러</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${recentOrders.length === 0 ?
+                '<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다.</td></tr>' :
+                recentOrders.map(order => `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
+                    <td>${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
+                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${order.product_name || '-'}</td>
+                    <td>${order.buyer_name || '-'}</td>
+                    <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
+                    <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
+                    <td>${getCafe24PaymentStatusBadge(order.payment_status)}</td>
+                    <td>${order.seller_name || '-'}</td>
+                  </tr>
+                `).join('')
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 자동 새로고침 안내 -->
+      <div style="text-align: center; margin-top: 24px; padding: 16px; background: var(--info-light); border-radius: 8px;">
+        <p style="color: var(--info); font-size: 14px; font-weight: 500;">
+          ℹ️ 이 페이지는 10분마다 자동으로 주문 데이터를 수집합니다.
+        </p>
+        <button onclick="renderOrderStatus()" class="btn btn-sm btn-primary" style="margin-top: 12px;">
+          🔄 수동 새로고침
+        </button>
+      </div>
+    `;
+  } catch (err) {
+    console.error('주문현황 대시보드 로딩 실패:', err);
+    app.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">📋 주문현황 대시보드</h1>
+      </div>
+      <div class="card" style="text-align: center; padding: 60px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
+        <p style="color: var(--gray-500);">데이터를 불러오는데 실패했습니다.</p>
+        <button onclick="renderOrderStatus()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button>
+      </div>
+    `;
+  }
+}
+
+// 카페24 주문 상태 뱃지
+function getCafe24OrderStatusBadge(status) {
+  const statusMap = {
+    'N00': { text: '입금전', color: 'var(--gray-500)' },
+    'N10': { text: '결제완료', color: 'var(--info)' },
+    'N20': { text: '상품준비중', color: 'var(--warning)' },
+    'N21': { text: '배송대기', color: '#ff9f43' },
+    'N22': { text: '배송중', color: 'var(--success)' },
+    'N30': { text: '배송완료', color: '#00b894' },
+    'C00': { text: '취소신청', color: 'var(--danger)' },
+    'C10': { text: '취소처리중', color: 'var(--danger)' },
+    'C20': { text: '취소완료', color: 'var(--gray-600)' },
+    'E00': { text: '교환신청', color: '#a55eea' },
+    'E10': { text: '교환처리중', color: '#a55eea' },
+    'E20': { text: '교환완료', color: '#a55eea' },
+    'R00': { text: '반품신청', color: '#e84393' },
+    'R10': { text: '반품처리중', color: '#e84393' },
+    'R20': { text: '반품완료', color: '#e84393' },
+  };
+
+  const info = statusMap[status] || { text: status || '알 수 없음', color: 'var(--gray-500)' };
+  return `<span style="display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: white; background: ${info.color};">${info.text}</span>`;
 }
 
 // 카페24 정산 완료 처리
