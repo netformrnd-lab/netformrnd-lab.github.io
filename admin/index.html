@@ -34453,6 +34453,8 @@ function renderReferenceList(references) {
 // 레퍼런스 추가 모달
 function openAddReferenceModal(refId) {
   refId = refId || null;
+  window.refUploadedFileUrl = null;
+  window.refUploadedFileName = null;
   var modal = document.getElementById('modal');
   modal.className = 'modal active';
   var currentMember = getCurrentMember();
@@ -34474,17 +34476,160 @@ function openAddReferenceModal(refId) {
     '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #0064FF;">🔗 링크 URL</label>' +
     '<input type="url" id="ref-link" placeholder="https://..." style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; font-size: 14px; background: white;" />' +
     '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">유튜브, 인스타그램, 웹사이트 등 외부 링크</div></div>' +
+
+    '<div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); padding: 16px; border-radius: 10px; border: 1px solid #F59E0B;">' +
+    '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; color: #B45309;">📤 파일 직접 업로드</label>' +
+    '<div id="ref-file-upload-area" style="background: white; border: 2px dashed #F59E0B; border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.2s;" onclick="document.getElementById(\'ref-file-input\').click()" onmouseover="this.style.borderColor=\'#D97706\'; this.style.background=\'#FFFBEB\'" onmouseout="this.style.borderColor=\'#F59E0B\'; this.style.background=\'white\'">' +
+    '<input type="file" id="ref-file-input" accept=".jpg,.jpeg,.png,.gif,.mp4" style="display: none;" onchange="handleReferenceFileUpload(this.files[0])" />' +
+    '<div style="font-size: 32px; margin-bottom: 8px;">🖼️</div>' +
+    '<div style="font-size: 14px; font-weight: 600; color: #92400E;">클릭하여 파일 선택</div>' +
+    '<div style="font-size: 12px; color: #B45309; margin-top: 4px;">JPG, PNG, GIF, MP4 (최대 20MB)</div></div>' +
+    '<div id="ref-file-preview" style="display: none; margin-top: 12px; padding: 12px; background: white; border-radius: 8px; border: 1px solid #F59E0B;"></div></div>' +
+
     '<div style="background: #DCFCE7; padding: 16px; border-radius: 10px;">' +
-    '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #16A34A;">📎 파일 URL</label>' +
+    '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #16A34A;">📎 파일 URL (외부 링크)</label>' +
     '<input type="url" id="ref-file" placeholder="구글 드라이브, Dropbox 등 파일 공유 링크" style="width: 100%; padding: 12px; border: 1px solid #86EFAC; border-radius: 10px; font-size: 14px; background: white;" />' +
-    '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">구글 드라이브, Dropbox 등의 공유 링크를 붙여넣으세요</div></div>' +
+    '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">직접 업로드 또는 외부 링크 중 하나만 입력하세요</div></div>' +
     '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #333D4B;">태그 (쉼표로 구분)</label>' +
     '<input type="text" id="ref-tags" placeholder="예: 봄신상, 할인이벤트, 인스타" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 14px;" /></div></div>' +
     '<div style="display: flex; gap: 12px; margin-top: 24px;">' +
     '<button onclick="closeModal()" style="flex: 1; background: #F2F4F6; color: #333D4B; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">취소</button>' +
-    '<button onclick="saveReference(\'' + (refId || '') + '\')" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">저장하기</button></div></div>';
+    '<button onclick="saveReference(\'' + (refId || '') + '\')" id="btn-save-ref" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">저장하기</button></div></div>';
 
   if (refId) loadReferenceForEdit(refId);
+}
+
+// 레퍼런스 파일 업로드 처리
+async function handleReferenceFileUpload(file) {
+  if (!file) return;
+
+  // 파일 크기 제한 (20MB)
+  if (file.size > 20 * 1024 * 1024) {
+    showToast('파일 크기는 20MB 이하여야 합니다');
+    return;
+  }
+
+  // 허용 파일 타입 검사
+  var allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'video/mp4'];
+  var allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'mp4'];
+  var ext = file.name.split('.').pop().toLowerCase();
+
+  if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) {
+    showToast('JPG, PNG, GIF, MP4 파일만 업로드 가능합니다');
+    return;
+  }
+
+  var uploadArea = document.getElementById('ref-file-upload-area');
+  var previewDiv = document.getElementById('ref-file-preview');
+  var saveBtn = document.getElementById('btn-save-ref');
+
+  // 업로드 중 UI
+  uploadArea.innerHTML = '<div style="font-size: 32px; margin-bottom: 8px;">⏳</div>' +
+    '<div style="font-size: 14px; font-weight: 600; color: #92400E;">업로드 중...</div>' +
+    '<div id="ref-upload-progress" style="font-size: 12px; color: #B45309; margin-top: 4px;">0%</div>';
+  uploadArea.style.pointerEvents = 'none';
+  if (saveBtn) saveBtn.disabled = true;
+
+  try {
+    var storageRef = firebase.storage().ref();
+    var fileName = Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    var fileRef = storageRef.child('references/' + fileName);
+
+    // 업로드 진행률 표시
+    var uploadTask = fileRef.put(file);
+
+    uploadTask.on('state_changed',
+      function(snapshot) {
+        var progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+        var progressEl = document.getElementById('ref-upload-progress');
+        if (progressEl) progressEl.textContent = progress + '%';
+      },
+      function(error) {
+        console.error('업로드 오류:', error);
+        showToast('파일 업로드 실패: ' + error.message);
+        resetRefUploadArea();
+        if (saveBtn) saveBtn.disabled = false;
+      },
+      async function() {
+        // 업로드 완료
+        var downloadUrl = await uploadTask.snapshot.ref.getDownloadURL();
+        window.refUploadedFileUrl = downloadUrl;
+        window.refUploadedFileName = file.name;
+
+        // 미리보기 표시
+        var isVideo = file.type.startsWith('video/') || ext === 'mp4';
+        var isGif = file.type === 'image/gif' || ext === 'gif';
+        var previewHtml = '';
+
+        if (isVideo) {
+          previewHtml = '<div style="display: flex; align-items: center; gap: 12px;">' +
+            '<video src="' + downloadUrl + '" style="max-width: 120px; max-height: 80px; border-radius: 6px;" controls></video>' +
+            '<div style="flex: 1;">' +
+            '<div style="font-size: 13px; font-weight: 600; color: #92400E;">🎬 ' + file.name + '</div>' +
+            '<div style="font-size: 11px; color: #B45309; margin-top: 2px;">' + formatFileSize(file.size) + '</div></div>' +
+            '<button onclick="removeRefUploadedFile()" style="background: #FEE2E2; color: #DC2626; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button></div>';
+        } else {
+          previewHtml = '<div style="display: flex; align-items: center; gap: 12px;">' +
+            '<img src="' + downloadUrl + '" style="max-width: 80px; max-height: 80px; border-radius: 6px; object-fit: cover;" />' +
+            '<div style="flex: 1;">' +
+            '<div style="font-size: 13px; font-weight: 600; color: #92400E;">' + (isGif ? '🎞️ ' : '🖼️ ') + file.name + '</div>' +
+            '<div style="font-size: 11px; color: #B45309; margin-top: 2px;">' + formatFileSize(file.size) + '</div></div>' +
+            '<button onclick="removeRefUploadedFile()" style="background: #FEE2E2; color: #DC2626; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button></div>';
+        }
+
+        previewDiv.innerHTML = previewHtml;
+        previewDiv.style.display = 'block';
+
+        // 업로드 영역 완료 상태
+        uploadArea.innerHTML = '<div style="font-size: 32px; margin-bottom: 8px;">✅</div>' +
+          '<div style="font-size: 14px; font-weight: 600; color: #16A34A;">업로드 완료!</div>' +
+          '<div style="font-size: 12px; color: #6B7684; margin-top: 4px;">다른 파일을 선택하려면 클릭하세요</div>';
+        uploadArea.style.pointerEvents = 'auto';
+        uploadArea.onclick = function() { document.getElementById('ref-file-input').click(); };
+
+        if (saveBtn) saveBtn.disabled = false;
+        showToast('✅ 파일이 업로드되었습니다');
+      }
+    );
+
+  } catch (error) {
+    console.error('업로드 오류:', error);
+    showToast('파일 업로드 실패');
+    resetRefUploadArea();
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+// 파일 크기 포맷
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// 업로드 영역 초기화
+function resetRefUploadArea() {
+  var uploadArea = document.getElementById('ref-file-upload-area');
+  if (uploadArea) {
+    uploadArea.innerHTML = '<input type="file" id="ref-file-input" accept=".jpg,.jpeg,.png,.gif,.mp4" style="display: none;" onchange="handleReferenceFileUpload(this.files[0])" />' +
+      '<div style="font-size: 32px; margin-bottom: 8px;">🖼️</div>' +
+      '<div style="font-size: 14px; font-weight: 600; color: #92400E;">클릭하여 파일 선택</div>' +
+      '<div style="font-size: 12px; color: #B45309; margin-top: 4px;">JPG, PNG, GIF, MP4 (최대 20MB)</div>';
+    uploadArea.style.pointerEvents = 'auto';
+    uploadArea.onclick = function() { document.getElementById('ref-file-input').click(); };
+  }
+}
+
+// 업로드된 파일 삭제
+function removeRefUploadedFile() {
+  window.refUploadedFileUrl = null;
+  window.refUploadedFileName = null;
+
+  var previewDiv = document.getElementById('ref-file-preview');
+  if (previewDiv) previewDiv.style.display = 'none';
+
+  resetRefUploadArea();
+  showToast('파일이 삭제되었습니다');
 }
 
 // 레퍼런스 수정 데이터 로드
@@ -34497,8 +34642,51 @@ async function loadReferenceForEdit(refId) {
       document.getElementById('ref-category').value = ref.category || 'etc';
       document.getElementById('ref-description').value = ref.description || '';
       document.getElementById('ref-link').value = ref.linkUrl || '';
-      document.getElementById('ref-file').value = ref.fileUrl || '';
       document.getElementById('ref-tags').value = (ref.tags || []).join(', ');
+
+      // 기존 업로드된 파일이 있으면 미리보기 표시
+      if (ref.uploadedFileName && ref.fileUrl) {
+        window.refUploadedFileUrl = ref.fileUrl;
+        window.refUploadedFileName = ref.uploadedFileName;
+
+        var previewDiv = document.getElementById('ref-file-preview');
+        var uploadArea = document.getElementById('ref-file-upload-area');
+        var ext = ref.uploadedFileName.split('.').pop().toLowerCase();
+        var isVideo = ext === 'mp4';
+        var isGif = ext === 'gif';
+
+        var previewHtml = '';
+        if (isVideo) {
+          previewHtml = '<div style="display: flex; align-items: center; gap: 12px;">' +
+            '<video src="' + ref.fileUrl + '" style="max-width: 120px; max-height: 80px; border-radius: 6px;" controls></video>' +
+            '<div style="flex: 1;">' +
+            '<div style="font-size: 13px; font-weight: 600; color: #92400E;">🎬 ' + ref.uploadedFileName + '</div>' +
+            '<div style="font-size: 11px; color: #B45309; margin-top: 2px;">기존 업로드 파일</div></div>' +
+            '<button onclick="removeRefUploadedFile()" style="background: #FEE2E2; color: #DC2626; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button></div>';
+        } else {
+          previewHtml = '<div style="display: flex; align-items: center; gap: 12px;">' +
+            '<img src="' + ref.fileUrl + '" style="max-width: 80px; max-height: 80px; border-radius: 6px; object-fit: cover;" />' +
+            '<div style="flex: 1;">' +
+            '<div style="font-size: 13px; font-weight: 600; color: #92400E;">' + (isGif ? '🎞️ ' : '🖼️ ') + ref.uploadedFileName + '</div>' +
+            '<div style="font-size: 11px; color: #B45309; margin-top: 2px;">기존 업로드 파일</div></div>' +
+            '<button onclick="removeRefUploadedFile()" style="background: #FEE2E2; color: #DC2626; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button></div>';
+        }
+
+        if (previewDiv) {
+          previewDiv.innerHTML = previewHtml;
+          previewDiv.style.display = 'block';
+        }
+
+        if (uploadArea) {
+          uploadArea.innerHTML = '<div style="font-size: 32px; margin-bottom: 8px;">✅</div>' +
+            '<div style="font-size: 14px; font-weight: 600; color: #16A34A;">파일 등록됨</div>' +
+            '<div style="font-size: 12px; color: #6B7684; margin-top: 4px;">다른 파일을 선택하려면 클릭하세요</div>';
+          uploadArea.onclick = function() { document.getElementById('ref-file-input').click(); };
+        }
+      } else if (ref.fileUrl) {
+        // 외부 링크인 경우
+        document.getElementById('ref-file').value = ref.fileUrl;
+      }
     }
   } catch (error) {
     console.error('레퍼런스 로드 오류:', error);
@@ -34511,16 +34699,29 @@ async function saveReference(refId) {
   var category = document.getElementById('ref-category').value;
   var description = document.getElementById('ref-description').value.trim();
   var linkUrl = document.getElementById('ref-link').value.trim();
-  var fileUrl = document.getElementById('ref-file').value.trim();
+  var externalFileUrl = document.getElementById('ref-file').value.trim();
   var tagsStr = document.getElementById('ref-tags').value.trim();
   var tags = tagsStr ? tagsStr.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
 
+  // 업로드된 파일 URL 우선 사용, 없으면 외부 링크 사용
+  var fileUrl = window.refUploadedFileUrl || externalFileUrl;
+  var uploadedFileName = window.refUploadedFileName || null;
+
   if (!title) { showToast('제목을 입력해주세요'); return; }
-  if (!linkUrl && !fileUrl) { showToast('링크 또는 파일 URL을 입력해주세요'); return; }
+  if (!linkUrl && !fileUrl) { showToast('링크 또는 파일을 등록해주세요'); return; }
 
   var currentMember = getCurrentMember();
   var now = new Date().toISOString();
-  var data = { title: title, category: category, description: description, linkUrl: linkUrl || null, fileUrl: fileUrl || null, tags: tags, updatedAt: now };
+  var data = {
+    title: title,
+    category: category,
+    description: description,
+    linkUrl: linkUrl || null,
+    fileUrl: fileUrl || null,
+    uploadedFileName: uploadedFileName,
+    tags: tags,
+    updatedAt: now
+  };
 
   try {
     if (refId) {
