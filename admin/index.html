@@ -26161,10 +26161,18 @@ async function uploadCafe24Excel(event) {
         // 셀러명 추출 (상품명(관리용) 컬럼)
         const rawSellerName = (row['상품명(관리용)'] || row['관리용 상품명'] || '').trim();
         const sellerName = extractSellerName(rawSellerName);
-        
-        // 주문번호에서 날짜 추출: 20251127-0000014 → 2025-11-27
+
+        // 🎯 주문일자 파싱 (다양한 컬럼명 지원)
         let orderDate = '';
-        if (orderId.length >= 8) {
+        const rawOrderDate = row['주문일자'] || row['주문일시'] || row['주문 일자'] || row['주문 일시'] ||
+                            row['결제일'] || row['결제일자'] || row['결제일시'] ||
+                            row['order_date'] || row['order_datetime'] || '';
+
+        if (rawOrderDate) {
+          // 엑셀에서 주문일자 컬럼이 있는 경우
+          orderDate = parseCafe24Date(rawOrderDate);
+        } else if (orderId.length >= 8) {
+          // 주문일자 컬럼이 없으면 주문번호에서 날짜 추출: 20251127-0000014 → 2025-11-27
           const dateStr = orderId.substring(0, 8);
           if (/^\d{8}$/.test(dateStr)) {
             orderDate = `${dateStr.substring(0,4)}-${dateStr.substring(4,6)}-${dateStr.substring(6,8)}T00:00:00`;
@@ -26186,28 +26194,35 @@ async function uploadCafe24Excel(event) {
 
         // 수령인 정보
         const buyerName = row['수령인'] || row['주문자명'] || '';
-        const buyerPhone = row['수령인 휴대전화'] || row['연락처'] || '';
+        const buyerPhone = row['수령인 휴대전화'] || row['수령인휴대전화'] || row['연락처'] || '';
+        const buyerZipcode = row['수령인 우편번호'] || row['수령인우편번호'] || row['우편번호'] || '';
 
         // 상품명
         const productName = row['주문상품명(기본)'] || row['주문상품명'] || '';
         const productOption = row['주문상품명(옵션포함)'] || '';
         
+        // 🎯 주문 상태 파싱 (다양한 컬럼명 지원)
+        const orderStatus = row['주문상태'] || row['주문 상태'] || row['배송상태'] || row['배송 상태'] ||
+                           row['order_status'] || row['shipping_status'] || '';
+
         // 🎯 PG수수료 자동 계산 (신용카드 = 4%)
         const paymentMethod = row['결제수단'] || '';
         const isCard = paymentMethod.includes('카드') || paymentMethod.includes('신용') || paymentMethod.toLowerCase().includes('card');
         const pgFeeRate = isCard ? 0.04 : 0; // 카드 4%, 그 외 0%
         const pgFee = Math.round(totalAmount * pgFeeRate);
-        
+
         orderMap.set(docId, {
           order_id: String(orderId),
           product_no: String(productNo),
           order_date: orderDate,
+          order_status: orderStatus,    // 🎯 주문 상태
           supplier_name: supplierName,
           seller_name: sellerName,
           seller_full_name: rawSellerName,
           product_type: productType,
           buyer_name: buyerName,
           buyer_phone: buyerPhone,
+          buyer_zipcode: buyerZipcode,  // 🎯 우편번호
           product_name: productName,
           product_option: productOption,
           quantity: quantity,           // 🎯 수량!
@@ -26222,11 +26237,38 @@ async function uploadCafe24Excel(event) {
           synced_at: new Date().toISOString()
         });
       }
-      
+
+      // 🎯 재구매자 판별: 기존 주문 데이터 조회
+      console.log('재구매자 판별 중...');
+      const existingOrdersSnapshot = await db.collection('cafe24_orders').get();
+      const existingCustomers = new Map(); // key: "이름|전화번호", value: true
+
+      existingOrdersSnapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.buyer_name && data.buyer_phone) {
+          const key = `${data.buyer_name.trim()}|${data.buyer_phone.trim()}`;
+          existingCustomers.set(key, true);
+        }
+      });
+
+      console.log('기존 고객 수:', existingCustomers.size);
+
+      // 🎯 재구매자 여부 추가
+      for (const [docId, orderData] of orderMap) {
+        const customerKey = `${orderData.buyer_name.trim()}|${orderData.buyer_phone.trim()}`;
+        const isRepeatCustomer = existingCustomers.has(customerKey);
+        orderData.is_repeat_customer = isRepeatCustomer;
+
+        // 첫 구매자는 Map에 추가 (이후 주문에서 재구매자로 판별되도록)
+        if (!isRepeatCustomer && orderData.buyer_name && orderData.buyer_phone) {
+          existingCustomers.set(customerKey, true);
+        }
+      }
+
       // Firebase에 저장
       let uploadedCount = 0;
       let errorCount = 0;
-      
+
       for (const [docId, orderData] of orderMap) {
         try {
           await db.collection('cafe24_orders').doc(docId).set(orderData, { merge: true });
@@ -26314,6 +26356,52 @@ function parseCafe24Amount(value) {
   // "12500.00" 또는 "12,500원" 형식 처리
   const cleaned = String(value).replace(/[^0-9.-]/g, '');
   return parseFloat(cleaned) || 0;
+}
+
+// 카페24 날짜 파싱 (다양한 형식 지원)
+function parseCafe24Date(value) {
+  if (!value) return '';
+
+  const str = String(value).trim();
+
+  // 이미 ISO 형식인 경우 (2025-12-26T08:48:00)
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str)) {
+    return str;
+  }
+
+  // 날짜와 시간이 있는 경우 (2025-12-26 08:48:00, 2025.12.26 08:48, 2025/12/26 08:48)
+  const dateTimeMatch = str.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})[\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+  if (dateTimeMatch) {
+    const [_, year, month, day, hour, minute, second] = dateTimeMatch;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hour.padStart(2, '0')}:${minute.padStart(2, '0')}:${(second || '00').padStart(2, '0')}`;
+  }
+
+  // 날짜만 있는 경우 (2025-12-26, 2025.12.26, 2025/12/26)
+  const dateMatch = str.match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (dateMatch) {
+    const [_, year, month, day] = dateMatch;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T00:00:00`;
+  }
+
+  // 숫자만 있는 경우 (20251226)
+  const numOnlyMatch = str.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (numOnlyMatch) {
+    const [_, year, month, day] = numOnlyMatch;
+    return `${year}-${month}-${day}T00:00:00`;
+  }
+
+  // Excel 날짜 시리얼 번호인 경우 (예: 44927 = 2023-01-01)
+  if (/^\d+$/.test(str) && parseInt(str) > 40000) {
+    const excelEpoch = new Date(1899, 11, 30);
+    const days = parseInt(str);
+    const date = new Date(excelEpoch.getTime() + days * 24 * 60 * 60 * 1000);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}T00:00:00`;
+  }
+
+  return '';
 }
 
 // 셀러명 추출 (상품명(관리용) 컬럼에서)
