@@ -32303,12 +32303,10 @@ async function openManualActivityModal() {
     var tasksSnapshot = await db.collection('tasks').get();
     tasksSnapshot.forEach(function(doc) {
       var task = { id: doc.id, ...doc.data() };
-      // 완료되지 않은 업무만 표시 (선택적)
       if (task.status !== 'done') {
         tasks.push(task);
       }
     });
-    // 최신순 정렬
     tasks.sort(function(a, b) {
       return (b.createdAt || '').localeCompare(a.createdAt || '');
     });
@@ -32316,8 +32314,22 @@ async function openManualActivityModal() {
     console.error('업무 목록 로드 오류:', error);
   }
 
+  // 추천 업무: 내 업무 중 진행중인 것 우선
+  var myTasks = tasks.filter(function(t) {
+    return t.assigneeId === currentMember.id || t.assignee === currentMember.name;
+  });
+  var recommendedTasks = myTasks.filter(function(t) { return t.status === 'in_progress'; }).slice(0, 3);
+  if (recommendedTasks.length < 3) {
+    var pending = myTasks.filter(function(t) { return t.status !== 'in_progress'; }).slice(0, 3 - recommendedTasks.length);
+    recommendedTasks = recommendedTasks.concat(pending);
+  }
+
+  // 추천 공구: 최근 공구
+  var deals = state.deals || [];
+  var recommendedDeals = deals.slice(0, 3);
+
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 520px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
         <h2 style="font-size: 20px; font-weight: 700;">📝 활동 수동 추가</h2>
         <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>
@@ -32328,20 +32340,58 @@ async function openManualActivityModal() {
         <input type="text" id="manual-activity-action" placeholder="예: 셀러 미팅 완료" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;" />
       </div>
 
+      <!-- 관련 업무 (검색 + 추천) -->
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 업무 (선택)</label>
-        <select id="manual-activity-task" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-          <option value="">선택 안함</option>
-          ${tasks.slice(0, 50).map(t => `<option value="${t.id}">${t.title}${t.category ? ' [' + t.category + ']' : ''}</option>`).join('')}
-        </select>
+        <div style="position: relative;">
+          <input type="text" id="task-search-input" placeholder="🔍 업무 검색..."
+            style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;"
+            oninput="filterTaskList(this.value)" onfocus="showTaskDropdown()" />
+          <input type="hidden" id="manual-activity-task" value="" />
+          <div id="selected-task-badge" style="display: none; margin-top: 8px;"></div>
+          <div id="task-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #E5E8EB; border-radius: 10px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+        </div>
+        ${recommendedTasks.length > 0 ? `
+        <div style="margin-top: 10px;">
+          <span style="font-size: 12px; color: #6B7684;">⚡ 추천:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+            ${recommendedTasks.map(t => `
+              <button type="button" onclick="selectTask('${t.id}', '${(t.title || '').replace(/'/g, "\\'")}', '${(t.category || '').replace(/'/g, "\\'")}')"
+                style="background: #F0F9FF; border: 1px solid #BAE6FD; color: #0369A1; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
+                onmouseover="this.style.background='#E0F2FE'" onmouseout="this.style.background='#F0F9FF'">
+                📌 ${(t.title || '').length > 15 ? (t.title || '').substring(0, 15) + '...' : (t.title || '')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
 
+      <!-- 관련 공구 (검색 + 추천) -->
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 공구 (선택)</label>
-        <select id="manual-activity-deal" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-          <option value="">선택 안함</option>
-          ${(state.deals || []).slice(0, 30).map(d => `<option value="${d.id}">${d.title}</option>`).join('')}
-        </select>
+        <div style="position: relative;">
+          <input type="text" id="deal-search-input" placeholder="🔍 공구 검색..."
+            style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;"
+            oninput="filterDealList(this.value)" onfocus="showDealDropdown()" />
+          <input type="hidden" id="manual-activity-deal" value="" />
+          <div id="selected-deal-badge" style="display: none; margin-top: 8px;"></div>
+          <div id="deal-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #E5E8EB; border-radius: 10px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+        </div>
+        ${recommendedDeals.length > 0 ? `
+        <div style="margin-top: 10px;">
+          <span style="font-size: 12px; color: #6B7684;">⚡ 최근:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+            ${recommendedDeals.map(d => `
+              <button type="button" onclick="selectDeal('${d.id}', '${(d.title || '').replace(/'/g, "\\'")}')"
+                style="background: #FFF7ED; border: 1px solid #FDBA74; color: #C2410C; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
+                onmouseover="this.style.background='#FFEDD5'" onmouseout="this.style.background='#FFF7ED'">
+                🛒 ${(d.title || '').length > 15 ? (d.title || '').substring(0, 15) + '...' : (d.title || '')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
 
       <div style="margin-bottom: 24px;">
@@ -32355,8 +32405,130 @@ async function openManualActivityModal() {
     </div>
   `;
 
-  // 업무 목록을 전역에 저장 (저장 시 사용)
+  // 전역에 저장
   window._manualActivityTasks = tasks;
+  window._manualActivityDeals = deals;
+
+  // 드롭다운 외부 클릭 시 닫기
+  setTimeout(function() {
+    document.addEventListener('click', handleActivityDropdownClose);
+  }, 100);
+}
+
+// 업무 드롭다운 표시
+function showTaskDropdown() {
+  var dropdown = document.getElementById('task-dropdown');
+  if (dropdown) {
+    filterTaskList('');
+    dropdown.style.display = 'block';
+  }
+}
+
+// 업무 필터링
+function filterTaskList(query) {
+  var dropdown = document.getElementById('task-dropdown');
+  if (!dropdown) return;
+  var tasks = window._manualActivityTasks || [];
+  var filtered = tasks.filter(function(t) {
+    var searchStr = ((t.title || '') + ' ' + (t.category || '')).toLowerCase();
+    return searchStr.includes(query.toLowerCase());
+  }).slice(0, 20);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(function(t) {
+      return '<div onclick="selectTask(\'' + t.id + '\', \'' + (t.title || '').replace(/'/g, "\\'") + '\', \'' + (t.category || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">' + (t.title || '') + '</div>' +
+        (t.category ? '<div style="font-size: 12px; color: #6B7684; margin-top: 2px;">' + t.category + '</div>' : '') +
+      '</div>';
+    }).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+// 업무 선택
+function selectTask(id, title, category) {
+  document.getElementById('manual-activity-task').value = id;
+  document.getElementById('task-search-input').value = '';
+  document.getElementById('task-dropdown').style.display = 'none';
+
+  var badge = document.getElementById('selected-task-badge');
+  badge.style.display = 'block';
+  badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #E0E7FF; color: #4338CA; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
+    '📌 ' + title + (category ? ' [' + category + ']' : '') +
+    '<button type="button" onclick="clearTaskSelection()" style="background: none; border: none; color: #4338CA; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
+  '</span>';
+}
+
+// 업무 선택 해제
+function clearTaskSelection() {
+  document.getElementById('manual-activity-task').value = '';
+  document.getElementById('selected-task-badge').style.display = 'none';
+  document.getElementById('selected-task-badge').innerHTML = '';
+}
+
+// 공구 드롭다운 표시
+function showDealDropdown() {
+  var dropdown = document.getElementById('deal-dropdown');
+  if (dropdown) {
+    filterDealList('');
+    dropdown.style.display = 'block';
+  }
+}
+
+// 공구 필터링
+function filterDealList(query) {
+  var dropdown = document.getElementById('deal-dropdown');
+  if (!dropdown) return;
+  var deals = window._manualActivityDeals || [];
+  var filtered = deals.filter(function(d) {
+    return (d.title || '').toLowerCase().includes(query.toLowerCase());
+  }).slice(0, 20);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(function(d) {
+      return '<div onclick="selectDeal(\'' + d.id + '\', \'' + (d.title || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">🛒 ' + (d.title || '') + '</div>' +
+      '</div>';
+    }).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+// 공구 선택
+function selectDeal(id, title) {
+  document.getElementById('manual-activity-deal').value = id;
+  document.getElementById('deal-search-input').value = '';
+  document.getElementById('deal-dropdown').style.display = 'none';
+
+  var badge = document.getElementById('selected-deal-badge');
+  badge.style.display = 'block';
+  badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #FFF7ED; color: #C2410C; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
+    '🛒 ' + title +
+    '<button type="button" onclick="clearDealSelection()" style="background: none; border: none; color: #C2410C; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
+  '</span>';
+}
+
+// 공구 선택 해제
+function clearDealSelection() {
+  document.getElementById('manual-activity-deal').value = '';
+  document.getElementById('selected-deal-badge').style.display = 'none';
+  document.getElementById('selected-deal-badge').innerHTML = '';
+}
+
+// 드롭다운 외부 클릭 시 닫기
+function handleActivityDropdownClose(e) {
+  var taskDropdown = document.getElementById('task-dropdown');
+  var dealDropdown = document.getElementById('deal-dropdown');
+  if (taskDropdown && !e.target.closest('#task-search-input') && !e.target.closest('#task-dropdown')) {
+    taskDropdown.style.display = 'none';
+  }
+  if (dealDropdown && !e.target.closest('#deal-search-input') && !e.target.closest('#deal-dropdown')) {
+    dealDropdown.style.display = 'none';
+  }
 }
 
 // 수동 활동 저장
@@ -33131,7 +33303,7 @@ async function openQuickTaskModal(dueDate) {
           </div>
         </div>
         
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
           <div>
             <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">상태</label>
             <select id="quick-task-status" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">
@@ -33146,13 +33318,6 @@ async function openQuickTaskModal(dueDate) {
               <option value="높음">🔴 높음</option>
               <option value="중간">🟡 중간</option>
               <option value="낮음">🔵 낮음</option>
-            </select>
-          </div>
-          <div>
-            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">구분</label>
-            <select id="quick-task-category" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">
-              <option value="">선택</option>
-              ${categories.map(c => `<option value="${c}">${c}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -33396,10 +33561,10 @@ async function saveQuickTask() {
   }
   
   try {
-    var docRef = await db.collection('tasks').add({
+    var now = new Date().toISOString();
+    var taskData = {
       title: title,
       status: status,
-      category: document.getElementById('quick-task-category').value,
       priority: document.getElementById('quick-task-priority').value,
       note: document.getElementById('quick-task-note').value,
       dueDate: document.getElementById('quick-task-date').value,
@@ -33410,9 +33575,14 @@ async function saveQuickTask() {
       linkedOkrTitle: linkedOkrTitle,
       linkedKrTitle: linkedKrTitle,
       bookmark: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
+      createdAt: now,
+      updatedAt: now
+    };
+    // 진행중으로 시작하면 진행시작일시 기록
+    if (status === '진행중') {
+      taskData.startedAt = now;
+    }
+    var docRef = await db.collection('tasks').add(taskData);
     
     // 새 업무 추가 시 활동 로그 기록
     var statusIcon = status === '진행중' ? '🔄' : '⏳';
@@ -33436,9 +33606,16 @@ async function openTaskDetailModal(taskId) {
     if (!doc.exists) { alert('업무를 찾을 수 없습니다.'); return; }
     var task = { id: doc.id, ...doc.data() };
 
-    // 팀원 목록 + 카테고리 목록 로드
+    // 팀원 목록 로드
     var teamMembers = state.teamMembers || [];
-    var categories = await loadTaskCategories();
+
+    // 연결된 활동 기록 로드
+    var activityLogs = [];
+    try {
+      var logsSnapshot = await db.collection('activityLogs').where('taskId', '==', taskId).get();
+      logsSnapshot.forEach(function(d) { activityLogs.push({ id: d.id, ...d.data() }); });
+      activityLogs.sort(function(a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    } catch (e) { console.error('활동 로그 로드 오류:', e); }
 
     // 모든 OKR 로드 (연도별로 그룹화)
     var currentYear = new Date().getFullYear();
@@ -33457,7 +33634,7 @@ async function openTaskDetailModal(taskId) {
     // 전역에 저장 (연도 변경 시 사용)
     window._taskModalOkrsByYear = okrsByYear;
 
-    // 기존 연결된 OKR의 연도 확인 (linkedOkrId 우선, 하위 호환으로 okrId도 확인)
+    // 기존 연결된 OKR의 연도 확인
     var taskOkrId = task.linkedOkrId || task.okrId || '';
     var taskKrIndex = task.linkedKrIndex ?? task.krIndex ?? null;
     var taskOkrYear = currentYear;
@@ -33470,6 +33647,21 @@ async function openTaskDetailModal(taskId) {
 
     var okrs = okrsByYear[taskOkrYear] || [];
 
+    // 성공률 계산
+    var successInfo = '';
+    if (task.status === '완료' && task.dueDate && task.completedAt) {
+      var dueDate = new Date(task.dueDate + 'T23:59:59');
+      var completedDate = new Date(task.completedAt);
+      var isOnTime = completedDate <= dueDate;
+      var diffDays = Math.ceil((completedDate - dueDate) / (1000 * 60 * 60 * 24));
+      if (isOnTime) {
+        successInfo = '<span style="color: #16A34A; font-weight: 600;">✅ 기한 내 완료</span>';
+        if (diffDays < 0) successInfo += ' <span style="color: #6B7684; font-size: 11px;">(' + Math.abs(diffDays) + '일 앞당겨 완료)</span>';
+      } else {
+        successInfo = '<span style="color: #DC2626; font-weight: 600;">⚠️ 기한 초과</span> <span style="color: #6B7684; font-size: 11px;">(' + diffDays + '일 지연)</span>';
+      }
+    }
+
     var modal = document.getElementById('modal');
     modal.className = 'modal active';
 
@@ -33477,6 +33669,16 @@ async function openTaskDetailModal(taskId) {
     html += '<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">';
     html += '<h2 style="font-size: 18px; font-weight: 700;">📝 업무 상세</h2>';
     html += '<button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>';
+    html += '</div>';
+
+    // 일시 정보 및 성공률 표시
+    html += '<div style="background: #F8FAFC; border-radius: 10px; padding: 14px; margin-bottom: 16px;">';
+    html += '<div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: #6B7684;">';
+    if (task.createdAt) html += '<div>📅 등록: <span style="color: #191F28; font-weight: 500;">' + task.createdAt.slice(0, 16).replace('T', ' ') + '</span></div>';
+    if (task.startedAt) html += '<div>▶️ 시작: <span style="color: #191F28; font-weight: 500;">' + task.startedAt.slice(0, 16).replace('T', ' ') + '</span></div>';
+    if (task.completedAt) html += '<div>✅ 완료: <span style="color: #191F28; font-weight: 500;">' + task.completedAt.slice(0, 16).replace('T', ' ') + '</span></div>';
+    html += '</div>';
+    if (successInfo) html += '<div style="margin-top: 10px; font-size: 13px;">' + successInfo + '</div>';
     html += '</div>';
 
     html += '<div style="display: grid; gap: 16px;">';
@@ -33488,8 +33690,6 @@ async function openTaskDetailModal(taskId) {
     // 관련 OKR 선택 섹션
     html += '<div style="background: #E8F3FF; border-radius: 10px; padding: 14px;">';
     html += '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #0064FF;">🎯 관련 OKR</label>';
-
-    // 연도 선택 + OKR 선택
     html += '<div style="display: flex; gap: 8px; margin-bottom: 10px;">';
     html += '<select id="detail-task-okr-year" onchange="updateDetailTaskOkrList()" style="width: 100px; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white; font-weight: 600;">';
     [currentYear, currentYear + 1].forEach(function(y) {
@@ -33503,10 +33703,7 @@ async function openTaskDetailModal(taskId) {
       var krsJson = JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;");
       html += '<option value="' + o.id + '" data-krs=\'' + krsJson + '\' ' + (isSelected ? 'selected' : '') + '>[' + (o.quarter || '') + '] ' + (o.objective || '') + '</option>';
     });
-    html += '</select>';
-    html += '</div>';
-
-    // KR 선택 드롭다운
+    html += '</select></div>';
     var showKr = taskOkrId ? 'block' : 'none';
     var selectedOkr = okrs.find(function(o) { return o.id === taskOkrId; });
     var krs = selectedOkr ? (selectedOkr.keyResults || []) : [];
@@ -33516,12 +33713,10 @@ async function openTaskDetailModal(taskId) {
       var isKrSelected = taskKrIndex === idx || taskKrIndex === String(idx);
       html += '<option value="' + idx + '" ' + (isKrSelected ? 'selected' : '') + '>' + (kr.description || 'KR ' + (idx + 1)) + '</option>';
     });
-    html += '</select>';
-    html += '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">연도를 선택하면 해당 연도의 OKR 목록이 표시됩니다.</div>';
-    html += '</div>';
+    html += '</select></div>';
 
-    // 상태, 우선순위, 구분
-    html += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">';
+    // 상태, 우선순위
+    html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">';
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">상태</label><select id="detail-task-status" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">';
     ['대기', '진행중', '완료', '보류'].forEach(function(s) {
       html += '<option value="' + s + '" ' + (task.status === s ? 'selected' : '') + '>' + s + '</option>';
@@ -33531,12 +33726,6 @@ async function openTaskDetailModal(taskId) {
     html += '<option value="">선택</option>';
     ['높음', '중간', '낮음'].forEach(function(p) {
       html += '<option value="' + p + '" ' + (task.priority === p ? 'selected' : '') + '>' + p + '</option>';
-    });
-    html += '</select></div>';
-    html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">구분</label><select id="detail-task-category" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">';
-    html += '<option value="">선택</option>';
-    categories.forEach(function(c) {
-      html += '<option value="' + c + '" ' + (task.category === c ? 'selected' : '') + '>' + c + '</option>';
     });
     html += '</select></div></div>';
 
@@ -33556,7 +33745,26 @@ async function openTaskDetailModal(taskId) {
 
     // 메모
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">메모</label>';
-    html += '<textarea id="detail-task-note" style="width: 100%; height: 120px; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; resize: none;">' + (task.note || '') + '</textarea></div>';
+    html += '<textarea id="detail-task-note" style="width: 100%; height: 80px; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; resize: none;">' + (task.note || '') + '</textarea></div>';
+
+    // 연결된 활동 기록 (접은 상태)
+    html += '<div style="border: 1px solid #E5E8EB; border-radius: 10px; overflow: hidden;">';
+    html += '<div onclick="toggleTaskActivityLogs()" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #F8FAFC; cursor: pointer;">';
+    html += '<span style="font-size: 13px; font-weight: 600; color: #333D4B;">📋 연결된 활동 기록 <span style="color: #0064FF; font-weight: 700;">(' + activityLogs.length + '건)</span></span>';
+    html += '<span id="task-activity-toggle-icon" style="font-size: 14px; color: #6B7684; transition: transform 0.2s;">▼</span>';
+    html += '</div>';
+    html += '<div id="task-activity-logs" style="display: none; padding: 12px; background: white; max-height: 200px; overflow-y: auto;">';
+    if (activityLogs.length === 0) {
+      html += '<div style="color: #6B7684; font-size: 13px; text-align: center; padding: 16px;">연결된 활동 기록이 없습니다</div>';
+    } else {
+      activityLogs.forEach(function(log) {
+        html += '<div style="padding: 10px; border-bottom: 1px solid #F2F4F6; font-size: 13px;">';
+        html += '<div style="color: #191F28; font-weight: 500;">' + (log.action || '') + '</div>';
+        html += '<div style="color: #6B7684; font-size: 11px; margin-top: 4px;">' + (log.memberName || '') + ' · ' + (log.date || '') + ' ' + (log.time || '') + '</div>';
+        html += '</div>';
+      });
+    }
+    html += '</div></div>';
 
     html += '</div>';
 
@@ -33570,6 +33778,19 @@ async function openTaskDetailModal(taskId) {
     modal.innerHTML = html;
   } catch (error) {
     console.error('업무 상세 로드 오류:', error);
+  }
+}
+
+// 업무 상세 - 활동 기록 토글
+function toggleTaskActivityLogs() {
+  var logsDiv = document.getElementById('task-activity-logs');
+  var icon = document.getElementById('task-activity-toggle-icon');
+  if (logsDiv.style.display === 'none') {
+    logsDiv.style.display = 'block';
+    icon.style.transform = 'rotate(180deg)';
+  } else {
+    logsDiv.style.display = 'none';
+    icon.style.transform = 'rotate(0deg)';
   }
 }
 
@@ -33630,11 +33851,11 @@ async function saveTaskDetail(taskId) {
       linkedKrTitle = krSelect.options[krSelect.selectedIndex]?.textContent || '';
     }
 
+    var now = new Date().toISOString();
     var updateData = {
       title: newTitle,
       status: newStatus,
       priority: document.getElementById('detail-task-priority').value,
-      category: document.getElementById('detail-task-category').value,
       dueDate: document.getElementById('detail-task-date').value,
       note: document.getElementById('detail-task-note').value,
       assigneeId: assigneeId,
@@ -33643,12 +33864,17 @@ async function saveTaskDetail(taskId) {
       linkedKrIndex: linkedKrIndex,
       linkedOkrTitle: linkedOkrTitle,
       linkedKrTitle: linkedKrTitle,
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
+
+    // 진행중으로 변경 시 startedAt 기록 (처음 진행 시작한 경우만)
+    if (newStatus === '진행중' && oldStatus !== '진행중' && !oldTask.startedAt) {
+      updateData.startedAt = now;
+    }
 
     // 완료로 변경 시 completedAt 기록
     if (newStatus === '완료' && oldStatus !== '완료') {
-      updateData.completedAt = new Date().toISOString();
+      updateData.completedAt = now;
     }
 
     await db.collection('tasks').doc(taskId).update(updateData);
