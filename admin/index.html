@@ -4100,7 +4100,13 @@ function openDealModal(deal = null) {
           <label class="form-label">공구명 <span id="deal-duration" style="color: var(--primary); font-weight: 600;">${initialDuration}</span></label>
           <input type="text" class="form-input" id="deal-title" value="${d.title}" required placeholder="셀러 선택 시 자동 생성됩니다">
         </div>
-        
+
+        <div class="form-group">
+          <label class="form-label">🏷️ 카페24 상품번호 <span style="color: var(--gray-500); font-size: 12px; font-weight: 400;">(주문 자동 매칭용)</span></label>
+          <input type="text" class="form-input" id="deal-cafe24-product-no" value="${d.cafe24ProductNo || ''}" placeholder="예: 123456 (카페24 상품 번호 입력)">
+          <p style="font-size: 12px; color: var(--gray-500); margin-top: 6px;">💡 입력 시 주문 데이터와 자동으로 매칭됩니다. 카페24 → 상품관리에서 확인 가능</p>
+        </div>
+
         <!-- 날짜 선택 영역 -->
         <div class="form-group">
           <label class="form-label">📅 공구 기간</label>
@@ -4725,6 +4731,7 @@ function submitDealForm(e, id) {
     status: statusRadio ? statusRadio.value : 'negotiating',
     notes: document.getElementById('deal-notes').value,
     eventCost: Number(document.getElementById('deal-eventCost')?.value) || 0, // 🎯 이벤트비용
+    cafe24ProductNo: document.getElementById('deal-cafe24-product-no')?.value?.trim() || '', // 🎯 카페24 상품번호
     selectedProducts: selectedProducts,  // 이제 객체 배열: [{productId, productName, marginRate}]
     // 여정 체크리스트 (확장)
     journeySample: document.getElementById('journey-sample')?.checked || false,
@@ -25080,12 +25087,35 @@ async function syncCafe24Orders(isAuto = false) {
       }
     }
 
+    // 🎯 딜 목록 가져오기 (상품번호로 매칭하기 위해)
+    const dealsSnapshot = await db.collection('deals').get();
+    const deals = dealsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // 상품번호 -> 딜 매핑 (빠른 조회를 위해)
+    const productNoToDeal = new Map();
+    deals.forEach(deal => {
+      if (deal.cafe24ProductNo) {
+        productNoToDeal.set(deal.cafe24ProductNo.trim(), deal);
+      }
+    });
+
     // 새 주문만 Firestore에 저장
     let savedCount = 0;
     if (newOrders.length > 0) {
       const batch = db.batch();
 
       for (const order of newOrders) {
+        // 🎯 주문의 상품번호로 딜 찾기 (items 배열에서 product_no 추출)
+        let matchedDeal = null;
+        const items = order.items || [];
+        for (const item of items) {
+          const productNo = String(item.product_no || '').trim();
+          if (productNo && productNoToDeal.has(productNo)) {
+            matchedDeal = productNoToDeal.get(productNo);
+            break; // 첫 번째 매칭된 딜 사용
+          }
+        }
+
         const docRef = db.collection('cafe24_orders').doc(order.order_id);
         batch.set(docRef, {
           order_id: order.order_id || '',
@@ -25096,6 +25126,11 @@ async function syncCafe24Orders(isAuto = false) {
           payment_status: order.payment_status || '',
           order_status: order.order_status || '',
           items: order.items || [],
+          // 🎯 매칭된 딜 정보 추가
+          deal_id: matchedDeal ? matchedDeal.id : '',
+          deal_title: matchedDeal ? matchedDeal.title : '',
+          supplier_id: matchedDeal ? matchedDeal.supplierId : '',
+          seller_id: matchedDeal ? matchedDeal.sellerId : '',
           synced_at: new Date().toISOString()
         });
 
@@ -25700,6 +25735,7 @@ async function renderOrderStatus() {
               <tr>
                 <th>주문번호</th>
                 <th>주문일시</th>
+                <th>공구명</th>
                 <th>상품명</th>
                 <th>수령인</th>
                 <th>금액</th>
@@ -25710,11 +25746,12 @@ async function renderOrderStatus() {
             </thead>
             <tbody>
               ${recentOrders.length === 0 ?
-                '<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다.</td></tr>' :
+                '<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다.</td></tr>' :
                 recentOrders.map(order => `
                   <tr>
                     <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
                     <td>${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
+                    <td>${order.deal_title ? `<span style="display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: white; background: var(--primary);">${order.deal_title}</span>` : '<span style="color: var(--gray-400);">미매칭</span>'}</td>
                     <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${order.product_name || '-'}</td>
                     <td>${order.buyer_name || '-'}</td>
                     <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
@@ -26124,14 +26161,28 @@ async function uploadCafe24Excel(event) {
       
       // 주문+상품별로 저장 (행별로 개별 저장)
       const orderMap = new Map();
-      
+
       // 기존 공급사 목록에서 자사/타사 매핑 생성
       const supplierTypeMap = {};
       (state.suppliers || []).forEach(s => {
         supplierTypeMap[s.name.trim().toLowerCase()] = s.supplierType || 'external';
       });
-      
+
       console.log('공급사 타입 매핑:', supplierTypeMap);
+
+      // 🎯 딜 목록 가져오기 (상품번호로 매칭하기 위해)
+      const dealsSnapshot = await db.collection('deals').get();
+      const deals = dealsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      // 상품번호 -> 딜 매핑 (빠른 조회를 위해)
+      const productNoToDeal = new Map();
+      deals.forEach(deal => {
+        if (deal.cafe24ProductNo) {
+          productNoToDeal.set(deal.cafe24ProductNo.trim(), deal);
+        }
+      });
+
+      console.log('딜 매핑:', productNoToDeal.size, '개');
       
       let rowIndex = 0;
       for (const row of rows) {
@@ -26212,6 +26263,9 @@ async function uploadCafe24Excel(event) {
         const pgFeeRate = isCard ? 0.04 : 0; // 카드 4%, 그 외 0%
         const pgFee = Math.round(totalAmount * pgFeeRate);
 
+        // 🎯 상품번호로 딜 찾기
+        const matchedDeal = productNo ? productNoToDeal.get(String(productNo).trim()) : null;
+
         orderMap.set(docId, {
           order_id: String(orderId),
           product_no: String(productNo),
@@ -26235,6 +26289,9 @@ async function uploadCafe24Excel(event) {
           pg_fee_rate: pgFeeRate,       // 🎯 PG수수료율 (0.04 = 4%)
           pg_fee: pgFee,                // 🎯 PG수수료 금액
           shipping_address: row['수령인 주소(전체)'] || '',
+          // 🎯 매칭된 딜 정보
+          deal_id: matchedDeal ? matchedDeal.id : '',
+          deal_title: matchedDeal ? matchedDeal.title : '',
           synced_at: new Date().toISOString()
         });
       }
