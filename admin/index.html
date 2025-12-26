@@ -1958,7 +1958,7 @@
           <!-- 카페24 관리 섹션 -->
           <div class="nav-section">
             <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #2563eb, #3b82f6); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);" onclick="toggleCafe24Menu()">
-              <span style="font-weight: 600; color: white;">🛒 카페24</span>
+              <span style="font-weight: 600; color: white;">🛒 카페24 <span style="background: rgba(254, 243, 199, 0.9); color: #92400e; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 4px;">파트너 공유용</span></span>
               <span id="cafe24-menu-arrow" style="transition: transform 0.2s; color: white; transform: rotate(180deg);">▼</span>
             </div>
             <div id="cafe24-submenu" style="display: block; padding-left: 8px;">
@@ -7362,18 +7362,6 @@ function getChannelIcon(link) {
 async function renderSettlement() {
   const app = document.getElementById('app');
 
-  // 🔥 cafe24_orders 데이터 로드 (없으면 로드)
-  if (!state.cafe24Orders || state.cafe24Orders.length === 0) {
-    app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">매출 데이터 로딩 중...</p></div>';
-    try {
-      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(1000).get();
-      state.cafe24Orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    } catch (err) {
-      console.error('cafe24 orders 로드 실패:', err);
-      state.cafe24Orders = [];
-    }
-  }
-
   const today = new Date();
 
   // 정산 대상: status가 completed/settled이거나 endDate가 지난 모든 공구
@@ -7400,10 +7388,9 @@ async function renderSettlement() {
   const pendingSettlement = completedDeals.filter(d => !isFullySettled(d));
   const fullySettled = completedDeals.filter(d => isFullySettled(d));
 
-  // ========== 매출 KPI 계산 (sellerSettlements 기준으로 변경) ==========
+  // ========== 매출 KPI 계산 (settlements 기준) ==========
   const allSellerSettlements = state.sellerSettlements || [];
   const allSupplierSettlements = state.supplierSettlements || [];
-  const cafe24Orders = state.cafe24Orders || [];
 
   // 자사 상품 정산
   const inhouseSettlements = allSellerSettlements.filter(s => s.productType === 'inhouse');
@@ -7422,10 +7409,8 @@ async function renderSettlement() {
   // 공급사 정산
   const supplierTotalAmount = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
 
-  // 총 매출 (cafe24 또는 sellerSettlements 중 큰 값 사용)
-  const cafe24TotalSales = cafe24Orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
-  const settlementTotalSales = inhouseSalesAmount + externalSalesAmount;
-  const totalSalesAmount = Math.max(cafe24TotalSales, settlementTotalSales);
+  // 총 매출 (settlements 데이터 기준)
+  const totalSalesAmount = inhouseSalesAmount + externalSalesAmount;
 
   const totalPgFee = Math.round(totalSalesAmount * 0.04);
 
@@ -7573,6 +7558,17 @@ async function renderSettlement() {
           <span style="color: #f59e0b;">⏳</span> 정산 대기
           <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 10px; font-size: 12px;">${pendingSettlement.length}</span>
         </h2>
+        ${pendingSettlement.length > 0 ? `
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: var(--gray-600);">
+              <input type="checkbox" id="select-all-pending" onchange="toggleSelectAllPending()" style="cursor: pointer;">
+              전체 선택
+            </label>
+            <button id="delete-selected-btn" onclick="deleteSelectedSettlements()" style="padding: 8px 16px; background: #ef4444; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; display: none;">
+              선택 삭제
+            </button>
+          </div>
+        ` : ''}
       </div>
 
       ${pendingSettlement.length === 0 ? `
@@ -7594,6 +7590,8 @@ async function renderSettlement() {
               <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid ${isUrgent ? '#fecaca' : isWarning ? '#fed7aa' : 'var(--gray-200)'}; ${isUrgent ? 'border-left: 4px solid #ef4444;' : isWarning ? 'border-left: 4px solid #f59e0b;' : ''}">
                 <div style="display: flex; align-items: center; justify-content: space-between;">
                   <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                    <!-- 체크박스 -->
+                    <input type="checkbox" class="settlement-checkbox" data-deal-id="${d.id}" onchange="updateDeleteButton()" style="cursor: pointer; width: 16px; height: 16px;">
                     <!-- 타사/자사 뱃지 -->
                     <span style="background: ${isExternal ? '#fef3c7' : '#dbeafe'}; color: ${isExternal ? '#92400e' : '#1d4ed8'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap;">
                       ${isExternal ? '타사' : '자사'}
@@ -7914,6 +7912,116 @@ async function deleteSettlementData(dealId) {
       }
     }
   });
+}
+
+// 전체 선택 토글
+function toggleSelectAllPending() {
+  const selectAllCheckbox = document.getElementById('select-all-pending');
+  const checkboxes = document.querySelectorAll('.settlement-checkbox');
+
+  checkboxes.forEach(cb => {
+    cb.checked = selectAllCheckbox.checked;
+  });
+
+  updateDeleteButton();
+}
+
+// 삭제 버튼 표시 업데이트
+function updateDeleteButton() {
+  const checkboxes = document.querySelectorAll('.settlement-checkbox');
+  const checkedBoxes = Array.from(checkboxes).filter(cb => cb.checked);
+  const deleteBtn = document.getElementById('delete-selected-btn');
+  const selectAllCheckbox = document.getElementById('select-all-pending');
+
+  if (deleteBtn) {
+    if (checkedBoxes.length > 0) {
+      deleteBtn.style.display = 'block';
+      deleteBtn.textContent = `선택 삭제 (${checkedBoxes.length})`;
+    } else {
+      deleteBtn.style.display = 'none';
+    }
+  }
+
+  // 전체 선택 체크박스 상태 업데이트
+  if (selectAllCheckbox) {
+    if (checkedBoxes.length === 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    } else if (checkedBoxes.length === checkboxes.length) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    }
+  }
+}
+
+// 선택된 정산 항목 일괄 삭제
+async function deleteSelectedSettlements() {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const checkboxes = document.querySelectorAll('.settlement-checkbox:checked');
+  const selectedIds = Array.from(checkboxes).map(cb => cb.dataset.dealId);
+
+  if (selectedIds.length === 0) {
+    showToast('❌ 선택된 항목이 없습니다');
+    return;
+  }
+
+  const selectedDeals = state.deals.filter(d => selectedIds.includes(d.id));
+  const dealNames = selectedDeals.map(d => d.title || d.brandName || '알 수 없음').join(', ');
+
+  if (!confirm(`선택한 ${selectedIds.length}개 항목의 정산 데이터를 삭제하시겠습니까?\n\n${dealNames.length > 100 ? dealNames.substring(0, 100) + '...' : dealNames}\n\n• 카페24 매핑 데이터가 초기화됩니다\n• 정산 상태가 리셋됩니다`)) {
+    return;
+  }
+
+  try {
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const dealId of selectedIds) {
+      try {
+        const deal = state.deals.find(d => d.id === dealId);
+        if (!deal) continue;
+
+        // 카페24 매핑 데이터 초기화
+        await db.collection('deals').doc(dealId).update({
+          cafe24Mapped: false,
+          totalSales: 0,
+          totalQty: 0,
+          supplierSettled: false,
+          sellerSettled: false,
+          status: 'completed'
+        });
+
+        // state 즉시 업데이트
+        Object.assign(deal, {
+          cafe24Mapped: false,
+          totalSales: 0,
+          totalQty: 0,
+          supplierSettled: false,
+          sellerSettled: false,
+          status: 'completed'
+        });
+
+        successCount++;
+      } catch (err) {
+        console.error(`Deal ${dealId} 삭제 실패:`, err);
+        failCount++;
+      }
+    }
+
+    if (successCount > 0) {
+      showToast(`✅ ${successCount}개 항목이 삭제되었습니다${failCount > 0 ? ` (실패: ${failCount}개)` : ''}`);
+      renderSettlement();
+    } else {
+      showToast('❌ 삭제에 실패했습니다');
+    }
+  } catch (err) {
+    console.error('일괄 삭제 실패:', err);
+    showToast('❌ 삭제 중 오류가 발생했습니다');
+  }
 }
 
 // 수동 입력 정산 데이터 일괄 삭제 (카페24 데이터만 유지)
@@ -25672,8 +25780,11 @@ async function renderOrderStatus() {
 
     app.innerHTML = `
       <div class="page-header">
-        <h1 class="page-title">📋 주문현황 대시보드</h1>
+        <h1 class="page-title">📋 주문현황 대시보드 <span style="background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; padding: 4px 10px; border-radius: 8px; font-size: 13px; font-weight: 600;">파트너 공유용</span></h1>
         <p style="color: var(--gray-500); margin-top: 4px;">실시간 주문 상태 모니터링 (자동 수집: 10분 간격)</p>
+        <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 3px solid #f59e0b; padding: 10px 12px; border-radius: 8px; margin-top: 8px; display: inline-block;">
+          <p style="font-size: 12px; color: #92400e; font-weight: 500;">ℹ️ 이 데이터는 파트너 포털 공유용이며, 실제 정산은 정산관리 메뉴의 수동 엑셀 업로드 데이터를 사용합니다.</p>
+        </div>
         <p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">⏰ 마지막 업데이트: ${currentTime}</p>
       </div>
 
