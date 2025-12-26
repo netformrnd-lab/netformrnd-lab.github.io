@@ -1962,14 +1962,8 @@
               <span id="cafe24-menu-arrow" style="transition: transform 0.2s; color: white; transform: rotate(180deg);">▼</span>
             </div>
             <div id="cafe24-submenu" style="display: block; padding-left: 8px;">
-              <div class="nav-item" data-tab="cafe24Dashboard" onclick="switchTab('cafe24Dashboard')" style="font-size: 13px;">
-                <span>📊 매출 대시보드</span>
-              </div>
               <div class="nav-item" data-tab="orderStatus" onclick="switchTab('orderStatus')" style="font-size: 13px;">
                 <span>📋 주문현황</span>
-              </div>
-              <div class="nav-item" data-tab="cafe24Orders" onclick="switchTab('cafe24Orders')" style="font-size: 13px;">
-                <span>📦 주문 관리</span>
               </div>
               <div class="nav-item" data-tab="productDataManager" onclick="switchTab('productDataManager')" style="font-size: 13px;">
                 <span>📋 상품 데이터 관리</span>
@@ -1987,8 +1981,14 @@
               <div class="nav-item" onclick="openCafe24MappingModal()" style="font-size: 13px;">
                 <span>📤 엑셀 업로드 & 매핑</span>
               </div>
+              <div class="nav-item" data-tab="cafe24Orders" onclick="switchTab('cafe24Orders')" style="font-size: 13px;">
+                <span>📦 주문 관리</span>
+              </div>
               <div class="nav-item" data-tab="cafe24SettlementData" onclick="switchTab('cafe24SettlementData')" style="font-size: 13px;">
                 <span>📋 정산 데이터 현황</span>
+              </div>
+              <div class="nav-item" data-tab="cafe24Rankings" onclick="switchTab('cafe24Rankings')" style="font-size: 13px;">
+                <span>🏆 셀러/공급사 순위</span>
               </div>
             </div>
           </div>
@@ -6383,6 +6383,7 @@ function render() {
     case 'cafe24Settings': renderCafe24Settings(); break;
     case 'productDataManager': renderProductDataManager(); break;
     case 'cafe24SettlementData': renderCafe24SettlementData(); break;
+    case 'cafe24Rankings': renderCafe24Rankings(); break;
     case 'guide': renderGuide(); break;
     case 'growthDashboard': renderGrowthDashboard(); break;
     case 'growthGuide': renderGrowthGuide(); break;
@@ -24930,6 +24931,259 @@ function renderCafe24SettlementData() {
       `}
     </div>
   `;
+}
+
+// 카페24 셀러/공급사 순위 페이지 (엑셀 업로드 데이터 기반)
+async function renderCafe24Rankings() {
+  const app = document.getElementById('app');
+  app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">데이터 로딩 중...</p></div>';
+
+  try {
+    // cafe24_orders 컬렉션에서 데이터 로드 (엑셀 업로드된 정산용 데이터)
+    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
+    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // 셀러별 집계
+    const sellerStats = {};
+    orders.forEach(order => {
+      const sellerName = order.seller_name || '미지정';
+      if (!sellerStats[sellerName]) {
+        sellerStats[sellerName] = {
+          name: sellerName,
+          totalSales: 0,
+          totalQty: 0,
+          orderCount: 0,
+          products: {}
+        };
+      }
+      const amount = Number(order.total_amount) || 0;
+      const qty = Number(order.quantity) || 1;
+      sellerStats[sellerName].totalSales += amount;
+      sellerStats[sellerName].totalQty += qty;
+      sellerStats[sellerName].orderCount += 1;
+
+      // 상품별 집계
+      const productName = order.product_name || '상품명 없음';
+      if (!sellerStats[sellerName].products[productName]) {
+        sellerStats[sellerName].products[productName] = { name: productName, qty: 0, sales: 0 };
+      }
+      sellerStats[sellerName].products[productName].qty += qty;
+      sellerStats[sellerName].products[productName].sales += amount;
+    });
+
+    // 공급사별 집계
+    const supplierStats = {};
+    orders.forEach(order => {
+      const supplierName = order.supplier_name || '미지정';
+      if (!supplierStats[supplierName]) {
+        supplierStats[supplierName] = {
+          name: supplierName,
+          totalSales: 0,
+          totalQty: 0,
+          orderCount: 0,
+          products: {}
+        };
+      }
+      const amount = Number(order.total_amount) || 0;
+      const qty = Number(order.quantity) || 1;
+      supplierStats[supplierName].totalSales += amount;
+      supplierStats[supplierName].totalQty += qty;
+      supplierStats[supplierName].orderCount += 1;
+
+      // 상품별 집계
+      const productName = order.product_name || '상품명 없음';
+      if (!supplierStats[supplierName].products[productName]) {
+        supplierStats[supplierName].products[productName] = { name: productName, qty: 0, sales: 0 };
+      }
+      supplierStats[supplierName].products[productName].qty += qty;
+      supplierStats[supplierName].products[productName].sales += amount;
+    });
+
+    // 순위 정렬
+    const sellerRankings = Object.values(sellerStats).sort((a, b) => b.totalSales - a.totalSales);
+    const supplierRankings = Object.values(supplierStats).sort((a, b) => b.totalSales - a.totalSales);
+
+    app.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">🏆 셀러/공급사 순위</h1>
+        <p class="page-desc">엑셀 업로드 데이터 기반 정산 순위</p>
+      </div>
+
+      <!-- 안내 박스 -->
+      <div class="card" style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 3px solid #f59e0b; margin-bottom: 24px;">
+        <div style="display: flex; align-items: start; gap: 12px;">
+          <span style="font-size: 20px;">ℹ️</span>
+          <div>
+            <div style="font-weight: 600; color: #92400e; margin-bottom: 4px;">정산서용 순위 데이터</div>
+            <div style="font-size: 13px; color: #78350f; line-height: 1.6;">
+              • 이 순위는 카페24 엑셀 업로드 데이터를 기반으로 계산됩니다<br>
+              • 실제 정산 금액 계산에 사용되는 데이터이며, 파트너 포털에는 공유되지 않습니다<br>
+              • 총 ${orders.length}건의 주문 데이터가 분석되었습니다
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 탭 네비게이션 -->
+      <div style="display: flex; gap: 8px; margin-bottom: 24px; border-bottom: 2px solid var(--gray-200);">
+        <button id="seller-tab" onclick="switchRankingTab('seller')" style="padding: 12px 24px; background: none; border: none; border-bottom: 3px solid var(--primary); color: var(--primary); font-weight: 600; cursor: pointer; transition: all 0.2s;">
+          셀러 순위
+        </button>
+        <button id="supplier-tab" onclick="switchRankingTab('supplier')" style="padding: 12px 24px; background: none; border: none; border-bottom: 3px solid transparent; color: var(--gray-500); font-weight: 600; cursor: pointer; transition: all 0.2s;">
+          공급사 순위
+        </button>
+      </div>
+
+      <!-- 셀러 순위 -->
+      <div id="seller-rankings" style="display: block;">
+        <div class="card" style="margin-bottom: 24px;">
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">📊 셀러별 매출 순위</h3>
+
+          ${sellerRankings.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+              <div style="font-size: 48px; margin-bottom: 12px;">📋</div>
+              <div>데이터가 없습니다</div>
+            </div>
+          ` : `
+            <div style="display: grid; gap: 16px;">
+              ${sellerRankings.map((seller, index) => {
+                const topProducts = Object.values(seller.products).sort((a, b) => b.sales - a.sales).slice(0, 3);
+                const medalEmoji = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}위`;
+
+                return `
+                  <div style="border: 1px solid var(--gray-200); border-radius: 12px; padding: 20px; background: ${index < 3 ? 'linear-gradient(135deg, #fef3c7, #ffffff)' : 'white'}; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
+                      <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                          <span style="font-size: 24px;">${medalEmoji}</span>
+                          <div>
+                            <div style="font-weight: 700; color: var(--gray-900); font-size: 18px;">${seller.name}</div>
+                            <div style="font-size: 12px; color: var(--gray-500);">주문 ${seller.orderCount}건 • 수량 ${seller.totalQty.toLocaleString()}개</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div style="text-align: right;">
+                        <div style="font-weight: 700; color: #10b981; font-size: 24px;">${seller.totalSales.toLocaleString()}원</div>
+                        <div style="font-size: 11px; color: var(--gray-500);">총 매출</div>
+                      </div>
+                    </div>
+
+                    <!-- 상위 판매 상품 -->
+                    ${topProducts.length > 0 ? `
+                      <div style="background: var(--gray-50); border-radius: 8px; padding: 12px; margin-top: 12px;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">🔥 상위 판매 상품</div>
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                          ${topProducts.map((product, pIndex) => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                              <span style="color: var(--gray-700);">${pIndex + 1}. ${product.name}</span>
+                              <span style="font-weight: 600; color: #10b981;">${product.qty}개 • ${product.sales.toLocaleString()}원</span>
+                            </div>
+                          `).join('')}
+                        </div>
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      </div>
+
+      <!-- 공급사 순위 -->
+      <div id="supplier-rankings" style="display: none;">
+        <div class="card" style="margin-bottom: 24px;">
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">📊 공급사별 매출 순위</h3>
+
+          ${supplierRankings.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+              <div style="font-size: 48px; margin-bottom: 12px;">📋</div>
+              <div>데이터가 없습니다</div>
+            </div>
+          ` : `
+            <div style="display: grid; gap: 16px;">
+              ${supplierRankings.map((supplier, index) => {
+                const topProducts = Object.values(supplier.products).sort((a, b) => b.sales - a.sales).slice(0, 3);
+                const medalEmoji = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}위`;
+
+                return `
+                  <div style="border: 1px solid var(--gray-200); border-radius: 12px; padding: 20px; background: ${index < 3 ? 'linear-gradient(135deg, #fef3c7, #ffffff)' : 'white'}; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
+                      <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                          <span style="font-size: 24px;">${medalEmoji}</span>
+                          <div>
+                            <div style="font-weight: 700; color: var(--gray-900); font-size: 18px;">${supplier.name}</div>
+                            <div style="font-size: 12px; color: var(--gray-500);">주문 ${supplier.orderCount}건 • 수량 ${supplier.totalQty.toLocaleString()}개</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div style="text-align: right;">
+                        <div style="font-weight: 700; color: #10b981; font-size: 24px;">${supplier.totalSales.toLocaleString()}원</div>
+                        <div style="font-size: 11px; color: var(--gray-500);">총 매출</div>
+                      </div>
+                    </div>
+
+                    <!-- 상위 판매 상품 -->
+                    ${topProducts.length > 0 ? `
+                      <div style="background: var(--gray-50); border-radius: 8px; padding: 12px; margin-top: 12px;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">🔥 상위 판매 상품</div>
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                          ${topProducts.map((product, pIndex) => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                              <span style="color: var(--gray-700);">${pIndex + 1}. ${product.name}</span>
+                              <span style="font-weight: 600; color: #10b981;">${product.qty}개 • ${product.sales.toLocaleString()}원</span>
+                            </div>
+                          `).join('')}
+                        </div>
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+
+  } catch (err) {
+    console.error('순위 데이터 로드 오류:', err);
+    app.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title">🏆 셀러/공급사 순위</h1>
+      </div>
+      <div class="card" style="text-align: center; padding: 60px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
+        <p>데이터를 불러오는데 실패했습니다.</p>
+        <button onclick="renderCafe24Rankings()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button>
+      </div>
+    `;
+  }
+}
+
+// 순위 탭 전환
+function switchRankingTab(tab) {
+  const sellerTab = document.getElementById('seller-tab');
+  const supplierTab = document.getElementById('supplier-tab');
+  const sellerRankings = document.getElementById('seller-rankings');
+  const supplierRankings = document.getElementById('supplier-rankings');
+
+  if (tab === 'seller') {
+    sellerTab.style.borderBottom = '3px solid var(--primary)';
+    sellerTab.style.color = 'var(--primary)';
+    supplierTab.style.borderBottom = '3px solid transparent';
+    supplierTab.style.color = 'var(--gray-500)';
+    sellerRankings.style.display = 'block';
+    supplierRankings.style.display = 'none';
+  } else {
+    supplierTab.style.borderBottom = '3px solid var(--primary)';
+    supplierTab.style.color = 'var(--primary)';
+    sellerTab.style.borderBottom = '3px solid transparent';
+    sellerTab.style.color = 'var(--gray-500)';
+    supplierRankings.style.display = 'block';
+    sellerRankings.style.display = 'none';
+  }
 }
 
 // 카페24 설정 페이지 렌더링
