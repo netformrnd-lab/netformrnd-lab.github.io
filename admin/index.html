@@ -8536,51 +8536,107 @@ function renderCafe24Groups() {
     const borderColor = confirmed ? '#3b82f6' : (autoMatched ? '#059669' : '#e5e7eb');
     const bgColor = confirmed ? '#eff6ff' : (autoMatched ? '#f0fdf4' : 'white');
 
+    // 선택된 공구의 상품 목록 가져오기
+    let dealProductOptions = '';
+    if (group.mappedDealId) {
+      const selectedDeal = state.deals.find(d => d.id === group.mappedDealId);
+      const dealProducts = selectedDeal?.selectedProducts || [];
+
+      if (dealProducts.length > 0) {
+        // 상품명 유사도 자동 매칭
+        const getSimilarity = (str1, str2) => {
+          const s1 = (str1 || '').toLowerCase().replace(/[^가-힣a-z0-9]/g, '');
+          const s2 = (str2 || '').toLowerCase().replace(/[^가-힣a-z0-9]/g, '');
+          if (s1 === s2) return 1;
+          if (s1.includes(s2) || s2.includes(s1)) return 0.8;
+          const words1 = s1.split(/\s+/);
+          let matches = 0;
+          words1.forEach(w => { if (s2.includes(w) && w.length > 1) matches++; });
+          return matches / Math.max(words1.length, 1);
+        };
+
+        // 자동 매칭 (아직 선택 안된 경우)
+        if (!group.matchedProductSku) {
+          let bestMatch = null;
+          let bestScore = 0;
+          dealProducts.forEach(dp => {
+            const score = getSimilarity(group.productName, dp.productName || dp.sku);
+            if (score > bestScore && score >= 0.3) {
+              bestScore = score;
+              bestMatch = dp;
+            }
+          });
+          if (bestMatch) {
+            group.matchedProductSku = bestMatch.sku;
+            group.matchedProductName = bestMatch.productName;
+            group.supplyPrice = bestMatch.supplyPrice || 0;
+            group.marginRate = bestMatch.marginRate || 0;
+          }
+        }
+
+        dealProductOptions = dealProducts.map(dp => {
+          const isSelected = dp.sku === group.matchedProductSku;
+          return `<option value="${dp.sku}" data-supply="${dp.supplyPrice || 0}" data-margin="${dp.marginRate || 0}" ${isSelected ? 'selected' : ''}>
+            ${dp.productName || dp.sku} (${(dp.supplyPrice || 0).toLocaleString()}원)
+          </option>`;
+        }).join('');
+      }
+    }
+
     return `
       <div style="background: ${bgColor}; border: 2px solid ${borderColor}; border-radius: 12px; padding: 16px;" data-group-key="${key}">
-        <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;">
-          <div>
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-              ${confirmed ? '<span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 확정</span>' : ''}
-              ${autoMatched && !confirmed ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 자동매칭</span>' : ''}
-              ${!autoMatched && !confirmed ? '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">⚠ 수동선택</span>' : ''}
-              <span style="font-weight: 600; color: var(--gray-800);">${group.productName}</span>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <div style="flex: 1;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                ${confirmed ? '<span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 확정</span>' : ''}
+                ${autoMatched && !confirmed ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 자동매칭</span>' : ''}
+                ${!autoMatched && !confirmed ? '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">⚠ 수동선택</span>' : ''}
+                <span style="font-weight: 600; color: var(--gray-800); max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${group.productName}">${group.productName}</span>
+              </div>
+              <div style="font-size: 12px; color: var(--gray-500);">
+                셀러: <strong>${group.sellerName || '-'}</strong> |
+                공급사: ${group.supplier || '-'} |
+                <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> /
+                <span style="color: var(--success); font-weight: 600;">${formatNumber(group.totalSales)}원</span>
+              </div>
             </div>
-            <div style="font-size: 12px; color: var(--gray-500);">
-              ${group.matchedDealName ? `<span style="color: #059669;">✓ ${group.matchedDealName}</span> | ` : ''}
-              셀러: <strong>${group.sellerName || '-'}</strong> |
-              공급사: ${group.supplier || '-'} |
-              <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> /
-              <span style="color: var(--success); font-weight: 600;">${formatNumber(group.totalSales)}원</span>
+            <div>
+              ${!confirmed && group.mappedDealId && group.matchedProductSku ? `
+                <button onclick="confirmGroupMapping('${key}')" class="btn btn-sm btn-primary" style="padding: 8px 16px;">
+                  ✓ 확정
+                </button>
+              ` : ''}
+              ${confirmed ? `
+                <button onclick="unconfirmGroupMapping('${key}')" class="btn btn-sm btn-secondary" style="padding: 8px 16px;">
+                  ↩ 취소
+                </button>
+              ` : ''}
             </div>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 12px; color: var(--gray-500);">→</span>
-            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-width: 250px; ${autoMatched ? 'border-color: #059669;' : ''}" ${confirmed ? 'disabled' : ''}>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span style="font-size: 12px; color: var(--gray-500); min-width: 60px;">→ 공구:</span>
+            <select onchange="updateGroupMapping('${key}', this.value)" style="padding: 6px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; min-width: 200px; ${autoMatched ? 'border-color: #059669;' : ''}" ${confirmed ? 'disabled' : ''}>
               <option value="">-- 공구 선택 --</option>
               ${completedDeals.map(d => {
                 const seller = state.sellers.find(s => s.id === d.sellerId);
                 const isSelected = d.id === group.mappedDealId;
                 const isMapped = d.cafe24Mapped;
-                // 현재 선택된 항목은 disabled 하지 않음
                 const shouldDisable = isMapped && !isSelected;
                 return `<option value="${d.id}" ${isSelected ? 'selected' : ''} ${shouldDisable ? 'disabled' : ''}>
                   ${d.name || d.title || d.brandName || '-'} (${seller?.name || '-'}) ${isMapped ? '✅' : ''}
                 </option>`;
               }).join('')}
             </select>
-          </div>
-          <div>
-            ${!confirmed && group.mappedDealId ? `
-              <button onclick="confirmGroupMapping('${key}')" class="btn btn-sm btn-primary" style="padding: 8px 16px;">
-                ✓ 확정
-              </button>
+            ${group.mappedDealId && dealProductOptions ? `
+              <span style="font-size: 12px; color: var(--gray-500);">→ 상품:</span>
+              <select onchange="updateProductMapping('${key}', this)" style="padding: 6px 10px; border: 2px solid ${group.matchedProductSku ? '#22c55e' : '#f59e0b'}; border-radius: 6px; font-size: 12px; min-width: 280px; background: ${group.matchedProductSku ? '#f0fdf4' : '#fefce8'};" ${confirmed ? 'disabled' : ''}>
+                <option value="">-- 상품 선택 --</option>
+                ${dealProductOptions}
+              </select>
+              ${group.matchedProductSku ? '<span style="color: #16a34a; font-size: 11px;">✓</span>' : '<span style="color: #f59e0b; font-size: 11px;">선택필요</span>'}
             ` : ''}
-            ${confirmed ? `
-              <button onclick="unconfirmGroupMapping('${key}')" class="btn btn-sm btn-secondary" style="padding: 8px 16px;">
-                ↩ 취소
-              </button>
-            ` : ''}
+            ${group.mappedDealId && !dealProductOptions ? '<span style="font-size: 11px; color: #dc2626;">⚠ 공구에 등록된 상품 없음</span>' : ''}
           </div>
         </div>
       </div>
@@ -8591,10 +8647,14 @@ function renderCafe24Groups() {
   updateSettlementPreview();
 }
 
-// 그룹 매핑 업데이트
+// 그룹 매핑 업데이트 (공구 선택)
 function updateGroupMapping(groupKey, dealId) {
   if (cafe24GroupedData[groupKey]) {
     cafe24GroupedData[groupKey].mappedDealId = dealId || null;
+
+    // 공구 변경 시 상품 매칭 초기화
+    cafe24GroupedData[groupKey].matchedProductSku = null;
+    cafe24GroupedData[groupKey].matchedProductName = null;
 
     // 매칭된 공구명도 저장
     if (dealId) {
@@ -8602,8 +8662,33 @@ function updateGroupMapping(groupKey, dealId) {
       cafe24GroupedData[groupKey].matchedDealName = deal?.name || null;
     } else {
       cafe24GroupedData[groupKey].matchedDealName = null;
+      cafe24GroupedData[groupKey].supplyPrice = 0;
+      cafe24GroupedData[groupKey].marginRate = 0;
     }
   }
+  // UI 다시 렌더링
+  renderCafe24Groups();
+}
+
+// 상품 매핑 업데이트
+function updateProductMapping(groupKey, selectEl) {
+  if (!cafe24GroupedData[groupKey]) return;
+
+  const selectedOption = selectEl.options[selectEl.selectedIndex];
+  const sku = selectedOption?.value || '';
+
+  cafe24GroupedData[groupKey].matchedProductSku = sku || null;
+
+  if (sku && selectedOption) {
+    cafe24GroupedData[groupKey].matchedProductName = selectedOption.textContent.trim();
+    cafe24GroupedData[groupKey].supplyPrice = Number(selectedOption.dataset.supply) || 0;
+    cafe24GroupedData[groupKey].marginRate = Number(selectedOption.dataset.margin) || 0;
+  } else {
+    cafe24GroupedData[groupKey].matchedProductName = null;
+    cafe24GroupedData[groupKey].supplyPrice = 0;
+    cafe24GroupedData[groupKey].marginRate = 0;
+  }
+
   // UI 다시 렌더링
   renderCafe24Groups();
 }
@@ -8615,6 +8700,10 @@ function confirmGroupMapping(groupKey) {
   const group = cafe24GroupedData[groupKey];
   if (!group.mappedDealId) {
     alert('먼저 공구를 선택해주세요.');
+    return;
+  }
+  if (!group.matchedProductSku) {
+    alert('먼저 상품을 선택해주세요.');
     return;
   }
 
