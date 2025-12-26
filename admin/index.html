@@ -26709,8 +26709,19 @@ async function previewSettlementGeneration() {
 
     // 셀러별 집계
     const sellerStats = {};
+    const supplierStats = {}; // 공급사별 집계 추가
+
     validOrders.forEach(o => {
       const sellerName = o.seller_name || '미지정';
+      const supplierName = o.supplier_name || '';
+      const productType = o.product_type || 'inhouse';
+      const qty = Number(o.quantity) || 1;
+      const amount = Number(o.total_amount) || 0;
+      const marginRate = Number(o.margin_rate) || 0;
+      const supplyPrice = Number(o.supply_price) || 0;
+      const productName = o.product_name || '상품명 없음';
+
+      // 셀러별 집계
       if (!sellerStats[sellerName]) {
         sellerStats[sellerName] = {
           orderCount: 0,
@@ -26718,15 +26729,10 @@ async function previewSettlementGeneration() {
           totalAmount: 0,
           marginAmount: 0,
           supplyAmount: 0,
-          productType: o.product_type || 'inhouse',
+          productType: productType,
           products: {}
         };
       }
-      const qty = Number(o.quantity) || 1;
-      const amount = Number(o.total_amount) || 0;
-      const marginRate = Number(o.margin_rate) || 0;
-      const supplyPrice = Number(o.supply_price) || 0;
-
       sellerStats[sellerName].orderCount += 1;
       sellerStats[sellerName].totalQuantity += qty;
       sellerStats[sellerName].totalAmount += amount;
@@ -26734,63 +26740,124 @@ async function previewSettlementGeneration() {
       sellerStats[sellerName].supplyAmount += supplyPrice * qty;
 
       // 상품별 집계
-      const productName = o.product_name || '상품명 없음';
       if (!sellerStats[sellerName].products[productName]) {
-        sellerStats[sellerName].products[productName] = { quantity: 0, amount: 0, marginRate };
+        sellerStats[sellerName].products[productName] = { quantity: 0, amount: 0, marginRate, supplyPrice };
       }
       sellerStats[sellerName].products[productName].quantity += qty;
       sellerStats[sellerName].products[productName].amount += amount;
+
+      // 공급사별 집계 (타사 상품만)
+      if (productType === 'external' && supplierName) {
+        if (!supplierStats[supplierName]) {
+          supplierStats[supplierName] = {
+            orderCount: 0,
+            totalQuantity: 0,
+            supplyAmount: 0,
+            products: {}
+          };
+        }
+        supplierStats[supplierName].orderCount += 1;
+        supplierStats[supplierName].totalQuantity += qty;
+        supplierStats[supplierName].supplyAmount += supplyPrice * qty;
+
+        if (!supplierStats[supplierName].products[productName]) {
+          supplierStats[supplierName].products[productName] = { quantity: 0, supplyPrice };
+        }
+        supplierStats[supplierName].products[productName].quantity += qty;
+      }
     });
 
     const sellerCount = Object.keys(sellerStats).length;
+    const supplierCount = Object.keys(supplierStats).length;
     const totalAmount = Object.values(sellerStats).reduce((sum, s) => sum + s.totalAmount, 0);
     const totalMargin = Object.values(sellerStats).reduce((sum, s) => sum + s.marginAmount, 0);
+    const totalSupply = Object.values(supplierStats).reduce((sum, s) => sum + s.supplyAmount, 0);
 
     previewEl.innerHTML = `
       <div style="margin-bottom: 16px;">
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
-          <div style="background: #dbeafe; padding: 12px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 11px; color: #1d4ed8;">셀러 수</div>
-            <div style="font-size: 20px; font-weight: 700; color: #1e40af;">${sellerCount}명</div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px;">
+          <div style="background: #dbeafe; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #1d4ed8;">👤 셀러</div>
+            <div style="font-size: 18px; font-weight: 700; color: #1e40af;">${sellerCount}명</div>
           </div>
-          <div style="background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 11px; color: #166534;">총 매출액</div>
-            <div style="font-size: 20px; font-weight: 700; color: #15803d;">${totalAmount.toLocaleString()}원</div>
+          <div style="background: #fef3c7; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #92400e;">🏭 공급사</div>
+            <div style="font-size: 18px; font-weight: 700; color: #b45309;">${supplierCount}곳</div>
           </div>
-          <div style="background: #fef3c7; padding: 12px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 11px; color: #92400e;">총 마진금</div>
-            <div style="font-size: 20px; font-weight: 700; color: #b45309;">${totalMargin.toLocaleString()}원</div>
+          <div style="background: #dcfce7; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #166534;">총 매출액</div>
+            <div style="font-size: 18px; font-weight: 700; color: #15803d;">${totalAmount.toLocaleString()}</div>
+          </div>
+          <div style="background: #ede9fe; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #7c3aed;">셀러 마진</div>
+            <div style="font-size: 18px; font-weight: 700; color: #6d28d9;">${totalMargin.toLocaleString()}</div>
           </div>
         </div>
 
-        <div style="font-weight: 600; margin-bottom: 8px; font-size: 13px;">📋 셀러별 정산 요약</div>
-        <div style="max-height: 200px; overflow-y: auto;">
-          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-            <thead>
-              <tr style="background: #f3f4f6;">
-                <th style="padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb;">셀러명</th>
-                <th style="padding: 8px; text-align: right; border-bottom: 1px solid #e5e7eb;">주문수</th>
-                <th style="padding: 8px; text-align: right; border-bottom: 1px solid #e5e7eb;">매출액</th>
-                <th style="padding: 8px; text-align: right; border-bottom: 1px solid #e5e7eb;">마진금</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${Object.entries(sellerStats).map(([name, s]) => `
-                <tr>
-                  <td style="padding: 8px; border-bottom: 1px solid #f3f4f6;">${name}</td>
-                  <td style="padding: 8px; text-align: right; border-bottom: 1px solid #f3f4f6;">${s.orderCount}건</td>
-                  <td style="padding: 8px; text-align: right; border-bottom: 1px solid #f3f4f6;">${s.totalAmount.toLocaleString()}원</td>
-                  <td style="padding: 8px; text-align: right; border-bottom: 1px solid #f3f4f6; color: #059669; font-weight: 600;">${s.marginAmount.toLocaleString()}원</td>
+        <!-- 셀러 정산 -->
+        <div style="margin-bottom: 16px; padding: 12px; background: #eff6ff; border-radius: 8px; border: 2px solid #3b82f6;">
+          <div style="font-weight: 600; margin-bottom: 8px; font-size: 13px; color: #1d4ed8;">👤 셀러 정산 (${sellerCount}건)</div>
+          <div style="max-height: 120px; overflow-y: auto;">
+            <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: #dbeafe;">
+                  <th style="padding: 6px; text-align: left;">셀러명</th>
+                  <th style="padding: 6px; text-align: right;">매출액</th>
+                  <th style="padding: 6px; text-align: right;">마진금액</th>
+                  <th style="padding: 6px; text-align: right;">지급액(-3.3%)</th>
                 </tr>
-              `).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                ${Object.entries(sellerStats).map(([name, s]) => {
+                  const payment = s.marginAmount - Math.round(s.marginAmount * 0.033);
+                  return `
+                  <tr>
+                    <td style="padding: 6px;">${name}</td>
+                    <td style="padding: 6px; text-align: right;">${s.totalAmount.toLocaleString()}</td>
+                    <td style="padding: 6px; text-align: right; color: #1d4ed8;">${s.marginAmount.toLocaleString()}</td>
+                    <td style="padding: 6px; text-align: right; color: #059669; font-weight: 600;">${payment.toLocaleString()}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        <!-- 공급사 정산 -->
+        ${supplierCount > 0 ? `
+        <div style="padding: 12px; background: #fef9c3; border-radius: 8px; border: 2px solid #f59e0b;">
+          <div style="font-weight: 600; margin-bottom: 8px; font-size: 13px; color: #92400e;">🏭 공급사 정산 (${supplierCount}건)</div>
+          <div style="max-height: 120px; overflow-y: auto;">
+            <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: #fde68a;">
+                  <th style="padding: 6px; text-align: left;">공급사명</th>
+                  <th style="padding: 6px; text-align: right;">수량</th>
+                  <th style="padding: 6px; text-align: right;">공급가액</th>
+                  <th style="padding: 6px; text-align: right;">VAT 별도</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(supplierStats).map(([name, s]) => {
+                  const vatExcluded = Math.round(s.supplyAmount / 1.1);
+                  return `
+                  <tr>
+                    <td style="padding: 6px;">${name}</td>
+                    <td style="padding: 6px; text-align: right;">${s.totalQuantity}개</td>
+                    <td style="padding: 6px; text-align: right; color: #92400e;">${s.supplyAmount.toLocaleString()}</td>
+                    <td style="padding: 6px; text-align: right; color: #b45309; font-weight: 600;">${vatExcluded.toLocaleString()}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        ` : '<div style="padding: 12px; background: #f3f4f6; border-radius: 8px; text-align: center; color: #6b7280; font-size: 12px;">타사 상품이 없어 공급사 정산이 생성되지 않습니다.</div>'}
       </div>
     `;
 
     // 전역에 저장 (생성 시 사용)
-    window.settlementPreviewData = { startDate, endDate, sellerStats, validOrders };
+    window.settlementPreviewData = { startDate, endDate, sellerStats, supplierStats, validOrders };
 
   } catch (err) {
     console.error(err);
@@ -26808,17 +26875,21 @@ async function executeSettlementGeneration() {
     return;
   }
 
-  if (!confirm(`${Object.keys(previewData.sellerStats).length}명의 셀러 정산서를 생성하시겠습니까?`)) {
+  const sellerCount = Object.keys(previewData.sellerStats).length;
+  const supplierCount = Object.keys(previewData.supplierStats || {}).length;
+
+  if (!confirm(`셀러 ${sellerCount}건, 공급사 ${supplierCount}건의 정산서를 생성하시겠습니까?`)) {
     return;
   }
 
   try {
-    const { startDate, endDate, sellerStats, validOrders } = previewData;
+    const { startDate, endDate, sellerStats, supplierStats, validOrders } = previewData;
     const period = `${startDate}~${endDate}`;
     const today = new Date().toISOString().split('T')[0];
-    let createdCount = 0;
+    let sellerCreatedCount = 0;
+    let supplierCreatedCount = 0;
 
-    // 셀러별 정산서 생성
+    // 1. 셀러별 정산서 생성
     for (const [sellerName, stats] of Object.entries(sellerStats)) {
       // 상품별 상세 데이터
       const salesItems = Object.entries(stats.products).map(([productName, p]) => ({
@@ -26826,6 +26897,7 @@ async function executeSettlementGeneration() {
         quantity: p.quantity,
         amount: p.amount,
         marginRate: p.marginRate,
+        supplyPrice: p.supplyPrice || 0,
         marginAmount: Math.round(p.amount * p.marginRate / 100)
       }));
 
@@ -26842,6 +26914,9 @@ async function executeSettlementGeneration() {
         .where('source', '==', 'productData')
         .get();
 
+      const withholdingTax = Math.round(stats.marginAmount * 0.033);
+      const actualPayment = stats.marginAmount - withholdingTax;
+
       if (!existingQuery.empty) {
         // 기존 정산서 업데이트
         const docId = existingQuery.docs[0].id;
@@ -26851,19 +26926,18 @@ async function executeSettlementGeneration() {
           salesAmount: stats.totalAmount,
           marginAmount: stats.marginAmount,
           supplyAmount: stats.supplyAmount,
+          withholdingTax,
+          actualPayment,
           productType: stats.productType,
           updatedAt: new Date().toISOString()
         });
       } else {
         // 새 정산서 생성
-        const withholdingTax = Math.round(stats.marginAmount * 0.033);
-        const actualPayment = stats.marginAmount - withholdingTax;
-
         await db.collection('sellerSettlements').add({
           type: 'seller',
           sellerName,
           sellerId: seller?.id || '',
-          brandName: '-', // 여러 브랜드 가능
+          brandName: '-',
           productType: stats.productType,
           dealPeriod: period,
           salesItems,
@@ -26881,10 +26955,67 @@ async function executeSettlementGeneration() {
           createdBy: 'generateSettlementFromProductData'
         });
       }
-      createdCount++;
+      sellerCreatedCount++;
     }
 
-    showToast(`✅ ${createdCount}건의 정산서가 생성되었습니다!`, 'success');
+    // 2. 공급사별 정산서 생성 (타사 상품)
+    for (const [supplierName, stats] of Object.entries(supplierStats || {})) {
+      // 상품별 상세 데이터
+      const supplyItems = Object.entries(stats.products).map(([productName, p]) => ({
+        productName,
+        quantity: p.quantity,
+        supplyPrice: p.supplyPrice || 0,
+        supplyAmount: (p.supplyPrice || 0) * p.quantity
+      }));
+
+      // 공급사 정보 찾기
+      const supplier = state.suppliers?.find(s => s.name === supplierName);
+
+      // 기존 정산서 확인 (중복 방지)
+      const existingQuery = await db.collection('supplierSettlements')
+        .where('supplierName', '==', supplierName)
+        .where('dealPeriod', '==', period)
+        .where('source', '==', 'productData')
+        .get();
+
+      const totalSupplyAmount = stats.supplyAmount;
+      const vatAmount = Math.round(totalSupplyAmount / 11); // VAT
+      const supplyAmountExVat = totalSupplyAmount - vatAmount;
+
+      if (!existingQuery.empty) {
+        // 기존 정산서 업데이트
+        const docId = existingQuery.docs[0].id;
+        await db.collection('supplierSettlements').doc(docId).update({
+          supplyItems,
+          totalQuantity: stats.totalQuantity,
+          supplyAmount: totalSupplyAmount,
+          supplyAmountExVat,
+          vatAmount,
+          updatedAt: new Date().toISOString()
+        });
+      } else {
+        // 새 정산서 생성
+        await db.collection('supplierSettlements').add({
+          type: 'supplier',
+          supplierName,
+          supplierId: supplier?.id || '',
+          dealPeriod: period,
+          supplyItems,
+          totalQuantity: stats.totalQuantity,
+          supplyAmount: totalSupplyAmount,
+          supplyAmountExVat,
+          vatAmount,
+          settlementDate: today,
+          isCompleted: false,
+          source: 'productData',
+          createdAt: new Date().toISOString(),
+          createdBy: 'generateSettlementFromProductData'
+        });
+      }
+      supplierCreatedCount++;
+    }
+
+    showToast(`✅ 셀러 ${sellerCreatedCount}건, 공급사 ${supplierCreatedCount}건 정산서 생성 완료!`, 'success');
     closeModal();
 
     // 정산관리 새로고침
