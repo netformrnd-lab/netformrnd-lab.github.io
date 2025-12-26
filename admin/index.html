@@ -32102,12 +32102,10 @@ async function openManualActivityModal() {
     var tasksSnapshot = await db.collection('tasks').get();
     tasksSnapshot.forEach(function(doc) {
       var task = { id: doc.id, ...doc.data() };
-      // 완료되지 않은 업무만 표시 (선택적)
       if (task.status !== 'done') {
         tasks.push(task);
       }
     });
-    // 최신순 정렬
     tasks.sort(function(a, b) {
       return (b.createdAt || '').localeCompare(a.createdAt || '');
     });
@@ -32115,8 +32113,22 @@ async function openManualActivityModal() {
     console.error('업무 목록 로드 오류:', error);
   }
 
+  // 추천 업무: 내 업무 중 진행중인 것 우선
+  var myTasks = tasks.filter(function(t) {
+    return t.assigneeId === currentMember.id || t.assignee === currentMember.name;
+  });
+  var recommendedTasks = myTasks.filter(function(t) { return t.status === 'in_progress'; }).slice(0, 3);
+  if (recommendedTasks.length < 3) {
+    var pending = myTasks.filter(function(t) { return t.status !== 'in_progress'; }).slice(0, 3 - recommendedTasks.length);
+    recommendedTasks = recommendedTasks.concat(pending);
+  }
+
+  // 추천 공구: 최근 공구
+  var deals = state.deals || [];
+  var recommendedDeals = deals.slice(0, 3);
+
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 520px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
         <h2 style="font-size: 20px; font-weight: 700;">📝 활동 수동 추가</h2>
         <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>
@@ -32127,20 +32139,58 @@ async function openManualActivityModal() {
         <input type="text" id="manual-activity-action" placeholder="예: 셀러 미팅 완료" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;" />
       </div>
 
+      <!-- 관련 업무 (검색 + 추천) -->
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 업무 (선택)</label>
-        <select id="manual-activity-task" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-          <option value="">선택 안함</option>
-          ${tasks.slice(0, 50).map(t => `<option value="${t.id}">${t.title}${t.category ? ' [' + t.category + ']' : ''}</option>`).join('')}
-        </select>
+        <div style="position: relative;">
+          <input type="text" id="task-search-input" placeholder="🔍 업무 검색..."
+            style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;"
+            oninput="filterTaskList(this.value)" onfocus="showTaskDropdown()" />
+          <input type="hidden" id="manual-activity-task" value="" />
+          <div id="selected-task-badge" style="display: none; margin-top: 8px;"></div>
+          <div id="task-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #E5E8EB; border-radius: 10px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+        </div>
+        ${recommendedTasks.length > 0 ? `
+        <div style="margin-top: 10px;">
+          <span style="font-size: 12px; color: #6B7684;">⚡ 추천:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+            ${recommendedTasks.map(t => `
+              <button type="button" onclick="selectTask('${t.id}', '${(t.title || '').replace(/'/g, "\\'")}', '${(t.category || '').replace(/'/g, "\\'")}')"
+                style="background: #F0F9FF; border: 1px solid #BAE6FD; color: #0369A1; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
+                onmouseover="this.style.background='#E0F2FE'" onmouseout="this.style.background='#F0F9FF'">
+                📌 ${(t.title || '').length > 15 ? (t.title || '').substring(0, 15) + '...' : (t.title || '')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
 
+      <!-- 관련 공구 (검색 + 추천) -->
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 공구 (선택)</label>
-        <select id="manual-activity-deal" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-          <option value="">선택 안함</option>
-          ${(state.deals || []).slice(0, 30).map(d => `<option value="${d.id}">${d.title}</option>`).join('')}
-        </select>
+        <div style="position: relative;">
+          <input type="text" id="deal-search-input" placeholder="🔍 공구 검색..."
+            style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;"
+            oninput="filterDealList(this.value)" onfocus="showDealDropdown()" />
+          <input type="hidden" id="manual-activity-deal" value="" />
+          <div id="selected-deal-badge" style="display: none; margin-top: 8px;"></div>
+          <div id="deal-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #E5E8EB; border-radius: 10px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+        </div>
+        ${recommendedDeals.length > 0 ? `
+        <div style="margin-top: 10px;">
+          <span style="font-size: 12px; color: #6B7684;">⚡ 최근:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+            ${recommendedDeals.map(d => `
+              <button type="button" onclick="selectDeal('${d.id}', '${(d.title || '').replace(/'/g, "\\'")}')"
+                style="background: #FFF7ED; border: 1px solid #FDBA74; color: #C2410C; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
+                onmouseover="this.style.background='#FFEDD5'" onmouseout="this.style.background='#FFF7ED'">
+                🛒 ${(d.title || '').length > 15 ? (d.title || '').substring(0, 15) + '...' : (d.title || '')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
 
       <div style="margin-bottom: 24px;">
@@ -32154,8 +32204,130 @@ async function openManualActivityModal() {
     </div>
   `;
 
-  // 업무 목록을 전역에 저장 (저장 시 사용)
+  // 전역에 저장
   window._manualActivityTasks = tasks;
+  window._manualActivityDeals = deals;
+
+  // 드롭다운 외부 클릭 시 닫기
+  setTimeout(function() {
+    document.addEventListener('click', handleActivityDropdownClose);
+  }, 100);
+}
+
+// 업무 드롭다운 표시
+function showTaskDropdown() {
+  var dropdown = document.getElementById('task-dropdown');
+  if (dropdown) {
+    filterTaskList('');
+    dropdown.style.display = 'block';
+  }
+}
+
+// 업무 필터링
+function filterTaskList(query) {
+  var dropdown = document.getElementById('task-dropdown');
+  if (!dropdown) return;
+  var tasks = window._manualActivityTasks || [];
+  var filtered = tasks.filter(function(t) {
+    var searchStr = ((t.title || '') + ' ' + (t.category || '')).toLowerCase();
+    return searchStr.includes(query.toLowerCase());
+  }).slice(0, 20);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(function(t) {
+      return '<div onclick="selectTask(\'' + t.id + '\', \'' + (t.title || '').replace(/'/g, "\\'") + '\', \'' + (t.category || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">' + (t.title || '') + '</div>' +
+        (t.category ? '<div style="font-size: 12px; color: #6B7684; margin-top: 2px;">' + t.category + '</div>' : '') +
+      '</div>';
+    }).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+// 업무 선택
+function selectTask(id, title, category) {
+  document.getElementById('manual-activity-task').value = id;
+  document.getElementById('task-search-input').value = '';
+  document.getElementById('task-dropdown').style.display = 'none';
+
+  var badge = document.getElementById('selected-task-badge');
+  badge.style.display = 'block';
+  badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #E0E7FF; color: #4338CA; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
+    '📌 ' + title + (category ? ' [' + category + ']' : '') +
+    '<button type="button" onclick="clearTaskSelection()" style="background: none; border: none; color: #4338CA; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
+  '</span>';
+}
+
+// 업무 선택 해제
+function clearTaskSelection() {
+  document.getElementById('manual-activity-task').value = '';
+  document.getElementById('selected-task-badge').style.display = 'none';
+  document.getElementById('selected-task-badge').innerHTML = '';
+}
+
+// 공구 드롭다운 표시
+function showDealDropdown() {
+  var dropdown = document.getElementById('deal-dropdown');
+  if (dropdown) {
+    filterDealList('');
+    dropdown.style.display = 'block';
+  }
+}
+
+// 공구 필터링
+function filterDealList(query) {
+  var dropdown = document.getElementById('deal-dropdown');
+  if (!dropdown) return;
+  var deals = window._manualActivityDeals || [];
+  var filtered = deals.filter(function(d) {
+    return (d.title || '').toLowerCase().includes(query.toLowerCase());
+  }).slice(0, 20);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(function(d) {
+      return '<div onclick="selectDeal(\'' + d.id + '\', \'' + (d.title || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">🛒 ' + (d.title || '') + '</div>' +
+      '</div>';
+    }).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+// 공구 선택
+function selectDeal(id, title) {
+  document.getElementById('manual-activity-deal').value = id;
+  document.getElementById('deal-search-input').value = '';
+  document.getElementById('deal-dropdown').style.display = 'none';
+
+  var badge = document.getElementById('selected-deal-badge');
+  badge.style.display = 'block';
+  badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #FFF7ED; color: #C2410C; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
+    '🛒 ' + title +
+    '<button type="button" onclick="clearDealSelection()" style="background: none; border: none; color: #C2410C; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
+  '</span>';
+}
+
+// 공구 선택 해제
+function clearDealSelection() {
+  document.getElementById('manual-activity-deal').value = '';
+  document.getElementById('selected-deal-badge').style.display = 'none';
+  document.getElementById('selected-deal-badge').innerHTML = '';
+}
+
+// 드롭다운 외부 클릭 시 닫기
+function handleActivityDropdownClose(e) {
+  var taskDropdown = document.getElementById('task-dropdown');
+  var dealDropdown = document.getElementById('deal-dropdown');
+  if (taskDropdown && !e.target.closest('#task-search-input') && !e.target.closest('#task-dropdown')) {
+    taskDropdown.style.display = 'none';
+  }
+  if (dealDropdown && !e.target.closest('#deal-search-input') && !e.target.closest('#deal-dropdown')) {
+    dealDropdown.style.display = 'none';
+  }
 }
 
 // 수동 활동 저장
