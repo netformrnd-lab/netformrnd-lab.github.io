@@ -25951,8 +25951,14 @@ async function renderProductDataManager() {
           orderIds: [],
           // 공구 매칭 정보
           matchedDeal: null,
-          matchedDealId: ''
+          matchedDealId: '',
+          // 저장된 SKU 매칭 정보
+          savedMatchedSku: order.matched_sku || ''
         };
+      }
+      // 저장된 SKU가 있으면 업데이트
+      if (order.matched_sku && !productGroups[key].savedMatchedSku) {
+        productGroups[key].savedMatchedSku = order.matched_sku;
       }
       productGroups[key].quantity += Number(order.quantity) || 1;
       productGroups[key].totalAmount += Number(order.total_amount) || 0;
@@ -26165,16 +26171,26 @@ async function renderProductDataManager() {
                   return matches / Math.max(words1.length, 1);
                 };
 
-                // 자동 매칭: 가장 유사한 공구 상품 찾기
+                // 자동 매칭: 저장된 SKU 우선, 없으면 유사도 기반
                 let bestMatch = null;
                 let bestScore = 0;
-                sellerDealProducts.forEach(dp => {
-                  const score = getSimilarity(p.productName, dp.productName || dp.sku);
-                  if (score > bestScore && score >= 0.3) {
-                    bestScore = score;
-                    bestMatch = dp;
-                  }
-                });
+
+                // 1. 저장된 SKU가 있으면 우선 사용
+                if (p.savedMatchedSku) {
+                  bestMatch = sellerDealProducts.find(dp => dp.sku === p.savedMatchedSku);
+                  if (bestMatch) bestScore = 1;
+                }
+
+                // 2. 저장된 SKU가 없거나 매칭 실패 시 유사도 기반 매칭
+                if (!bestMatch) {
+                  sellerDealProducts.forEach(dp => {
+                    const score = getSimilarity(p.productName, dp.productName || dp.sku);
+                    if (score > bestScore && score >= 0.3) {
+                      bestScore = score;
+                      bestMatch = dp;
+                    }
+                  });
+                }
 
                 // 공구 상품 매칭 드롭다운 생성
                 let dealProductOptions = '<option value="">선택...</option>';
@@ -26207,8 +26223,11 @@ async function renderProductDataManager() {
                   : 'width: 100%; font-size: 11px; border: 1px solid #d1d5db; border-radius: 4px; padding: 3px;';
 
                 let autoMatchLabel = '';
-                if (sellerDealProducts.length === 0) {
+                const isSavedMatch = p.savedMatchedSku && bestMatch?.sku === p.savedMatchedSku;
+                if (sellerDealProducts.length === 0 && dealProducts.length === 0) {
                   autoMatchLabel = '<div style="font-size: 9px; color: #9ca3af;">공구 없음</div>';
+                } else if (isSavedMatch) {
+                  autoMatchLabel = '<div style="font-size: 9px; color: #3b82f6; margin-top: 1px;">💾 저장됨</div>';
                 } else if (bestMatch) {
                   autoMatchLabel = '<div style="font-size: 9px; color: #16a34a; margin-top: 1px;">✓ 자동</div>';
                 } else if (showAllProducts) {
@@ -26458,14 +26477,19 @@ async function saveAllProductData() {
 
     const marginRate = Number(row.querySelector('.pdm-margin-input')?.value) || 0;
     const supplyPrice = Number(row.querySelector('.pdm-supply-input')?.value) || 0;
+    const skuSelect = row.querySelector('.pdm-deal-product-select');
+    const matchedSku = skuSelect?.value || '';
+    const supplierName = row.querySelector('.pdm-supplier-name')?.textContent || '';
 
     // 변경된 경우만 업데이트
-    if (marginRate !== product.marginRate || supplyPrice !== product.supplyPrice) {
+    if (marginRate !== product.marginRate || supplyPrice !== product.supplyPrice || matchedSku) {
       product.orderIds.forEach(orderId => {
         updates.push({
           orderId,
           marginRate,
-          supplyPrice: product.productType === 'external' ? supplyPrice : 0
+          supplyPrice: product.productType === 'external' ? supplyPrice : 0,
+          matchedSku,
+          supplierName: supplierName !== '-' ? supplierName : ''
         });
       });
     }
@@ -26492,6 +26516,8 @@ async function saveAllProductData() {
         batch.update(ref, {
           margin_rate: u.marginRate,
           supply_price: u.supplyPrice,
+          matched_sku: u.matchedSku,
+          supplier_name: u.supplierName,
           updatedAt: new Date().toISOString()
         });
       });
