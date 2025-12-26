@@ -32038,6 +32038,7 @@ function renderAutoLogSection(todayLogs, currentMember) {
       html += '<div onclick="openActivityDetailModal(\'' + (log.id || '') + '\')" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: #FFF7ED; border: 1px solid #FDBA74; border-radius: 10px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.background=\'#FFEDD5\'" onmouseout="this.style.background=\'#FFF7ED\'">';
       html += '<span style="font-size: 14px; color: #EA580C;">●</span>';
       html += '<span style="font-size: 13px; color: #191F28; font-weight: 500;">' + log.action + '</span>';
+      if (log.taskTitle) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E0E7FF; color: #4338CA; border-radius: 4px;">📌 ' + log.taskTitle + '</span>';
       if (log.memberName && currentMember.name !== log.memberName) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E8F3FF; color: #0064FF; border-radius: 4px;">👤 ' + log.memberName + '</span>';
       html += '<span style="font-size: 11px; color: #8B95A1;">' + (log.time || '') + '</span>';
       html += '</div>';
@@ -32061,6 +32062,7 @@ function renderAutoLogSection(todayLogs, currentMember) {
       html += '<div onclick="event.stopPropagation(); openActivityDetailModal(\'' + (log.id || '') + '\')" style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #F2F4F6; border-radius: 10px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.background=\'#E8F3FF\'" onmouseout="this.style.background=\'#F2F4F6\'">';
       html += '<span style="font-size: 13px; color: #00C471;">✓</span>';
       html += '<span style="font-size: 12px; color: #333D4B;">' + log.action + '</span>';
+      if (log.taskTitle) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E0E7FF; color: #4338CA; border-radius: 4px;">📌 ' + log.taskTitle + '</span>';
       if (log.dealTitle) html += '<span style="font-size: 10px; padding: 2px 6px; background: white; color: #6B7684; border-radius: 4px;">' + log.dealTitle + '</span>';
       if (log.memberName && currentMember.name !== log.memberName) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E8F3FF; color: #0064FF; border-radius: 4px;">👤 ' + log.memberName + '</span>';
       html += '<span style="font-size: 10px; color: #8B95A1;">' + (log.time || '') + '</span>';
@@ -32089,23 +32091,50 @@ function toggleAutoLogSection() {
 }
 
 // 수동 활동 추가 모달
-function openManualActivityModal() {
+async function openManualActivityModal() {
   var currentMember = getCurrentMember();
   var modal = document.getElementById('modal');
   modal.className = 'modal active';
-  
+
+  // 업무 목록 로드
+  var tasks = [];
+  try {
+    var tasksSnapshot = await db.collection('tasks').get();
+    tasksSnapshot.forEach(function(doc) {
+      var task = { id: doc.id, ...doc.data() };
+      // 완료되지 않은 업무만 표시 (선택적)
+      if (task.status !== 'done') {
+        tasks.push(task);
+      }
+    });
+    // 최신순 정렬
+    tasks.sort(function(a, b) {
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    });
+  } catch (error) {
+    console.error('업무 목록 로드 오류:', error);
+  }
+
   modal.innerHTML = `
     <div class="modal-content" style="max-width: 500px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
         <h2 style="font-size: 20px; font-weight: 700;">📝 활동 수동 추가</h2>
         <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>
       </div>
-      
+
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">활동 내용 *</label>
         <input type="text" id="manual-activity-action" placeholder="예: 셀러 미팅 완료" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;" />
       </div>
-      
+
+      <div style="margin-bottom: 16px;">
+        <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 업무 (선택)</label>
+        <select id="manual-activity-task" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+          <option value="">선택 안함</option>
+          ${tasks.slice(0, 50).map(t => `<option value="${t.id}">${t.title}${t.category ? ' [' + t.category + ']' : ''}</option>`).join('')}
+        </select>
+      </div>
+
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 공구 (선택)</label>
         <select id="manual-activity-deal" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
@@ -32113,37 +32142,45 @@ function openManualActivityModal() {
           ${(state.deals || []).slice(0, 30).map(d => `<option value="${d.id}">${d.title}</option>`).join('')}
         </select>
       </div>
-      
+
       <div style="margin-bottom: 24px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">메모</label>
         <textarea id="manual-activity-memo" placeholder="추가 설명 (선택)" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px; min-height: 80px; resize: vertical;"></textarea>
       </div>
-      
+
       <button onclick="saveManualActivity()" style="width: 100%; background: #0064FF; color: white; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer;">
         저장하기
       </button>
     </div>
   `;
+
+  // 업무 목록을 전역에 저장 (저장 시 사용)
+  window._manualActivityTasks = tasks;
 }
 
 // 수동 활동 저장
 async function saveManualActivity() {
   var action = document.getElementById('manual-activity-action').value.trim();
+  var taskId = document.getElementById('manual-activity-task').value;
   var dealId = document.getElementById('manual-activity-deal').value;
   var memo = document.getElementById('manual-activity-memo').value.trim();
-  
+
   if (!action) {
     showToast('활동 내용을 입력해주세요');
     return;
   }
-  
+
   var currentMember = getCurrentMember();
   var deal = dealId ? state.deals.find(d => d.id === dealId) : null;
+  var task = taskId ? (window._manualActivityTasks || []).find(t => t.id === taskId) : null;
   var now = new Date();
-  
+
   try {
     await db.collection('activityLogs').add({
       action: action,
+      taskId: taskId || null,
+      taskTitle: task ? task.title : null,
+      taskCategory: task ? task.category : null,
       dealId: dealId || null,
       dealTitle: deal ? deal.title : null,
       memo: memo,
@@ -32156,7 +32193,7 @@ async function saveManualActivity() {
       createdBy: currentMember.id,
       createdByName: currentMember.name
     });
-    
+
     showToast('✅ 활동이 기록되었습니다');
     closeModal();
     loadWorkLogByMonth();
@@ -32194,6 +32231,7 @@ async function openActivityDetailModal(logId) {
         
         <div style="background: #F2F4F6; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
           <div style="font-size: 18px; font-weight: 700; color: #191F28; margin-bottom: 12px;">${log.action}</div>
+          ${log.taskTitle ? `<div style="font-size: 14px; color: #6B7684; margin-bottom: 8px;">📌 관련 업무: ${log.taskTitle}${log.taskCategory ? ' [' + log.taskCategory + ']' : ''}</div>` : ''}
           ${log.dealTitle ? `<div style="font-size: 14px; color: #6B7684; margin-bottom: 8px;">🛒 관련 공구: ${log.dealTitle}</div>` : ''}
           ${log.memo ? `<div style="font-size: 14px; color: #6B7684; margin-bottom: 8px;">📝 메모: ${log.memo}</div>` : ''}
           <div style="font-size: 13px; color: #8B95A1; margin-top: 12px;">
