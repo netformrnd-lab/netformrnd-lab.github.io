@@ -24520,7 +24520,24 @@ async function handleOAuthCallback() {
     }
 
     const tokenData = await response.json();
-    console.log('✅ Access Token 발급 성공:', tokenData);
+    console.log('✅ Access Token 발급 성공:', JSON.stringify(tokenData, null, 2));
+
+    // expires_in 기본값 설정 (Cafe24는 보통 2시간 = 7200초)
+    const expiresIn = tokenData.expires_in || 7200;
+    const tokenExpiry = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+
+    // refresh_token 만료 계산 (기본 14일)
+    let refreshTokenExpiry;
+    if (tokenData.refresh_token_expires_at) {
+      refreshTokenExpiry = tokenData.refresh_token_expires_at;
+    } else if (tokenData.refresh_token_expires_in) {
+      refreshTokenExpiry = new Date(Date.now() + (tokenData.refresh_token_expires_in * 1000)).toISOString();
+    } else {
+      refreshTokenExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    console.log('Token expiry:', tokenExpiry);
+    console.log('Refresh token expiry:', refreshTokenExpiry);
 
     // Firestore에 토큰 정보 저장
     await db.collection('settings').doc('cafe24').set({
@@ -24529,8 +24546,8 @@ async function handleOAuthCallback() {
       clientSecret: CAFE24_CONFIG.clientSecret,
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
-      tokenExpiry: new Date(Date.now() + (tokenData.expires_in * 1000)).toISOString(),
-      refreshTokenExpiry: tokenData.refresh_token_expires_at || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      tokenExpiry: tokenExpiry,
+      refreshTokenExpiry: refreshTokenExpiry,
       scopes: tokenData.scopes || CAFE24_CONFIG.scope.split(','),
       lastTokenRefresh: new Date().toISOString(),
       lastSync: null,
@@ -24873,13 +24890,28 @@ async function refreshCafe24AccessToken() {
     }
 
     const data = await response.json();
+    console.log('토큰 갱신 응답:', JSON.stringify(data, null, 2));
+
+    // expires_in 기본값 설정 (Cafe24는 보통 2시간 = 7200초)
+    const expiresIn = data.expires_in || 7200;
+    const tokenExpiry = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+
+    // refresh_token 만료 계산
+    let refreshTokenExpiry;
+    if (data.refresh_token_expires_at) {
+      refreshTokenExpiry = data.refresh_token_expires_at;
+    } else if (data.refresh_token_expires_in) {
+      refreshTokenExpiry = new Date(Date.now() + (data.refresh_token_expires_in * 1000)).toISOString();
+    } else {
+      refreshTokenExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    }
 
     // 새로운 토큰 정보 저장
     await db.collection('settings').doc('cafe24').update({
       accessToken: data.access_token,
       refreshToken: data.refresh_token, // 새로운 refresh token도 함께 발급됨
-      tokenExpiry: new Date(Date.now() + (data.expires_in * 1000)).toISOString(),
-      refreshTokenExpiry: data.refresh_token_expires_at || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      tokenExpiry: tokenExpiry,
+      refreshTokenExpiry: refreshTokenExpiry,
       lastTokenRefresh: new Date().toISOString()
     });
 
