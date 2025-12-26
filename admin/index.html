@@ -24324,6 +24324,31 @@ const CAFE24_CONFIG = {
   tokenProxyUrl: 'https://cafe24oauthtoken-751113514390.asia-northeast3.run.app'
 };
 
+// 카페24 API 프록시 호출 함수 (CORS 우회)
+async function callCafe24Api(mallId, accessToken, apiEndpoint) {
+  const response = await fetch(CAFE24_CONFIG.tokenProxyUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      mallId: mallId,
+      accessToken: accessToken,
+      apiEndpoint: apiEndpoint
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const error = new Error(data.error_description || data.error || `API 오류: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
 // ==================== 카페24 OAuth 인증 ====================
 
 // CSRF 토큰 생성 및 저장
@@ -24844,45 +24869,22 @@ async function testCafe24Connection() {
 
     let { mallId, accessToken } = doc.data();
 
-    // 카페24 API 테스트 호출 (shop 정보 조회)
-    let response = await fetch(
-      `https://${mallId}.cafe24api.com/api/v2/admin/shop`,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'X-Cafe24-Api-Version': '2024-03-01'
-        }
-      }
-    );
-
-    // 401 에러 시 토큰 갱신 시도
-    if (response.status === 401) {
-      console.log('Access Token 만료, 갱신 시도...');
-      try {
+    // 프록시를 통해 카페24 API 테스트 호출 (shop 정보 조회)
+    let data;
+    try {
+      data = await callCafe24Api(mallId, accessToken, '/api/v2/admin/shop');
+    } catch (apiErr) {
+      // 401 에러 시 토큰 갱신 시도
+      if (apiErr.status === 401) {
+        console.log('Access Token 만료, 갱신 시도...');
         accessToken = await refreshCafe24AccessToken();
-        // 갱신된 토큰으로 재시도
-        response = await fetch(
-          `https://${mallId}.cafe24api.com/api/v2/admin/shop`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-              'X-Cafe24-Api-Version': '2024-03-01'
-            }
-          }
-        );
-      } catch (refreshErr) {
-        throw new Error('토큰 갱신 실패: ' + refreshErr.message);
+        data = await callCafe24Api(mallId, accessToken, '/api/v2/admin/shop');
+      } else {
+        throw apiErr;
       }
     }
 
-    if (!response.ok) {
-      throw new Error(`API 호출 실패: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    alert(`✅ 연결 성공!\n\n쇼핑몰: ${data.shop.shop_name || mallId}\n상태: 정상`);
+    alert(`✅ 연결 성공!\n\n쇼핑몰: ${data.shop?.shop_name || mallId}\n상태: 정상`);
 
   } catch (err) {
     console.error('연결 테스트 오류:', err);
@@ -24920,46 +24922,23 @@ async function syncCafe24Orders(isAuto = false) {
     const startDateStr = startDate.toISOString().split('T')[0];
     const endDateStr = new Date().toISOString().split('T')[0];
 
-    // 카페24 API 호출
-    let ordersResponse = await fetch(
-      `https://${mallId}.cafe24api.com/api/v2/admin/orders?` +
-      `start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'X-Cafe24-Api-Version': '2024-03-01'
-        }
-      }
-    );
+    // 프록시를 통해 카페24 API 호출
+    const apiEndpoint = `/api/v2/admin/orders?start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`;
 
-    // 401 에러 시 토큰 갱신 시도
-    if (ordersResponse.status === 401) {
-      console.log('Access Token 만료, 갱신 시도...');
-      try {
+    let ordersData;
+    try {
+      ordersData = await callCafe24Api(mallId, accessToken, apiEndpoint);
+    } catch (apiErr) {
+      // 401 에러 시 토큰 갱신 시도
+      if (apiErr.status === 401) {
+        console.log('Access Token 만료, 갱신 시도...');
         accessToken = await refreshCafe24AccessToken();
-        // 갱신된 토큰으로 재시도
-        ordersResponse = await fetch(
-          `https://${mallId}.cafe24api.com/api/v2/admin/orders?` +
-          `start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-              'X-Cafe24-Api-Version': '2024-03-01'
-            }
-          }
-        );
-      } catch (refreshErr) {
-        throw new Error('토큰 갱신 실패: ' + refreshErr.message + '\n\n설정에서 Refresh Token을 확인해주세요.');
+        ordersData = await callCafe24Api(mallId, accessToken, apiEndpoint);
+      } else {
+        throw apiErr;
       }
     }
 
-    if (!ordersResponse.ok) {
-      throw new Error('주문 데이터 조회 실패: ' + ordersResponse.statusText);
-    }
-
-    const ordersData = await ordersResponse.json();
     const orders = ordersData.orders || [];
 
     // Firestore에 저장
