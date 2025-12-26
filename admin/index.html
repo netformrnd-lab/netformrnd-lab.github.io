@@ -1773,6 +1773,38 @@
   </style>
 </head>
 <body>
+  <!-- OAuth 콜백 즉시 처리 (로그인 화면보다 먼저) -->
+  <script>
+  (function() {
+    // URL에서 OAuth 파라미터 확인
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
+    const error = urlParams.get('error');
+
+    // OAuth 콜백이면 처리 대기 플래그 설정
+    if (code || error) {
+      window.__OAUTH_CALLBACK_PENDING__ = true;
+      window.__OAUTH_CODE__ = code;
+      window.__OAUTH_STATE__ = state;
+      window.__OAUTH_ERROR__ = error;
+      window.__OAUTH_ERROR_DESC__ = urlParams.get('error_description');
+
+      // URL 정리 (파라미터 제거)
+      const cleanUrl = window.location.origin + window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+
+      // 로그인 화면 숨기고 로딩 표시
+      document.addEventListener('DOMContentLoaded', function() {
+        const loginScreen = document.getElementById('login-screen');
+        if (loginScreen) {
+          loginScreen.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;"><div style="font-size:48px;margin-bottom:16px;">⏳</div><div style="font-size:16px;color:#333;">카페24 인증 처리 중...</div></div>';
+        }
+      });
+    }
+  })();
+  </script>
+
   <!-- 로그인 화면 -->
   <div id="login-screen" class="login-screen">
     <div class="login-container">
@@ -24331,22 +24363,22 @@ function startCafe24OAuth() {
 
 // OAuth 콜백 처리 - authorization code로 access token 발급
 async function handleOAuthCallback() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const code = urlParams.get('code');
-  const state = urlParams.get('state');
-  const error = urlParams.get('error');
+  // 즉시 실행 스크립트에서 저장한 값 확인
+  const code = window.__OAUTH_CODE__;
+  const state = window.__OAUTH_STATE__;
+  const error = window.__OAUTH_ERROR__;
 
   // OAuth 파라미터가 없으면 무시
-  if (!code && !error) return false;
+  if (!window.__OAUTH_CALLBACK_PENDING__) return false;
 
-  // URL에서 OAuth 파라미터 제거 (히스토리 정리)
-  const cleanUrl = window.location.origin + window.location.pathname;
-  window.history.replaceState({}, document.title, cleanUrl);
+  // 플래그 리셋
+  window.__OAUTH_CALLBACK_PENDING__ = false;
 
   // 에러 처리
   if (error) {
-    const errorDesc = urlParams.get('error_description') || '알 수 없는 오류';
+    const errorDesc = window.__OAUTH_ERROR_DESC__ || '알 수 없는 오류';
     alert(`❌ 카페24 인증 실패\n\n오류: ${error}\n설명: ${errorDesc}`);
+    window.location.reload();
     return true;
   }
 
@@ -24411,16 +24443,15 @@ async function handleOAuthCallback() {
     sessionStorage.removeItem('cafe24_csrf_token');
     sessionStorage.removeItem('cafe24_mall_id');
 
-    hideLoadingOverlay();
-    alert('✅ 카페24 인증 완료!\n\n이제 주문 데이터를 동기화할 수 있습니다.');
+    alert('✅ 카페24 인증 완료!\n\n이제 주문 데이터를 동기화할 수 있습니다.\n\n로그인 후 카페24 설정 페이지에서 확인하세요.');
 
-    // 카페24 설정 페이지로 이동
-    navigateTo('cafe24-settings');
+    // 페이지 리로드 (정상 로그인 흐름으로)
+    window.location.reload();
 
   } catch (err) {
-    hideLoadingOverlay();
     console.error('OAuth 토큰 발급 오류:', err);
     alert(`❌ 토큰 발급 실패\n\n${err.message}\n\n다시 시도해주세요.`);
+    window.location.reload();
   }
 
   return true;
