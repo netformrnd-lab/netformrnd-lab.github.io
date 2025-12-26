@@ -7573,6 +7573,17 @@ async function renderSettlement() {
           <span style="color: #f59e0b;">⏳</span> 정산 대기
           <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 10px; font-size: 12px;">${pendingSettlement.length}</span>
         </h2>
+        ${pendingSettlement.length > 0 ? `
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: var(--gray-600);">
+              <input type="checkbox" id="select-all-pending" onchange="toggleSelectAllPending()" style="cursor: pointer;">
+              전체 선택
+            </label>
+            <button id="delete-selected-btn" onclick="deleteSelectedSettlements()" style="padding: 8px 16px; background: #ef4444; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; display: none;">
+              선택 삭제
+            </button>
+          </div>
+        ` : ''}
       </div>
 
       ${pendingSettlement.length === 0 ? `
@@ -7594,6 +7605,8 @@ async function renderSettlement() {
               <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid ${isUrgent ? '#fecaca' : isWarning ? '#fed7aa' : 'var(--gray-200)'}; ${isUrgent ? 'border-left: 4px solid #ef4444;' : isWarning ? 'border-left: 4px solid #f59e0b;' : ''}">
                 <div style="display: flex; align-items: center; justify-content: space-between;">
                   <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                    <!-- 체크박스 -->
+                    <input type="checkbox" class="settlement-checkbox" data-deal-id="${d.id}" onchange="updateDeleteButton()" style="cursor: pointer; width: 16px; height: 16px;">
                     <!-- 타사/자사 뱃지 -->
                     <span style="background: ${isExternal ? '#fef3c7' : '#dbeafe'}; color: ${isExternal ? '#92400e' : '#1d4ed8'}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap;">
                       ${isExternal ? '타사' : '자사'}
@@ -7914,6 +7927,116 @@ async function deleteSettlementData(dealId) {
       }
     }
   });
+}
+
+// 전체 선택 토글
+function toggleSelectAllPending() {
+  const selectAllCheckbox = document.getElementById('select-all-pending');
+  const checkboxes = document.querySelectorAll('.settlement-checkbox');
+
+  checkboxes.forEach(cb => {
+    cb.checked = selectAllCheckbox.checked;
+  });
+
+  updateDeleteButton();
+}
+
+// 삭제 버튼 표시 업데이트
+function updateDeleteButton() {
+  const checkboxes = document.querySelectorAll('.settlement-checkbox');
+  const checkedBoxes = Array.from(checkboxes).filter(cb => cb.checked);
+  const deleteBtn = document.getElementById('delete-selected-btn');
+  const selectAllCheckbox = document.getElementById('select-all-pending');
+
+  if (deleteBtn) {
+    if (checkedBoxes.length > 0) {
+      deleteBtn.style.display = 'block';
+      deleteBtn.textContent = `선택 삭제 (${checkedBoxes.length})`;
+    } else {
+      deleteBtn.style.display = 'none';
+    }
+  }
+
+  // 전체 선택 체크박스 상태 업데이트
+  if (selectAllCheckbox) {
+    if (checkedBoxes.length === 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    } else if (checkedBoxes.length === checkboxes.length) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    }
+  }
+}
+
+// 선택된 정산 항목 일괄 삭제
+async function deleteSelectedSettlements() {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const checkboxes = document.querySelectorAll('.settlement-checkbox:checked');
+  const selectedIds = Array.from(checkboxes).map(cb => cb.dataset.dealId);
+
+  if (selectedIds.length === 0) {
+    showToast('❌ 선택된 항목이 없습니다');
+    return;
+  }
+
+  const selectedDeals = state.deals.filter(d => selectedIds.includes(d.id));
+  const dealNames = selectedDeals.map(d => d.title || d.brandName || '알 수 없음').join(', ');
+
+  if (!confirm(`선택한 ${selectedIds.length}개 항목의 정산 데이터를 삭제하시겠습니까?\n\n${dealNames.length > 100 ? dealNames.substring(0, 100) + '...' : dealNames}\n\n• 카페24 매핑 데이터가 초기화됩니다\n• 정산 상태가 리셋됩니다`)) {
+    return;
+  }
+
+  try {
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const dealId of selectedIds) {
+      try {
+        const deal = state.deals.find(d => d.id === dealId);
+        if (!deal) continue;
+
+        // 카페24 매핑 데이터 초기화
+        await db.collection('deals').doc(dealId).update({
+          cafe24Mapped: false,
+          totalSales: 0,
+          totalQty: 0,
+          supplierSettled: false,
+          sellerSettled: false,
+          status: 'completed'
+        });
+
+        // state 즉시 업데이트
+        Object.assign(deal, {
+          cafe24Mapped: false,
+          totalSales: 0,
+          totalQty: 0,
+          supplierSettled: false,
+          sellerSettled: false,
+          status: 'completed'
+        });
+
+        successCount++;
+      } catch (err) {
+        console.error(`Deal ${dealId} 삭제 실패:`, err);
+        failCount++;
+      }
+    }
+
+    if (successCount > 0) {
+      showToast(`✅ ${successCount}개 항목이 삭제되었습니다${failCount > 0 ? ` (실패: ${failCount}개)` : ''}`);
+      renderSettlement();
+    } else {
+      showToast('❌ 삭제에 실패했습니다');
+    }
+  } catch (err) {
+    console.error('일괄 삭제 실패:', err);
+    showToast('❌ 삭제 중 오류가 발생했습니다');
+  }
 }
 
 // 수동 입력 정산 데이터 일괄 삭제 (카페24 데이터만 유지)
