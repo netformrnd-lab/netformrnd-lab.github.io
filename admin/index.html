@@ -1971,9 +1971,6 @@
               <div class="nav-item" data-tab="productDataManager" onclick="switchTab('productDataManager')" style="font-size: 13px;">
                 <span>📋 상품 데이터 관리</span>
               </div>
-              <div class="nav-item" data-tab="cafe24Settings" onclick="switchTab('cafe24Settings')" style="font-size: 13px;">
-                <span>⚙️ API 연동 설정</span>
-              </div>
             </div>
           </div>
 
@@ -2015,8 +2012,8 @@
             </div>
           </div>
 
-          <!-- 관리자 섹션 (닫힌 상태, 비밀번호 필요) -->
-          <div class="nav-section" style="margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
+          <!-- 관리자 섹션 (관리자만 표시) -->
+          <div id="admin-menu-section" class="nav-section" style="display: none; margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
             <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #374151, #4b5563); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" onclick="toggleAdminMenu()">
               <span style="font-weight: 600; color: white;">관리자 🔐</span>
               <span id="admin-menu-arrow" style="transition: transform 0.2s; color: white;">▼</span>
@@ -2027,6 +2024,9 @@
               </div>
               <div class="nav-item" data-tab="dataUsage" onclick="switchTab('dataUsage')" style="font-size: 13px;">
                 <span>데이터 사용량</span>
+              </div>
+              <div class="nav-item" data-tab="cafe24Settings" onclick="switchTab('cafe24Settings')" style="font-size: 13px;">
+                <span>⚙️ 카페24 API 설정</span>
               </div>
               <div style="border-top: 1px dashed var(--gray-300); margin: 8px 0;"></div>
               <div class="nav-item" onclick="toggleAdvancedAdminMenu()" style="font-size: 12px; color: var(--gray-500); padding: 6px 12px;">
@@ -2544,6 +2544,13 @@ function showApp() {
     // 모바일 FAB (퀵배너) 숨김
     const mobileFab = document.getElementById('mobile-fab');
     if (mobileFab) mobileFab.style.display = 'none';
+  }
+
+  // 🎯 관리자 메뉴 접근 제한 - 관리자(admin)만 표시
+  const adminMenuSection = document.getElementById('admin-menu-section');
+  if (adminMenuSection) {
+    const user = state.currentAdmin || state.currentUser;
+    adminMenuSection.style.display = (user && user.role === 'admin') ? 'block' : 'none';
   }
 
   // 🎯 게스트 배너 표시
@@ -24414,9 +24421,45 @@ function toggleOKRMenu() {
 const CAFE24_CONFIG = {
   clientId: 'Ag6Iw2O9NNFqjAb7037UOD',
   clientSecret: 'eeolPKxRyk0jWeRJOSeL9J',
-  redirectUri: window.location.origin + '/admin/', // 현재 어드민 페이지 URL
-  scope: 'mall.read_order,mall.read_product,mall.read_customer'
+  redirectUri: 'https://partner-moyeoradeal.kr/admin/', // 카페24 개발자센터에 등록된 URI와 정확히 일치
+  scope: 'mall.read_order,mall.read_product,mall.read_customer',
+  // Cloud Run 프록시 URL (CORS 우회용)
+  tokenProxyUrl: 'https://cafe24oauthtoken-751113514390.asia-northeast3.run.app'
 };
+
+// 카페24 API 프록시 호출 함수 (CORS 우회)
+async function callCafe24Api(mallId, accessToken, apiEndpoint) {
+  console.log('API 호출:', { mallId, apiEndpoint });
+
+  const response = await fetch(CAFE24_CONFIG.tokenProxyUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      mallId: mallId,
+      accessToken: accessToken,
+      apiEndpoint: apiEndpoint
+    })
+  });
+
+  const data = await response.json();
+  console.log('API 응답:', response.status, data);
+
+  if (!response.ok) {
+    // 에러 메시지 추출 (객체인 경우 문자열로 변환)
+    let errorMsg = data.error_description || data.error || data.message;
+    if (typeof errorMsg === 'object') {
+      errorMsg = JSON.stringify(errorMsg);
+    }
+    const error = new Error(errorMsg || `API 오류: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+}
 
 // ==================== 카페24 OAuth 인증 ====================
 
@@ -24496,20 +24539,20 @@ async function handleOAuthCallback() {
   showLoadingOverlay('카페24 인증 처리 중...');
 
   try {
-    // Authorization Code로 Access Token 발급
-    const credentials = btoa(`${CAFE24_CONFIG.clientId}:${CAFE24_CONFIG.clientSecret}`);
-
-    const response = await fetch(`https://${mallId}.cafe24api.com/api/v2/oauth/token`, {
+    // Firebase Functions 프록시를 통해 Access Token 발급 (CORS 우회)
+    const response = await fetch(CAFE24_CONFIG.tokenProxyUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${credentials}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
+        'Content-Type': 'application/json'
       },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
+      body: JSON.stringify({
+        mallId: mallId,
         code: code,
-        redirect_uri: CAFE24_CONFIG.redirectUri
-      }).toString()
+        redirectUri: CAFE24_CONFIG.redirectUri,
+        clientId: CAFE24_CONFIG.clientId,
+        clientSecret: CAFE24_CONFIG.clientSecret,
+        grantType: 'authorization_code'
+      })
     });
 
     if (!response.ok) {
@@ -24518,7 +24561,24 @@ async function handleOAuthCallback() {
     }
 
     const tokenData = await response.json();
-    console.log('✅ Access Token 발급 성공:', tokenData);
+    console.log('✅ Access Token 발급 성공:', JSON.stringify(tokenData, null, 2));
+
+    // expires_in 기본값 설정 (Cafe24는 보통 2시간 = 7200초)
+    const expiresIn = tokenData.expires_in || 7200;
+    const tokenExpiry = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+
+    // refresh_token 만료 계산 (기본 14일)
+    let refreshTokenExpiry;
+    if (tokenData.refresh_token_expires_at) {
+      refreshTokenExpiry = tokenData.refresh_token_expires_at;
+    } else if (tokenData.refresh_token_expires_in) {
+      refreshTokenExpiry = new Date(Date.now() + (tokenData.refresh_token_expires_in * 1000)).toISOString();
+    } else {
+      refreshTokenExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    console.log('Token expiry:', tokenExpiry);
+    console.log('Refresh token expiry:', refreshTokenExpiry);
 
     // Firestore에 토큰 정보 저장
     await db.collection('settings').doc('cafe24').set({
@@ -24527,8 +24587,8 @@ async function handleOAuthCallback() {
       clientSecret: CAFE24_CONFIG.clientSecret,
       accessToken: tokenData.access_token,
       refreshToken: tokenData.refresh_token,
-      tokenExpiry: new Date(Date.now() + (tokenData.expires_in * 1000)).toISOString(),
-      refreshTokenExpiry: tokenData.refresh_token_expires_at || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      tokenExpiry: tokenExpiry,
+      refreshTokenExpiry: refreshTokenExpiry,
       scopes: tokenData.scopes || CAFE24_CONFIG.scope.split(','),
       lastTokenRefresh: new Date().toISOString(),
       lastSync: null,
@@ -24850,35 +24910,49 @@ async function refreshCafe24AccessToken() {
 
     const { mallId, refreshToken, clientId, clientSecret } = config;
 
-    // Base64 인코딩 (client_id:client_secret)
-    const credentials = btoa(`${clientId}:${clientSecret}`);
-
-    // 카페24 토큰 갱신 API 호출
-    const response = await fetch(
-      `https://${mallId}.cafe24api.com/api/v2/oauth/token`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${credentials}`,
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        body: `grant_type=refresh_token&refresh_token=${refreshToken}`
-      }
-    );
+    // Firebase Functions 프록시를 통해 토큰 갱신 (CORS 우회)
+    const response = await fetch(CAFE24_CONFIG.tokenProxyUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        mallId: mallId,
+        refreshToken: refreshToken,
+        clientId: clientId,
+        clientSecret: clientSecret,
+        grantType: 'refresh_token'
+      })
+    });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`토큰 갱신 실패: ${response.status} - ${errorText}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`토큰 갱신 실패: ${response.status} - ${errorData.error_description || ''}`);
     }
 
     const data = await response.json();
+    console.log('토큰 갱신 응답:', JSON.stringify(data, null, 2));
+
+    // expires_in 기본값 설정 (Cafe24는 보통 2시간 = 7200초)
+    const expiresIn = data.expires_in || 7200;
+    const tokenExpiry = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+
+    // refresh_token 만료 계산
+    let refreshTokenExpiry;
+    if (data.refresh_token_expires_at) {
+      refreshTokenExpiry = data.refresh_token_expires_at;
+    } else if (data.refresh_token_expires_in) {
+      refreshTokenExpiry = new Date(Date.now() + (data.refresh_token_expires_in * 1000)).toISOString();
+    } else {
+      refreshTokenExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    }
 
     // 새로운 토큰 정보 저장
     await db.collection('settings').doc('cafe24').update({
       accessToken: data.access_token,
       refreshToken: data.refresh_token, // 새로운 refresh token도 함께 발급됨
-      tokenExpiry: new Date(Date.now() + (data.expires_in * 1000)).toISOString(),
-      refreshTokenExpiry: data.refresh_token_expires_at || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      tokenExpiry: tokenExpiry,
+      refreshTokenExpiry: refreshTokenExpiry,
       lastTokenRefresh: new Date().toISOString()
     });
 
@@ -24901,55 +24975,34 @@ async function testCafe24Connection() {
   try {
     const doc = await db.collection('settings').doc('cafe24').get();
     if (!doc.exists || !doc.data().accessToken) {
-      alert('연동 정보가 없습니다.');
+      alert('❌ 연동 정보가 없습니다.\n\nOAuth 인증을 먼저 진행해주세요.');
       return;
     }
 
-    let { mallId, accessToken } = doc.data();
+    const config = doc.data();
+    const tokenExpiry = config.tokenExpiry ? new Date(config.tokenExpiry) : null;
+    const isExpired = tokenExpiry && tokenExpiry < new Date();
 
-    // 카페24 API 테스트 호출 (shop 정보 조회)
-    let response = await fetch(
-      `https://${mallId}.cafe24api.com/api/v2/admin/shop`,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'X-Cafe24-Api-Version': '2024-03-01'
-        }
-      }
-    );
-
-    // 401 에러 시 토큰 갱신 시도
-    if (response.status === 401) {
-      console.log('Access Token 만료, 갱신 시도...');
+    if (isExpired) {
+      alert(`⚠️ Access Token이 만료되었습니다.\n\n만료일: ${tokenExpiry.toLocaleString('ko-KR')}\n\nRefresh Token으로 갱신을 시도합니다.`);
       try {
-        accessToken = await refreshCafe24AccessToken();
-        // 갱신된 토큰으로 재시도
-        response = await fetch(
-          `https://${mallId}.cafe24api.com/api/v2/admin/shop`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-              'X-Cafe24-Api-Version': '2024-03-01'
-            }
-          }
-        );
+        await refreshCafe24AccessToken();
+        alert('✅ 토큰이 성공적으로 갱신되었습니다!');
       } catch (refreshErr) {
-        throw new Error('토큰 갱신 실패: ' + refreshErr.message);
+        alert('❌ 토큰 갱신 실패: ' + refreshErr.message);
       }
+      return;
     }
 
-    if (!response.ok) {
-      throw new Error(`API 호출 실패: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    alert(`✅ 연결 성공!\n\n쇼핑몰: ${data.shop.shop_name || mallId}\n상태: 정상`);
+    alert(`✅ 카페24 연동 상태: 정상\n\n` +
+      `📦 Mall ID: ${config.mallId}\n` +
+      `🔑 Access Token: ${config.accessToken?.substring(0, 10)}...\n` +
+      `🔄 Refresh Token: ${config.refreshToken ? '설정됨' : '없음'}\n` +
+      `⏰ 토큰 만료: ${tokenExpiry ? tokenExpiry.toLocaleString('ko-KR') : '알 수 없음'}`);
 
   } catch (err) {
     console.error('연결 테스트 오류:', err);
-    alert('❌ 연결 실패: ' + err.message + '\n\nAccess Token이 만료되었거나 잘못되었을 수 있습니다.');
+    alert('❌ 오류: ' + err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = originalText;
@@ -24964,14 +25017,14 @@ async function syncCafe24Orders(isAuto = false) {
   const btn = isAuto ? null : event.target;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '🔄 동기화 중...';
+    btn.textContent = '🔄 수집 중...';
   }
 
   try {
     // Firestore에서 설정 가져오기
     const doc = await db.collection('settings').doc('cafe24').get();
     if (!doc.exists || !doc.data().accessToken) {
-      if (!isAuto) alert('먼저 카페24 인증을 진행해주세요.');
+      if (!isAuto) alert('먼저 카페24 인증을 진행해주세요.\n\n관리자에게 문의하세요.');
       return;
     }
 
@@ -24983,77 +25036,77 @@ async function syncCafe24Orders(isAuto = false) {
     const startDateStr = startDate.toISOString().split('T')[0];
     const endDateStr = new Date().toISOString().split('T')[0];
 
-    // 카페24 API 호출
-    let ordersResponse = await fetch(
-      `https://${mallId}.cafe24api.com/api/v2/admin/orders?` +
-      `start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`,
-      {
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          'X-Cafe24-Api-Version': '2024-03-01'
-        }
-      }
-    );
+    // 프록시를 통해 카페24 API 호출
+    const apiEndpoint = `/api/v2/admin/orders?start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`;
 
-    // 401 에러 시 토큰 갱신 시도
-    if (ordersResponse.status === 401) {
-      console.log('Access Token 만료, 갱신 시도...');
-      try {
+    let ordersData;
+    try {
+      ordersData = await callCafe24Api(mallId, accessToken, apiEndpoint);
+    } catch (apiErr) {
+      // 401 에러 시 토큰 갱신 시도
+      if (apiErr.status === 401) {
+        console.log('Access Token 만료, 갱신 시도...');
         accessToken = await refreshCafe24AccessToken();
-        // 갱신된 토큰으로 재시도
-        ordersResponse = await fetch(
-          `https://${mallId}.cafe24api.com/api/v2/admin/orders?` +
-          `start_date=${startDateStr}&end_date=${endDateStr}&limit=1000`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json',
-              'X-Cafe24-Api-Version': '2024-03-01'
-            }
-          }
-        );
-      } catch (refreshErr) {
-        throw new Error('토큰 갱신 실패: ' + refreshErr.message + '\n\n설정에서 Refresh Token을 확인해주세요.');
+        ordersData = await callCafe24Api(mallId, accessToken, apiEndpoint);
+      } else {
+        throw apiErr;
       }
     }
 
-    if (!ordersResponse.ok) {
-      throw new Error('주문 데이터 조회 실패: ' + ordersResponse.statusText);
-    }
-
-    const ordersData = await ordersResponse.json();
     const orders = ordersData.orders || [];
 
-    // Firestore에 저장
-    let savedCount = 0;
-    const batch = db.batch();
+    if (orders.length === 0) {
+      if (!isAuto) alert('ℹ️ 수집할 새 주문이 없습니다.\n\n(최근 30일 기준)');
+      return;
+    }
+
+    // 기존 주문 ID 조회 (중복 체크용)
+    const existingOrdersSnapshot = await db.collection('cafe24_orders').get();
+    const existingOrderIds = new Set(existingOrdersSnapshot.docs.map(doc => doc.id));
+
+    // 새 주문과 중복 주문 분류
+    const newOrders = [];
+    const duplicateOrders = [];
 
     for (const order of orders) {
-      const docRef = db.collection('cafe24_orders').doc(order.order_id);
-      batch.set(docRef, {
-        order_id: order.order_id,
-        order_date: order.order_date,
-        member_id: order.member_id,
-        billing_name: order.billing_name,
-        total_amount: parseFloat(order.order_price_amount || 0),
-        payment_status: order.payment_status,
-        order_status: order.order_status,
-        items: order.items || [],
-        synced_at: new Date().toISOString()
-      }, { merge: true });
-
-      savedCount++;
-
-      // Firestore는 한 번에 500개까지만 batch 가능
-      if (savedCount % 500 === 0) {
-        await batch.commit();
+      if (existingOrderIds.has(order.order_id)) {
+        duplicateOrders.push(order);
+      } else {
+        newOrders.push(order);
       }
     }
 
-    // 남은 데이터 커밋
-    if (savedCount % 500 !== 0) {
-      await batch.commit();
+    // 새 주문만 Firestore에 저장
+    let savedCount = 0;
+    if (newOrders.length > 0) {
+      const batch = db.batch();
+
+      for (const order of newOrders) {
+        const docRef = db.collection('cafe24_orders').doc(order.order_id);
+        batch.set(docRef, {
+          order_id: order.order_id || '',
+          order_date: order.order_date || '',
+          member_id: order.member_id || '',
+          billing_name: order.billing_name || '',
+          total_amount: parseFloat(order.order_price_amount || 0),
+          payment_status: order.payment_status || '',
+          order_status: order.order_status || '',
+          items: order.items || [],
+          synced_at: new Date().toISOString()
+        });
+
+        savedCount++;
+
+        // Firestore는 한 번에 500개까지만 batch 가능
+        if (savedCount % 500 === 0) {
+          await batch.commit();
+        }
+      }
+
+      // 남은 데이터 커밋
+      if (savedCount > 0 && savedCount % 500 !== 0) {
+        await batch.commit();
+      }
     }
 
     // 마지막 동기화 시간 업데이트
@@ -25062,22 +25115,31 @@ async function syncCafe24Orders(isAuto = false) {
       lastSyncCount: savedCount
     });
 
+    // 결과 메시지
     if (!isAuto) {
-      alert(`✅ 총 ${savedCount}건의 주문 데이터를 동기화했습니다!`);
-      renderCafe24Settings();
+      if (newOrders.length > 0 && duplicateOrders.length > 0) {
+        alert(`✅ 주문 수집 완료!\n\n` +
+          `📥 새로 수집: ${newOrders.length}건\n` +
+          `🔄 이미 수집됨 (중복): ${duplicateOrders.length}건`);
+      } else if (newOrders.length > 0) {
+        alert(`✅ 주문 수집 완료!\n\n📥 새로 수집: ${newOrders.length}건`);
+      } else {
+        alert(`ℹ️ 새 주문이 없습니다.\n\n🔄 이미 수집된 주문: ${duplicateOrders.length}건`);
+      }
+      renderCafe24Orders();
     } else {
-      console.log(`✅ [자동 동기화] ${savedCount}건의 주문 데이터를 동기화했습니다 (${new Date().toLocaleString('ko-KR')})`);
+      console.log(`✅ [자동 수집] 새 주문 ${newOrders.length}건, 중복 ${duplicateOrders.length}건 (${new Date().toLocaleString('ko-KR')})`);
     }
 
   } catch (err) {
-    console.error('동기화 오류:', err);
+    console.error('주문 수집 오류:', err);
     if (!isAuto) {
-      alert('❌ 동기화 중 오류가 발생했습니다: ' + err.message);
+      alert('❌ 주문 수집 중 오류가 발생했습니다: ' + err.message);
     }
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🔄 주문 데이터 동기화';
+      btn.textContent = '🔄 주문 수집';
     }
   }
 }
@@ -26325,35 +26387,44 @@ async function renderProductDataManager() {
           <span>공구DB 매칭</span>
         </div>
         <div style="display: flex; align-items: center; gap: 6px;">
-          <span style="display: inline-block; width: 14px; height: 14px; background: #fef3c7; border-radius: 3px;"></span>
-          <span>수정 가능 (정산서 반영)</span>
+          <span style="display: inline-block; width: 14px; height: 14px; background: #dbeafe; border: 2px solid #3b82f6; border-radius: 3px;"></span>
+          <span style="font-weight: 600; color: #1d4ed8;">👤 셀러 정산</span>
         </div>
         <div style="display: flex; align-items: center; gap: 6px;">
-          <span style="display: inline-block; width: 14px; height: 14px; border: 2px solid #3b82f6; border-radius: 3px;"></span>
-          <span style="font-weight: 600; color: #1d4ed8;">📋 정산서 반영 영역</span>
+          <span style="display: inline-block; width: 14px; height: 14px; background: #fef3c7; border: 2px solid #f59e0b; border-radius: 3px;"></span>
+          <span style="font-weight: 600; color: #92400e;">🏭 공급사 정산</span>
         </div>
       </div>
 
       <!-- 상품 테이블 -->
-      <div class="card" style="border: 2px solid transparent; background: linear-gradient(white, white) padding-box, linear-gradient(90deg, transparent 0%, transparent 55%, #3b82f6 55%, #3b82f6 100%) border-box;">
+      <div class="card" style="padding: 0; overflow: hidden;">
         <div style="overflow-x: auto;">
-          <table class="data-table" id="pdm-table">
+          <table class="data-table" id="pdm-table" style="margin: 0;">
             <thead>
               <tr style="background: var(--gray-50);">
                 <th style="width: 40px; text-align: center;">#</th>
                 <th style="width: 70px; text-align: center; background: #dbeafe;">출처</th>
                 <th style="min-width: 80px; background: #dbeafe;">셀러명<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24</span></th>
-                <th style="min-width: 180px; background: #dbeafe;">상품명<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24 주문</span></th>
-                <th style="min-width: 160px; background: #f0fdf4;">공구 SKU<br><span style="font-size:9px;color:#16a34a;font-weight:400;">공구DB 매칭</span></th>
-                <th style="min-width: 80px; background: #f0fdf4;">공급사<br><span style="font-size:9px;color:#16a34a;font-weight:400;">공구DB</span></th>
-                <th style="width: 60px; text-align: center; background: #dbeafe;">구분<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24</span></th>
-                <th style="width: 70px; text-align: right; background: #dbeafe;">판매단가<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24</span></th>
-                <th style="width: 50px; text-align: center; background: #dbeafe;">수량<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24</span></th>
-                <th style="width: 90px; text-align: right; background: #dbeafe;">판매금액<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24</span></th>
-                <th style="width: 80px; text-align: center; background: #fef3c7; border-left: 3px solid #3b82f6;">마진율(%)<br><span style="font-size:9px;color:#92400e;font-weight:400;">공구DB→정산</span></th>
-                <th style="width: 100px; text-align: right; background: #fef3c7;">공급가(V+)<br><span style="font-size:9px;color:#92400e;font-weight:400;">공구DB→정산</span></th>
-                <th style="width: 90px; text-align: right; background: #dcfce7;">마진금액<br><span style="font-size:9px;color:#166534;font-weight:400;">자동계산→정산</span></th>
-                <th style="width: 70px; text-align: center;">상태</th>
+                <th style="min-width: 150px; background: #dbeafe;">상품명<br><span style="font-size:9px;color:#6b7280;font-weight:400;">카페24 주문</span></th>
+                <th style="min-width: 140px; background: #f0fdf4;">공구 SKU<br><span style="font-size:9px;color:#16a34a;font-weight:400;">공구DB 매칭</span></th>
+                <th style="width: 70px; text-align: center; background: #f0fdf4;">공급사<br><span style="font-size:9px;color:#16a34a;font-weight:400;">공구DB</span></th>
+                <th style="width: 50px; text-align: center; background: #dbeafe;">구분</th>
+                <th style="width: 70px; text-align: right; background: #dbeafe;">판매단가</th>
+                <th style="width: 45px; text-align: center; background: #dbeafe;">수량</th>
+                <th style="width: 80px; text-align: right; background: #dbeafe;">판매금액</th>
+                <th colspan="3" style="text-align: center; background: #dbeafe; border: 2px solid #3b82f6; border-bottom: none;">👤 셀러 정산</th>
+                <th colspan="3" style="text-align: center; background: #fef3c7; border: 2px solid #f59e0b; border-bottom: none;">🏭 공급사 정산</th>
+                <th style="width: 60px; text-align: center;">상태</th>
+              </tr>
+              <tr style="background: var(--gray-50);">
+                <th colspan="10"></th>
+                <th style="width: 60px; text-align: center; background: #eff6ff; border-left: 2px solid #3b82f6;">마진율(%)<br><span style="font-size:8px;color:#1d4ed8;">공구정보</span></th>
+                <th style="width: 80px; text-align: right; background: #eff6ff;">마진금액<br><span style="font-size:8px;color:#1d4ed8;">자동계산</span></th>
+                <th style="width: 70px; text-align: right; background: #eff6ff; border-right: 2px solid #3b82f6;">셀러지급<br><span style="font-size:8px;color:#1d4ed8;">-3.3%</span></th>
+                <th style="width: 60px; text-align: center; background: #fef9c3; border-left: 2px solid #f59e0b;">수수료(%)<br><span style="font-size:8px;color:#92400e;">상품DB</span></th>
+                <th style="width: 80px; text-align: right; background: #fef9c3;">공급가(V+)<br><span style="font-size:8px;color:#92400e;">상품DB</span></th>
+                <th style="width: 80px; text-align: right; background: #fef9c3; border-right: 2px solid #f59e0b;">공급가액<br><span style="font-size:8px;color:#92400e;">자동계산</span></th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="pdm-tbody">
@@ -26463,16 +26534,29 @@ async function renderProductDataManager() {
                 // 공급사명 가져오기
                 const supplierName = bestMatch?.supplierName || '-';
 
+                // 공급사 수수료율 (상품DB에서 조회)
+                const matchedSupplierProduct = supplierProducts.find(sp =>
+                  (sp.productName && p.productName && sp.productName.includes(p.productName.split(' ')[0])) ||
+                  (bestMatch && sp.productName === bestMatch.productName)
+                );
+                const commissionRate = matchedSupplierProduct?.commission || 0;
+
+                // 셀러 정산 계산
+                const sellerMarginAmount = finalMarginAmount;
+                const sellerWithholdingTax = Math.round(sellerMarginAmount * 0.033);
+                const sellerPayment = sellerMarginAmount - sellerWithholdingTax;
+
+                // 공급사 정산 계산
+                const supplyAmount = finalSupply * p.quantity;
+
                 return `
                   <tr data-idx="${idx}" data-key="${p.sellerName}___${p.productName}" data-type="${p.productType}">
-                    <td style="text-align: center; color: var(--gray-500); font-size: 11px;">${idx + 1}</td>
+                    <td style="text-align: center; color: var(--gray-500); font-size: 10px;">${idx + 1}</td>
                     <td style="text-align: center; background: #eff6ff;">
-                      <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 6px; border-radius: 8px; font-size: 10px;">
-                        카페24
-                      </span>
+                      <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 5px; border-radius: 6px; font-size: 9px;">카페24</span>
                     </td>
-                    <td style="font-weight: 600; font-size: 12px; background: #eff6ff;">${p.sellerName}</td>
-                    <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #eff6ff;" title="${p.productName}">${p.productName}</td>
+                    <td style="font-weight: 600; font-size: 11px; background: #eff6ff;">${p.sellerName}</td>
+                    <td style="font-size: 10px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #eff6ff;" title="${p.productName}">${p.productName}</td>
                     <td style="background: #f0fdf4;">
                       <select class="pdm-deal-product-select" data-key="${p.sellerName}___${p.productName}"
                         style="${selectStyle}"
@@ -26481,29 +26565,40 @@ async function renderProductDataManager() {
                       </select>
                       ${autoMatchLabel}
                     </td>
-                    <td style="font-size: 11px; background: #f0fdf4; color: #166534;" class="pdm-supplier-name">${supplierName}</td>
+                    <td style="font-size: 10px; background: #f0fdf4; color: #166534; text-align: center;" class="pdm-supplier-name">${supplierName}</td>
                     <td style="text-align: center; background: #eff6ff;">
-                      <span style="background: ${p.productType === 'external' ? '#fef3c7' : '#dbeafe'}; color: ${p.productType === 'external' ? '#92400e' : '#1d4ed8'}; padding: 2px 6px; border-radius: 8px; font-size: 10px;">
+                      <span style="background: ${p.productType === 'external' ? '#fef3c7' : '#dbeafe'}; color: ${p.productType === 'external' ? '#92400e' : '#1d4ed8'}; padding: 2px 5px; border-radius: 6px; font-size: 9px;">
                         ${p.productType === 'external' ? '타사' : '자사'}
                       </span>
                     </td>
-                    <td style="text-align: right; font-size: 11px; background: #eff6ff;">${p.unitPrice.toLocaleString()}</td>
-                    <td style="text-align: center; font-size: 11px; background: #eff6ff;">${p.quantity}</td>
-                    <td style="text-align: right; font-weight: 600; font-size: 11px; background: #eff6ff;">${p.totalAmount.toLocaleString()}</td>
-                    <td style="text-align: center; background: #fef3c7; border-left: 3px solid #3b82f6;">
+                    <td style="text-align: right; font-size: 10px; background: #eff6ff;">${p.unitPrice.toLocaleString()}</td>
+                    <td style="text-align: center; font-size: 10px; background: #eff6ff;">${p.quantity}</td>
+                    <td style="text-align: right; font-weight: 600; font-size: 10px; background: #eff6ff;">${p.totalAmount.toLocaleString()}</td>
+                    <!-- 셀러 정산 -->
+                    <td style="text-align: center; background: #eff6ff; border-left: 2px solid #3b82f6; font-size: 10px;">
                       <input type="number" class="pdm-margin-input" data-key="${p.sellerName}___${p.productName}"
                         value="${finalMargin}" step="0.1" min="0" max="100"
-                        style="width: 55px; text-align: center; border: 1px solid #e5e7eb; border-radius: 4px; padding: 3px; font-size: 11px;${bestMatch ? ' background: #dcfce7;' : ''}"
+                        style="width: 45px; text-align: center; border: 1px solid #e5e7eb; border-radius: 4px; padding: 2px; font-size: 10px;${bestMatch ? ' background: #dcfce7;' : ''}"
                         onchange="updateProductCalc(this)">
                     </td>
-                    <td style="text-align: right; background: #fef3c7;">
+                    <td style="text-align: right; background: #eff6ff; font-weight: 600; color: #1d4ed8; font-size: 10px;" class="pdm-margin-amount">
+                      ${sellerMarginAmount.toLocaleString()}
+                    </td>
+                    <td style="text-align: right; background: #eff6ff; border-right: 2px solid #3b82f6; font-size: 10px; color: #059669;" class="pdm-seller-payment">
+                      ${sellerPayment.toLocaleString()}
+                    </td>
+                    <!-- 공급사 정산 -->
+                    <td style="text-align: center; background: #fef9c3; border-left: 2px solid #f59e0b; font-size: 10px;" class="pdm-commission">
+                      ${commissionRate > 0 ? commissionRate + '%' : '-'}
+                    </td>
+                    <td style="text-align: right; background: #fef9c3; font-size: 10px;">
                       <input type="number" class="pdm-supply-input" data-key="${p.sellerName}___${p.productName}"
                         value="${finalSupply}" step="100" min="0"
-                        style="width: 80px; text-align: right; border: 1px solid #e5e7eb; border-radius: 4px; padding: 3px; font-size: 11px;${bestMatch ? ' background: #dcfce7;' : ''}"
+                        style="width: 65px; text-align: right; border: 1px solid #e5e7eb; border-radius: 4px; padding: 2px; font-size: 10px;${bestMatch ? ' background: #dcfce7;' : ''}"
                         onchange="updateProductCalc(this)" ${p.productType === 'inhouse' ? 'disabled placeholder="자사"' : ''}>
                     </td>
-                    <td style="text-align: right; background: #dcfce7; font-weight: 600; color: #166534; font-size: 11px;" class="pdm-margin-amount">
-                      ${finalMarginAmount.toLocaleString()}
+                    <td style="text-align: right; background: #fef9c3; border-right: 2px solid #f59e0b; font-weight: 600; color: #b45309; font-size: 10px;" class="pdm-supply-amount">
+                      ${p.productType === 'external' ? supplyAmount.toLocaleString() : '-'}
                     </td>
                     <td style="text-align: center;">${finalStatusBadge}</td>
                   </tr>
@@ -26515,23 +26610,28 @@ async function renderProductDataManager() {
       </div>
 
       <!-- 안내 -->
-      <div style="margin-top: 16px; padding: 16px; background: #f0f9ff; border-radius: 12px; border-left: 4px solid #3b82f6;">
-        <div style="font-weight: 600; color: #1d4ed8; margin-bottom: 8px;">💡 컬럼 설명</div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; font-size: 12px;">
+      <div style="margin-top: 16px; padding: 16px; background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0;">
+        <div style="font-weight: 600; color: #334155; margin-bottom: 12px;">💡 컬럼 설명</div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; font-size: 12px;">
           <div style="background: #eff6ff; padding: 10px; border-radius: 8px;">
-            <div style="font-weight: 600; color: #1d4ed8; margin-bottom: 4px;">📦 카페24 데이터 (파란색)</div>
-            <div style="color: #4b5563;">셀러명, 상품명, 구분, 판매단가, 수량, 판매금액</div>
+            <div style="font-weight: 600; color: #1d4ed8; margin-bottom: 4px;">📦 카페24 데이터</div>
+            <div style="color: #4b5563;">셀러명, 상품명, 구분, 단가, 수량, 금액</div>
             <div style="color: #6b7280; font-size: 11px; margin-top: 2px;">→ 카페24 주문에서 자동 수집</div>
           </div>
           <div style="background: #f0fdf4; padding: 10px; border-radius: 8px;">
-            <div style="font-weight: 600; color: #16a34a; margin-bottom: 4px;">🔗 공구DB 매칭 (초록색)</div>
+            <div style="font-weight: 600; color: #16a34a; margin-bottom: 4px;">🔗 공구DB 매칭</div>
             <div style="color: #4b5563;">공구 SKU, 공급사</div>
-            <div style="color: #6b7280; font-size: 11px; margin-top: 2px;">→ 상품명 유사도로 자동매칭 (수동 변경 가능)</div>
+            <div style="color: #6b7280; font-size: 11px; margin-top: 2px;">→ 상품명 유사도 자동매칭</div>
           </div>
-          <div style="background: #fef3c7; padding: 10px; border-radius: 8px; border: 2px solid #3b82f6;">
-            <div style="font-weight: 600; color: #92400e; margin-bottom: 4px;">📋 정산서 반영 (노란색+파란테두리)</div>
-            <div style="color: #4b5563;">마진율(%), 공급가(V+), 마진금액</div>
-            <div style="color: #6b7280; font-size: 11px; margin-top: 2px;">→ 공구DB에서 가져오며, 정산서 생성 시 사용</div>
+          <div style="background: #eff6ff; padding: 10px; border-radius: 8px; border: 2px solid #3b82f6;">
+            <div style="font-weight: 600; color: #1d4ed8; margin-bottom: 4px;">👤 셀러 정산</div>
+            <div style="color: #4b5563;">마진율(공구정보), 마진금액, 셀러지급</div>
+            <div style="color: #6b7280; font-size: 11px; margin-top: 2px;">→ 공구현황의 상품별 마진율 적용</div>
+          </div>
+          <div style="background: #fef9c3; padding: 10px; border-radius: 8px; border: 2px solid #f59e0b;">
+            <div style="font-weight: 600; color: #92400e; margin-bottom: 4px;">🏭 공급사 정산</div>
+            <div style="color: #4b5563;">수수료(상품DB), 공급가(V+), 공급가액</div>
+            <div style="color: #6b7280; font-size: 11px; margin-top: 2px;">→ 상품DB의 수수료율/공급가 적용</div>
           </div>
         </div>
       </div>
@@ -26597,19 +26697,25 @@ function updateProductCalc(input) {
   const marginInput = row.querySelector('.pdm-margin-input');
   const supplyInput = row.querySelector('.pdm-supply-input');
   const marginAmountCell = row.querySelector('.pdm-margin-amount');
-  const supplyTotalCell = row.querySelector('.pdm-supply-total');
+  const sellerPaymentCell = row.querySelector('.pdm-seller-payment');
+  const supplyAmountCell = row.querySelector('.pdm-supply-amount');
 
   const marginRate = Number(marginInput?.value) || 0;
   const supplyPrice = Number(supplyInput?.value) || 0;
 
   // 마진금액 계산
   const marginAmount = Math.round(product.totalAmount * marginRate / 100);
-  marginAmountCell.textContent = marginAmount.toLocaleString() + '원';
+  if (marginAmountCell) marginAmountCell.textContent = marginAmount.toLocaleString();
+
+  // 셀러 지급액 계산 (마진금액 - 3.3% 원천징수)
+  const withholdingTax = Math.round(marginAmount * 0.033);
+  const sellerPayment = marginAmount - withholdingTax;
+  if (sellerPaymentCell) sellerPaymentCell.textContent = sellerPayment.toLocaleString();
 
   // 공급가액 계산 (타사만)
-  if (product.productType === 'external') {
-    const supplyTotal = supplyPrice * product.quantity;
-    supplyTotalCell.textContent = supplyTotal.toLocaleString() + '원';
+  if (product.productType === 'external' && supplyAmountCell) {
+    const supplyAmount = supplyPrice * product.quantity;
+    supplyAmountCell.textContent = supplyAmount.toLocaleString();
   }
 
   // 입력 필드 배경색 변경 (수정됨 표시)
@@ -26673,8 +26779,22 @@ function matchDealProduct(select) {
 
   // 계산 업데이트
   const marginAmountCell = row.querySelector('.pdm-margin-amount');
+  const sellerPaymentCell = row.querySelector('.pdm-seller-payment');
+  const supplyAmountCell = row.querySelector('.pdm-supply-amount');
+
   const marginAmount = Math.round(product.totalAmount * marginRate / 100);
-  marginAmountCell.textContent = marginAmount.toLocaleString();
+  if (marginAmountCell) marginAmountCell.textContent = marginAmount.toLocaleString();
+
+  // 셀러 지급액 계산 (마진금액 - 3.3% 원천징수)
+  const withholdingTax = Math.round(marginAmount * 0.033);
+  const sellerPayment = marginAmount - withholdingTax;
+  if (sellerPaymentCell) sellerPaymentCell.textContent = sellerPayment.toLocaleString();
+
+  // 공급가액 계산 (타사만)
+  if (product.productType === 'external' && supplyAmountCell) {
+    const supplyAmount = supplyPrice * product.quantity;
+    supplyAmountCell.textContent = supplyAmount.toLocaleString();
+  }
 
   // 상태 업데이트
   const statusCell = row.querySelector('td:last-child');
@@ -26856,8 +26976,19 @@ async function previewSettlementGeneration() {
 
     // 셀러별 집계
     const sellerStats = {};
+    const supplierStats = {}; // 공급사별 집계 추가
+
     validOrders.forEach(o => {
       const sellerName = o.seller_name || '미지정';
+      const supplierName = o.supplier_name || '';
+      const productType = o.product_type || 'inhouse';
+      const qty = Number(o.quantity) || 1;
+      const amount = Number(o.total_amount) || 0;
+      const marginRate = Number(o.margin_rate) || 0;
+      const supplyPrice = Number(o.supply_price) || 0;
+      const productName = o.product_name || '상품명 없음';
+
+      // 셀러별 집계
       if (!sellerStats[sellerName]) {
         sellerStats[sellerName] = {
           orderCount: 0,
@@ -26865,15 +26996,10 @@ async function previewSettlementGeneration() {
           totalAmount: 0,
           marginAmount: 0,
           supplyAmount: 0,
-          productType: o.product_type || 'inhouse',
+          productType: productType,
           products: {}
         };
       }
-      const qty = Number(o.quantity) || 1;
-      const amount = Number(o.total_amount) || 0;
-      const marginRate = Number(o.margin_rate) || 0;
-      const supplyPrice = Number(o.supply_price) || 0;
-
       sellerStats[sellerName].orderCount += 1;
       sellerStats[sellerName].totalQuantity += qty;
       sellerStats[sellerName].totalAmount += amount;
@@ -26881,63 +27007,124 @@ async function previewSettlementGeneration() {
       sellerStats[sellerName].supplyAmount += supplyPrice * qty;
 
       // 상품별 집계
-      const productName = o.product_name || '상품명 없음';
       if (!sellerStats[sellerName].products[productName]) {
-        sellerStats[sellerName].products[productName] = { quantity: 0, amount: 0, marginRate };
+        sellerStats[sellerName].products[productName] = { quantity: 0, amount: 0, marginRate, supplyPrice };
       }
       sellerStats[sellerName].products[productName].quantity += qty;
       sellerStats[sellerName].products[productName].amount += amount;
+
+      // 공급사별 집계 (타사 상품만)
+      if (productType === 'external' && supplierName) {
+        if (!supplierStats[supplierName]) {
+          supplierStats[supplierName] = {
+            orderCount: 0,
+            totalQuantity: 0,
+            supplyAmount: 0,
+            products: {}
+          };
+        }
+        supplierStats[supplierName].orderCount += 1;
+        supplierStats[supplierName].totalQuantity += qty;
+        supplierStats[supplierName].supplyAmount += supplyPrice * qty;
+
+        if (!supplierStats[supplierName].products[productName]) {
+          supplierStats[supplierName].products[productName] = { quantity: 0, supplyPrice };
+        }
+        supplierStats[supplierName].products[productName].quantity += qty;
+      }
     });
 
     const sellerCount = Object.keys(sellerStats).length;
+    const supplierCount = Object.keys(supplierStats).length;
     const totalAmount = Object.values(sellerStats).reduce((sum, s) => sum + s.totalAmount, 0);
     const totalMargin = Object.values(sellerStats).reduce((sum, s) => sum + s.marginAmount, 0);
+    const totalSupply = Object.values(supplierStats).reduce((sum, s) => sum + s.supplyAmount, 0);
 
     previewEl.innerHTML = `
       <div style="margin-bottom: 16px;">
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
-          <div style="background: #dbeafe; padding: 12px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 11px; color: #1d4ed8;">셀러 수</div>
-            <div style="font-size: 20px; font-weight: 700; color: #1e40af;">${sellerCount}명</div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px;">
+          <div style="background: #dbeafe; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #1d4ed8;">👤 셀러</div>
+            <div style="font-size: 18px; font-weight: 700; color: #1e40af;">${sellerCount}명</div>
           </div>
-          <div style="background: #dcfce7; padding: 12px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 11px; color: #166534;">총 매출액</div>
-            <div style="font-size: 20px; font-weight: 700; color: #15803d;">${totalAmount.toLocaleString()}원</div>
+          <div style="background: #fef3c7; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #92400e;">🏭 공급사</div>
+            <div style="font-size: 18px; font-weight: 700; color: #b45309;">${supplierCount}곳</div>
           </div>
-          <div style="background: #fef3c7; padding: 12px; border-radius: 8px; text-align: center;">
-            <div style="font-size: 11px; color: #92400e;">총 마진금</div>
-            <div style="font-size: 20px; font-weight: 700; color: #b45309;">${totalMargin.toLocaleString()}원</div>
+          <div style="background: #dcfce7; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #166534;">총 매출액</div>
+            <div style="font-size: 18px; font-weight: 700; color: #15803d;">${totalAmount.toLocaleString()}</div>
+          </div>
+          <div style="background: #ede9fe; padding: 10px; border-radius: 8px; text-align: center;">
+            <div style="font-size: 10px; color: #7c3aed;">셀러 마진</div>
+            <div style="font-size: 18px; font-weight: 700; color: #6d28d9;">${totalMargin.toLocaleString()}</div>
           </div>
         </div>
 
-        <div style="font-weight: 600; margin-bottom: 8px; font-size: 13px;">📋 셀러별 정산 요약</div>
-        <div style="max-height: 200px; overflow-y: auto;">
-          <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-            <thead>
-              <tr style="background: #f3f4f6;">
-                <th style="padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb;">셀러명</th>
-                <th style="padding: 8px; text-align: right; border-bottom: 1px solid #e5e7eb;">주문수</th>
-                <th style="padding: 8px; text-align: right; border-bottom: 1px solid #e5e7eb;">매출액</th>
-                <th style="padding: 8px; text-align: right; border-bottom: 1px solid #e5e7eb;">마진금</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${Object.entries(sellerStats).map(([name, s]) => `
-                <tr>
-                  <td style="padding: 8px; border-bottom: 1px solid #f3f4f6;">${name}</td>
-                  <td style="padding: 8px; text-align: right; border-bottom: 1px solid #f3f4f6;">${s.orderCount}건</td>
-                  <td style="padding: 8px; text-align: right; border-bottom: 1px solid #f3f4f6;">${s.totalAmount.toLocaleString()}원</td>
-                  <td style="padding: 8px; text-align: right; border-bottom: 1px solid #f3f4f6; color: #059669; font-weight: 600;">${s.marginAmount.toLocaleString()}원</td>
+        <!-- 셀러 정산 -->
+        <div style="margin-bottom: 16px; padding: 12px; background: #eff6ff; border-radius: 8px; border: 2px solid #3b82f6;">
+          <div style="font-weight: 600; margin-bottom: 8px; font-size: 13px; color: #1d4ed8;">👤 셀러 정산 (${sellerCount}건)</div>
+          <div style="max-height: 120px; overflow-y: auto;">
+            <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: #dbeafe;">
+                  <th style="padding: 6px; text-align: left;">셀러명</th>
+                  <th style="padding: 6px; text-align: right;">매출액</th>
+                  <th style="padding: 6px; text-align: right;">마진금액</th>
+                  <th style="padding: 6px; text-align: right;">지급액(-3.3%)</th>
                 </tr>
-              `).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                ${Object.entries(sellerStats).map(([name, s]) => {
+                  const payment = s.marginAmount - Math.round(s.marginAmount * 0.033);
+                  return `
+                  <tr>
+                    <td style="padding: 6px;">${name}</td>
+                    <td style="padding: 6px; text-align: right;">${s.totalAmount.toLocaleString()}</td>
+                    <td style="padding: 6px; text-align: right; color: #1d4ed8;">${s.marginAmount.toLocaleString()}</td>
+                    <td style="padding: 6px; text-align: right; color: #059669; font-weight: 600;">${payment.toLocaleString()}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        <!-- 공급사 정산 -->
+        ${supplierCount > 0 ? `
+        <div style="padding: 12px; background: #fef9c3; border-radius: 8px; border: 2px solid #f59e0b;">
+          <div style="font-weight: 600; margin-bottom: 8px; font-size: 13px; color: #92400e;">🏭 공급사 정산 (${supplierCount}건)</div>
+          <div style="max-height: 120px; overflow-y: auto;">
+            <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+              <thead>
+                <tr style="background: #fde68a;">
+                  <th style="padding: 6px; text-align: left;">공급사명</th>
+                  <th style="padding: 6px; text-align: right;">수량</th>
+                  <th style="padding: 6px; text-align: right;">공급가액</th>
+                  <th style="padding: 6px; text-align: right;">VAT 별도</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${Object.entries(supplierStats).map(([name, s]) => {
+                  const vatExcluded = Math.round(s.supplyAmount / 1.1);
+                  return `
+                  <tr>
+                    <td style="padding: 6px;">${name}</td>
+                    <td style="padding: 6px; text-align: right;">${s.totalQuantity}개</td>
+                    <td style="padding: 6px; text-align: right; color: #92400e;">${s.supplyAmount.toLocaleString()}</td>
+                    <td style="padding: 6px; text-align: right; color: #b45309; font-weight: 600;">${vatExcluded.toLocaleString()}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        ` : '<div style="padding: 12px; background: #f3f4f6; border-radius: 8px; text-align: center; color: #6b7280; font-size: 12px;">타사 상품이 없어 공급사 정산이 생성되지 않습니다.</div>'}
       </div>
     `;
 
     // 전역에 저장 (생성 시 사용)
-    window.settlementPreviewData = { startDate, endDate, sellerStats, validOrders };
+    window.settlementPreviewData = { startDate, endDate, sellerStats, supplierStats, validOrders };
 
   } catch (err) {
     console.error(err);
@@ -26955,17 +27142,21 @@ async function executeSettlementGeneration() {
     return;
   }
 
-  if (!confirm(`${Object.keys(previewData.sellerStats).length}명의 셀러 정산서를 생성하시겠습니까?`)) {
+  const sellerCount = Object.keys(previewData.sellerStats).length;
+  const supplierCount = Object.keys(previewData.supplierStats || {}).length;
+
+  if (!confirm(`셀러 ${sellerCount}건, 공급사 ${supplierCount}건의 정산서를 생성하시겠습니까?`)) {
     return;
   }
 
   try {
-    const { startDate, endDate, sellerStats, validOrders } = previewData;
+    const { startDate, endDate, sellerStats, supplierStats, validOrders } = previewData;
     const period = `${startDate}~${endDate}`;
     const today = new Date().toISOString().split('T')[0];
-    let createdCount = 0;
+    let sellerCreatedCount = 0;
+    let supplierCreatedCount = 0;
 
-    // 셀러별 정산서 생성
+    // 1. 셀러별 정산서 생성
     for (const [sellerName, stats] of Object.entries(sellerStats)) {
       // 상품별 상세 데이터
       const salesItems = Object.entries(stats.products).map(([productName, p]) => ({
@@ -26973,6 +27164,7 @@ async function executeSettlementGeneration() {
         quantity: p.quantity,
         amount: p.amount,
         marginRate: p.marginRate,
+        supplyPrice: p.supplyPrice || 0,
         marginAmount: Math.round(p.amount * p.marginRate / 100)
       }));
 
@@ -26989,6 +27181,9 @@ async function executeSettlementGeneration() {
         .where('source', '==', 'productData')
         .get();
 
+      const withholdingTax = Math.round(stats.marginAmount * 0.033);
+      const actualPayment = stats.marginAmount - withholdingTax;
+
       if (!existingQuery.empty) {
         // 기존 정산서 업데이트
         const docId = existingQuery.docs[0].id;
@@ -26998,19 +27193,18 @@ async function executeSettlementGeneration() {
           salesAmount: stats.totalAmount,
           marginAmount: stats.marginAmount,
           supplyAmount: stats.supplyAmount,
+          withholdingTax,
+          actualPayment,
           productType: stats.productType,
           updatedAt: new Date().toISOString()
         });
       } else {
         // 새 정산서 생성
-        const withholdingTax = Math.round(stats.marginAmount * 0.033);
-        const actualPayment = stats.marginAmount - withholdingTax;
-
         await db.collection('sellerSettlements').add({
           type: 'seller',
           sellerName,
           sellerId: seller?.id || '',
-          brandName: '-', // 여러 브랜드 가능
+          brandName: '-',
           productType: stats.productType,
           dealPeriod: period,
           salesItems,
@@ -27028,10 +27222,67 @@ async function executeSettlementGeneration() {
           createdBy: 'generateSettlementFromProductData'
         });
       }
-      createdCount++;
+      sellerCreatedCount++;
     }
 
-    showToast(`✅ ${createdCount}건의 정산서가 생성되었습니다!`, 'success');
+    // 2. 공급사별 정산서 생성 (타사 상품)
+    for (const [supplierName, stats] of Object.entries(supplierStats || {})) {
+      // 상품별 상세 데이터
+      const supplyItems = Object.entries(stats.products).map(([productName, p]) => ({
+        productName,
+        quantity: p.quantity,
+        supplyPrice: p.supplyPrice || 0,
+        supplyAmount: (p.supplyPrice || 0) * p.quantity
+      }));
+
+      // 공급사 정보 찾기
+      const supplier = state.suppliers?.find(s => s.name === supplierName);
+
+      // 기존 정산서 확인 (중복 방지)
+      const existingQuery = await db.collection('supplierSettlements')
+        .where('supplierName', '==', supplierName)
+        .where('dealPeriod', '==', period)
+        .where('source', '==', 'productData')
+        .get();
+
+      const totalSupplyAmount = stats.supplyAmount;
+      const vatAmount = Math.round(totalSupplyAmount / 11); // VAT
+      const supplyAmountExVat = totalSupplyAmount - vatAmount;
+
+      if (!existingQuery.empty) {
+        // 기존 정산서 업데이트
+        const docId = existingQuery.docs[0].id;
+        await db.collection('supplierSettlements').doc(docId).update({
+          supplyItems,
+          totalQuantity: stats.totalQuantity,
+          supplyAmount: totalSupplyAmount,
+          supplyAmountExVat,
+          vatAmount,
+          updatedAt: new Date().toISOString()
+        });
+      } else {
+        // 새 정산서 생성
+        await db.collection('supplierSettlements').add({
+          type: 'supplier',
+          supplierName,
+          supplierId: supplier?.id || '',
+          dealPeriod: period,
+          supplyItems,
+          totalQuantity: stats.totalQuantity,
+          supplyAmount: totalSupplyAmount,
+          supplyAmountExVat,
+          vatAmount,
+          settlementDate: today,
+          isCompleted: false,
+          source: 'productData',
+          createdAt: new Date().toISOString(),
+          createdBy: 'generateSettlementFromProductData'
+        });
+      }
+      supplierCreatedCount++;
+    }
+
+    showToast(`✅ 셀러 ${sellerCreatedCount}건, 공급사 ${supplierCreatedCount}건 정산서 생성 완료!`, 'success');
     closeModal();
 
     // 정산관리 새로고침
@@ -27079,9 +27330,14 @@ function renderCafe24OrdersUI() {
   const selectedCount = (state.cafe24SelectedOrders || []).length;
   
   app.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">📦 카페24 주문 관리</h1>
-      <p style="color: var(--gray-500); margin-top: 4px;">총 ${orders.length}건의 주문</p>
+    <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
+      <div>
+        <h1 class="page-title">📦 카페24 주문 관리</h1>
+        <p style="color: var(--gray-500); margin-top: 4px;">총 ${orders.length}건의 주문</p>
+      </div>
+      <button onclick="syncCafe24Orders()" class="btn btn-primary" style="display: flex; align-items: center; gap: 8px;">
+        <span>🔄</span> 주문 수집
+      </button>
     </div>
     <div class="card" style="margin-bottom: 16px;">
       <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
@@ -32038,6 +32294,7 @@ function renderAutoLogSection(todayLogs, currentMember) {
       html += '<div onclick="openActivityDetailModal(\'' + (log.id || '') + '\')" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: #FFF7ED; border: 1px solid #FDBA74; border-radius: 10px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.background=\'#FFEDD5\'" onmouseout="this.style.background=\'#FFF7ED\'">';
       html += '<span style="font-size: 14px; color: #EA580C;">●</span>';
       html += '<span style="font-size: 13px; color: #191F28; font-weight: 500;">' + log.action + '</span>';
+      if (log.taskTitle) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E0E7FF; color: #4338CA; border-radius: 4px;">📌 ' + log.taskTitle + '</span>';
       if (log.memberName && currentMember.name !== log.memberName) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E8F3FF; color: #0064FF; border-radius: 4px;">👤 ' + log.memberName + '</span>';
       html += '<span style="font-size: 11px; color: #8B95A1;">' + (log.time || '') + '</span>';
       html += '</div>';
@@ -32061,6 +32318,7 @@ function renderAutoLogSection(todayLogs, currentMember) {
       html += '<div onclick="event.stopPropagation(); openActivityDetailModal(\'' + (log.id || '') + '\')" style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #F2F4F6; border-radius: 10px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.background=\'#E8F3FF\'" onmouseout="this.style.background=\'#F2F4F6\'">';
       html += '<span style="font-size: 13px; color: #00C471;">✓</span>';
       html += '<span style="font-size: 12px; color: #333D4B;">' + log.action + '</span>';
+      if (log.taskTitle) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E0E7FF; color: #4338CA; border-radius: 4px;">📌 ' + log.taskTitle + '</span>';
       if (log.dealTitle) html += '<span style="font-size: 10px; padding: 2px 6px; background: white; color: #6B7684; border-radius: 4px;">' + log.dealTitle + '</span>';
       if (log.memberName && currentMember.name !== log.memberName) html += '<span style="font-size: 10px; padding: 2px 6px; background: #E8F3FF; color: #0064FF; border-radius: 4px;">👤 ' + log.memberName + '</span>';
       html += '<span style="font-size: 10px; color: #8B95A1;">' + (log.time || '') + '</span>';
@@ -32089,61 +32347,268 @@ function toggleAutoLogSection() {
 }
 
 // 수동 활동 추가 모달
-function openManualActivityModal() {
+async function openManualActivityModal() {
   var currentMember = getCurrentMember();
   var modal = document.getElementById('modal');
   modal.className = 'modal active';
-  
+
+  // 업무 목록 로드
+  var tasks = [];
+  try {
+    var tasksSnapshot = await db.collection('tasks').get();
+    tasksSnapshot.forEach(function(doc) {
+      var task = { id: doc.id, ...doc.data() };
+      if (task.status !== 'done') {
+        tasks.push(task);
+      }
+    });
+    tasks.sort(function(a, b) {
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    });
+  } catch (error) {
+    console.error('업무 목록 로드 오류:', error);
+  }
+
+  // 추천 업무: 내 업무 중 진행중인 것 우선
+  var myTasks = tasks.filter(function(t) {
+    return t.assigneeId === currentMember.id || t.assignee === currentMember.name;
+  });
+  var recommendedTasks = myTasks.filter(function(t) { return t.status === 'in_progress'; }).slice(0, 3);
+  if (recommendedTasks.length < 3) {
+    var pending = myTasks.filter(function(t) { return t.status !== 'in_progress'; }).slice(0, 3 - recommendedTasks.length);
+    recommendedTasks = recommendedTasks.concat(pending);
+  }
+
+  // 추천 공구: 최근 공구
+  var deals = state.deals || [];
+  var recommendedDeals = deals.slice(0, 3);
+
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 520px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
         <h2 style="font-size: 20px; font-weight: 700;">📝 활동 수동 추가</h2>
         <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>
       </div>
-      
+
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">활동 내용 *</label>
         <input type="text" id="manual-activity-action" placeholder="예: 셀러 미팅 완료" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;" />
       </div>
-      
+
+      <!-- 관련 업무 (검색 + 추천) -->
+      <div style="margin-bottom: 16px;">
+        <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 업무 (선택)</label>
+        <div style="position: relative;">
+          <input type="text" id="task-search-input" placeholder="🔍 업무 검색..."
+            style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;"
+            oninput="filterTaskList(this.value)" onfocus="showTaskDropdown()" />
+          <input type="hidden" id="manual-activity-task" value="" />
+          <div id="selected-task-badge" style="display: none; margin-top: 8px;"></div>
+          <div id="task-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #E5E8EB; border-radius: 10px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+        </div>
+        ${recommendedTasks.length > 0 ? `
+        <div style="margin-top: 10px;">
+          <span style="font-size: 12px; color: #6B7684;">⚡ 추천:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+            ${recommendedTasks.map(t => `
+              <button type="button" onclick="selectTask('${t.id}', '${(t.title || '').replace(/'/g, "\\'")}', '${(t.category || '').replace(/'/g, "\\'")}')"
+                style="background: #F0F9FF; border: 1px solid #BAE6FD; color: #0369A1; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
+                onmouseover="this.style.background='#E0F2FE'" onmouseout="this.style.background='#F0F9FF'">
+                📌 ${(t.title || '').length > 15 ? (t.title || '').substring(0, 15) + '...' : (t.title || '')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
+      </div>
+
+      <!-- 관련 공구 (검색 + 추천) -->
       <div style="margin-bottom: 16px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">관련 공구 (선택)</label>
-        <select id="manual-activity-deal" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-          <option value="">선택 안함</option>
-          ${(state.deals || []).slice(0, 30).map(d => `<option value="${d.id}">${d.title}</option>`).join('')}
-        </select>
+        <div style="position: relative;">
+          <input type="text" id="deal-search-input" placeholder="🔍 공구 검색..."
+            style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;"
+            oninput="filterDealList(this.value)" onfocus="showDealDropdown()" />
+          <input type="hidden" id="manual-activity-deal" value="" />
+          <div id="selected-deal-badge" style="display: none; margin-top: 8px;"></div>
+          <div id="deal-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #E5E8EB; border-radius: 10px; max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 4px;"></div>
+        </div>
+        ${recommendedDeals.length > 0 ? `
+        <div style="margin-top: 10px;">
+          <span style="font-size: 12px; color: #6B7684;">⚡ 최근:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
+            ${recommendedDeals.map(d => `
+              <button type="button" onclick="selectDeal('${d.id}', '${(d.title || '').replace(/'/g, "\\'")}')"
+                style="background: #FFF7ED; border: 1px solid #FDBA74; color: #C2410C; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
+                onmouseover="this.style.background='#FFEDD5'" onmouseout="this.style.background='#FFF7ED'">
+                🛒 ${(d.title || '').length > 15 ? (d.title || '').substring(0, 15) + '...' : (d.title || '')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
       </div>
-      
+
       <div style="margin-bottom: 24px;">
         <label style="font-size: 14px; font-weight: 600; color: #333D4B; display: block; margin-bottom: 8px;">메모</label>
         <textarea id="manual-activity-memo" placeholder="추가 설명 (선택)" style="width: 100%; padding: 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px; min-height: 80px; resize: vertical;"></textarea>
       </div>
-      
+
       <button onclick="saveManualActivity()" style="width: 100%; background: #0064FF; color: white; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer;">
         저장하기
       </button>
     </div>
   `;
+
+  // 전역에 저장
+  window._manualActivityTasks = tasks;
+  window._manualActivityDeals = deals;
+
+  // 드롭다운 외부 클릭 시 닫기
+  setTimeout(function() {
+    document.addEventListener('click', handleActivityDropdownClose);
+  }, 100);
+}
+
+// 업무 드롭다운 표시
+function showTaskDropdown() {
+  var dropdown = document.getElementById('task-dropdown');
+  if (dropdown) {
+    filterTaskList('');
+    dropdown.style.display = 'block';
+  }
+}
+
+// 업무 필터링
+function filterTaskList(query) {
+  var dropdown = document.getElementById('task-dropdown');
+  if (!dropdown) return;
+  var tasks = window._manualActivityTasks || [];
+  var filtered = tasks.filter(function(t) {
+    var searchStr = ((t.title || '') + ' ' + (t.category || '')).toLowerCase();
+    return searchStr.includes(query.toLowerCase());
+  }).slice(0, 20);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(function(t) {
+      return '<div onclick="selectTask(\'' + t.id + '\', \'' + (t.title || '').replace(/'/g, "\\'") + '\', \'' + (t.category || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">' + (t.title || '') + '</div>' +
+        (t.category ? '<div style="font-size: 12px; color: #6B7684; margin-top: 2px;">' + t.category + '</div>' : '') +
+      '</div>';
+    }).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+// 업무 선택
+function selectTask(id, title, category) {
+  document.getElementById('manual-activity-task').value = id;
+  document.getElementById('task-search-input').value = '';
+  document.getElementById('task-dropdown').style.display = 'none';
+
+  var badge = document.getElementById('selected-task-badge');
+  badge.style.display = 'block';
+  badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #E0E7FF; color: #4338CA; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
+    '📌 ' + title + (category ? ' [' + category + ']' : '') +
+    '<button type="button" onclick="clearTaskSelection()" style="background: none; border: none; color: #4338CA; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
+  '</span>';
+}
+
+// 업무 선택 해제
+function clearTaskSelection() {
+  document.getElementById('manual-activity-task').value = '';
+  document.getElementById('selected-task-badge').style.display = 'none';
+  document.getElementById('selected-task-badge').innerHTML = '';
+}
+
+// 공구 드롭다운 표시
+function showDealDropdown() {
+  var dropdown = document.getElementById('deal-dropdown');
+  if (dropdown) {
+    filterDealList('');
+    dropdown.style.display = 'block';
+  }
+}
+
+// 공구 필터링
+function filterDealList(query) {
+  var dropdown = document.getElementById('deal-dropdown');
+  if (!dropdown) return;
+  var deals = window._manualActivityDeals || [];
+  var filtered = deals.filter(function(d) {
+    return (d.title || '').toLowerCase().includes(query.toLowerCase());
+  }).slice(0, 20);
+
+  if (filtered.length === 0) {
+    dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(function(d) {
+      return '<div onclick="selectDeal(\'' + d.id + '\', \'' + (d.title || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">🛒 ' + (d.title || '') + '</div>' +
+      '</div>';
+    }).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+// 공구 선택
+function selectDeal(id, title) {
+  document.getElementById('manual-activity-deal').value = id;
+  document.getElementById('deal-search-input').value = '';
+  document.getElementById('deal-dropdown').style.display = 'none';
+
+  var badge = document.getElementById('selected-deal-badge');
+  badge.style.display = 'block';
+  badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #FFF7ED; color: #C2410C; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
+    '🛒 ' + title +
+    '<button type="button" onclick="clearDealSelection()" style="background: none; border: none; color: #C2410C; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
+  '</span>';
+}
+
+// 공구 선택 해제
+function clearDealSelection() {
+  document.getElementById('manual-activity-deal').value = '';
+  document.getElementById('selected-deal-badge').style.display = 'none';
+  document.getElementById('selected-deal-badge').innerHTML = '';
+}
+
+// 드롭다운 외부 클릭 시 닫기
+function handleActivityDropdownClose(e) {
+  var taskDropdown = document.getElementById('task-dropdown');
+  var dealDropdown = document.getElementById('deal-dropdown');
+  if (taskDropdown && !e.target.closest('#task-search-input') && !e.target.closest('#task-dropdown')) {
+    taskDropdown.style.display = 'none';
+  }
+  if (dealDropdown && !e.target.closest('#deal-search-input') && !e.target.closest('#deal-dropdown')) {
+    dealDropdown.style.display = 'none';
+  }
 }
 
 // 수동 활동 저장
 async function saveManualActivity() {
   var action = document.getElementById('manual-activity-action').value.trim();
+  var taskId = document.getElementById('manual-activity-task').value;
   var dealId = document.getElementById('manual-activity-deal').value;
   var memo = document.getElementById('manual-activity-memo').value.trim();
-  
+
   if (!action) {
     showToast('활동 내용을 입력해주세요');
     return;
   }
-  
+
   var currentMember = getCurrentMember();
   var deal = dealId ? state.deals.find(d => d.id === dealId) : null;
+  var task = taskId ? (window._manualActivityTasks || []).find(t => t.id === taskId) : null;
   var now = new Date();
-  
+
   try {
     await db.collection('activityLogs').add({
       action: action,
+      taskId: taskId || null,
+      taskTitle: task ? task.title : null,
+      taskCategory: task ? task.category : null,
       dealId: dealId || null,
       dealTitle: deal ? deal.title : null,
       memo: memo,
@@ -32156,7 +32621,7 @@ async function saveManualActivity() {
       createdBy: currentMember.id,
       createdByName: currentMember.name
     });
-    
+
     showToast('✅ 활동이 기록되었습니다');
     closeModal();
     loadWorkLogByMonth();
@@ -32194,6 +32659,7 @@ async function openActivityDetailModal(logId) {
         
         <div style="background: #F2F4F6; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
           <div style="font-size: 18px; font-weight: 700; color: #191F28; margin-bottom: 12px;">${log.action}</div>
+          ${log.taskTitle ? `<div style="font-size: 14px; color: #6B7684; margin-bottom: 8px;">📌 관련 업무: ${log.taskTitle}${log.taskCategory ? ' [' + log.taskCategory + ']' : ''}</div>` : ''}
           ${log.dealTitle ? `<div style="font-size: 14px; color: #6B7684; margin-bottom: 8px;">🛒 관련 공구: ${log.dealTitle}</div>` : ''}
           ${log.memo ? `<div style="font-size: 14px; color: #6B7684; margin-bottom: 8px;">📝 메모: ${log.memo}</div>` : ''}
           <div style="font-size: 13px; color: #8B95A1; margin-top: 12px;">
@@ -32892,7 +33358,7 @@ async function openQuickTaskModal(dueDate) {
           </div>
         </div>
         
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
           <div>
             <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">상태</label>
             <select id="quick-task-status" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">
@@ -32907,13 +33373,6 @@ async function openQuickTaskModal(dueDate) {
               <option value="높음">🔴 높음</option>
               <option value="중간">🟡 중간</option>
               <option value="낮음">🔵 낮음</option>
-            </select>
-          </div>
-          <div>
-            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">구분</label>
-            <select id="quick-task-category" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">
-              <option value="">선택</option>
-              ${categories.map(c => `<option value="${c}">${c}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -33157,10 +33616,10 @@ async function saveQuickTask() {
   }
   
   try {
-    var docRef = await db.collection('tasks').add({
+    var now = new Date().toISOString();
+    var taskData = {
       title: title,
       status: status,
-      category: document.getElementById('quick-task-category').value,
       priority: document.getElementById('quick-task-priority').value,
       note: document.getElementById('quick-task-note').value,
       dueDate: document.getElementById('quick-task-date').value,
@@ -33171,9 +33630,14 @@ async function saveQuickTask() {
       linkedOkrTitle: linkedOkrTitle,
       linkedKrTitle: linkedKrTitle,
       bookmark: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
+      createdAt: now,
+      updatedAt: now
+    };
+    // 진행중으로 시작하면 진행시작일시 기록
+    if (status === '진행중') {
+      taskData.startedAt = now;
+    }
+    var docRef = await db.collection('tasks').add(taskData);
     
     // 새 업무 추가 시 활동 로그 기록
     var statusIcon = status === '진행중' ? '🔄' : '⏳';
@@ -33197,9 +33661,16 @@ async function openTaskDetailModal(taskId) {
     if (!doc.exists) { alert('업무를 찾을 수 없습니다.'); return; }
     var task = { id: doc.id, ...doc.data() };
 
-    // 팀원 목록 + 카테고리 목록 로드
+    // 팀원 목록 로드
     var teamMembers = state.teamMembers || [];
-    var categories = await loadTaskCategories();
+
+    // 연결된 활동 기록 로드
+    var activityLogs = [];
+    try {
+      var logsSnapshot = await db.collection('activityLogs').where('taskId', '==', taskId).get();
+      logsSnapshot.forEach(function(d) { activityLogs.push({ id: d.id, ...d.data() }); });
+      activityLogs.sort(function(a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    } catch (e) { console.error('활동 로그 로드 오류:', e); }
 
     // 모든 OKR 로드 (연도별로 그룹화)
     var currentYear = new Date().getFullYear();
@@ -33218,7 +33689,7 @@ async function openTaskDetailModal(taskId) {
     // 전역에 저장 (연도 변경 시 사용)
     window._taskModalOkrsByYear = okrsByYear;
 
-    // 기존 연결된 OKR의 연도 확인 (linkedOkrId 우선, 하위 호환으로 okrId도 확인)
+    // 기존 연결된 OKR의 연도 확인
     var taskOkrId = task.linkedOkrId || task.okrId || '';
     var taskKrIndex = task.linkedKrIndex ?? task.krIndex ?? null;
     var taskOkrYear = currentYear;
@@ -33231,6 +33702,21 @@ async function openTaskDetailModal(taskId) {
 
     var okrs = okrsByYear[taskOkrYear] || [];
 
+    // 성공률 계산
+    var successInfo = '';
+    if (task.status === '완료' && task.dueDate && task.completedAt) {
+      var dueDate = new Date(task.dueDate + 'T23:59:59');
+      var completedDate = new Date(task.completedAt);
+      var isOnTime = completedDate <= dueDate;
+      var diffDays = Math.ceil((completedDate - dueDate) / (1000 * 60 * 60 * 24));
+      if (isOnTime) {
+        successInfo = '<span style="color: #16A34A; font-weight: 600;">✅ 기한 내 완료</span>';
+        if (diffDays < 0) successInfo += ' <span style="color: #6B7684; font-size: 11px;">(' + Math.abs(diffDays) + '일 앞당겨 완료)</span>';
+      } else {
+        successInfo = '<span style="color: #DC2626; font-weight: 600;">⚠️ 기한 초과</span> <span style="color: #6B7684; font-size: 11px;">(' + diffDays + '일 지연)</span>';
+      }
+    }
+
     var modal = document.getElementById('modal');
     modal.className = 'modal active';
 
@@ -33238,6 +33724,16 @@ async function openTaskDetailModal(taskId) {
     html += '<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">';
     html += '<h2 style="font-size: 18px; font-weight: 700;">📝 업무 상세</h2>';
     html += '<button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button>';
+    html += '</div>';
+
+    // 일시 정보 및 성공률 표시
+    html += '<div style="background: #F8FAFC; border-radius: 10px; padding: 14px; margin-bottom: 16px;">';
+    html += '<div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: #6B7684;">';
+    if (task.createdAt) html += '<div>📅 등록: <span style="color: #191F28; font-weight: 500;">' + task.createdAt.slice(0, 16).replace('T', ' ') + '</span></div>';
+    if (task.startedAt) html += '<div>▶️ 시작: <span style="color: #191F28; font-weight: 500;">' + task.startedAt.slice(0, 16).replace('T', ' ') + '</span></div>';
+    if (task.completedAt) html += '<div>✅ 완료: <span style="color: #191F28; font-weight: 500;">' + task.completedAt.slice(0, 16).replace('T', ' ') + '</span></div>';
+    html += '</div>';
+    if (successInfo) html += '<div style="margin-top: 10px; font-size: 13px;">' + successInfo + '</div>';
     html += '</div>';
 
     html += '<div style="display: grid; gap: 16px;">';
@@ -33249,8 +33745,6 @@ async function openTaskDetailModal(taskId) {
     // 관련 OKR 선택 섹션
     html += '<div style="background: #E8F3FF; border-radius: 10px; padding: 14px;">';
     html += '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #0064FF;">🎯 관련 OKR</label>';
-
-    // 연도 선택 + OKR 선택
     html += '<div style="display: flex; gap: 8px; margin-bottom: 10px;">';
     html += '<select id="detail-task-okr-year" onchange="updateDetailTaskOkrList()" style="width: 100px; padding: 10px; border: 1px solid #C7D2FE; border-radius: 8px; background: white; font-weight: 600;">';
     [currentYear, currentYear + 1].forEach(function(y) {
@@ -33264,10 +33758,7 @@ async function openTaskDetailModal(taskId) {
       var krsJson = JSON.stringify(o.keyResults || []).replace(/'/g, "&#39;");
       html += '<option value="' + o.id + '" data-krs=\'' + krsJson + '\' ' + (isSelected ? 'selected' : '') + '>[' + (o.quarter || '') + '] ' + (o.objective || '') + '</option>';
     });
-    html += '</select>';
-    html += '</div>';
-
-    // KR 선택 드롭다운
+    html += '</select></div>';
     var showKr = taskOkrId ? 'block' : 'none';
     var selectedOkr = okrs.find(function(o) { return o.id === taskOkrId; });
     var krs = selectedOkr ? (selectedOkr.keyResults || []) : [];
@@ -33277,12 +33768,10 @@ async function openTaskDetailModal(taskId) {
       var isKrSelected = taskKrIndex === idx || taskKrIndex === String(idx);
       html += '<option value="' + idx + '" ' + (isKrSelected ? 'selected' : '') + '>' + (kr.description || 'KR ' + (idx + 1)) + '</option>';
     });
-    html += '</select>';
-    html += '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">연도를 선택하면 해당 연도의 OKR 목록이 표시됩니다.</div>';
-    html += '</div>';
+    html += '</select></div>';
 
-    // 상태, 우선순위, 구분
-    html += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">';
+    // 상태, 우선순위
+    html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">';
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">상태</label><select id="detail-task-status" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">';
     ['대기', '진행중', '완료', '보류'].forEach(function(s) {
       html += '<option value="' + s + '" ' + (task.status === s ? 'selected' : '') + '>' + s + '</option>';
@@ -33292,12 +33781,6 @@ async function openTaskDetailModal(taskId) {
     html += '<option value="">선택</option>';
     ['높음', '중간', '낮음'].forEach(function(p) {
       html += '<option value="' + p + '" ' + (task.priority === p ? 'selected' : '') + '>' + p + '</option>';
-    });
-    html += '</select></div>';
-    html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">구분</label><select id="detail-task-category" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px;">';
-    html += '<option value="">선택</option>';
-    categories.forEach(function(c) {
-      html += '<option value="' + c + '" ' + (task.category === c ? 'selected' : '') + '>' + c + '</option>';
     });
     html += '</select></div></div>';
 
@@ -33317,7 +33800,26 @@ async function openTaskDetailModal(taskId) {
 
     // 메모
     html += '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">메모</label>';
-    html += '<textarea id="detail-task-note" style="width: 100%; height: 120px; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; resize: none;">' + (task.note || '') + '</textarea></div>';
+    html += '<textarea id="detail-task-note" style="width: 100%; height: 80px; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; resize: none;">' + (task.note || '') + '</textarea></div>';
+
+    // 연결된 활동 기록 (접은 상태)
+    html += '<div style="border: 1px solid #E5E8EB; border-radius: 10px; overflow: hidden;">';
+    html += '<div onclick="toggleTaskActivityLogs()" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #F8FAFC; cursor: pointer;">';
+    html += '<span style="font-size: 13px; font-weight: 600; color: #333D4B;">📋 연결된 활동 기록 <span style="color: #0064FF; font-weight: 700;">(' + activityLogs.length + '건)</span></span>';
+    html += '<span id="task-activity-toggle-icon" style="font-size: 14px; color: #6B7684; transition: transform 0.2s;">▼</span>';
+    html += '</div>';
+    html += '<div id="task-activity-logs" style="display: none; padding: 12px; background: white; max-height: 200px; overflow-y: auto;">';
+    if (activityLogs.length === 0) {
+      html += '<div style="color: #6B7684; font-size: 13px; text-align: center; padding: 16px;">연결된 활동 기록이 없습니다</div>';
+    } else {
+      activityLogs.forEach(function(log) {
+        html += '<div style="padding: 10px; border-bottom: 1px solid #F2F4F6; font-size: 13px;">';
+        html += '<div style="color: #191F28; font-weight: 500;">' + (log.action || '') + '</div>';
+        html += '<div style="color: #6B7684; font-size: 11px; margin-top: 4px;">' + (log.memberName || '') + ' · ' + (log.date || '') + ' ' + (log.time || '') + '</div>';
+        html += '</div>';
+      });
+    }
+    html += '</div></div>';
 
     html += '</div>';
 
@@ -33331,6 +33833,19 @@ async function openTaskDetailModal(taskId) {
     modal.innerHTML = html;
   } catch (error) {
     console.error('업무 상세 로드 오류:', error);
+  }
+}
+
+// 업무 상세 - 활동 기록 토글
+function toggleTaskActivityLogs() {
+  var logsDiv = document.getElementById('task-activity-logs');
+  var icon = document.getElementById('task-activity-toggle-icon');
+  if (logsDiv.style.display === 'none') {
+    logsDiv.style.display = 'block';
+    icon.style.transform = 'rotate(180deg)';
+  } else {
+    logsDiv.style.display = 'none';
+    icon.style.transform = 'rotate(0deg)';
   }
 }
 
@@ -33391,11 +33906,11 @@ async function saveTaskDetail(taskId) {
       linkedKrTitle = krSelect.options[krSelect.selectedIndex]?.textContent || '';
     }
 
+    var now = new Date().toISOString();
     var updateData = {
       title: newTitle,
       status: newStatus,
       priority: document.getElementById('detail-task-priority').value,
-      category: document.getElementById('detail-task-category').value,
       dueDate: document.getElementById('detail-task-date').value,
       note: document.getElementById('detail-task-note').value,
       assigneeId: assigneeId,
@@ -33404,12 +33919,17 @@ async function saveTaskDetail(taskId) {
       linkedKrIndex: linkedKrIndex,
       linkedOkrTitle: linkedOkrTitle,
       linkedKrTitle: linkedKrTitle,
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
+
+    // 진행중으로 변경 시 startedAt 기록 (처음 진행 시작한 경우만)
+    if (newStatus === '진행중' && oldStatus !== '진행중' && !oldTask.startedAt) {
+      updateData.startedAt = now;
+    }
 
     // 완료로 변경 시 completedAt 기록
     if (newStatus === '완료' && oldStatus !== '완료') {
-      updateData.completedAt = new Date().toISOString();
+      updateData.completedAt = now;
     }
 
     await db.collection('tasks').doc(taskId).update(updateData);
@@ -33848,9 +34368,17 @@ function renderReferenceLibrary() {
           <h1 style="font-size: 26px; font-weight: 700; color: #191F28; margin: 0;">📚 레퍼런스 라이브러리</h1>
           <p style="color: #6B7684; margin-top: 8px; font-size: 15px;">이벤트, 디자인, 제안서, 숏폼 등 업무 레퍼런스를 모아두세요</p>
         </div>
-        <button onclick="openAddReferenceModal()" style="padding: 12px 24px; font-size: 14px; font-weight: 600; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);">
-          ➕ 레퍼런스 추가
-        </button>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <button onclick="downloadReferenceTemplate()" style="padding: 12px 20px; font-size: 14px; font-weight: 600; background: white; color: #8B5CF6; border: 2px solid #8B5CF6; border-radius: 12px; cursor: pointer;">
+            📥 양식 다운로드
+          </button>
+          <button onclick="openBulkReferenceModal()" style="padding: 12px 20px; font-size: 14px; font-weight: 600; background: #10B981; color: white; border: none; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">
+            📤 엑셀 일괄등록
+          </button>
+          <button onclick="openAddReferenceModal()" style="padding: 12px 24px; font-size: 14px; font-weight: 600; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);">
+            ➕ 레퍼런스 추가
+          </button>
+        </div>
       </div>
 
       <!-- 검색 및 필터 -->
@@ -33944,18 +34472,34 @@ function renderReferenceList(references) {
     var cat = REFERENCE_CATEGORIES.find(function(c) { return c.id === ref.category; }) || REFERENCE_CATEGORIES[6];
     var date = ref.createdAt ? ref.createdAt.substring(0, 10) : '';
     var tags = (ref.tags || []).slice(0, 3).map(function(tag) { return '<span style="font-size: 11px; padding: 4px 8px; background: #F2F4F6; color: #6B7684; border-radius: 4px;">#' + tag + '</span>'; }).join('');
+    var images = ref.images || [];
+    var hasImages = images.length > 0;
+    var firstImage = hasImages ? images[0].data : null;
 
-    html += '<div onclick="openReferenceDetail(\'' + ref.id + '\')" style="background: white; border-radius: 16px; padding: 20px; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #E5E8EB;" onmouseover="this.style.borderColor=\'#8B5CF6\'; this.style.transform=\'translateY(-2px)\'" onmouseout="this.style.borderColor=\'#E5E8EB\'; this.style.transform=\'none\'">';
-    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">';
-    html += '<span style="font-size: 12px; padding: 4px 12px; background: ' + cat.bg + '; color: ' + cat.color + '; border-radius: 6px; font-weight: 600;">' + cat.label + '</span>';
+    html += '<div onclick="openReferenceDetail(\'' + ref.id + '\')" style="background: white; border-radius: 16px; overflow: hidden; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid #E5E8EB;" onmouseover="this.style.borderColor=\'#8B5CF6\'; this.style.transform=\'translateY(-2px)\'" onmouseout="this.style.borderColor=\'#E5E8EB\'; this.style.transform=\'none\'">';
+
+    // 이미지 썸네일 (있을 경우)
+    if (firstImage) {
+      html += '<div style="position: relative; width: 100%; height: 140px; background: #F2F4F6;">';
+      html += '<img src="' + firstImage + '" style="width: 100%; height: 100%; object-fit: cover;" />';
+      if (images.length > 1) {
+        html += '<span style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 600;">+' + (images.length - 1) + '</span>';
+      }
+      html += '</div>';
+    }
+
+    html += '<div style="padding: 16px;">';
+    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
+    html += '<span style="font-size: 11px; padding: 4px 10px; background: ' + cat.bg + '; color: ' + cat.color + '; border-radius: 6px; font-weight: 600;">' + cat.label + '</span>';
     html += '<span style="font-size: 11px; color: #8B95A1;">' + date + '</span></div>';
-    html += '<div style="font-size: 16px; font-weight: 700; color: #191F28; margin-bottom: 8px; line-height: 1.4;">' + ref.title + '</div>';
-    if (ref.description) html += '<div style="font-size: 13px; color: #6B7684; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">' + ref.description + '</div>';
-    html += '<div style="display: flex; gap: 8px; flex-wrap: wrap;">';
-    if (ref.linkUrl) html += '<span style="font-size: 11px; padding: 4px 10px; background: #E8F3FF; color: #0064FF; border-radius: 4px;">🔗 링크</span>';
-    if (ref.fileUrl) html += '<span style="font-size: 11px; padding: 4px 10px; background: #DCFCE7; color: #16A34A; border-radius: 4px;">📎 파일</span>';
+    html += '<div style="font-size: 15px; font-weight: 700; color: #191F28; margin-bottom: 6px; line-height: 1.4;">' + ref.title + '</div>';
+    if (ref.description) html += '<div style="font-size: 12px; color: #6B7684; margin-bottom: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">' + ref.description + '</div>';
+    html += '<div style="display: flex; gap: 6px; flex-wrap: wrap;">';
+    if (ref.linkUrl) html += '<span style="font-size: 10px; padding: 3px 8px; background: #E8F3FF; color: #0064FF; border-radius: 4px;">🔗 링크</span>';
+    if (hasImages) html += '<span style="font-size: 10px; padding: 3px 8px; background: #FEF3C7; color: #B45309; border-radius: 4px;">🖼️ ' + images.length + '장</span>';
+    else if (ref.fileUrl) html += '<span style="font-size: 10px; padding: 3px 8px; background: #DCFCE7; color: #16A34A; border-radius: 4px;">📎 파일</span>';
     html += tags + '</div>';
-    html += '<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #E5E8EB; font-size: 12px; color: #8B95A1;">👤 ' + (ref.createdByName || '알 수 없음') + '</div></div>';
+    html += '<div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #E5E8EB; font-size: 11px; color: #8B95A1;">👤 ' + (ref.createdByName || '알 수 없음') + '</div></div></div>';
   });
 
   container.innerHTML = html;
@@ -33964,6 +34508,7 @@ function renderReferenceList(references) {
 // 레퍼런스 추가 모달
 function openAddReferenceModal(refId) {
   refId = refId || null;
+  window.refUploadedImages = []; // 여러 이미지 배열
   var modal = document.getElementById('modal');
   modal.className = 'modal active';
   var currentMember = getCurrentMember();
@@ -33985,17 +34530,261 @@ function openAddReferenceModal(refId) {
     '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #0064FF;">🔗 링크 URL</label>' +
     '<input type="url" id="ref-link" placeholder="https://..." style="width: 100%; padding: 12px; border: 1px solid #C7D2FE; border-radius: 10px; font-size: 14px; background: white;" />' +
     '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">유튜브, 인스타그램, 웹사이트 등 외부 링크</div></div>' +
+
+    '<div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); padding: 16px; border-radius: 10px; border: 1px solid #F59E0B;">' +
+    '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; color: #B45309;">📤 이미지 직접 업로드 <span id="ref-image-count" style="color: #6B7684; font-weight: 400;"></span></label>' +
+    '<div id="ref-file-upload-area" style="background: white; border: 2px dashed #F59E0B; border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.2s;" onclick="document.getElementById(\'ref-file-input\').click()" onmouseover="this.style.borderColor=\'#D97706\'; this.style.background=\'#FFFBEB\'" onmouseout="this.style.borderColor=\'#F59E0B\'; this.style.background=\'white\'">' +
+    '<input type="file" id="ref-file-input" accept=".jpg,.jpeg,.png,.gif" multiple style="display: none;" onchange="handleReferenceMultipleFiles(this.files)" />' +
+    '<div style="font-size: 32px; margin-bottom: 8px;">🖼️</div>' +
+    '<div style="font-size: 14px; font-weight: 600; color: #92400E;">클릭하여 이미지 선택 (여러장 가능)</div>' +
+    '<div style="font-size: 12px; color: #B45309; margin-top: 4px;">JPG, PNG, GIF (자동 압축, 최대 10장)</div></div>' +
+    '<div id="ref-images-preview" style="display: none; margin-top: 12px;"></div></div>' +
+
     '<div style="background: #DCFCE7; padding: 16px; border-radius: 10px;">' +
-    '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #16A34A;">📎 파일 URL</label>' +
+    '<label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #16A34A;">📎 파일 URL (외부 링크)</label>' +
     '<input type="url" id="ref-file" placeholder="구글 드라이브, Dropbox 등 파일 공유 링크" style="width: 100%; padding: 12px; border: 1px solid #86EFAC; border-radius: 10px; font-size: 14px; background: white;" />' +
-    '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">구글 드라이브, Dropbox 등의 공유 링크를 붙여넣으세요</div></div>' +
+    '<div style="font-size: 11px; color: #6B7684; margin-top: 6px;">동영상은 외부 링크로 등록하세요</div></div>' +
     '<div><label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #333D4B;">태그 (쉼표로 구분)</label>' +
     '<input type="text" id="ref-tags" placeholder="예: 봄신상, 할인이벤트, 인스타" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 14px;" /></div></div>' +
     '<div style="display: flex; gap: 12px; margin-top: 24px;">' +
     '<button onclick="closeModal()" style="flex: 1; background: #F2F4F6; color: #333D4B; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">취소</button>' +
-    '<button onclick="saveReference(\'' + (refId || '') + '\')" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">저장하기</button></div></div>';
+    '<button onclick="saveReference(\'' + (refId || '') + '\')" id="btn-save-ref" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">저장하기</button></div></div>';
 
   if (refId) loadReferenceForEdit(refId);
+}
+
+// 여러 파일 업로드 처리
+async function handleReferenceMultipleFiles(files) {
+  if (!files || files.length === 0) return;
+
+  var maxImages = 10;
+  var currentCount = (window.refUploadedImages || []).length;
+
+  if (currentCount >= maxImages) {
+    showToast('최대 ' + maxImages + '장까지 업로드 가능합니다');
+    return;
+  }
+
+  var filesToProcess = Array.from(files).slice(0, maxImages - currentCount);
+  var uploadArea = document.getElementById('ref-file-upload-area');
+  var saveBtn = document.getElementById('btn-save-ref');
+
+  // 처리 중 UI
+  uploadArea.innerHTML = '<div style="font-size: 32px; margin-bottom: 8px;">⏳</div>' +
+    '<div style="font-size: 14px; font-weight: 600; color: #92400E;">이미지 처리 중...</div>' +
+    '<div id="ref-upload-progress" style="font-size: 12px; color: #B45309; margin-top: 4px;">0 / ' + filesToProcess.length + '</div>';
+  uploadArea.style.pointerEvents = 'none';
+  if (saveBtn) saveBtn.disabled = true;
+
+  var successCount = 0;
+  var failCount = 0;
+
+  for (var i = 0; i < filesToProcess.length; i++) {
+    var file = filesToProcess[i];
+    var progressEl = document.getElementById('ref-upload-progress');
+    if (progressEl) progressEl.textContent = (i + 1) + ' / ' + filesToProcess.length;
+
+    var result = await processRefImage(file);
+    if (result) {
+      window.refUploadedImages.push(result);
+      successCount++;
+    } else {
+      failCount++;
+    }
+  }
+
+  // 미리보기 갱신
+  renderRefImagesPreview();
+
+  // 업로드 영역 복원
+  resetRefUploadArea();
+  if (saveBtn) saveBtn.disabled = false;
+
+  // 결과 메시지
+  if (successCount > 0) {
+    var msg = '✅ ' + successCount + '장 추가됨';
+    if (failCount > 0) msg += ' (' + failCount + '장 실패)';
+    showToast(msg);
+  } else {
+    showToast('이미지 추가 실패');
+  }
+
+  // 파일 입력 초기화
+  var fileInput = document.getElementById('ref-file-input');
+  if (fileInput) fileInput.value = '';
+}
+
+// 단일 이미지 처리
+async function processRefImage(file) {
+  if (!file) return null;
+
+  var ext = file.name.split('.').pop().toLowerCase();
+  var isVideo = file.type.startsWith('video/') || ext === 'mp4';
+  var isGif = file.type === 'image/gif' || ext === 'gif';
+
+  // 동영상 제외
+  if (isVideo) return null;
+
+  // 파일 크기 제한 (원본 10MB)
+  if (file.size > 10 * 1024 * 1024) return null;
+
+  // 허용 파일 타입 검사
+  var allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+  var allowedExts = ['jpg', 'jpeg', 'png', 'gif'];
+  if (!allowedTypes.includes(file.type) && !allowedExts.includes(ext)) return null;
+
+  try {
+    var base64Data;
+
+    // GIF는 압축하지 않고 그대로 저장
+    if (isGif) {
+      base64Data = await readFileAsBase64ForRef(file);
+    } else {
+      base64Data = await compressImageForRef(file, 1200, 0.8);
+    }
+
+    // 용량 제한 확인 (약 700KB per image for multiple)
+    if (base64Data.length > 700000) {
+      if (!isGif) {
+        base64Data = await compressImageForRef(file, 800, 0.6);
+      }
+      if (base64Data.length > 700000) {
+        base64Data = await compressImageForRef(file, 600, 0.5);
+      }
+      if (base64Data.length > 700000) return null;
+    }
+
+    return {
+      data: base64Data,
+      name: file.name,
+      type: file.type || 'image/' + ext
+    };
+
+  } catch (error) {
+    console.error('이미지 처리 오류:', error);
+    return null;
+  }
+}
+
+// 이미지 미리보기 렌더링
+function renderRefImagesPreview() {
+  var previewDiv = document.getElementById('ref-images-preview');
+  var countSpan = document.getElementById('ref-image-count');
+  var images = window.refUploadedImages || [];
+
+  if (countSpan) {
+    countSpan.textContent = images.length > 0 ? '(' + images.length + '장)' : '';
+  }
+
+  if (!previewDiv) return;
+
+  if (images.length === 0) {
+    previewDiv.style.display = 'none';
+    previewDiv.innerHTML = '';
+    return;
+  }
+
+  var html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px;">';
+  images.forEach(function(img, index) {
+    var isGif = img.name.toLowerCase().endsWith('.gif');
+    html += '<div style="position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 1px solid #F59E0B;">' +
+      '<img src="' + img.data + '" style="width: 100%; height: 100%; object-fit: cover;" />' +
+      '<button onclick="removeRefImage(' + index + ')" style="position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(220,38,38,0.9); color: white; border: none; cursor: pointer; font-size: 12px; line-height: 1;">×</button>' +
+      '<div style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.6); color: white; font-size: 9px; padding: 2px 4px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (isGif ? '🎞️' : '') + (index + 1) + '</div>' +
+      '</div>';
+  });
+  html += '</div>';
+  html += '<div style="margin-top: 8px; text-align: right;"><button onclick="clearAllRefImages()" style="background: #FEE2E2; color: #DC2626; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">전체 삭제</button></div>';
+
+  previewDiv.innerHTML = html;
+  previewDiv.style.display = 'block';
+}
+
+// 개별 이미지 삭제
+function removeRefImage(index) {
+  if (window.refUploadedImages && window.refUploadedImages[index]) {
+    window.refUploadedImages.splice(index, 1);
+    renderRefImagesPreview();
+    showToast('이미지가 삭제되었습니다');
+  }
+}
+
+// 전체 이미지 삭제
+function clearAllRefImages() {
+  window.refUploadedImages = [];
+  renderRefImagesPreview();
+  showToast('모든 이미지가 삭제되었습니다');
+}
+
+// 이미지 압축 함수
+function compressImageForRef(file, maxSize, quality) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var canvas = document.createElement('canvas');
+        var width = img.width;
+        var height = img.height;
+
+        // 리사이즈
+        if (width > maxSize || height > maxSize) {
+          if (width > height) {
+            height = Math.round(height * maxSize / width);
+            width = maxSize;
+          } else {
+            width = Math.round(width * maxSize / height);
+            height = maxSize;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // JPEG로 압축
+        var compressedData = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressedData);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// 파일을 Base64로 읽기
+function readFileAsBase64ForRef(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function(e) { resolve(e.target.result); };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// 파일 크기 포맷
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// 업로드 영역 초기화
+function resetRefUploadArea() {
+  var uploadArea = document.getElementById('ref-file-upload-area');
+  var imageCount = (window.refUploadedImages || []).length;
+  if (uploadArea) {
+    uploadArea.innerHTML = '<input type="file" id="ref-file-input" accept=".jpg,.jpeg,.png,.gif" multiple style="display: none;" onchange="handleReferenceMultipleFiles(this.files)" />' +
+      '<div style="font-size: 32px; margin-bottom: 8px;">🖼️</div>' +
+      '<div style="font-size: 14px; font-weight: 600; color: #92400E;">' + (imageCount > 0 ? '+ 이미지 더 추가하기' : '클릭하여 이미지 선택 (여러장 가능)') + '</div>' +
+      '<div style="font-size: 12px; color: #B45309; margin-top: 4px;">JPG, PNG, GIF (자동 압축, 최대 10장)</div>';
+    uploadArea.style.pointerEvents = 'auto';
+    uploadArea.onclick = function() { document.getElementById('ref-file-input').click(); };
+  }
 }
 
 // 레퍼런스 수정 데이터 로드
@@ -34008,8 +34797,28 @@ async function loadReferenceForEdit(refId) {
       document.getElementById('ref-category').value = ref.category || 'etc';
       document.getElementById('ref-description').value = ref.description || '';
       document.getElementById('ref-link').value = ref.linkUrl || '';
-      document.getElementById('ref-file').value = ref.fileUrl || '';
       document.getElementById('ref-tags').value = (ref.tags || []).join(', ');
+
+      // 여러 이미지 로드 (새 형식)
+      if (ref.images && ref.images.length > 0) {
+        window.refUploadedImages = ref.images;
+        renderRefImagesPreview();
+        resetRefUploadArea();
+      }
+      // 기존 단일 이미지 호환 (이전 형식)
+      else if (ref.uploadedFileName && ref.fileUrl) {
+        window.refUploadedImages = [{
+          data: ref.fileUrl,
+          name: ref.uploadedFileName,
+          type: 'image/jpeg'
+        }];
+        renderRefImagesPreview();
+        resetRefUploadArea();
+      }
+      // 외부 링크인 경우
+      else if (ref.fileUrl && !ref.uploadedFileName) {
+        document.getElementById('ref-file').value = ref.fileUrl;
+      }
     }
   } catch (error) {
     console.error('레퍼런스 로드 오류:', error);
@@ -34022,16 +34831,32 @@ async function saveReference(refId) {
   var category = document.getElementById('ref-category').value;
   var description = document.getElementById('ref-description').value.trim();
   var linkUrl = document.getElementById('ref-link').value.trim();
-  var fileUrl = document.getElementById('ref-file').value.trim();
+  var externalFileUrl = document.getElementById('ref-file').value.trim();
   var tagsStr = document.getElementById('ref-tags').value.trim();
   var tags = tagsStr ? tagsStr.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
 
+  // 업로드된 이미지 배열
+  var images = window.refUploadedImages || [];
+  var hasImages = images.length > 0;
+
+  // 외부 링크 (이미지가 없을 때만)
+  var fileUrl = hasImages ? null : externalFileUrl;
+
   if (!title) { showToast('제목을 입력해주세요'); return; }
-  if (!linkUrl && !fileUrl) { showToast('링크 또는 파일 URL을 입력해주세요'); return; }
+  if (!linkUrl && !hasImages && !fileUrl) { showToast('링크 또는 이미지를 등록해주세요'); return; }
 
   var currentMember = getCurrentMember();
   var now = new Date().toISOString();
-  var data = { title: title, category: category, description: description, linkUrl: linkUrl || null, fileUrl: fileUrl || null, tags: tags, updatedAt: now };
+  var data = {
+    title: title,
+    category: category,
+    description: description,
+    linkUrl: linkUrl || null,
+    fileUrl: fileUrl || null,
+    images: images, // 여러 이미지 배열
+    tags: tags,
+    updatedAt: now
+  };
 
   try {
     if (refId) {
@@ -34064,18 +34889,41 @@ async function openReferenceDetail(refId) {
     var isAdmin = state.currentUser?.role === 'admin';
     var canEdit = isAdmin || ref.createdBy === currentMember.id;
     var tagsHtml = (ref.tags && ref.tags.length > 0) ? '<div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px;">' + ref.tags.map(function(tag) { return '<span style="font-size: 12px; padding: 6px 12px; background: #F2F4F6; color: #6B7684; border-radius: 6px;">#' + tag + '</span>'; }).join('') + '</div>' : '';
+    var images = ref.images || [];
 
     var modal = document.getElementById('modal');
     modal.className = 'modal active';
 
-    var html = '<div class="modal-content" style="max-width: 600px; max-height: 90vh; overflow-y: auto;">';
+    var html = '<div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">';
     html += '<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">';
     html += '<span style="font-size: 13px; padding: 6px 14px; background: ' + cat.bg + '; color: ' + cat.color + '; border-radius: 8px; font-weight: 600;">' + cat.label + '</span>';
     html += '<button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button></div>';
     html += '<h2 style="font-size: 22px; font-weight: 700; color: #191F28; margin-bottom: 16px; line-height: 1.4;">' + ref.title + '</h2>';
+
+    // 이미지 갤러리 (여러 이미지)
+    if (images.length > 0) {
+      html += '<div style="margin-bottom: 20px;">';
+      // 메인 이미지
+      html += '<div id="ref-detail-main-img" style="width: 100%; max-height: 350px; border-radius: 12px; overflow: hidden; background: #F2F4F6; margin-bottom: 10px;">';
+      html += '<img src="' + images[0].data + '" style="width: 100%; height: 100%; object-fit: contain; max-height: 350px;" onclick="openRefImageFullscreen(0)" />';
+      html += '</div>';
+      // 썸네일 목록 (2장 이상일 때)
+      if (images.length > 1) {
+        html += '<div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px;">';
+        images.forEach(function(img, idx) {
+          html += '<img src="' + img.data + '" onclick="changeRefDetailImage(' + idx + ')" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px; cursor: pointer; border: 2px solid ' + (idx === 0 ? '#8B5CF6' : '#E5E8EB') + ';" data-ref-thumb="' + idx + '" />';
+        });
+        html += '</div>';
+      }
+      html += '<div style="text-align: center; font-size: 12px; color: #6B7684; margin-top: 8px;">🖼️ ' + images.length + '장의 이미지 (클릭하여 확대)</div>';
+      html += '</div>';
+      // 이미지 데이터 저장 (hidden div에 data 속성으로)
+      html += '<div id="ref-detail-images-data" style="display:none;" data-images="' + encodeURIComponent(JSON.stringify(images.map(function(i){return i.data;}))) + '"></div>';
+    }
+
     if (ref.description) html += '<div style="font-size: 15px; color: #333D4B; line-height: 1.7; margin-bottom: 20px; padding: 16px; background: #F2F4F6; border-radius: 10px;">' + ref.description + '</div>';
     if (ref.linkUrl) html += '<a href="' + ref.linkUrl + '" target="_blank" style="display: flex; align-items: center; gap: 12px; padding: 16px; background: #E8F3FF; border-radius: 12px; margin-bottom: 12px; text-decoration: none;" onmouseover="this.style.background=\'#DBEAFE\'" onmouseout="this.style.background=\'#E8F3FF\'"><span style="font-size: 24px;">🔗</span><div style="flex: 1; min-width: 0;"><div style="font-size: 14px; font-weight: 600; color: #0064FF;">외부 링크 열기</div><div style="font-size: 12px; color: #6B7684; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + ref.linkUrl + '</div></div><span style="color: #0064FF;">→</span></a>';
-    if (ref.fileUrl) html += '<a href="' + ref.fileUrl + '" target="_blank" style="display: flex; align-items: center; gap: 12px; padding: 16px; background: #DCFCE7; border-radius: 12px; margin-bottom: 12px; text-decoration: none;" onmouseover="this.style.background=\'#BBF7D0\'" onmouseout="this.style.background=\'#DCFCE7\'"><span style="font-size: 24px;">📎</span><div style="flex: 1; min-width: 0;"><div style="font-size: 14px; font-weight: 600; color: #16A34A;">파일 다운로드/열기</div><div style="font-size: 12px; color: #6B7684; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + ref.fileUrl + '</div></div><span style="color: #16A34A;">→</span></a>';
+    if (ref.fileUrl && images.length === 0) html += '<a href="' + ref.fileUrl + '" target="_blank" style="display: flex; align-items: center; gap: 12px; padding: 16px; background: #DCFCE7; border-radius: 12px; margin-bottom: 12px; text-decoration: none;" onmouseover="this.style.background=\'#BBF7D0\'" onmouseout="this.style.background=\'#DCFCE7\'"><span style="font-size: 24px;">📎</span><div style="flex: 1; min-width: 0;"><div style="font-size: 14px; font-weight: 600; color: #16A34A;">파일 다운로드/열기</div><div style="font-size: 12px; color: #6B7684; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + ref.fileUrl + '</div></div><span style="color: #16A34A;">→</span></a>';
     html += tagsHtml;
     html += '<div style="padding: 16px; background: #FAFAFA; border-radius: 10px; font-size: 13px; color: #6B7684;"><div style="display: flex; justify-content: space-between;"><span>👤 등록자: ' + (ref.createdByName || '알 수 없음') + '</span><span>📅 ' + (ref.createdAt ? ref.createdAt.substring(0, 10) : '') + '</span></div></div>';
     html += '<div style="display: flex; gap: 12px; margin-top: 20px;">';
@@ -34093,6 +34941,55 @@ async function openReferenceDetail(refId) {
   }
 }
 
+// hidden div에서 이미지 데이터 가져오기
+function getRefDetailImages() {
+  var dataDiv = document.getElementById('ref-detail-images-data');
+  if (!dataDiv) return [];
+  try {
+    return JSON.parse(decodeURIComponent(dataDiv.dataset.images));
+  } catch (e) {
+    return [];
+  }
+}
+
+// 상세보기 이미지 변경
+function changeRefDetailImage(index) {
+  var mainImg = document.querySelector('#ref-detail-main-img img');
+  var images = getRefDetailImages();
+  if (mainImg && images && images[index]) {
+    mainImg.src = images[index];
+    mainImg.onclick = function() { openRefImageFullscreen(index); };
+  }
+  // 썸네일 테두리 업데이트
+  document.querySelectorAll('[data-ref-thumb]').forEach(function(thumb) {
+    thumb.style.border = '2px solid ' + (parseInt(thumb.dataset.refThumb) === index ? '#8B5CF6' : '#E5E8EB');
+  });
+}
+
+// 이미지 전체화면 보기
+function openRefImageFullscreen(index) {
+  var images = getRefDetailImages();
+  if (!images || !images[index]) return;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'ref-fullscreen-overlay';
+  overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); z-index: 10000; display: flex; align-items: center; justify-content: center; cursor: pointer;';
+  overlay.onclick = function() { overlay.remove(); };
+
+  var img = document.createElement('img');
+  img.src = images[index];
+  img.style.cssText = 'max-width: 95%; max-height: 95%; object-fit: contain;';
+
+  var closeBtn = document.createElement('button');
+  closeBtn.innerHTML = '×';
+  closeBtn.style.cssText = 'position: absolute; top: 20px; right: 20px; background: white; border: none; width: 40px; height: 40px; border-radius: 50%; font-size: 24px; cursor: pointer;';
+  closeBtn.onclick = function() { overlay.remove(); };
+
+  overlay.appendChild(img);
+  overlay.appendChild(closeBtn);
+  document.body.appendChild(overlay);
+}
+
 // 레퍼런스 삭제
 async function deleteReference(refId) {
   if (!confirm('이 레퍼런스를 삭제하시겠습니까?')) return;
@@ -34105,6 +35002,240 @@ async function deleteReference(refId) {
     console.error('레퍼런스 삭제 오류:', error);
     showToast('삭제 중 오류가 발생했습니다');
   }
+}
+
+// 레퍼런스 엑셀 템플릿 다운로드
+function downloadReferenceTemplate() {
+  var catList = REFERENCE_CATEGORIES.map(function(c) { return c.id; }).join(', ');
+  var ws = XLSX.utils.aoa_to_sheet([
+    ['제목', '카테고리', '설명', '링크URL', '파일URL', '태그(쉼표구분)'],
+    ['2024 봄 이벤트 기획안', 'event', '봄시즌 프로모션 기획안입니다', 'https://docs.google.com/presentation/...', '', '봄시즌, 프로모션, 기획'],
+    ['상품 상세페이지 디자인 가이드', 'design', '상세페이지 디자인 참고용', '', 'https://drive.google.com/file/...', '디자인, 상세페이지'],
+    ['숏폼 콘텐츠 모음', 'shortform', '인스타그램 릴스 참고 영상', 'https://www.instagram.com/reel/...', '', '숏폼, 릴스, 인스타'],
+    ['고객 제안서 템플릿', 'proposal', '신규 고객 제안서 양식', '', 'https://drive.google.com/file/...', '제안서, 템플릿'],
+    ['※ 카테고리 옵션: ' + catList, '', '', '', '', '']
+  ]);
+
+  ws['!cols'] = [
+    { wch: 30 },
+    { wch: 12 },
+    { wch: 35 },
+    { wch: 40 },
+    { wch: 40 },
+    { wch: 25 }
+  ];
+
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '레퍼런스');
+  XLSX.writeFile(wb, '레퍼런스_일괄등록_양식.xlsx');
+  showToast('📥 양식이 다운로드되었습니다');
+}
+
+// 레퍼런스 일괄 등록 모달
+var referenceExcelData = [];
+
+function openBulkReferenceModal() {
+  referenceExcelData = [];
+  var modal = document.getElementById('modal');
+  modal.className = 'modal active';
+  var catList = REFERENCE_CATEGORIES.map(function(c) { return c.id + '(' + c.label + ')'; }).join(', ');
+
+  modal.innerHTML = '<div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">' +
+    '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">' +
+    '<h2 style="font-size: 20px; font-weight: 700; margin: 0;">📤 레퍼런스 일괄 등록</h2>' +
+    '<button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #6B7684;">×</button></div>' +
+
+    '<div style="background: #F0FDF4; border: 1px solid #86EFAC; border-radius: 12px; padding: 16px; margin-bottom: 20px;">' +
+    '<div style="font-size: 14px; font-weight: 600; color: #16A34A; margin-bottom: 8px;">📋 엑셀 파일 양식 안내</div>' +
+    '<div style="font-size: 13px; color: #166534; line-height: 1.6;">' +
+    '열 순서: <strong>제목, 카테고리, 설명, 링크URL, 파일URL, 태그</strong><br>' +
+    '카테고리 옵션: <code style="background: #DCFCE7; padding: 2px 6px; border-radius: 4px;">' + catList + '</code><br>' +
+    '링크URL 또는 파일URL 중 하나는 필수입니다.</div></div>' +
+
+    '<div style="margin-bottom: 20px;">' +
+    '<label style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; border: 2px dashed #D1D5DB; border-radius: 12px; cursor: pointer; transition: all 0.2s;" ' +
+    'onmouseover="this.style.borderColor=\'#8B5CF6\'; this.style.background=\'#F5F3FF\'" onmouseout="this.style.borderColor=\'#D1D5DB\'; this.style.background=\'white\'">' +
+    '<input type="file" accept=".xlsx,.xls" onchange="handleReferenceExcelFile(this.files[0])" style="display: none;" />' +
+    '<div style="font-size: 48px; margin-bottom: 12px;">📁</div>' +
+    '<div style="font-size: 15px; font-weight: 600; color: #333D4B;">엑셀 파일을 선택하세요</div>' +
+    '<div style="font-size: 13px; color: #6B7684; margin-top: 4px;">.xlsx, .xls 형식</div></label></div>' +
+
+    '<div id="ref-excel-preview" style="display: none; margin-bottom: 20px;">' +
+    '<div style="font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #333D4B;">📊 미리보기 <span id="ref-preview-count" style="color: #8B5CF6;"></span></div>' +
+    '<div style="overflow-x: auto; border: 1px solid #E5E8EB; border-radius: 10px;">' +
+    '<table id="ref-preview-table" style="width: 100%; border-collapse: collapse; font-size: 13px;">' +
+    '<thead style="background: #F9FAFB;"></thead>' +
+    '<tbody></tbody></table></div></div>' +
+
+    '<div style="display: flex; gap: 12px;">' +
+    '<button onclick="downloadReferenceTemplate()" style="flex: 1; background: white; color: #8B5CF6; border: 2px solid #8B5CF6; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;">📥 양식 다운로드</button>' +
+    '<button onclick="submitBulkReferences()" id="btn-submit-bulk-refs" style="flex: 1; background: linear-gradient(135deg, #8B5CF6, #A78BFA); color: white; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600;" disabled>일괄 등록하기</button></div></div>';
+}
+
+// 레퍼런스 엑셀 파일 처리
+function handleReferenceExcelFile(file) {
+  if (!file) return;
+
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var data = new Uint8Array(e.target.result);
+      var workbook = XLSX.read(data, { type: 'array' });
+      var firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      var jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+      if (jsonData.length < 2) {
+        showToast('데이터가 없습니다');
+        return;
+      }
+
+      var headers = jsonData[0].map(function(h) { return String(h || '').trim(); });
+      var rows = jsonData.slice(1).filter(function(row) { return row.some(function(cell) { return cell; }); });
+
+      // 열 매핑 (유연하게 매핑)
+      var colMap = {
+        title: headers.findIndex(function(h) { return h.includes('제목') || h.toLowerCase().includes('title'); }),
+        category: headers.findIndex(function(h) { return h.includes('카테고리') || h.toLowerCase().includes('category'); }),
+        description: headers.findIndex(function(h) { return h.includes('설명') || h.toLowerCase().includes('description') || h.toLowerCase().includes('desc'); }),
+        linkUrl: headers.findIndex(function(h) { return h.includes('링크') || h.toLowerCase().includes('link'); }),
+        fileUrl: headers.findIndex(function(h) { return h.includes('파일') || h.toLowerCase().includes('file'); }),
+        tags: headers.findIndex(function(h) { return h.includes('태그') || h.toLowerCase().includes('tag'); })
+      };
+
+      // 첫 번째 열이 제목이면 기본 순서대로 매핑
+      if (colMap.title < 0) colMap.title = 0;
+      if (colMap.category < 0) colMap.category = 1;
+      if (colMap.description < 0) colMap.description = 2;
+      if (colMap.linkUrl < 0) colMap.linkUrl = 3;
+      if (colMap.fileUrl < 0) colMap.fileUrl = 4;
+      if (colMap.tags < 0) colMap.tags = 5;
+
+      var validCategories = REFERENCE_CATEGORIES.map(function(c) { return c.id; });
+
+      referenceExcelData = rows.map(function(row) {
+        var title = colMap.title >= 0 ? String(row[colMap.title] || '').trim() : '';
+        var category = colMap.category >= 0 ? String(row[colMap.category] || '').trim().toLowerCase() : '';
+        var description = colMap.description >= 0 ? String(row[colMap.description] || '').trim() : '';
+        var linkUrl = colMap.linkUrl >= 0 ? String(row[colMap.linkUrl] || '').trim() : '';
+        var fileUrl = colMap.fileUrl >= 0 ? String(row[colMap.fileUrl] || '').trim() : '';
+        var tagsStr = colMap.tags >= 0 ? String(row[colMap.tags] || '').trim() : '';
+
+        // 카테고리가 유효하지 않으면 'etc'로 설정
+        if (!validCategories.includes(category)) category = 'etc';
+
+        return {
+          title: title,
+          category: category,
+          description: description,
+          linkUrl: linkUrl,
+          fileUrl: fileUrl,
+          tags: tagsStr ? tagsStr.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : []
+        };
+      }).filter(function(item) {
+        // 제목이 있고, 링크 또는 파일URL이 있는 항목만
+        return item.title && (item.linkUrl || item.fileUrl);
+      });
+
+      // 안내 행 제외 (카테고리 옵션 설명 행)
+      referenceExcelData = referenceExcelData.filter(function(item) {
+        return !item.title.includes('※') && !item.title.includes('카테고리 옵션');
+      });
+
+      // 미리보기 표시
+      var previewDiv = document.getElementById('ref-excel-preview');
+      var countSpan = document.getElementById('ref-preview-count');
+      var thead = document.querySelector('#ref-preview-table thead');
+      var tbody = document.querySelector('#ref-preview-table tbody');
+      var submitBtn = document.getElementById('btn-submit-bulk-refs');
+
+      if (referenceExcelData.length === 0) {
+        showToast('유효한 레퍼런스가 없습니다. 제목과 링크/파일URL을 확인하세요.');
+        previewDiv.style.display = 'none';
+        submitBtn.disabled = true;
+        return;
+      }
+
+      countSpan.textContent = '(' + referenceExcelData.length + '개)';
+      thead.innerHTML = '<tr><th style="padding: 12px; text-align: left; border-bottom: 1px solid #E5E8EB;">제목</th><th style="padding: 12px; text-align: left; border-bottom: 1px solid #E5E8EB;">카테고리</th><th style="padding: 12px; text-align: left; border-bottom: 1px solid #E5E8EB;">설명</th><th style="padding: 12px; text-align: left; border-bottom: 1px solid #E5E8EB;">링크</th><th style="padding: 12px; text-align: left; border-bottom: 1px solid #E5E8EB;">파일</th><th style="padding: 12px; text-align: left; border-bottom: 1px solid #E5E8EB;">태그</th></tr>';
+
+      var previewRows = referenceExcelData.slice(0, 10).map(function(r) {
+        var cat = REFERENCE_CATEGORIES.find(function(c) { return c.id === r.category; }) || REFERENCE_CATEGORIES[6];
+        return '<tr>' +
+          '<td style="padding: 10px; border-bottom: 1px solid #F2F4F6; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + r.title + '</td>' +
+          '<td style="padding: 10px; border-bottom: 1px solid #F2F4F6;"><span style="font-size: 11px; padding: 3px 8px; background: ' + cat.bg + '; color: ' + cat.color + '; border-radius: 4px;">' + cat.label + '</span></td>' +
+          '<td style="padding: 10px; border-bottom: 1px solid #F2F4F6; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (r.description || '-') + '</td>' +
+          '<td style="padding: 10px; border-bottom: 1px solid #F2F4F6;">' + (r.linkUrl ? '🔗' : '-') + '</td>' +
+          '<td style="padding: 10px; border-bottom: 1px solid #F2F4F6;">' + (r.fileUrl ? '📎' : '-') + '</td>' +
+          '<td style="padding: 10px; border-bottom: 1px solid #F2F4F6; font-size: 11px; color: #6B7684;">' + (r.tags.length > 0 ? r.tags.slice(0, 2).map(function(t) { return '#' + t; }).join(' ') : '-') + '</td>' +
+          '</tr>';
+      }).join('');
+
+      if (referenceExcelData.length > 10) {
+        previewRows += '<tr><td colspan="6" style="text-align: center; padding: 12px; color: #6B7684;">... 외 ' + (referenceExcelData.length - 10) + '개</td></tr>';
+      }
+
+      tbody.innerHTML = previewRows;
+      previewDiv.style.display = 'block';
+      submitBtn.disabled = false;
+
+      showToast(referenceExcelData.length + '개의 레퍼런스를 불러왔습니다');
+
+    } catch(err) {
+      console.error(err);
+      showToast('파일을 읽는 중 오류가 발생했습니다');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// 레퍼런스 일괄 등록 실행
+async function submitBulkReferences() {
+  if (referenceExcelData.length === 0) {
+    showToast('등록할 레퍼런스가 없습니다');
+    return;
+  }
+
+  var submitBtn = document.getElementById('btn-submit-bulk-refs');
+  submitBtn.disabled = true;
+  submitBtn.textContent = '등록 중...';
+
+  var currentMember = getCurrentMember();
+  var now = new Date().toISOString();
+  var successCount = 0;
+  var errorCount = 0;
+
+  for (var i = 0; i < referenceExcelData.length; i++) {
+    var item = referenceExcelData[i];
+    try {
+      await db.collection('references').add({
+        title: item.title,
+        category: item.category,
+        description: item.description,
+        linkUrl: item.linkUrl || null,
+        fileUrl: item.fileUrl || null,
+        tags: item.tags,
+        createdAt: now,
+        createdBy: currentMember.id,
+        createdByName: currentMember.name,
+        updatedAt: now
+      });
+      successCount++;
+    } catch(e) {
+      console.error('레퍼런스 등록 오류:', e);
+      errorCount++;
+    }
+  }
+
+  referenceExcelData = [];
+
+  if (errorCount > 0) {
+    showToast(successCount + '개 등록 완료, ' + errorCount + '개 실패');
+  } else {
+    showToast('✅ ' + successCount + '개의 레퍼런스가 등록되었습니다');
+  }
+
+  closeModal();
+  loadReferences();
 }
 
 </script>
