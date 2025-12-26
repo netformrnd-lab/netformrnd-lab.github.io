@@ -2012,8 +2012,8 @@
             </div>
           </div>
 
-          <!-- 관리자 섹션 (닫힌 상태, 비밀번호 필요) -->
-          <div class="nav-section" style="margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
+          <!-- 관리자 섹션 (관리자만 표시) -->
+          <div id="admin-menu-section" class="nav-section" style="display: none; margin-top: 20px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
             <div class="nav-label" style="cursor: pointer; display: flex; align-items: center; justify-content: space-between; background: linear-gradient(135deg, #374151, #4b5563); padding: 10px 14px; border-radius: 8px; margin-bottom: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" onclick="toggleAdminMenu()">
               <span style="font-weight: 600; color: white;">관리자 🔐</span>
               <span id="admin-menu-arrow" style="transition: transform 0.2s; color: white;">▼</span>
@@ -2544,6 +2544,13 @@ function showApp() {
     // 모바일 FAB (퀵배너) 숨김
     const mobileFab = document.getElementById('mobile-fab');
     if (mobileFab) mobileFab.style.display = 'none';
+  }
+
+  // 🎯 관리자 메뉴 접근 제한 - 관리자(admin)만 표시
+  const adminMenuSection = document.getElementById('admin-menu-section');
+  if (adminMenuSection) {
+    const user = state.currentAdmin || state.currentUser;
+    adminMenuSection.style.display = (user && user.role === 'admin') ? 'block' : 'none';
   }
 
   // 🎯 게스트 배너 표시
@@ -25010,14 +25017,14 @@ async function syncCafe24Orders(isAuto = false) {
   const btn = isAuto ? null : event.target;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '🔄 동기화 중...';
+    btn.textContent = '🔄 수집 중...';
   }
 
   try {
     // Firestore에서 설정 가져오기
     const doc = await db.collection('settings').doc('cafe24').get();
     if (!doc.exists || !doc.data().accessToken) {
-      if (!isAuto) alert('먼저 카페24 인증을 진행해주세요.');
+      if (!isAuto) alert('먼저 카페24 인증을 진행해주세요.\n\n관리자에게 문의하세요.');
       return;
     }
 
@@ -25048,35 +25055,58 @@ async function syncCafe24Orders(isAuto = false) {
 
     const orders = ordersData.orders || [];
 
-    // Firestore에 저장
-    let savedCount = 0;
-    const batch = db.batch();
+    if (orders.length === 0) {
+      if (!isAuto) alert('ℹ️ 수집할 새 주문이 없습니다.\n\n(최근 30일 기준)');
+      return;
+    }
+
+    // 기존 주문 ID 조회 (중복 체크용)
+    const existingOrdersSnapshot = await db.collection('cafe24_orders').get();
+    const existingOrderIds = new Set(existingOrdersSnapshot.docs.map(doc => doc.id));
+
+    // 새 주문과 중복 주문 분류
+    const newOrders = [];
+    const duplicateOrders = [];
 
     for (const order of orders) {
-      const docRef = db.collection('cafe24_orders').doc(order.order_id);
-      batch.set(docRef, {
-        order_id: order.order_id || '',
-        order_date: order.order_date || '',
-        member_id: order.member_id || '',
-        billing_name: order.billing_name || '',
-        total_amount: parseFloat(order.order_price_amount || 0),
-        payment_status: order.payment_status || '',
-        order_status: order.order_status || '',
-        items: order.items || [],
-        synced_at: new Date().toISOString()
-      }, { merge: true });
-
-      savedCount++;
-
-      // Firestore는 한 번에 500개까지만 batch 가능
-      if (savedCount % 500 === 0) {
-        await batch.commit();
+      if (existingOrderIds.has(order.order_id)) {
+        duplicateOrders.push(order);
+      } else {
+        newOrders.push(order);
       }
     }
 
-    // 남은 데이터 커밋
-    if (savedCount % 500 !== 0) {
-      await batch.commit();
+    // 새 주문만 Firestore에 저장
+    let savedCount = 0;
+    if (newOrders.length > 0) {
+      const batch = db.batch();
+
+      for (const order of newOrders) {
+        const docRef = db.collection('cafe24_orders').doc(order.order_id);
+        batch.set(docRef, {
+          order_id: order.order_id || '',
+          order_date: order.order_date || '',
+          member_id: order.member_id || '',
+          billing_name: order.billing_name || '',
+          total_amount: parseFloat(order.order_price_amount || 0),
+          payment_status: order.payment_status || '',
+          order_status: order.order_status || '',
+          items: order.items || [],
+          synced_at: new Date().toISOString()
+        });
+
+        savedCount++;
+
+        // Firestore는 한 번에 500개까지만 batch 가능
+        if (savedCount % 500 === 0) {
+          await batch.commit();
+        }
+      }
+
+      // 남은 데이터 커밋
+      if (savedCount > 0 && savedCount % 500 !== 0) {
+        await batch.commit();
+      }
     }
 
     // 마지막 동기화 시간 업데이트
@@ -25085,22 +25115,31 @@ async function syncCafe24Orders(isAuto = false) {
       lastSyncCount: savedCount
     });
 
+    // 결과 메시지
     if (!isAuto) {
-      alert(`✅ 총 ${savedCount}건의 주문 데이터를 동기화했습니다!`);
-      renderCafe24Settings();
+      if (newOrders.length > 0 && duplicateOrders.length > 0) {
+        alert(`✅ 주문 수집 완료!\n\n` +
+          `📥 새로 수집: ${newOrders.length}건\n` +
+          `🔄 이미 수집됨 (중복): ${duplicateOrders.length}건`);
+      } else if (newOrders.length > 0) {
+        alert(`✅ 주문 수집 완료!\n\n📥 새로 수집: ${newOrders.length}건`);
+      } else {
+        alert(`ℹ️ 새 주문이 없습니다.\n\n🔄 이미 수집된 주문: ${duplicateOrders.length}건`);
+      }
+      renderCafe24Orders();
     } else {
-      console.log(`✅ [자동 동기화] ${savedCount}건의 주문 데이터를 동기화했습니다 (${new Date().toLocaleString('ko-KR')})`);
+      console.log(`✅ [자동 수집] 새 주문 ${newOrders.length}건, 중복 ${duplicateOrders.length}건 (${new Date().toLocaleString('ko-KR')})`);
     }
 
   } catch (err) {
-    console.error('동기화 오류:', err);
+    console.error('주문 수집 오류:', err);
     if (!isAuto) {
-      alert('❌ 동기화 중 오류가 발생했습니다: ' + err.message);
+      alert('❌ 주문 수집 중 오류가 발생했습니다: ' + err.message);
     }
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🔄 주문 데이터 동기화';
+      btn.textContent = '🔄 주문 수집';
     }
   }
 }
