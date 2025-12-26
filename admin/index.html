@@ -24968,33 +24968,34 @@ async function testCafe24Connection() {
   try {
     const doc = await db.collection('settings').doc('cafe24').get();
     if (!doc.exists || !doc.data().accessToken) {
-      alert('연동 정보가 없습니다.');
+      alert('❌ 연동 정보가 없습니다.\n\nOAuth 인증을 먼저 진행해주세요.');
       return;
     }
 
-    let { mallId, accessToken } = doc.data();
+    const config = doc.data();
+    const tokenExpiry = config.tokenExpiry ? new Date(config.tokenExpiry) : null;
+    const isExpired = tokenExpiry && tokenExpiry < new Date();
 
-    // 프록시를 통해 카페24 API 테스트 호출 (shop 정보 조회)
-    let data;
-    try {
-      data = await callCafe24Api(mallId, accessToken, '/api/v2/admin/shop');
-    } catch (apiErr) {
-      // 401 에러 시 토큰 갱신 시도
-      if (apiErr.status === 401) {
-        console.log('Access Token 만료, 갱신 시도...');
-        accessToken = await refreshCafe24AccessToken();
-        data = await callCafe24Api(mallId, accessToken, '/api/v2/admin/shop');
-      } else {
-        throw apiErr;
+    if (isExpired) {
+      alert(`⚠️ Access Token이 만료되었습니다.\n\n만료일: ${tokenExpiry.toLocaleString('ko-KR')}\n\nRefresh Token으로 갱신을 시도합니다.`);
+      try {
+        await refreshCafe24AccessToken();
+        alert('✅ 토큰이 성공적으로 갱신되었습니다!');
+      } catch (refreshErr) {
+        alert('❌ 토큰 갱신 실패: ' + refreshErr.message);
       }
+      return;
     }
 
-    alert(`✅ 연결 성공!\n\n쇼핑몰: ${data.shop?.shop_name || mallId}\n상태: 정상`);
+    alert(`✅ 카페24 연동 상태: 정상\n\n` +
+      `📦 Mall ID: ${config.mallId}\n` +
+      `🔑 Access Token: ${config.accessToken?.substring(0, 10)}...\n` +
+      `🔄 Refresh Token: ${config.refreshToken ? '설정됨' : '없음'}\n` +
+      `⏰ 토큰 만료: ${tokenExpiry ? tokenExpiry.toLocaleString('ko-KR') : '알 수 없음'}`);
 
   } catch (err) {
     console.error('연결 테스트 오류:', err);
-    const errorMsg = typeof err === 'object' ? (err.message || JSON.stringify(err)) : String(err);
-    alert('❌ 연결 실패: ' + errorMsg + '\n\nAccess Token이 만료되었거나 잘못되었을 수 있습니다.');
+    alert('❌ 오류: ' + err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = originalText;
