@@ -8416,9 +8416,16 @@ function openCafe24MappingModal() {
         
         <!-- STEP 2: 자동 분류 결과 & 공구 매핑 -->
         <div id="cafe24GroupSection" style="display: none; margin-bottom: 24px;">
-          <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-            <span style="background: #3b82f6; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">2</span>
-            자동 분류 결과 → 공구 매핑
+          <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="background: #3b82f6; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">2</span>
+              자동 분류 결과 → 공구 매핑
+            </div>
+            <button onclick="autoConfirmAll()" style="padding: 8px 16px; background: #059669; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+              <span>⚡</span>
+              <span>전체 자동확정</span>
+              <span style="font-size: 11px; opacity: 0.9;">(수동확인 제외)</span>
+            </button>
           </div>
           <div id="cafe24GroupList" style="display: grid; gap: 12px;"></div>
         </div>
@@ -8758,6 +8765,7 @@ function renderCafe24Groups() {
             group.matchedProductName = dp.productName;
             group.supplyPrice = dp.supplyPrice || 0;
             group.marginRate = dp.marginRate || 0;
+            group.matchScore = 1.0; // 상품 1개는 100% 신뢰
             console.log('[자동매칭] 상품 1개 자동선택:', group.productName, '→', dp.productName);
           } else {
             // 상품이 여러개면 유사도로 매칭
@@ -8775,9 +8783,11 @@ function renderCafe24Groups() {
               group.matchedProductName = bestMatch.productName;
               group.supplyPrice = bestMatch.supplyPrice || 0;
               group.marginRate = bestMatch.marginRate || 0;
+              group.matchScore = bestScore; // 유사도 점수 저장
               console.log('[자동매칭] 유사도 매칭:', group.productName, '→', bestMatch.productName, '점수:', bestScore);
             } else {
               console.log('[자동매칭] 매칭 실패:', group.productName, '최고 점수:', bestScore);
+              group.matchScore = 0;
             }
           }
         }
@@ -8791,6 +8801,13 @@ function renderCafe24Groups() {
       }
     }
 
+    // 수동 확인이 필요한지 판단
+    const needsManualCheck = !confirmed && group.matchedProductSku && (
+      (group.matchScore !== undefined && group.matchScore < 0.5) ||  // 신뢰도 낮음
+      (group.supplyPrice === 0) ||  // 공급가 0원
+      (!group.matchedProductSku)    // 상품 미선택
+    );
+
     return `
       <div style="background: ${bgColor}; border: 2px solid ${borderColor}; border-radius: 12px; padding: 16px;" data-group-key="${key}">
         <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -8798,9 +8815,11 @@ function renderCafe24Groups() {
             <div style="flex: 1;">
               <div style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
                 ${confirmed ? '<span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">✓ 확정</span>' : ''}
-                ${autoMatched && !confirmed ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">✓ 자동매칭</span>' : ''}
-                ${!autoMatched && !confirmed ? '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">⚠ 수동선택</span>' : ''}
+                ${needsManualCheck ? '<span style="background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0; animation: pulse 2s infinite;">⚠ 수동확인필요</span>' : ''}
+                ${autoMatched && !confirmed && !needsManualCheck ? '<span style="background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">✓ 자동매칭</span>' : ''}
+                ${!autoMatched && !confirmed && !needsManualCheck ? '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">⚠ 수동선택</span>' : ''}
                 <span style="font-weight: 600; color: var(--gray-800); flex: 1; word-break: break-word; line-height: 1.4;" title="${group.productName}">${group.productName}</span>
+                ${needsManualCheck && group.matchScore !== undefined ? `<span style="font-size: 10px; color: #dc2626; font-weight: 600;">(유사도: ${Math.round(group.matchScore * 100)}%)</span>` : ''}
               </div>
               <div style="font-size: 12px; color: var(--gray-500);">
                 셀러: <strong>${group.sellerName || '-'}</strong> |
@@ -8809,14 +8828,20 @@ function renderCafe24Groups() {
                 <span style="color: var(--success); font-weight: 600;">${formatNumber(group.totalSales)}원</span>
               </div>
             </div>
-            <div>
+            <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-end;">
               ${!confirmed && group.mappedDealId && group.matchedProductSku ? `
-                <button onclick="confirmGroupMapping('${key}')" class="btn btn-sm btn-primary" style="padding: 8px 16px;">
-                  ✓ 확정
+                <button onclick="confirmGroupMapping('${key}')" class="btn btn-sm" style="padding: 10px 20px; font-size: 14px; font-weight: 700; background: ${needsManualCheck ? '#f59e0b' : '#059669'}; color: white; border: none; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); cursor: pointer; white-space: nowrap;">
+                  ${needsManualCheck ? '⚠ 확인 후 확정' : '✓ 확정'}
                 </button>
               ` : ''}
+              ${!confirmed && !group.mappedDealId ? `
+                <span style="font-size: 11px; color: #94a3b8; text-align: right;">공구를 선택하세요</span>
+              ` : ''}
+              ${!confirmed && group.mappedDealId && !group.matchedProductSku ? `
+                <span style="font-size: 11px; color: #f59e0b; text-align: right; font-weight: 600;">상품을 선택하세요</span>
+              ` : ''}
               ${confirmed ? `
-                <button onclick="unconfirmGroupMapping('${key}')" class="btn btn-sm btn-secondary" style="padding: 8px 16px;">
+                <button onclick="unconfirmGroupMapping('${key}')" class="btn btn-sm btn-secondary" style="padding: 8px 16px; font-size: 13px; background: #e2e8f0; color: #475569; border: none; border-radius: 8px; cursor: pointer;">
                   ↩ 취소
                 </button>
               ` : ''}
@@ -8929,6 +8954,54 @@ function unconfirmGroupMapping(groupKey) {
   cafe24GroupedData[groupKey].confirmed = false;
 
   showToast('↩ 확정이 취소되었습니다');
+  renderCafe24Groups();
+}
+
+// 전체 자동확정 (수동확인 제외)
+function autoConfirmAll() {
+  let confirmedCount = 0;
+  let skippedCount = 0;
+  const skippedReasons = [];
+
+  Object.entries(cafe24GroupedData).forEach(([key, group]) => {
+    // 이미 확정된 항목은 건너뛰기
+    if (group.confirmed) return;
+
+    // 공구나 상품이 선택되지 않은 경우 건너뛰기
+    if (!group.mappedDealId || !group.matchedProductSku) {
+      skippedCount++;
+      skippedReasons.push(`${group.productName}: 공구/상품 미선택`);
+      return;
+    }
+
+    // 수동 확인이 필요한 경우 건너뛰기
+    const needsManualCheck = (
+      (group.matchScore !== undefined && group.matchScore < 0.5) ||  // 신뢰도 낮음
+      (group.supplyPrice === 0)  // 공급가 0원
+    );
+
+    if (needsManualCheck) {
+      skippedCount++;
+      const reason = group.matchScore < 0.5 ? `유사도 ${Math.round(group.matchScore * 100)}%` : '공급가 0원';
+      skippedReasons.push(`${group.productName}: ${reason}`);
+      return;
+    }
+
+    // 자동 확정
+    group.confirmed = true;
+    confirmedCount++;
+  });
+
+  // 결과 메시지
+  let message = `✅ ${confirmedCount}개 항목이 자동 확정되었습니다`;
+  if (skippedCount > 0) {
+    message += `\n⚠ ${skippedCount}개 항목은 수동 확인이 필요합니다`;
+    if (skippedReasons.length <= 3) {
+      message += '\n\n' + skippedReasons.join('\n');
+    }
+  }
+
+  alert(message);
   renderCafe24Groups();
 }
 
