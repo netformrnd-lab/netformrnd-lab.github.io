@@ -32253,6 +32253,11 @@ async function openManualActivityModal() {
   var deals = state.deals || [];
   var recommendedDeals = deals.slice(0, 3);
 
+  // 안전한 문자열 처리 함수
+  function escapeHtml(str) {
+    return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   modal.innerHTML = `
     <div class="modal-content" style="max-width: 520px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
@@ -32280,11 +32285,11 @@ async function openManualActivityModal() {
         <div style="margin-top: 10px;">
           <span style="font-size: 12px; color: #6B7684;">⚡ 추천:</span>
           <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
-            ${recommendedTasks.map(t => `
-              <button type="button" onclick="selectTask('${t.id}', '${(t.title || '').replace(/'/g, "\\'")}', '${(t.category || '').replace(/'/g, "\\'")}')"
+            ${recommendedTasks.map((t, idx) => `
+              <button type="button" onclick="selectTaskByIndex(${idx})"
                 style="background: #F0F9FF; border: 1px solid #BAE6FD; color: #0369A1; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
                 onmouseover="this.style.background='#E0F2FE'" onmouseout="this.style.background='#F0F9FF'">
-                📌 ${(t.title || '').length > 15 ? (t.title || '').substring(0, 15) + '...' : (t.title || '')}
+                📌 ${escapeHtml((t.title || '').length > 15 ? (t.title || '').substring(0, 15) + '...' : (t.title || ''))}
               </button>
             `).join('')}
           </div>
@@ -32307,11 +32312,11 @@ async function openManualActivityModal() {
         <div style="margin-top: 10px;">
           <span style="font-size: 12px; color: #6B7684;">⚡ 최근:</span>
           <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;">
-            ${recommendedDeals.map(d => `
-              <button type="button" onclick="selectDeal('${d.id}', '${(d.title || '').replace(/'/g, "\\'")}')"
+            ${recommendedDeals.map((d, idx) => `
+              <button type="button" onclick="selectDealByIndex(${idx})"
                 style="background: #FFF7ED; border: 1px solid #FDBA74; color: #C2410C; padding: 6px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; transition: all 0.15s;"
                 onmouseover="this.style.background='#FFEDD5'" onmouseout="this.style.background='#FFF7ED'">
-                🛒 ${(d.title || '').length > 15 ? (d.title || '').substring(0, 15) + '...' : (d.title || '')}
+                🛒 ${escapeHtml((d.title || '').length > 15 ? (d.title || '').substring(0, 15) + '...' : (d.title || ''))}
               </button>
             `).join('')}
           </div>
@@ -32333,11 +32338,25 @@ async function openManualActivityModal() {
   // 전역에 저장
   window._manualActivityTasks = tasks;
   window._manualActivityDeals = deals;
+  window._recommendedTasks = recommendedTasks;
+  window._recommendedDeals = recommendedDeals;
 
   // 드롭다운 외부 클릭 시 닫기
   setTimeout(function() {
     document.addEventListener('click', handleActivityDropdownClose);
   }, 100);
+}
+
+// 추천 업무 인덱스로 선택
+function selectTaskByIndex(idx) {
+  var t = window._recommendedTasks[idx];
+  if (t) selectTask(t.id, t.title || '', t.category || '');
+}
+
+// 추천 공구 인덱스로 선택
+function selectDealByIndex(idx) {
+  var d = window._recommendedDeals[idx];
+  if (d) selectDeal(d.id, d.title || '');
 }
 
 // 업무 드롭다운 표시
@@ -32359,17 +32378,28 @@ function filterTaskList(query) {
     return searchStr.includes(query.toLowerCase());
   }).slice(0, 20);
 
+  // 필터된 결과 저장 (인덱스로 선택용)
+  window._filteredTasks = filtered;
+
   if (filtered.length === 0) {
     dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
   } else {
-    dropdown.innerHTML = filtered.map(function(t) {
-      return '<div onclick="selectTask(\'' + t.id + '\', \'' + (t.title || '').replace(/'/g, "\\'") + '\', \'' + (t.category || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
-        '<div style="font-weight: 500; color: #191F28;">' + (t.title || '') + '</div>' +
-        (t.category ? '<div style="font-size: 12px; color: #6B7684; margin-top: 2px;">' + t.category + '</div>' : '') +
+    dropdown.innerHTML = filtered.map(function(t, idx) {
+      var titleHtml = (t.title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      var categoryHtml = (t.category || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return '<div onclick="selectFilteredTask(' + idx + ')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">' + titleHtml + '</div>' +
+        (categoryHtml ? '<div style="font-size: 12px; color: #6B7684; margin-top: 2px;">' + categoryHtml + '</div>' : '') +
       '</div>';
     }).join('');
   }
   dropdown.style.display = 'block';
+}
+
+// 필터된 업무에서 선택
+function selectFilteredTask(idx) {
+  var t = window._filteredTasks[idx];
+  if (t) selectTask(t.id, t.title || '', t.category || '');
 }
 
 // 업무 선택
@@ -32378,10 +32408,15 @@ function selectTask(id, title, category) {
   document.getElementById('task-search-input').value = '';
   document.getElementById('task-dropdown').style.display = 'none';
 
+  // 선택된 업무 정보 저장
+  window._selectedTask = { id: id, title: title, category: category };
+
   var badge = document.getElementById('selected-task-badge');
   badge.style.display = 'block';
+  var safeTitle = (title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  var safeCategory = (category || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #E0E7FF; color: #4338CA; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
-    '📌 ' + title + (category ? ' [' + category + ']' : '') +
+    '📌 ' + safeTitle + (safeCategory ? ' [' + safeCategory + ']' : '') +
     '<button type="button" onclick="clearTaskSelection()" style="background: none; border: none; color: #4338CA; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
   '</span>';
 }
@@ -32411,16 +32446,26 @@ function filterDealList(query) {
     return (d.title || '').toLowerCase().includes(query.toLowerCase());
   }).slice(0, 20);
 
+  // 필터된 결과 저장 (인덱스로 선택용)
+  window._filteredDeals = filtered;
+
   if (filtered.length === 0) {
     dropdown.innerHTML = '<div style="padding: 14px; color: #6B7684; text-align: center; font-size: 13px;">검색 결과가 없습니다</div>';
   } else {
-    dropdown.innerHTML = filtered.map(function(d) {
-      return '<div onclick="selectDeal(\'' + d.id + '\', \'' + (d.title || '').replace(/'/g, "\\'") + '\')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
-        '<div style="font-weight: 500; color: #191F28;">🛒 ' + (d.title || '') + '</div>' +
+    dropdown.innerHTML = filtered.map(function(d, idx) {
+      var titleHtml = (d.title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return '<div onclick="selectFilteredDeal(' + idx + ')" style="padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #F2F4F6; font-size: 14px;" onmouseover="this.style.background=\'#F8FAFC\'" onmouseout="this.style.background=\'white\'">' +
+        '<div style="font-weight: 500; color: #191F28;">🛒 ' + titleHtml + '</div>' +
       '</div>';
     }).join('');
   }
   dropdown.style.display = 'block';
+}
+
+// 필터된 공구에서 선택
+function selectFilteredDeal(idx) {
+  var d = window._filteredDeals[idx];
+  if (d) selectDeal(d.id, d.title || '');
 }
 
 // 공구 선택
@@ -32429,10 +32474,14 @@ function selectDeal(id, title) {
   document.getElementById('deal-search-input').value = '';
   document.getElementById('deal-dropdown').style.display = 'none';
 
+  // 선택된 공구 정보 저장
+  window._selectedDeal = { id: id, title: title };
+
   var badge = document.getElementById('selected-deal-badge');
   badge.style.display = 'block';
+  var safeTitle = (title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   badge.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 6px; background: #FFF7ED; color: #C2410C; padding: 8px 12px; border-radius: 8px; font-size: 13px;">' +
-    '🛒 ' + title +
+    '🛒 ' + safeTitle +
     '<button type="button" onclick="clearDealSelection()" style="background: none; border: none; color: #C2410C; cursor: pointer; font-size: 16px; padding: 0; margin-left: 4px;">×</button>' +
   '</span>';
 }
