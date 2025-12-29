@@ -6513,8 +6513,9 @@ function renderCalendar() {
       else if (state.viewFilter === 'seller') badgeClass += ' seller';
       else badgeClass += ' both';
       
-      const displayText = isStart || isSingle ? `${deal.title}${daysText}` : '·';
-      dealBadges += `<div class="${badgeClass}" onclick="event.stopPropagation(); openDealModal(state.deals.find(d=>d.id==='${deal.id}'))" title="${deal.title} ${daysText}">${displayText}</div>`;
+      const escapedTitle = (deal.title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const displayText = isStart || isSingle ? `${escapedTitle}${daysText}` : '·';
+      dealBadges += `<div class="${badgeClass}" onclick="event.stopPropagation(); openDealModal(state.deals.find(d=>d.id==='${deal.id}'))" title="${escapedTitle} ${daysText}">${displayText}</div>`;
     });
     
     if (dayDeals.length > 3) {
@@ -17171,10 +17172,10 @@ function openSupplierSettlementModal(item = null) {
               <input type="text" class="form-input" id="sps-sellerName" value="${s.sellerName}" required placeholder="셀러 검색..." autocomplete="off" oninput="filterSellerDropdown(this.value)" onfocus="showSellerDropdown()">
               <input type="hidden" id="sps-sellerId" value="${s.sellerId || ''}">
               <div id="seller-dropdown" style="display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid var(--gray-300); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-height: 200px; overflow-y: auto; z-index: 100;">
-                ${sellers.map(seller => `
-                  <div class="seller-option" onclick="selectSeller('${seller.id}', '${seller.nickname || seller.name}')" style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--gray-100); transition: background 0.15s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='white'">
-                    <div style="font-weight: 600; color: var(--gray-900);">${seller.nickname || '-'}</div>
-                    <div style="font-size: 12px; color: var(--gray-500);">${seller.name || ''} ${seller.phone ? '· ' + seller.phone : ''}</div>
+                ${sellers.map((seller, idx) => `
+                  <div class="seller-option" onclick="selectSellerByIndex(${idx})" style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--gray-100); transition: background 0.15s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='white'">
+                    <div style="font-weight: 600; color: var(--gray-900);">${(seller.nickname || '-').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                    <div style="font-size: 12px; color: var(--gray-500);">${(seller.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')} ${seller.phone ? '· ' + seller.phone : ''}</div>
                   </div>
                 `).join('')}
               </div>
@@ -17226,9 +17227,24 @@ function openSupplierSettlementModal(item = null) {
     </div>
   `;
   setTimeout(() => { document.querySelectorAll('.sps-qty').forEach(input => calculateSupplierRow(input)); }, 100);
-  
+
+  // 셀러 목록 전역 저장 (인덱스 선택용)
+  window._supplierSellers = sellers;
+
   // 외부 클릭시 드롭다운 닫기
   document.addEventListener('click', closeSellerDropdownOnOutsideClick);
+}
+
+// 인덱스로 셀러 선택 (초기 목록용)
+function selectSellerByIndex(idx) {
+  var s = window._supplierSellers[idx];
+  if (s) selectSeller(s.id, s.nickname || s.name || '');
+}
+
+// 필터된 셀러에서 선택
+function selectFilteredSeller(idx) {
+  var s = window._filteredSellers[idx];
+  if (s) selectSeller(s.id, s.nickname || s.name || '');
 }
 
 // 셀러 드롭다운 표시
@@ -17244,7 +17260,7 @@ function showSellerDropdown() {
 function filterSellerDropdown(searchText) {
   const dropdown = document.getElementById('seller-dropdown');
   if (!dropdown) return;
-  
+
   const sellers = state.sellers || [];
   const filtered = sellers.filter(seller => {
     const nickname = (seller.nickname || '').toLowerCase();
@@ -17252,16 +17268,19 @@ function filterSellerDropdown(searchText) {
     const search = searchText.toLowerCase();
     return nickname.includes(search) || name.includes(search);
   });
-  
-  dropdown.innerHTML = filtered.length === 0 
+
+  // 필터된 결과 전역 저장 (인덱스 선택용)
+  window._filteredSellers = filtered;
+
+  dropdown.innerHTML = filtered.length === 0
     ? `<div style="padding: 16px; text-align: center; color: var(--gray-500);">검색 결과가 없습니다</div>`
-    : filtered.map(seller => `
-      <div class="seller-option" onclick="selectSeller('${seller.id}', '${seller.nickname || seller.name}')" style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--gray-100); transition: background 0.15s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='white'">
-        <div style="font-weight: 600; color: var(--gray-900);">${seller.nickname || '-'}</div>
-        <div style="font-size: 12px; color: var(--gray-500);">${seller.name || ''} ${seller.phone ? '· ' + seller.phone : ''}</div>
+    : filtered.map((seller, idx) => `
+      <div class="seller-option" onclick="selectFilteredSeller(${idx})" style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--gray-100); transition: background 0.15s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='white'">
+        <div style="font-weight: 600; color: var(--gray-900);">${(seller.nickname || '-').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+        <div style="font-size: 12px; color: var(--gray-500);">${(seller.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')} ${seller.phone ? '· ' + seller.phone : ''}</div>
       </div>
     `).join('');
-  
+
   dropdown.style.display = 'block';
 }
 
