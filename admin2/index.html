@@ -1880,19 +1880,16 @@
             </div>
             <div id="okr-submenu" style="display: block; padding-left: 8px;">
               <div class="nav-item" data-tab="growthDashboard" onclick="switchTab('growthDashboard')" style="font-size: 13px;">
-                <span>🏠 그로스 대시보드</span>
-              </div>
-              <div class="nav-item" data-tab="strategyManagement" onclick="switchTab('strategyManagement')" style="font-size: 13px;">
-                <span>📋 전략 관리</span>
-              </div>
-              <div class="nav-item" data-tab="okrManagement" onclick="switchTab('okrManagement')" style="font-size: 13px;">
-                <span>✏️ OKR 관리</span>
-              </div>
-              <div class="nav-item" data-tab="okrReview" onclick="switchTab('okrReview')" style="font-size: 13px;">
-                <span>📈 분기별 리뷰</span>
+                <span>📊 그로스 대시보드</span>
               </div>
               <div class="nav-item" data-tab="strategy2026" onclick="switchTab('strategy2026')" style="font-size: 13px;">
-                <span>📊 26년 전략기획</span>
+                <span>📋 전략기획</span>
+              </div>
+              <div class="nav-item" data-tab="okrManagement" onclick="switchTab('okrManagement')" style="font-size: 13px;">
+                <span>🎯 OKR 관리</span>
+              </div>
+              <div class="nav-item" data-tab="okrReview" onclick="switchTab('okrReview')" style="font-size: 13px;">
+                <span>📈 분기 리뷰</span>
               </div>
               <div class="nav-item" data-tab="workLog" onclick="switchTab('workLog')" style="font-size: 13px;">
                 <span>📓 업무일지</span>
@@ -29293,9 +29290,12 @@ function renderOKRManagement() {
 
 async function loadOKRList() {
   try {
-    const okrSnapshot = await db.collection('okrs').orderBy('createdAt', 'desc').get();
-    const teamSnapshot = await db.collection('teamMembers').get();
-    const taskSnapshot = await db.collection('tasks').get();
+    const [okrSnapshot, teamSnapshot, taskSnapshot, strategyDoc] = await Promise.all([
+      db.collection('okrs').orderBy('createdAt', 'desc').get(),
+      db.collection('teamMembers').get(),
+      db.collection('tasks').get(),
+      db.collection('strategies').doc('current').get()
+    ]);
 
     let okrs = [];
     okrSnapshot.forEach(doc => {
@@ -29306,6 +29306,10 @@ async function loadOKRList() {
     teamSnapshot.forEach(doc => {
       teamMembers[doc.id] = doc.data();
     });
+
+    // 전략 목록
+    const strategy = strategyDoc.exists ? strategyDoc.data() : { strategies: [] };
+    const strategyList = strategy.strategies || [];
 
     // 업무 데이터 수집 (달성률 계산용)
     const allTasks = [];
@@ -29348,14 +29352,15 @@ async function loadOKRList() {
       };
     });
 
-    renderOKRList(okrs, teamMembers);
+    renderOKRList(okrs, teamMembers, strategyList);
   } catch (error) {
     console.error('OKR 목록 로드 오류:', error);
   }
 }
 
-function renderOKRList(okrs, teamMembers) {
+function renderOKRList(okrs, teamMembers, strategyList) {
   const content = document.getElementById('okr-list-content');
+  strategyList = strategyList || [];
 
   if (okrs.length === 0) {
     content.innerHTML = `
@@ -29372,17 +29377,19 @@ function renderOKRList(okrs, teamMembers) {
 
   okrs.forEach(okr => {
     const member = teamMembers[okr.memberId] || { name: '알 수 없음' };
+    const linkedStrategyInfo = okr.linkedStrategy !== '' && strategyList[okr.linkedStrategy] ? strategyList[okr.linkedStrategy] : null;
     const progressColor = okr.progress >= 70 ? 'var(--success)' : okr.progress >= 40 ? 'var(--warning)' : 'var(--danger)';
 
     html += `
       <div style="background: white; border-radius: 12px; padding: 20px; border: 1px solid var(--gray-200);">
         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
           <div style="flex: 1;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
               <span style="background: var(--primary-light); color: var(--primary); padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;">
                 ${okr.quarter}
               </span>
               <span style="font-size: 14px; font-weight: 600; color: var(--gray-900);">${member.name}</span>
+              ${linkedStrategyInfo ? `<span style="background: #E0F2FE; color: #0284C7; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;">🎯 ${linkedStrategyInfo.title || '전략 ' + (Number(okr.linkedStrategy) + 1)}</span>` : ''}
             </div>
             <div style="font-size: 16px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px;">
               ${okr.objective}
@@ -29533,11 +29540,18 @@ async function openOKRModal(okrId = null) {
       return;
     }
 
-    const teamSnapshot = await db.collection('teamMembers').get();
+    const [teamSnapshot, strategyDoc] = await Promise.all([
+      db.collection('teamMembers').get(),
+      db.collection('strategies').doc('current').get()
+    ]);
     const teamMembers = [];
     teamSnapshot.forEach(doc => {
       teamMembers.push({ id: doc.id, ...doc.data() });
     });
+
+    // 전략 목록 가져오기
+    const strategy = strategyDoc.exists ? strategyDoc.data() : { strategies: [] };
+    const strategyList = strategy.strategies || [];
 
     // 팀원이 없으면 안내 메시지 표시
     if (teamMembers.length === 0) {
@@ -29548,6 +29562,7 @@ async function openOKRModal(okrId = null) {
     let okr = {
       memberId: '',
       quarter: `${getQuarter().year}-Q${getQuarter().quarter}`,
+      linkedStrategy: '',
       objective: '',
       keyResults: [
         { description: '', target: '', current: 0 }
@@ -29585,6 +29600,21 @@ async function openOKRModal(okrId = null) {
               </option>
             `).join('')}
           </select>
+        </div>
+
+        <div>
+          <label style="display: block; font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+            🎯 연관 전략
+          </label>
+          <select id="okr-strategy" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            <option value="">전략 선택 (선택사항)</option>
+            ${strategyList.map((s, idx) => `
+              <option value="${idx}" ${String(idx) === String(okr.linkedStrategy) ? 'selected' : ''}>
+                ${idx + 1}. ${s.title || '전략 ' + (idx + 1)}
+              </option>
+            `).join('')}
+          </select>
+          <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">이 OKR이 어떤 전략과 연관되는지 선택하세요</div>
         </div>
 
         <div>
@@ -29705,6 +29735,7 @@ function removeKeyResult(btn) {
 
 async function saveOKR(okrId) {
   const quarter = document.getElementById('okr-quarter').value;
+  const linkedStrategy = document.getElementById('okr-strategy')?.value || '';
   const memberId = document.getElementById('okr-member').value;
   const objective = document.getElementById('okr-objective').value.trim();
   const improvements = document.getElementById('okr-improvements').value.trim();
@@ -29735,6 +29766,7 @@ async function saveOKR(okrId) {
 
   const okrData = {
     quarter,
+    linkedStrategy,
     memberId,
     objective,
     keyResults,
@@ -30268,7 +30300,8 @@ async function loadGrowthDashboard() {
       db.collection('teamMembers').get(),
       db.collection('deals').get(),
       db.collection('sellerSettlements').get(),
-      db.collection('sellers').get()
+      db.collection('sellers').get(),
+      db.collection('strategies').doc('current').get()
     ]);
 
     var allOkrs = [];
@@ -30289,22 +30322,36 @@ async function loadGrowthDashboard() {
     var sellers = [];
     results[5].forEach(function(doc) { sellers.push({ id: doc.id, ...doc.data() }); });
 
+    // 전략 데이터
+    var strategy = results[6].exists ? results[6].data() : getDefaultStrategy();
+
     // 현재 분기 OKR
     var currentOkrs = allOkrs.filter(function(o) { return o.quarter === quarterKey; });
+
+    // OKR별 달성률을 연결된 업무 상태로 계산
+    allOkrs = allOkrs.map(function(okr) {
+      var linkedTasks = tasks.filter(function(t) { return t.linkedOkrId === okr.id || t.okrId === okr.id; });
+      var totalTasks = linkedTasks.length;
+      var completedTasks = linkedTasks.filter(function(t) { return t.status === '완료'; }).length;
+      var taskBasedProgress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+      return { ...okr, progress: taskBasedProgress };
+    });
+    currentOkrs = allOkrs.filter(function(o) { return o.quarter === quarterKey; });
 
     // 실적 계산
     var totalSales = settlements.reduce(function(s, d) { return s + (Number(d.totalSales) || 0); }, 0);
 
-    renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, deals, settlements, sellers, totalSales, currentYear, quarterKey);
+    renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, deals, settlements, sellers, totalSales, currentYear, quarterKey, strategy);
   } catch (error) {
     console.error('대시보드 로드 오류:', error);
     document.getElementById('growth-dashboard-content').innerHTML = '<div style="text-align: center; padding: 40px; color: var(--danger);">데이터 로드 중 오류가 발생했습니다.</div>';
   }
 }
 
-function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, deals, settlements, sellers, totalSales, currentYear, quarterKey) {
+function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, deals, settlements, sellers, totalSales, currentYear, quarterKey, strategy) {
   var content = document.getElementById('growth-dashboard-content');
   var yearGoal = YEARLY_GOALS[currentYear] || YEARLY_GOALS[2026];
+  strategy = strategy || getDefaultStrategy();
   var ultimateGoal = YEARLY_GOALS.ultimate.target;
 
   var html = '';
@@ -30338,6 +30385,42 @@ function renderGrowthDashboardContent(currentOkrs, allOkrs, tasks, teamMembers, 
   html += '</div>';
   html += '</div>';
   html += '</div>';
+
+  // ===== 0.5 전략별 OKR 진행률 =====
+  var strategyList = strategy.strategies || [];
+  if (strategyList.length > 0) {
+    html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
+    html += '<h3 style="font-size: 18px; font-weight: 700;">🎯 전략별 OKR 진행률</h3>';
+    html += '<button onclick="switchTab(\'strategy2026\')" style="background: var(--gray-100); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--gray-700);">전략기획 바로가기 →</button>';
+    html += '</div>';
+    html += '<div style="display: grid; grid-template-columns: repeat(' + Math.min(4, strategyList.length) + ', 1fr); gap: 16px;">';
+
+    strategyList.forEach(function(s, idx) {
+      // 해당 전략에 연결된 OKR들의 평균 진행률 계산
+      var linkedOkrs = allOkrs.filter(function(o) { return String(o.linkedStrategy) === String(idx); });
+      var strategyProgress = 0;
+      if (linkedOkrs.length > 0) {
+        strategyProgress = Math.round(linkedOkrs.reduce(function(sum, o) { return sum + (o.progress || 0); }, 0) / linkedOkrs.length);
+      }
+      var progressColor = strategyProgress >= 70 ? '#10b981' : strategyProgress >= 40 ? '#f59e0b' : '#ef4444';
+
+      html += '<div style="background: var(--gray-50); border-radius: 12px; padding: 16px; border-left: 4px solid ' + progressColor + ';">';
+      html += '<div style="font-size: 20px; font-weight: 800; color: var(--primary); margin-bottom: 8px;">' + (idx + 1) + '</div>';
+      html += '<div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">' + (s.title || '전략 ' + (idx + 1)) + '</div>';
+      html += '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 12px; line-height: 1.4;">' + (s.desc || '').substring(0, 40) + (s.desc && s.desc.length > 40 ? '...' : '') + '</div>';
+      html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">';
+      html += '<span style="font-size: 24px; font-weight: 700; color: ' + progressColor + ';">' + strategyProgress + '%</span>';
+      html += '<span style="font-size: 11px; color: var(--gray-500);">OKR ' + linkedOkrs.length + '개</span>';
+      html += '</div>';
+      html += '<div style="background: var(--gray-200); height: 6px; border-radius: 3px;">';
+      html += '<div style="background: ' + progressColor + '; height: 100%; width: ' + strategyProgress + '%; border-radius: 3px;"></div>';
+      html += '</div>';
+      html += '</div>';
+    });
+
+    html += '</div></div>';
+  }
 
   // ===== 1. 최종 목표 트래커 (50억) =====
   html += '<div style="background: linear-gradient(135deg, #1e3a8a, #3b82f6); border-radius: 20px; padding: 28px; margin-bottom: 24px; color: white;">';
@@ -30911,8 +30994,10 @@ function renderGrowthGuide() {
 }
 
 // ========================================
-// 2026년 전략현황 대시보드
+// 전략기획 (Strategy Planning) - Firebase 연동
 // ========================================
+var _strategyViewMode = 'dashboard'; // 'dashboard' or 'settings'
+
 function renderStrategy2026() {
   var app = document.getElementById('app');
 
@@ -30920,11 +31005,12 @@ function renderStrategy2026() {
     <div class="page-header">
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <div>
-          <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">📊 2026년 전략현황</h1>
-          <p style="color: var(--gray-600); margin-top: 8px;">PMF 검증 단계 - 실시간 전략 진행 현황</p>
+          <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">📋 전략기획</h1>
+          <p style="color: var(--gray-600); margin-top: 8px;">연간 전략과 목표를 설정하고 진행 현황을 확인합니다</p>
         </div>
         <div style="display: flex; gap: 12px;">
-          <button onclick="openStrategy2026PPT()" style="background: linear-gradient(135deg, #0f0f1a, #1a1a2e); color: #fc9600; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📽️ 발표자료 보기</button>
+          <button id="strategy-view-toggle" onclick="toggleStrategyView()" style="background: var(--gray-100); border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">⚙️ 전략 설정</button>
+          <button onclick="openGrowthBoardPPT()" style="background: linear-gradient(135deg, #0f0f1a, #1a1a2e); color: #fc9600; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">📽️ 발표자료</button>
         </div>
       </div>
     </div>
@@ -30935,6 +31021,16 @@ function renderStrategy2026() {
     </div>
   `;
 
+  _strategyViewMode = 'dashboard';
+  loadStrategy2026Data();
+}
+
+function toggleStrategyView() {
+  _strategyViewMode = _strategyViewMode === 'dashboard' ? 'settings' : 'dashboard';
+  var btn = document.getElementById('strategy-view-toggle');
+  if (btn) {
+    btn.textContent = _strategyViewMode === 'dashboard' ? '⚙️ 전략 설정' : '📊 현황 보기';
+  }
   loadStrategy2026Data();
 }
 
@@ -30942,14 +31038,21 @@ async function loadStrategy2026Data() {
   try {
     var currentYear = new Date().getFullYear();
     var currentMonth = new Date().getMonth() + 1;
+    var targetYear = currentYear; // 동적으로 연도 적용
 
-    // Firebase 데이터 로드
-    var [dealsSnap, settlementsSnap, sellersSnap, suppliersSnap] = await Promise.all([
+    // Firebase 데이터 로드 (전략 문서 포함)
+    var [strategyDoc, dealsSnap, settlementsSnap, sellersSnap, suppliersSnap, teamSnap] = await Promise.all([
+      db.collection('strategies').doc('current').get(),
       db.collection('deals').get(),
       db.collection('settlements').get(),
       db.collection('sellers').get(),
-      db.collection('suppliers').get()
+      db.collection('suppliers').get(),
+      db.collection('teamMembers').get()
     ]);
+
+    // 전략 설정 (Firebase에서 가져오거나 기본값)
+    var strategy = strategyDoc.exists ? strategyDoc.data() : getDefaultStrategy();
+    targetYear = strategy.year || currentYear;
 
     var deals = [];
     dealsSnap.forEach(function(doc) { deals.push({ id: doc.id, ...doc.data() }); });
@@ -30963,62 +31066,63 @@ async function loadStrategy2026Data() {
     var suppliers = [];
     suppliersSnap.forEach(function(doc) { suppliers.push({ id: doc.id, ...doc.data() }); });
 
-    // 2026년 데이터 필터링
-    var deals2026 = deals.filter(function(d) {
-      return d.startDate && d.startDate.startsWith('2026');
+    var teamMembers = [];
+    teamSnap.forEach(function(doc) { teamMembers.push({ id: doc.id, ...doc.data() }); });
+
+    // 해당 연도 데이터 필터링
+    var yearStr = String(targetYear);
+    var yearDeals = deals.filter(function(d) {
+      return d.startDate && d.startDate.startsWith(yearStr);
     });
 
-    var settlements2026 = settlements.filter(function(s) {
-      return s.settlementDate && s.settlementDate.startsWith('2026');
+    var yearSettlements = settlements.filter(function(s) {
+      return s.settlementDate && s.settlementDate.startsWith(yearStr);
     });
 
     // 이번 달 데이터
-    var thisMonthStr = '2026-' + String(currentMonth).padStart(2, '0');
-    var dealsThisMonth = deals2026.filter(function(d) {
+    var thisMonthStr = yearStr + '-' + String(currentMonth).padStart(2, '0');
+    var dealsThisMonth = yearDeals.filter(function(d) {
       return d.startDate && d.startDate.startsWith(thisMonthStr);
     });
 
-    // 연간 매출 계산 (정산 완료 기준)
-    var annualRevenue = settlements2026.reduce(function(sum, s) {
+    // 연간 매출 계산
+    var annualRevenue = yearSettlements.reduce(function(sum, s) {
       return sum + (Number(s.totalSales) || 0);
     }, 0);
 
-    // 30% 수수료 공구 비중 계산
-    var deals30Percent = deals2026.filter(function(d) {
+    // 30% 수수료 공구 비중
+    var deals30Percent = yearDeals.filter(function(d) {
       return Number(d.commissionRate || d.supplierCommission || 0) >= 30;
     });
-    var commission30Ratio = deals2026.length > 0 ? Math.round((deals30Percent.length / deals2026.length) * 100) : 0;
+    var commission30Ratio = yearDeals.length > 0 ? Math.round((deals30Percent.length / yearDeals.length) * 100) : 0;
 
-    // 올해 신규 셀러/공급사 (createdAt 기준)
-    var newSellers2026 = sellers.filter(function(s) {
-      return s.createdAt && s.createdAt.startsWith && s.createdAt.startsWith('2026');
+    // 신규 셀러/공급사
+    var newSellers = sellers.filter(function(s) {
+      return s.createdAt && s.createdAt.startsWith && s.createdAt.startsWith(yearStr);
     });
-    var newSuppliers2026 = suppliers.filter(function(s) {
-      return s.createdAt && s.createdAt.startsWith && s.createdAt.startsWith('2026');
-    });
-
-    // 월별 통계
-    var monthlyDeals = {};
-    deals2026.forEach(function(d) {
-      if (d.startDate) {
-        var month = d.startDate.substring(0, 7);
-        monthlyDeals[month] = (monthlyDeals[month] || 0) + 1;
-      }
+    var newSuppliers = suppliers.filter(function(s) {
+      return s.createdAt && s.createdAt.startsWith && s.createdAt.startsWith(yearStr);
     });
 
-    renderStrategy2026Content({
-      deals2026: deals2026,
-      settlements2026: settlements2026,
-      dealsThisMonth: dealsThisMonth,
-      annualRevenue: annualRevenue,
-      commission30Ratio: commission30Ratio,
-      deals30Percent: deals30Percent,
-      newSellers2026: newSellers2026,
-      newSuppliers2026: newSuppliers2026,
-      monthlyDeals: monthlyDeals,
-      allSellers: sellers,
-      allSuppliers: suppliers
-    });
+    if (_strategyViewMode === 'settings') {
+      renderStrategySettings(strategy, teamMembers);
+    } else {
+      renderStrategy2026Content({
+        strategy: strategy,
+        yearDeals: yearDeals,
+        yearSettlements: yearSettlements,
+        dealsThisMonth: dealsThisMonth,
+        annualRevenue: annualRevenue,
+        commission30Ratio: commission30Ratio,
+        deals30Percent: deals30Percent,
+        newSellers: newSellers,
+        newSuppliers: newSuppliers,
+        allSellers: sellers,
+        allSuppliers: suppliers,
+        teamMembers: teamMembers,
+        targetYear: targetYear
+      });
+    }
 
   } catch (error) {
     console.error('전략현황 로드 오류:', error);
@@ -31026,22 +31130,98 @@ async function loadStrategy2026Data() {
   }
 }
 
+function renderStrategySettings(strategy, teamMembers) {
+  var content = document.getElementById('strategy2026-content');
+  var html = '';
+
+  // 기본 정보
+  html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+  html += '<h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">📌 기본 설정</h3>';
+  html += '<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">연도</label><input type="number" id="strategy-year" value="' + strategy.year + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">단계</label><input type="text" id="strategy-phase" value="' + (strategy.phase || '') + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div style="display: flex; align-items: end;"><button onclick="saveStrategyDocument()" style="width: 100%; background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: 600;">💾 전략 저장</button></div>';
+  html += '</div></div>';
+
+  // 연간 목표
+  html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+  html += '<h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">🎯 연간 목표</h3>';
+  html += '<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">연간 매출 목표 (원)</label><input type="number" id="target-annualRevenue" value="' + (strategy.targets?.annualRevenue || 500000000) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">월간 공구 목표</label><input type="number" id="target-monthlyDeals" value="' + (strategy.targets?.monthlyDeals || 9) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">연간 공구 목표</label><input type="number" id="target-annualDeals" value="' + (strategy.targets?.annualDeals || 108) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">30% 수수료 비중 (%)</label><input type="number" id="target-commission30Ratio" value="' + (strategy.targets?.commission30Ratio || 70) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">건당 평균 매출</label><input type="number" id="target-avgDealRevenue" value="' + (strategy.targets?.avgDealRevenue || 4630000) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">월간 순익 목표</label><input type="number" id="target-monthlyProfit" value="' + (strategy.targets?.monthlyProfit || 4000000) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
+  html += '</div></div>';
+
+  // 팀원별 KPI
+  html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"><h3 style="font-size: 16px; font-weight: 700;">👥 팀원별 KPI</h3><button onclick="addTeamKPI()" style="background: var(--gray-100); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;">+ 추가</button></div>';
+  html += '<div id="team-kpi-list">';
+  var teamKPIs = strategy.teamKPIs || [];
+  if (teamKPIs.length === 0 && teamMembers.length > 0) {
+    teamMembers.forEach(function(m) { teamKPIs.push({ name: m.name || m.id, role: m.role || '', mainFocus: '', subFocus: '', weeklyTarget: '', monthlyTarget: '' }); });
+  }
+  teamKPIs.forEach(function(kpi) {
+    html += '<div class="team-kpi-item" style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 12px;"><div style="display: grid; grid-template-columns: 1fr 1fr 2fr 2fr 1fr 1fr; gap: 12px;">';
+    html += '<input type="text" class="kpi-name" value="' + (kpi.name || '') + '" placeholder="이름" style="padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">';
+    html += '<input type="text" class="kpi-role" value="' + (kpi.role || '') + '" placeholder="역할" style="padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">';
+    html += '<input type="text" class="kpi-main" value="' + (kpi.mainFocus || '') + '" placeholder="메인 업무" style="padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">';
+    html += '<input type="text" class="kpi-sub" value="' + (kpi.subFocus || '') + '" placeholder="서브 업무" style="padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">';
+    html += '<input type="text" class="kpi-weekly" value="' + (kpi.weeklyTarget || '') + '" placeholder="주간 목표" style="padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">';
+    html += '<input type="text" class="kpi-monthly" value="' + (kpi.monthlyTarget || '') + '" placeholder="월간 목표" style="padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">';
+    html += '</div></div>';
+  });
+  html += '</div></div>';
+
+  // 핵심 전략
+  html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"><h3 style="font-size: 16px; font-weight: 700;">🚀 핵심 전략</h3><button onclick="addStrategyItem()" style="background: var(--gray-100); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;">+ 추가</button></div>';
+  html += '<div id="strategies-list">';
+  var strategies = strategy.strategies || [];
+  strategies.forEach(function(s, idx) {
+    html += '<div class="strategy-item" style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">';
+    html += '<div style="background: var(--primary); color: white; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700;">' + (idx + 1) + '</div>';
+    html += '<input type="text" class="strategy-title" value="' + (s.title || '') + '" placeholder="전략명" style="width: 200px; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">';
+    html += '<input type="text" class="strategy-desc" value="' + (s.desc || '') + '" placeholder="설명" style="flex: 1; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">';
+    html += '<button onclick="this.parentElement.remove()" style="background: var(--danger-light); color: var(--danger); border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer;">삭제</button>';
+    html += '</div>';
+  });
+  html += '</div></div>';
+
+  // 분기별 실행 계획
+  html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"><h3 style="font-size: 16px; font-weight: 700;">📅 실행 계획</h3><button onclick="addTimelineItem()" style="background: var(--gray-100); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;">+ 추가</button></div>';
+  html += '<div id="timeline-list">';
+  var timeline = strategy.timeline || [];
+  timeline.forEach(function(t) {
+    html += '<div class="timeline-item" style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">';
+    html += '<input type="text" class="timeline-period" value="' + (t.period || '') + '" placeholder="기간" style="width: 120px; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">';
+    html += '<input type="text" class="timeline-goal" value="' + (t.goal || '') + '" placeholder="목표/계획" style="flex: 1; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">';
+    html += '<button onclick="this.parentElement.remove()" style="background: var(--danger-light); color: var(--danger); border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer;">삭제</button>';
+    html += '</div>';
+  });
+  html += '</div></div>';
+
+  content.innerHTML = html;
+}
+
 function renderStrategy2026Content(data) {
   var content = document.getElementById('strategy2026-content');
-
-  // 목표 설정
-  var TARGET = {
-    annualRevenue: 500000000, // 5억
+  var strategy = data.strategy;
+  var TARGET = strategy.targets || {
+    annualRevenue: 500000000,
     monthlyDeals: 9,
     annualDeals: 108,
-    commission30Ratio: 70, // 70%
-    avgDealRevenue: 4630000, // 463만원
-    monthlyProfit: 4000000 // 375~450만 평균
+    commission30Ratio: 70,
+    avgDealRevenue: 4630000,
+    monthlyProfit: 4000000
   };
 
   // 진행률 계산
   var revenueProgress = Math.min(100, Math.round((data.annualRevenue / TARGET.annualRevenue) * 100));
-  var dealsProgress = Math.min(100, Math.round((data.deals2026.length / TARGET.annualDeals) * 100));
+  var dealsProgress = Math.min(100, Math.round((data.yearDeals.length / TARGET.annualDeals) * 100));
   var commission30Progress = Math.min(100, Math.round((data.commission30Ratio / TARGET.commission30Ratio) * 100));
   var thisMonthDealsProgress = Math.min(100, Math.round((data.dealsThisMonth.length / TARGET.monthlyDeals) * 100));
 
@@ -31054,7 +31234,7 @@ function renderStrategy2026Content(data) {
   html += '<div style="background: linear-gradient(135deg, #fc9600, #e08600); border-radius: 16px; padding: 24px; color: white;">';
   html += '<div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">연간 매출</div>';
   html += '<div style="font-size: 28px; font-weight: 800;">' + (data.annualRevenue / 100000000).toFixed(2) + '억</div>';
-  html += '<div style="font-size: 12px; opacity: 0.8; margin-top: 4px;">목표 5억 대비 ' + revenueProgress + '%</div>';
+  html += '<div style="font-size: 12px; opacity: 0.8; margin-top: 4px;">목표 ' + (TARGET.annualRevenue / 100000000) + '억 대비 ' + revenueProgress + '%</div>';
   html += '<div style="background: rgba(255,255,255,0.3); height: 6px; border-radius: 3px; margin-top: 12px;">';
   html += '<div style="background: white; height: 100%; width: ' + revenueProgress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
@@ -31062,8 +31242,8 @@ function renderStrategy2026Content(data) {
   // 연간 공구
   html += '<div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
   html += '<div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">연간 공구</div>';
-  html += '<div style="font-size: 28px; font-weight: 800; color: var(--gray-900);">' + data.deals2026.length + '건</div>';
-  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">목표 108건 대비 ' + dealsProgress + '%</div>';
+  html += '<div style="font-size: 28px; font-weight: 800; color: var(--gray-900);">' + data.yearDeals.length + '건</div>';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">목표 ' + TARGET.annualDeals + '건 대비 ' + dealsProgress + '%</div>';
   html += '<div style="background: var(--gray-200); height: 6px; border-radius: 3px; margin-top: 12px;">';
   html += '<div style="background: var(--primary); height: 100%; width: ' + dealsProgress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
@@ -31072,18 +31252,19 @@ function renderStrategy2026Content(data) {
   html += '<div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
   html += '<div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">이번 달 공구</div>';
   html += '<div style="font-size: 28px; font-weight: 800; color: var(--gray-900);">' + data.dealsThisMonth.length + '건</div>';
-  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">목표 9건 대비 ' + thisMonthDealsProgress + '%</div>';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">목표 ' + TARGET.monthlyDeals + '건 대비 ' + thisMonthDealsProgress + '%</div>';
   html += '<div style="background: var(--gray-200); height: 6px; border-radius: 3px; margin-top: 12px;">';
   html += '<div style="background: ' + (thisMonthDealsProgress >= 100 ? 'var(--success)' : 'var(--info)') + '; height: 100%; width: ' + thisMonthDealsProgress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
 
   // 30% 수수료 비중
-  html += '<div style="background: ' + (data.commission30Ratio >= 70 ? 'linear-gradient(135deg, #10b981, #059669)' : 'white') + '; border-radius: 16px; padding: 24px; ' + (data.commission30Ratio >= 70 ? 'color: white;' : 'box-shadow: 0 2px 8px rgba(0,0,0,0.06);') + '">';
-  html += '<div style="font-size: 13px; ' + (data.commission30Ratio >= 70 ? 'opacity: 0.9;' : 'color: var(--gray-500);') + ' margin-bottom: 8px;">30% 수수료 비중</div>';
-  html += '<div style="font-size: 28px; font-weight: 800; ' + (data.commission30Ratio >= 70 ? '' : 'color: var(--gray-900);') + '">' + data.commission30Ratio + '%</div>';
-  html += '<div style="font-size: 12px; ' + (data.commission30Ratio >= 70 ? 'opacity: 0.8;' : 'color: var(--gray-500);') + ' margin-top: 4px;">목표 70% 대비 ' + commission30Progress + '%</div>';
-  html += '<div style="background: ' + (data.commission30Ratio >= 70 ? 'rgba(255,255,255,0.3)' : 'var(--gray-200)') + '; height: 6px; border-radius: 3px; margin-top: 12px;">';
-  html += '<div style="background: ' + (data.commission30Ratio >= 70 ? 'white' : 'var(--success)') + '; height: 100%; width: ' + commission30Progress + '%; border-radius: 3px;"></div>';
+  var commission30Met = data.commission30Ratio >= TARGET.commission30Ratio;
+  html += '<div style="background: ' + (commission30Met ? 'linear-gradient(135deg, #10b981, #059669)' : 'white') + '; border-radius: 16px; padding: 24px; ' + (commission30Met ? 'color: white;' : 'box-shadow: 0 2px 8px rgba(0,0,0,0.06);') + '">';
+  html += '<div style="font-size: 13px; ' + (commission30Met ? 'opacity: 0.9;' : 'color: var(--gray-500);') + ' margin-bottom: 8px;">30% 수수료 비중</div>';
+  html += '<div style="font-size: 28px; font-weight: 800; ' + (commission30Met ? '' : 'color: var(--gray-900);') + '">' + data.commission30Ratio + '%</div>';
+  html += '<div style="font-size: 12px; ' + (commission30Met ? 'opacity: 0.8;' : 'color: var(--gray-500);') + ' margin-top: 4px;">목표 ' + TARGET.commission30Ratio + '% 대비 ' + commission30Progress + '%</div>';
+  html += '<div style="background: ' + (commission30Met ? 'rgba(255,255,255,0.3)' : 'var(--gray-200)') + '; height: 6px; border-radius: 3px; margin-top: 12px;">';
+  html += '<div style="background: ' + (commission30Met ? 'white' : 'var(--success)') + '; height: 100%; width: ' + commission30Progress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
 
   html += '</div>';
@@ -31099,7 +31280,7 @@ function renderStrategy2026Content(data) {
   html += '<div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">국내 공급사</div>';
   html += '<div style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">안정 베이스</div>';
   html += '<div style="font-size: 20px; font-weight: 700; color: var(--gray-900);">' + data.allSuppliers.length + '개</div>';
-  html += '<div style="font-size: 11px; color: var(--gray-500);">신규 ' + data.newSuppliers2026.length + '개</div>';
+  html += '<div style="font-size: 11px; color: var(--gray-500);">신규 ' + data.newSuppliers.length + '개</div>';
   html += '</div>';
 
   // 전략2: 해외 직접 수입
