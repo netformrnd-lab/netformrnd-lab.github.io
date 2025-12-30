@@ -4281,6 +4281,13 @@ function openDealModal(deal = null) {
           <p style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">💡 공구 완료 후 분석 보고에 활용됩니다.</p>
         </div>
         
+        <!-- 🎯 셀러 마진율 추가 -->
+        <div class="form-group">
+          <label class="form-label">셀러 마진율 <span style="font-weight: 400; color: var(--gray-500);">(%)</span></label>
+          <input type="number" class="form-input" id="deal-sellerMarginRate" value="${d.sellerMarginRate || 20}" placeholder="20" min="0" max="50" step="1" style="width: 120px;">
+          <p style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">💡 셀러와 협의한 마진율 (정산 시 반영)</p>
+        </div>
+
         <!-- 🎯 이벤트비용 추가 -->
         <div class="form-group">
           <label class="form-label">이벤트비용 <span style="font-weight: 400; color: var(--gray-500);">(원)</span></label>
@@ -4739,6 +4746,7 @@ function submitDealForm(e, id) {
     endDate: document.getElementById('deal-end').value,
     status: statusRadio ? statusRadio.value : 'negotiating',
     notes: document.getElementById('deal-notes').value,
+    sellerMarginRate: Number(document.getElementById('deal-sellerMarginRate')?.value) || 20, // 🎯 셀러 마진율
     eventCost: Number(document.getElementById('deal-eventCost')?.value) || 0, // 🎯 이벤트비용
     cafe24ProductNo: document.getElementById('deal-cafe24-product-no')?.value?.trim() || '', // 🎯 카페24 상품번호
     selectedProducts: selectedProducts,  // 이제 객체 배열: [{productId, productName, marginRate}]
@@ -8571,8 +8579,8 @@ function viewSettlementReport(dealId) {
       }
     }
 
-    // 3. 기본값 적용
-    marginRate = marginRate || deal.sellerMarginRate || 10;
+    // 3. 기본값 적용 (공구 마진율 우선)
+    marginRate = marginRate || deal.sellerMarginRate || 20;
     supplyPrice = supplyPrice || deal.supplyPrice || 0;
 
     // 🎯 타사 상품: supplyPrice가 0이면 판매단가에서 마진율 빼서 자동 계산
@@ -9485,17 +9493,28 @@ function updateSettlementPreview() {
         if (!deal) return '';
         
         const seller = state.sellers.find(s => s.id === deal.sellerId);
-        const sellerMarginRate = deal.sellerMarginRate || 10;
+        const supplier = state.suppliers.find(s => s.id === deal.supplierId);
         const dealProducts = deal.selectedProducts || [];
-        const supplyPrice = dealProducts.length > 0
-          ? (dealProducts[0].supplyPrice || deal.supplyPrice || 0)
-          : (deal.supplyPrice || 0);
+        const isInhouse = supplier?.supplierType === 'inhouse' || deal.productType === 'inhouse';
+
+        // 🎯 셀러 마진율: 공구에 설정된 값 우선 사용
+        const sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 20;
+
+        // 공급사 정산 계산 (타사만)
+        let supplierTotal = 0;
+        if (!isInhouse) {
+          const supplyPrice = dealProducts.length > 0
+            ? (Number(dealProducts[0].supplyPrice) || deal.supplyPrice || 0)
+            : (deal.supplyPrice || 0);
+          supplierTotal = supplyPrice * ds.totalQty;
+        }
+
+        // 셀러 마진 계산
+        const sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
 
         const pgFee = Math.round(ds.totalSales * 0.04);
-        const sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
         const sellerTax = Math.round(sellerMargin * 0.033);
         const sellerNet = sellerMargin - sellerTax;
-        const supplierTotal = supplyPrice * ds.totalQty;
         const moyeoraProfit = ds.totalSales - pgFee - sellerNet - supplierTotal;
         
         return `
@@ -9591,17 +9610,27 @@ async function applyCafe24Mapping() {
 
       // 공급단가: selectedProducts에서 먼저 찾고, 없으면 deal.supplyPrice 사용
       const dealProducts = deal.selectedProducts || [];
-      const supplyPrice = dealProducts.length > 0
-        ? (dealProducts[0].supplyPrice || deal.supplyPrice || 0)
-        : (deal.supplyPrice || 0);
+      const isInhouse = supplier?.supplierType === 'inhouse' || deal.productType === 'inhouse';
 
-      const sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+      // 🎯 셀러 마진율: 공구에 설정된 값 우선 사용
+      const sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 20;
+
+      // 공급사 정산 계산 (타사만)
+      let supplierTotal = 0;
+      let supplyPrice = 0;
+      if (!isInhouse) {
+        supplyPrice = dealProducts.length > 0
+          ? (Number(dealProducts[0].supplyPrice) || deal.supplyPrice || 0)
+          : (deal.supplyPrice || 0);
+        supplierTotal = supplyPrice * data.totalQty;
+      }
+
+      // 셀러 마진 계산
+      const sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
 
       const pgFee = Math.round(data.totalSales * 0.04);
-      const sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
       const sellerTax = Math.round(sellerMargin * 0.033);
       const sellerNet = sellerMargin - sellerTax;
-      const supplierTotal = supplyPrice * data.totalQty;
       const moyeoraProfit = data.totalSales - pgFee - sellerNet - supplierTotal;
 
       // 공구 업데이트
@@ -9620,22 +9649,24 @@ async function applyCafe24Mapping() {
 
       // 🎯 정산서 자동 생성
       const today = new Date().toISOString().split('T')[0];
-      const productType = supplier?.supplierType || 'external';
+      const productType = isInhouse ? 'inhouse' : 'external';
 
       // 1. 셀러 정산서 생성 (상품별 정보 포함)
       const sellerSettlementId = `${dealId}_seller`;
 
-      // 상품별 마진 계산 (공급단가 포함)
+      // 🎯 상품별 마진 계산 (공구 마진율 일괄 적용)
       const salesItems = (data.products || []).map(p => {
+        const itemUnitPrice = p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0;
         const itemMargin = Math.round((p.amount || 0) * sellerMarginRate / 100);
         const itemTax = Math.round(itemMargin * 0.033);
-        const itemUnitPrice = p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0;
+
         return {
           productName: p.productName || '-',
           quantity: p.quantity || 0,
           unitPrice: itemUnitPrice,
-          supplyPrice: supplyPrice,  // 공급단가 추가
-          amount: p.amount || 0,
+          dealPrice: itemUnitPrice,
+          supplyPrice: isInhouse ? 0 : supplyPrice,
+          salesAmount: p.amount || 0,
           marginRate: sellerMarginRate,
           marginAmount: itemMargin,
           withholdingTax: itemTax,
