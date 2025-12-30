@@ -20537,7 +20537,12 @@ function renderDealCenter() {
   const urgentPending = urgentList.filter(u => !u.status || u.status === 'pending').length;
   const sellerPending = sellerProposals.filter(p => !p.status || p.status === 'pending').length;
   const adminPending = adminProposals.filter(p => !p.sellerStatus || p.sellerStatus === 'pending').length;
-  
+
+  // 🎯 확정된 공구 (캘린더에 등록된 공구들)
+  const confirmedDeals = (state.deals || []).filter(d =>
+    d.status === 'confirmed' || d.status === 'scheduled' || d.status === 'ongoing' || d.status === 'completed'
+  ).sort((a, b) => new Date(b.startDate || b.createdAt) - new Date(a.startDate || a.createdAt));
+
   // 성사된 제안 (캘린더 등록 가능)
   const approvedProposals = [
     ...sellerProposals.filter(p => p.status === 'approved' && !p.calendarRegistered),
@@ -20606,6 +20611,12 @@ function renderDealCenter() {
       ">
         📤 보낸 제안 <span style="opacity: 0.7;">${adminProposals.length}</span>
         ${adminPending > 0 ? `<span style="background: var(--primary); color: white; padding: 2px 6px; border-radius: 6px; font-size: 11px; margin-left: 4px;">대기 ${adminPending}</span>` : ''}
+      </button>
+      <button id="tab-confirmed" onclick="switchDealCenterTab('confirmed')" style="
+        flex: 1; padding: 12px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600;
+        background: transparent; color: var(--gray-500); cursor: pointer;
+      ">
+        ✅ 공구 확정 <span style="opacity: 0.7;">${confirmedDeals.length}</span>
       </button>
     </div>
     
@@ -20742,7 +20753,7 @@ function getTodayProcessed() {
 // 탭 전환
 function switchDealCenterTab(tab) {
   // 버튼 스타일 변경
-  ['urgent', 'received', 'sent'].forEach(t => {
+  ['urgent', 'received', 'sent', 'confirmed'].forEach(t => {
     const btn = document.getElementById('tab-' + t);
     if (btn) {
       if (t === tab) {
@@ -20756,7 +20767,7 @@ function switchDealCenterTab(tab) {
       }
     }
   });
-  
+
   // 콘텐츠 변경
   const content = document.getElementById('dealCenterContent');
   if (tab === 'urgent') {
@@ -20768,6 +20779,11 @@ function switchDealCenterTab(tab) {
   } else if (tab === 'sent') {
     const adminProposals = (state.adminProposals || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     content.innerHTML = renderDealCenterSent(adminProposals);
+  } else if (tab === 'confirmed') {
+    const confirmedDeals = (state.deals || []).filter(d =>
+      d.status === 'confirmed' || d.status === 'scheduled' || d.status === 'ongoing' || d.status === 'completed'
+    ).sort((a, b) => new Date(b.startDate || b.createdAt) - new Date(a.startDate || a.createdAt));
+    content.innerHTML = renderDealCenterConfirmed(confirmedDeals);
   }
 }
 
@@ -20985,6 +21001,147 @@ function renderDealCenterSent(adminProposals) {
       </div>
     </div>
   `;
+}
+
+// 🎯 공구 확정 내역 탭 콘텐츠
+function renderDealCenterConfirmed(confirmedDeals) {
+  if (confirmedDeals.length === 0) {
+    return `
+      <div class="card" style="text-align: center; padding: 60px 20px;">
+        <div style="font-size: 48px; margin-bottom: 16px;">📋</div>
+        <p style="color: var(--gray-500);">확정된 공구가 없습니다.</p>
+        <p style="font-size: 13px; color: var(--gray-400); margin-top: 8px;">캘린더에서 공구를 등록하면 여기에 표시됩니다.</p>
+      </div>
+    `;
+  }
+
+  // 상태별 분류
+  const ongoing = confirmedDeals.filter(d => d.status === 'ongoing');
+  const scheduled = confirmedDeals.filter(d => d.status === 'confirmed' || d.status === 'scheduled');
+  const completed = confirmedDeals.filter(d => d.status === 'completed');
+
+  const renderDealCard = (deal) => {
+    const seller = state.sellers.find(s => s.id === deal.sellerId);
+    const supplier = state.suppliers.find(s => s.id === deal.supplierId);
+    const products = deal.selectedProducts || [];
+    const isInhouse = supplier?.supplierType === 'inhouse' || deal.productType === 'inhouse';
+
+    // 상태 배지
+    const statusMap = {
+      'ongoing': { label: '진행중', color: '#16a34a', bg: '#dcfce7' },
+      'confirmed': { label: '확정', color: '#2563eb', bg: '#dbeafe' },
+      'scheduled': { label: '예정', color: '#7c3aed', bg: '#ede9fe' },
+      'completed': { label: '완료', color: 'var(--gray-500)', bg: 'var(--gray-100)' }
+    };
+    const status = statusMap[deal.status] || statusMap['confirmed'];
+
+    // 기간 표시
+    const period = deal.startDate && deal.endDate
+      ? deal.startDate + ' ~ ' + deal.endDate
+      : deal.startDate || '-';
+
+    return \`
+      <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span style="padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; background: \${status.bg}; color: \${status.color};">
+                \${status.label}
+              </span>
+              <span style="padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; background: \${isInhouse ? '#dbeafe' : '#fef3c7'}; color: \${isInhouse ? '#2563eb' : '#d97706'};">
+                \${isInhouse ? '자사' : '타사'}
+              </span>
+            </div>
+            <div style="font-size: 16px; font-weight: 600; color: var(--gray-800);">\${deal.name || deal.productName || '-'}</div>
+            <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+              📅 \${period}
+            </div>
+          </div>
+          <button onclick="openDealModal(state.deals.find(d=>d.id==='\${deal.id}'))" style="padding: 8px 14px; border: 1px solid var(--gray-200); border-radius: 8px; background: white; cursor: pointer; font-size: 13px; font-weight: 500;">
+            상세보기
+          </button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div style="padding: 10px; background: var(--gray-50); border-radius: 8px;">
+            <div style="font-size: 11px; color: var(--gray-500);">셀러</div>
+            <div style="font-weight: 600;">\${seller?.name || deal.sellerName || '-'}</div>
+          </div>
+          <div style="padding: 10px; background: var(--gray-50); border-radius: 8px;">
+            <div style="font-size: 11px; color: var(--gray-500);">브랜드/공급사</div>
+            <div style="font-weight: 600;">\${deal.brandName || supplier?.name || '-'}</div>
+          </div>
+        </div>
+
+        \${products.length > 0 ? \`
+        <div style="border-top: 1px solid var(--gray-100); padding-top: 12px;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 8px;">📦 상품별 마진율</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            \${products.map(p => \`
+              <div style="padding: 6px 10px; background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 8px; font-size: 12px;">
+                <span style="color: var(--gray-700);">\${p.productName || '-'}</span>
+                <span style="font-weight: 700; color: #d97706; margin-left: 4px;">\${p.marginRate || deal.sellerMarginRate || 20}%</span>
+              </div>
+            \`).join('')}
+          </div>
+        </div>
+        \` : \`
+        <div style="border-top: 1px solid var(--gray-100); padding-top: 12px;">
+          <div style="font-size: 12px; color: var(--gray-500);">
+            셀러 마진율: <strong style="color: var(--gray-700);">\${deal.sellerMarginRate || 20}%</strong>
+          </div>
+        </div>
+        \`}
+      </div>
+    \`;
+  };
+
+  return \`
+    <div class="card" style="padding: 0; overflow: hidden;">
+      <div style="padding: 16px; background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
+        <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: #16a34a;"></span>
+            <span style="font-size: 13px; color: var(--gray-600);">진행중 <strong>\${ongoing.length}</strong></span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: #2563eb;"></span>
+            <span style="font-size: 13px; color: var(--gray-600);">예정 <strong>\${scheduled.length}</strong></span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="width: 10px; height: 10px; border-radius: 50%; background: var(--gray-400);"></span>
+            <span style="font-size: 13px; color: var(--gray-600);">완료 <strong>\${completed.length}</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div style="padding: 16px; max-height: 600px; overflow-y: auto;">
+        \${ongoing.length > 0 ? \`
+        <div style="margin-bottom: 20px;">
+          <div style="font-size: 14px; font-weight: 600; color: #16a34a; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+            <span style="width: 8px; height: 8px; border-radius: 50%; background: #16a34a; animation: pulse 2s infinite;"></span>
+            진행중인 공구
+          </div>
+          \${ongoing.map(d => renderDealCard(d)).join('')}
+        </div>
+        \` : ''}
+
+        \${scheduled.length > 0 ? \`
+        <div style="margin-bottom: 20px;">
+          <div style="font-size: 14px; font-weight: 600; color: #2563eb; margin-bottom: 12px;">📅 예정된 공구</div>
+          \${scheduled.map(d => renderDealCard(d)).join('')}
+        </div>
+        \` : ''}
+
+        \${completed.length > 0 ? \`
+        <div>
+          <div style="font-size: 14px; font-weight: 600; color: var(--gray-500); margin-bottom: 12px;">✅ 완료된 공구</div>
+          \${completed.map(d => renderDealCard(d)).join('')}
+        </div>
+        \` : ''}
+      </div>
+    </div>
+  \`;
 }
 
 // 셀러 제안 상세 보기
