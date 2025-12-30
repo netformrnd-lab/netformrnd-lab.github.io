@@ -9403,14 +9403,20 @@ async function toggleSellerListField(id, field, value) {
     showSellerProposalModal(id);
     return;
   }
-  
+
+  // 온보딩 체크 시 세부 체크리스트 모달 띄우기
+  if (field === 'onboarding' && value === true) {
+    showSellerListOnboardingModal(id);
+    return;
+  }
+
   try {
-    await db.collection('sellerList').doc(id).update({ 
+    await db.collection('sellerList').doc(id).update({
       [field]: value,
       updatedAt: new Date().toISOString(),
       updatedBy: getCurrentUserId()
     });
-    
+
     // 계약 완료 시 셀러 DB 등록 확인
     if (field === 'contracted' && value === true) {
       const seller = state.sellerList.find(s => s.id === id);
@@ -9490,6 +9496,90 @@ async function submitSellerProposal(sellerId) {
   }
 }
 
+// 셀러리스트 온보딩 체크리스트 모달
+function showSellerListOnboardingModal(sellerId) {
+  const seller = state.sellerList.find(s => s.id === sellerId);
+  if (!seller) return;
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 520px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white;">
+        <h3 style="color: white;">🤝 온보딩 체크리스트</h3>
+        <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <div style="font-size: 18px; font-weight: 700; color: #1d4ed8;">${seller.accountName}</div>
+          <div style="font-size: 13px; color: var(--gray-500);">${seller.category || ''} · ${seller.channel || ''}</div>
+        </div>
+
+        <div style="background: #eff6ff; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-size: 13px; font-weight: 600; color: #1d4ed8; margin-bottom: 12px;">📋 온보딩 진행 상황</div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="sl-ob-contact" ${seller.obContact ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
+              <span style="font-size: 13px;">📞 첫 컨택/미팅 완료</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="sl-ob-guide" ${seller.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
+              <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="sl-ob-form" ${seller.obForm ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
+              <span style="font-size: 13px;">📄 입점신청서 수령</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="sl-ob-bank" ${seller.obBank ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
+              <span style="font-size: 13px;">🏦 계좌정보 수령</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="sl-ob-id" ${seller.obIdCard ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
+              <span style="font-size: 13px;">🪪 신분증 수령</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">메모 (선택)</label>
+          <textarea class="form-textarea" id="sl-ob-notes" rows="2" placeholder="온보딩 관련 메모">${seller.obNotes || ''}</textarea>
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #3b82f6, #1d4ed8);" onclick="saveSellerListOnboarding('${sellerId}')">
+            저장
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 셀러리스트 온보딩 저장
+async function saveSellerListOnboarding(sellerId) {
+  try {
+    await db.collection('sellerList').doc(sellerId).update({
+      onboarding: true,
+      obContact: document.getElementById('sl-ob-contact')?.checked || false,
+      obGuide: document.getElementById('sl-ob-guide')?.checked || false,
+      obForm: document.getElementById('sl-ob-form')?.checked || false,
+      obBank: document.getElementById('sl-ob-bank')?.checked || false,
+      obIdCard: document.getElementById('sl-ob-id')?.checked || false,
+      obNotes: document.getElementById('sl-ob-notes')?.value || '',
+      updatedAt: new Date().toISOString(),
+      updatedBy: getCurrentUserId()
+    });
+
+    showToast('🤝 온보딩 체크리스트가 저장되었습니다');
+    closeModal();
+  } catch(e) {
+    console.error(e);
+    showToast('저장에 실패했습니다');
+  }
+}
+
 // 셀러 계약 완료 시 셀러 DB 등록 확인 모달
 function showSellerContractConfirmModal(seller) {
   const m = document.getElementById('modal');
@@ -9537,31 +9627,42 @@ async function registerSellerFromList(sellerListId) {
     showToast('셀러 정보를 찾을 수 없습니다');
     return;
   }
-  
+
   try {
-    // 셀러 DB에 추가
+    // 셀러 DB에 추가 (온보딩 체크리스트 데이터 포함)
     const newSeller = {
       name: seller.accountName,
       category: seller.category || '',
       channel: seller.channel || '',
       channelId: seller.accountLink || '',
-      followers: seller.followers ? (seller.followers * 10000) : 0, // 만 단위를 실제 숫자로
+      followers: seller.followers ? (seller.followers * 10000) : 0,
       registeredBy: state.currentUser?.id || '',
       createdAt: new Date().toISOString(),
       createdBy: getCurrentUserId(),
-      sourceSellerListId: sellerListId, // 원본 셀러리스트 ID 연결
-      status: '입점완료'
+      sourceSellerListId: sellerListId,
+      status: '입점완료',
+      // 온보딩 체크리스트 연동 (sellerList → sellers)
+      journeyFirstContact: seller.obContact || false,
+      journeyOnboarding: seller.obGuide || false,
+      journeyDocuments: seller.obForm || false,
+      journeyBankInfo: seller.obBank || false,
+      journeyIdCard: seller.obIdCard || false,
+      // 제안/유입경로 정보
+      sourceType: seller.sourceType || '',
+      sourceDetail: seller.sourceDetail || '',
+      proposalContent: seller.proposalContent || '',
+      proposalDate: seller.proposalDate || ''
     };
-    
+
     await db.collection('sellers').add(newSeller);
-    
+
     // 셀러 리스트에 등록 완료 표시
     await db.collection('sellerList').doc(sellerListId).update({
       registeredToSellerDB: true,
       registeredToSellerDBAt: new Date().toISOString()
     });
-    
-    showToast('🎉 셀러 DB에 등록되었습니다!');
+
+    showToast('🎉 셀러 DB에 등록되었습니다! (온보딩 정보 포함)');
     closeModal();
   } catch(e) {
     console.error(e);
@@ -11590,14 +11691,20 @@ async function toggleProductListField(id, field, value) {
     showProductProposalModal(id);
     return;
   }
-  
+
+  // 온보딩 체크 시 세부 체크리스트 모달 띄우기
+  if (field === 'onboarding' && value === true) {
+    showProductListOnboardingModal(id);
+    return;
+  }
+
   try {
-    await db.collection('productList').doc(id).update({ 
+    await db.collection('productList').doc(id).update({
       [field]: value,
       updatedAt: new Date().toISOString(),
       updatedBy: getCurrentUserId()
     });
-    
+
     // 계약 완료 시 공급사 DB 등록 확인
     if (field === 'contracted' && value === true) {
       const product = state.productList.find(p => p.id === id);
@@ -11677,6 +11784,90 @@ async function submitProductProposal(productId) {
   }
 }
 
+// 상품리스트 온보딩 체크리스트 모달
+function showProductListOnboardingModal(productId) {
+  const product = state.productList.find(p => p.id === productId);
+  if (!product) return;
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 520px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #22c55e, #16a34a); color: white;">
+        <h3 style="color: white;">🤝 온보딩 체크리스트</h3>
+        <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <div style="font-size: 18px; font-weight: 700; color: #16a34a;">${product.brandName || product.productName}</div>
+          <div style="font-size: 13px; color: var(--gray-500);">${product.category || ''} · ${product.productName || ''}</div>
+        </div>
+
+        <div style="background: #f0fdf4; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-size: 13px; font-weight: 600; color: #16a34a; margin-bottom: 12px;">📋 온보딩 진행 상황</div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="pl-ob-contact" ${product.obContact ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+              <span style="font-size: 13px;">📞 첫 컨택/미팅 완료</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="pl-ob-guide" ${product.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+              <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="pl-ob-product" ${product.obProductInfo ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+              <span style="font-size: 13px;">📦 상품정보 수령</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="pl-ob-biz" ${product.obBizLicense ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+              <span style="font-size: 13px;">🏢 사업자등록증 수령</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
+              <input type="checkbox" id="pl-ob-bank" ${product.obBank ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+              <span style="font-size: 13px;">🏦 통장사본 수령</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">메모 (선택)</label>
+          <textarea class="form-textarea" id="pl-ob-notes" rows="2" placeholder="온보딩 관련 메모">${product.obNotes || ''}</textarea>
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #22c55e, #16a34a);" onclick="saveProductListOnboarding('${productId}')">
+            저장
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 상품리스트 온보딩 저장
+async function saveProductListOnboarding(productId) {
+  try {
+    await db.collection('productList').doc(productId).update({
+      onboarding: true,
+      obContact: document.getElementById('pl-ob-contact')?.checked || false,
+      obGuide: document.getElementById('pl-ob-guide')?.checked || false,
+      obProductInfo: document.getElementById('pl-ob-product')?.checked || false,
+      obBizLicense: document.getElementById('pl-ob-biz')?.checked || false,
+      obBank: document.getElementById('pl-ob-bank')?.checked || false,
+      obNotes: document.getElementById('pl-ob-notes')?.value || '',
+      updatedAt: new Date().toISOString(),
+      updatedBy: getCurrentUserId()
+    });
+
+    showToast('🤝 온보딩 체크리스트가 저장되었습니다');
+    closeModal();
+  } catch(e) {
+    console.error(e);
+    showToast('저장에 실패했습니다');
+  }
+}
+
 // 상품 계약 완료 시 공급사 DB 등록 확인 모달
 function showSupplierContractConfirmModal(product) {
   const m = document.getElementById('modal');
@@ -11725,9 +11916,9 @@ async function registerSupplierFromList(productListId) {
     showToast('상품 정보를 찾을 수 없습니다');
     return;
   }
-  
+
   try {
-    // 공급사 DB에 추가
+    // 공급사 DB에 추가 (온보딩 체크리스트 데이터 포함)
     const newSupplier = {
       name: product.brandName || product.productName,
       category: product.category || '',
@@ -11737,20 +11928,31 @@ async function registerSupplierFromList(productListId) {
       registeredBy: state.currentUser?.id || '',
       createdAt: new Date().toISOString(),
       createdBy: getCurrentUserId(),
-      sourceProductListId: productListId, // 원본 상품리스트 ID 연결
+      sourceProductListId: productListId,
       status: '계약완료',
-      mainProducts: product.productName || ''
+      mainProducts: product.productName || '',
+      // 온보딩 체크리스트 연동 (productList → suppliers)
+      hasOnboardingGuide: product.obGuide || false,
+      hasProductInfo: product.obProductInfo || false,
+      hasBusinessLicense: product.obBizLicense || false,
+      hasBankAccount: product.obBank || false,
+      hasContract: true, // 계약완료로 등록하므로 true
+      // 제안/유입경로 정보
+      sourceType: product.sourceType || '',
+      sourceDetail: product.sourceDetail || '',
+      proposalContent: product.proposalContent || '',
+      proposalDate: product.proposalDate || ''
     };
-    
+
     await db.collection('suppliers').add(newSupplier);
-    
+
     // 상품 리스트에 등록 완료 표시
     await db.collection('productList').doc(productListId).update({
       registeredToSupplierDB: true,
       registeredToSupplierDBAt: new Date().toISOString()
     });
-    
-    showToast('🎉 공급사 DB에 등록되었습니다!');
+
+    showToast('🎉 공급사 DB에 등록되었습니다! (온보딩 정보 포함)');
     closeModal();
   } catch(e) {
     console.error(e);
