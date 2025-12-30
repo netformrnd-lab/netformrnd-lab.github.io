@@ -1879,20 +1879,20 @@
               <span id="okr-menu-arrow" style="transition: transform 0.2s; color: white; transform: rotate(180deg);">▼</span>
             </div>
             <div id="okr-submenu" style="display: block; padding-left: 8px;">
-              <div class="nav-item" data-tab="growthDashboard" onclick="switchTab('growthDashboard')" style="font-size: 13px;">
-                <span>📊 그로스 대시보드</span>
-              </div>
               <div class="nav-item" data-tab="strategy2026" onclick="switchTab('strategy2026')" style="font-size: 13px;">
-                <span>📋 전략기획</span>
+                <span>① 전략기획</span>
               </div>
               <div class="nav-item" data-tab="okrManagement" onclick="switchTab('okrManagement')" style="font-size: 13px;">
-                <span>🎯 OKR 관리</span>
-              </div>
-              <div class="nav-item" data-tab="okrReview" onclick="switchTab('okrReview')" style="font-size: 13px;">
-                <span>📈 분기 리뷰</span>
+                <span>② OKR 설정</span>
               </div>
               <div class="nav-item" data-tab="workLog" onclick="switchTab('workLog')" style="font-size: 13px;">
-                <span>📓 업무일지</span>
+                <span>③ 업무일지</span>
+              </div>
+              <div class="nav-item" data-tab="growthDashboard" onclick="switchTab('growthDashboard')" style="font-size: 13px;">
+                <span>④ 현황 대시보드</span>
+              </div>
+              <div class="nav-item" data-tab="okrReview" onclick="switchTab('okrReview')" style="font-size: 13px;">
+                <span>⑤ 분기 리뷰</span>
               </div>
             </div>
           </div>
@@ -30252,13 +30252,17 @@ var DEAL_TASK_TEMPLATES = {
 // 25년도: MVP 잡기 위해 고객/모여라딜 여정 고도화 90%
 // 26년도~: 영업활동 70%, 고객/모여라딜 여정 고도화 30%
 
-var YEARLY_GOALS = {
-  2025: { target: 100000000, growth: 90, sales: 10, label: '2025년', description: 'MVP 완성 - 고객/팀원 여정 고도화 집중' },  // 1억
-  2026: { target: 300000000, growth: 30, sales: 70, label: '2026년', description: '영업 본격화 - 셀러/공급사 확대' },  // 3억
-  2027: { target: 1000000000, growth: 30, sales: 70, label: '2027년', description: '스케일업 - 지속적 영업 확대' }, // 10억
-  2028: { target: 3000000000, growth: 25, sales: 75, label: '2028년', description: '안정적 성장 궤도' }, // 30억
-  ultimate: { target: 5000000000, label: '최종 목표', description: '연 매출 50억 달성' }  // 50억
+// 기본 연도별 목표 (Firebase에서 덮어씌움)
+var DEFAULT_YEARLY_GOALS = {
+  2025: { target: 100000000, growth: 90, sales: 10, label: '2025년', description: 'MVP 완성 - 고객/팀원 여정 고도화 집중' },
+  2026: { target: 500000000, growth: 30, sales: 70, label: '2026년', description: '영업 본격화 - 셀러/공급사 확대' },
+  2027: { target: 1500000000, growth: 30, sales: 70, label: '2027년', description: '스케일업 - 지속적 영업 확대' },
+  2028: { target: 5000000000, growth: 25, sales: 75, label: '2028년', description: '최종 목표 달성' },
+  ultimate: { target: 5000000000, label: '최종 목표', description: '연 매출 50억 달성' }
 };
+
+// 실제 사용되는 YEARLY_GOALS (loadGrowthDashboard에서 Firebase로 업데이트됨)
+var YEARLY_GOALS = JSON.parse(JSON.stringify(DEFAULT_YEARLY_GOALS));
 
 function renderGrowthDashboard() {
   var app = document.getElementById('app');
@@ -30324,6 +30328,24 @@ async function loadGrowthDashboard() {
 
     // 전략 데이터
     var strategy = results[6].exists ? results[6].data() : getDefaultStrategy();
+
+    // Firebase 전략에서 연도별 목표 업데이트
+    if (strategy.yearlyGoals) {
+      Object.keys(strategy.yearlyGoals).forEach(function(year) {
+        YEARLY_GOALS[year] = { ...DEFAULT_YEARLY_GOALS[year], ...strategy.yearlyGoals[year] };
+      });
+    }
+    // 현재 연도 목표를 전략의 targets에서 가져오기
+    var strategyYear = strategy.year || currentYear;
+    if (strategy.targets && strategy.targets.annualRevenue) {
+      YEARLY_GOALS[strategyYear] = YEARLY_GOALS[strategyYear] || {};
+      YEARLY_GOALS[strategyYear].target = strategy.targets.annualRevenue;
+      YEARLY_GOALS[strategyYear].label = strategyYear + '년';
+    }
+    // 최종 목표도 전략에서 가져오기
+    if (strategy.ultimateGoal) {
+      YEARLY_GOALS.ultimate.target = strategy.ultimateGoal;
+    }
 
     // 현재 분기 OKR
     var currentOkrs = allOkrs.filter(function(o) { return o.quarter === quarterKey; });
@@ -31164,6 +31186,43 @@ function renderStrategySettings(strategy, teamMembers) {
   html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">건당 평균 매출</label><input type="number" id="target-avgDealRevenue" value="' + (strategy.targets?.avgDealRevenue || 4630000) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
   html += '<div><label style="font-size: 12px; color: var(--gray-500); display: block; margin-bottom: 4px;">월간 순익 목표</label><input type="number" id="target-monthlyProfit" value="' + (strategy.targets?.monthlyProfit || 4000000) + '" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;"></div>';
   html += '</div></div>';
+
+  // 연도별 로드맵
+  html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
+  html += '<h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px;">🗓️ 연도별 성장 로드맵</h3>';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-bottom: 16px;">각 연도별 매출 목표와 그로스/영업 비율을 설정합니다</div>';
+
+  var yearlyGoals = strategy.yearlyGoals || {};
+  var years = [2025, 2026, 2027, 2028];
+  var defaults = {
+    2025: { target: 100000000, growth: 90, sales: 10, description: 'MVP 완성' },
+    2026: { target: 500000000, growth: 30, sales: 70, description: '영업 본격화' },
+    2027: { target: 1500000000, growth: 30, sales: 70, description: '스케일업' },
+    2028: { target: 5000000000, growth: 25, sales: 75, description: '목표 달성' }
+  };
+
+  html += '<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">';
+  years.forEach(function(year) {
+    var goal = yearlyGoals[year] || defaults[year];
+    html += '<div style="background: var(--gray-50); border-radius: 12px; padding: 16px;">';
+    html += '<div style="font-size: 14px; font-weight: 700; margin-bottom: 12px; color: var(--primary);">' + year + '년</div>';
+    html += '<div style="margin-bottom: 8px;"><label style="font-size: 11px; color: var(--gray-500);">매출 목표 (억)</label><input type="number" class="yearly-target" data-year="' + year + '" value="' + ((goal.target || 0) / 100000000) + '" step="0.1" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;"></div>';
+    html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">';
+    html += '<div><label style="font-size: 11px; color: var(--gray-500);">그로스 %</label><input type="number" class="yearly-growth" data-year="' + year + '" value="' + (goal.growth || 50) + '" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;"></div>';
+    html += '<div><label style="font-size: 11px; color: var(--gray-500);">영업 %</label><input type="number" class="yearly-sales" data-year="' + year + '" value="' + (goal.sales || 50) + '" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;"></div>';
+    html += '</div>';
+    html += '<div><label style="font-size: 11px; color: var(--gray-500);">설명</label><input type="text" class="yearly-desc" data-year="' + year + '" value="' + (goal.description || '') + '" style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;"></div>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // 최종 목표
+  html += '<div style="margin-top: 16px; background: linear-gradient(135deg, #1e3a8a, #3b82f6); border-radius: 12px; padding: 16px; color: white;">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
+  html += '<div><div style="font-size: 12px; opacity: 0.8;">🚀 최종 목표</div><div style="font-size: 20px; font-weight: 700;">연 매출</div></div>';
+  html += '<div><input type="number" id="ultimate-goal" value="' + ((strategy.ultimateGoal || 5000000000) / 100000000) + '" step="0.1" style="width: 100px; padding: 10px; border: none; border-radius: 8px; font-size: 18px; font-weight: 700; text-align: center;">억</div>';
+  html += '</div></div>';
+  html += '</div>';
 
   // 팀원별 KPI
   html += '<div style="background: white; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
@@ -32297,6 +32356,33 @@ async function saveStrategyDocument() {
         strategy.strategies.push({ number: idx + 1, title: title, desc: desc });
       }
     });
+
+    // 연도별 목표 수집
+    strategy.yearlyGoals = {};
+    document.querySelectorAll('.yearly-target').forEach(function(input) {
+      var year = input.dataset.year;
+      if (!strategy.yearlyGoals[year]) strategy.yearlyGoals[year] = {};
+      strategy.yearlyGoals[year].target = parseFloat(input.value) * 100000000 || 0;
+      strategy.yearlyGoals[year].label = year + '년';
+    });
+    document.querySelectorAll('.yearly-growth').forEach(function(input) {
+      var year = input.dataset.year;
+      if (strategy.yearlyGoals[year]) strategy.yearlyGoals[year].growth = parseInt(input.value) || 50;
+    });
+    document.querySelectorAll('.yearly-sales').forEach(function(input) {
+      var year = input.dataset.year;
+      if (strategy.yearlyGoals[year]) strategy.yearlyGoals[year].sales = parseInt(input.value) || 50;
+    });
+    document.querySelectorAll('.yearly-desc').forEach(function(input) {
+      var year = input.dataset.year;
+      if (strategy.yearlyGoals[year]) strategy.yearlyGoals[year].description = input.value || '';
+    });
+
+    // 최종 목표 수집
+    var ultimateGoalInput = document.getElementById('ultimate-goal');
+    if (ultimateGoalInput) {
+      strategy.ultimateGoal = parseFloat(ultimateGoalInput.value) * 100000000 || 5000000000;
+    }
 
     // Firebase에 저장
     await db.collection('strategies').doc('current').set(strategy);
@@ -35520,7 +35606,78 @@ function renderOKRReviewContent(currentOkrs, prevOkrs, teamMembers, deals, settl
     html += '<div style="font-size: 28px; font-weight: 700; color: ' + (progressChange >= 0 ? 'var(--success)' : 'var(--danger)') + ';">' + (progressChange >= 0 ? '+' : '') + progressChange.toFixed(0) + '%</div></div>';
     html += '</div></div>';
   }
-  
+
+  // ===== 전략 피드백 루프 =====
+  html += '<div style="background: linear-gradient(135deg, #0f0f1a, #1a1a2e); border-radius: 16px; padding: 28px; color: white; margin-top: 24px;">';
+  html += '<h3 style="font-size: 18px; font-weight: 700; margin-bottom: 20px;">🔄 전략 피드백 사이클</h3>';
+  html += '<div style="font-size: 14px; opacity: 0.9; margin-bottom: 20px; line-height: 1.6;">분기 리뷰 결과를 바탕으로 다음 사이클의 전략을 개선하세요. <strong>본질을 잃지 않고 전략적으로 성장</strong>하려면 피드백이 필수입니다.</div>';
+
+  html += '<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px;">';
+  var cycleSteps = [
+    { num: '①', title: '전략기획', desc: '목표 설정', link: 'strategy2026', active: false },
+    { num: '②', title: 'OKR 설정', desc: 'KPI 수립', link: 'okrManagement', active: false },
+    { num: '③', title: '업무일지', desc: '실행 기록', link: 'workLog', active: false },
+    { num: '④', title: '대시보드', desc: '현황 확인', link: 'growthDashboard', active: false },
+    { num: '⑤', title: '분기 리뷰', desc: '피드백', link: 'okrReview', active: true }
+  ];
+
+  cycleSteps.forEach(function(step, idx) {
+    html += '<div onclick="switchTab(\'' + step.link + '\')" style="background: ' + (step.active ? 'var(--primary)' : 'rgba(255,255,255,0.1)') + '; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;">';
+    html += '<div style="font-size: 24px; font-weight: 800; margin-bottom: 8px;">' + step.num + '</div>';
+    html += '<div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">' + step.title + '</div>';
+    html += '<div style="font-size: 11px; opacity: 0.8;">' + step.desc + '</div>';
+    html += '</div>';
+    if (idx < 4) html += '';
+  });
+  html += '</div>';
+
+  // 피드백 액션
+  html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">';
+
+  // 잘된 점
+  html += '<div style="background: rgba(16, 185, 129, 0.2); border-radius: 12px; padding: 20px; border: 1px solid rgba(16, 185, 129, 0.3);">';
+  html += '<div style="font-size: 14px; font-weight: 700; margin-bottom: 12px; color: #10b981;">✅ 이번 분기 잘한 점</div>';
+  if (achieved > 0) {
+    html += '<div style="font-size: 13px; margin-bottom: 8px;">• ' + achieved + '개 OKR 목표 달성!</div>';
+  }
+  if (progressChange > 0) {
+    html += '<div style="font-size: 13px; margin-bottom: 8px;">• 전분기 대비 ' + progressChange.toFixed(0) + '% 성장</div>';
+  }
+  if (avgProgress >= 70) {
+    html += '<div style="font-size: 13px;">• 전체 달성률 ' + avgProgress.toFixed(0) + '%로 양호</div>';
+  }
+  if (achieved === 0 && progressChange <= 0 && avgProgress < 70) {
+    html += '<div style="font-size: 13px; opacity: 0.8;">• 도전하고 경험을 쌓았습니다</div>';
+  }
+  html += '</div>';
+
+  // 개선점
+  html += '<div style="background: rgba(239, 68, 68, 0.2); border-radius: 12px; padding: 20px; border: 1px solid rgba(239, 68, 68, 0.3);">';
+  html += '<div style="font-size: 14px; font-weight: 700; margin-bottom: 12px; color: #ef4444;">🔧 다음 분기 개선점</div>';
+  if (underperformed > 0) {
+    html += '<div style="font-size: 13px; margin-bottom: 8px;">• ' + underperformed + '개 미달성 OKR 원인 분석 필요</div>';
+  }
+  if (avgProgress < 70) {
+    html += '<div style="font-size: 13px; margin-bottom: 8px;">• 목표 난이도 조정 검토</div>';
+  }
+  if (progressChange < 0) {
+    html += '<div style="font-size: 13px;">• 하락 원인 파악 및 대책 수립</div>';
+  }
+  if (underperformed === 0 && avgProgress >= 70 && progressChange >= 0) {
+    html += '<div style="font-size: 13px; opacity: 0.8;">• 더 도전적인 목표 설정 고려</div>';
+  }
+  html += '</div>';
+
+  html += '</div>';
+
+  // 액션 버튼
+  html += '<div style="display: flex; gap: 12px; margin-top: 20px;">';
+  html += '<button onclick="switchTab(\'strategy2026\')" style="flex: 1; background: var(--primary); color: white; border: none; padding: 16px; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;">🔄 전략 수정하러 가기</button>';
+  html += '<button onclick="switchTab(\'okrManagement\')" style="flex: 1; background: white; color: var(--gray-900); border: none; padding: 16px; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;">🎯 다음 분기 OKR 설정</button>';
+  html += '</div>';
+
+  html += '</div>';
+
   content.innerHTML = html;
 }
 
