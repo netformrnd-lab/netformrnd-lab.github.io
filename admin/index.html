@@ -9485,17 +9485,46 @@ function updateSettlementPreview() {
         if (!deal) return '';
         
         const seller = state.sellers.find(s => s.id === deal.sellerId);
-        const sellerMarginRate = deal.sellerMarginRate || 10;
+        const supplier = state.suppliers.find(s => s.id === deal.supplierId);
         const dealProducts = deal.selectedProducts || [];
-        const supplyPrice = dealProducts.length > 0
-          ? (dealProducts[0].supplyPrice || deal.supplyPrice || 0)
-          : (deal.supplyPrice || 0);
+        const isInhouse = supplier?.supplierType === 'inhouse' || deal.productType === 'inhouse';
+
+        // 마진 계산: 자사는 marginFee, 타사는 marginRate 또는 supplyPrice 기반
+        let sellerMargin = 0;
+        let sellerMarginRate = 0;
+        let supplierTotal = 0;
+
+        if (isInhouse) {
+          // 자사: marginFee (총마진수수료) 사용
+          const totalMarginFee = dealProducts.reduce((sum, p) => sum + (Number(p.marginFee) || 0), 0);
+          if (totalMarginFee > 0) {
+            // marginFee가 단가당 금액이면 수량 곱하기
+            sellerMargin = totalMarginFee * ds.totalQty;
+          } else {
+            // marginFee 없으면 deal.sellerMarginRate 사용
+            sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 20;
+            sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
+          }
+          sellerMarginRate = ds.totalSales > 0 ? Math.round(sellerMargin / ds.totalSales * 100 * 10) / 10 : 0;
+          supplierTotal = 0; // 자사는 공급사 정산 없음
+        } else {
+          // 타사: supplyPrice (공급단가) 기반으로 공급사 정산, marginRate로 셀러 마진
+          const supplyPrice = dealProducts.length > 0
+            ? (Number(dealProducts[0].supplyPrice) || deal.supplyPrice || 0)
+            : (deal.supplyPrice || 0);
+
+          supplierTotal = supplyPrice * ds.totalQty;
+
+          // 셀러 마진율: 상품의 marginRate 또는 deal.sellerMarginRate 사용
+          sellerMarginRate = dealProducts.length > 0 && dealProducts[0].marginRate
+            ? Number(dealProducts[0].marginRate)
+            : (deal.sellerMarginRate || seller?.defaultMarginRate || 0);
+          sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
+        }
 
         const pgFee = Math.round(ds.totalSales * 0.04);
-        const sellerMargin = Math.round(ds.totalSales * sellerMarginRate / 100);
         const sellerTax = Math.round(sellerMargin * 0.033);
         const sellerNet = sellerMargin - sellerTax;
-        const supplierTotal = supplyPrice * ds.totalQty;
         const moyeoraProfit = ds.totalSales - pgFee - sellerNet - supplierTotal;
         
         return `
@@ -9591,17 +9620,46 @@ async function applyCafe24Mapping() {
 
       // 공급단가: selectedProducts에서 먼저 찾고, 없으면 deal.supplyPrice 사용
       const dealProducts = deal.selectedProducts || [];
-      const supplyPrice = dealProducts.length > 0
-        ? (dealProducts[0].supplyPrice || deal.supplyPrice || 0)
-        : (deal.supplyPrice || 0);
+      const isInhouse = supplier?.supplierType === 'inhouse' || deal.productType === 'inhouse';
 
-      const sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+      // 마진 계산: 자사는 marginFee, 타사는 marginRate 또는 supplyPrice 기반
+      let sellerMargin = 0;
+      let sellerMarginRate = 0;
+      let supplierTotal = 0;
+      let supplyPrice = 0;
+
+      if (isInhouse) {
+        // 자사: marginFee (총마진수수료) 사용
+        const totalMarginFee = dealProducts.reduce((sum, p) => sum + (Number(p.marginFee) || 0), 0);
+        if (totalMarginFee > 0) {
+          // marginFee가 단가당 금액이면 수량 곱하기
+          sellerMargin = totalMarginFee * data.totalQty;
+        } else {
+          // marginFee 없으면 deal.sellerMarginRate 사용
+          sellerMarginRate = deal.sellerMarginRate || seller?.defaultMarginRate || 20;
+          sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
+        }
+        sellerMarginRate = data.totalSales > 0 ? Math.round(sellerMargin / data.totalSales * 100 * 10) / 10 : 0;
+        supplierTotal = 0; // 자사는 공급사 정산 없음
+        supplyPrice = 0;
+      } else {
+        // 타사: supplyPrice (공급단가) 기반으로 공급사 정산, marginRate로 셀러 마진
+        supplyPrice = dealProducts.length > 0
+          ? (Number(dealProducts[0].supplyPrice) || deal.supplyPrice || 0)
+          : (deal.supplyPrice || 0);
+
+        supplierTotal = supplyPrice * data.totalQty;
+
+        // 셀러 마진율: 상품의 marginRate 또는 deal.sellerMarginRate 사용
+        sellerMarginRate = dealProducts.length > 0 && dealProducts[0].marginRate
+          ? Number(dealProducts[0].marginRate)
+          : (deal.sellerMarginRate || seller?.defaultMarginRate || 0);
+        sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
+      }
 
       const pgFee = Math.round(data.totalSales * 0.04);
-      const sellerMargin = Math.round(data.totalSales * sellerMarginRate / 100);
       const sellerTax = Math.round(sellerMargin * 0.033);
       const sellerNet = sellerMargin - sellerTax;
-      const supplierTotal = supplyPrice * data.totalQty;
       const moyeoraProfit = data.totalSales - pgFee - sellerNet - supplierTotal;
 
       // 공구 업데이트
@@ -9620,23 +9678,42 @@ async function applyCafe24Mapping() {
 
       // 🎯 정산서 자동 생성
       const today = new Date().toISOString().split('T')[0];
-      const productType = supplier?.supplierType || 'external';
+      const productType = isInhouse ? 'inhouse' : 'external';
 
       // 1. 셀러 정산서 생성 (상품별 정보 포함)
       const sellerSettlementId = `${dealId}_seller`;
 
-      // 상품별 마진 계산 (공급단가 포함)
+      // 상품별 마진 계산 (자사/타사 구분)
       const salesItems = (data.products || []).map(p => {
-        const itemMargin = Math.round((p.amount || 0) * sellerMarginRate / 100);
-        const itemTax = Math.round(itemMargin * 0.033);
         const itemUnitPrice = p.quantity > 0 ? Math.round((p.amount || 0) / p.quantity) : 0;
+        let itemMargin = 0;
+        let itemMarginRate = sellerMarginRate;
+
+        if (isInhouse) {
+          // 자사: marginFee(단가당 마진금액) * 수량
+          const productMarginFee = dealProducts.length > 0
+            ? (Number(dealProducts[0].marginFee) || 0)
+            : 0;
+          if (productMarginFee > 0) {
+            itemMargin = productMarginFee * (p.quantity || 0);
+            itemMarginRate = (p.amount || 0) > 0 ? Math.round(itemMargin / (p.amount || 1) * 100 * 10) / 10 : 0;
+          } else {
+            itemMargin = Math.round((p.amount || 0) * sellerMarginRate / 100);
+          }
+        } else {
+          // 타사: 마진율로 계산
+          itemMargin = Math.round((p.amount || 0) * sellerMarginRate / 100);
+        }
+
+        const itemTax = Math.round(itemMargin * 0.033);
         return {
           productName: p.productName || '-',
           quantity: p.quantity || 0,
           unitPrice: itemUnitPrice,
-          supplyPrice: supplyPrice,  // 공급단가 추가
-          amount: p.amount || 0,
-          marginRate: sellerMarginRate,
+          dealPrice: itemUnitPrice,
+          supplyPrice: isInhouse ? 0 : supplyPrice,  // 자사는 공급단가 없음
+          salesAmount: p.amount || 0,
+          marginRate: itemMarginRate,
           marginAmount: itemMargin,
           withholdingTax: itemTax,
           actualPayment: itemMargin - itemTax
