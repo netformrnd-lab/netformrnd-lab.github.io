@@ -22106,6 +22106,48 @@ function renderSalesDashboardContent() {
   const remainingSuccessDeals = Math.max(T.targetSuccessDeals - successfulDeals.length, 0);
   const remainingTotalDeals = Math.max(T.requiredTotalDeals - yearDeals.length, 0);
   const weeklyNeededDeals = Math.ceil(remainingTotalDeals / Math.max(remainingWeeks, 1));
+
+  // 📅 이번 주 데이터 계산
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - now.getDay()); // 일요일 시작
+  weekStart.setHours(0, 0, 0, 0);
+  const thisWeekDeals = allDeals.filter(d => {
+    const dealDate = new Date(d.startDate || d.createdAt || '');
+    return dealDate >= weekStart && dealDate <= now;
+  });
+  const thisWeekSuccessDeals = thisWeekDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
+
+  // 📊 주간/월간 목표 대비 진행률
+  const weeklyTargetDeals = T.weeklyRequiredDeals; // 주 7건
+  const monthlyTargetDeals = T.monthlyRequiredDeals; // 월 30건
+  const weeklyProgress = Math.min(100, Math.round((thisWeekDeals.length / weeklyTargetDeals) * 100));
+  const monthlyProgress = Math.min(100, Math.round((monthDeals.length / monthlyTargetDeals) * 100));
+
+  // 👥 셀러 여정 파이프라인 계산
+  const allSellers = state.sellers || [];
+  const thisYearSellers = allSellers.filter(s => (s.createdAt || '').startsWith(thisYearStr));
+  const thisMonthSellers = allSellers.filter(s => (s.createdAt || '').startsWith(thisMonth));
+
+  // 셀러 여정 단계별 집계
+  const sellerJourney = {
+    total: allSellers.length,
+    contacted: allSellers.filter(s => s.journeyFirstContact).length,
+    onboarded: allSellers.filter(s => s.journeyOnboarding).length,
+    documented: allSellers.filter(s => s.journeyDocuments).length,
+    firstDeal: allSellers.filter(s => s.journeyFirstDeal).length,
+    feedback: allSellers.filter(s => s.journeyFeedback).length,
+    // 이번 달 신규
+    monthNew: thisMonthSellers.length,
+    monthContacted: thisMonthSellers.filter(s => s.journeyFirstContact).length,
+    monthOnboarded: thisMonthSellers.filter(s => s.journeyOnboarding).length
+  };
+
+  // 🏭 공급사 현황
+  const allSuppliers = state.suppliers || [];
+  const thisYearSuppliers = allSuppliers.filter(s => (s.createdAt || '').startsWith(thisYearStr));
+  const thisMonthSuppliers = allSuppliers.filter(s => (s.createdAt || '').startsWith(thisMonth));
+  const contractedSuppliers = allSuppliers.filter(s => s.contractStatus === 'completed');
+  const suppliers30Commission = allSuppliers.filter(s => Number(s.commissionRate || 0) >= 30);
   const monthlyNeededDeals = Math.ceil(remainingTotalDeals / Math.max(remainingMonths, 1));
 
   // 팀원별 실적 계산
@@ -22190,12 +22232,28 @@ function renderSalesDashboardContent() {
         </div>
       </div>
 
-      <!-- 🎯 전략 목표 알림 -->
+      <!-- 📋 전략기획 연동 설명 -->
+      <div style="background: ${C.white}; border: 2px solid ${C.primary}; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="background: ${C.primary}; color: white; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700;">전략기획 연동</div>
+          <div style="font-size: 14px; color: ${C.gray700};">
+            <strong>연 매출 ${(T.annualRevenue / 100000000).toFixed(0)}억 달성</strong> = 성공 공구 <strong>${T.targetSuccessDeals}건</strong> 필요
+            → 성공률 ${T.successRate}% 반영 시 <strong style="color: ${C.primary};">전체 ${T.requiredTotalDeals}건 공구 필요</strong>
+            (월 ${T.monthlyRequiredDeals}건, 주 ${T.weeklyRequiredDeals}건)
+          </div>
+        </div>
+      </div>
+
+      <!-- 🎯 전략 목표 및 남은 기간 -->
       <div style="background: linear-gradient(135deg, ${C.primary}, #e08600); border-radius: 16px; padding: 20px 24px; margin-bottom: 20px; color: white;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
           <div>
-            <div style="font-size: 13px; opacity: 0.9; margin-bottom: 4px;">🎯 ${currentYear}년 전략 목표</div>
-            <div style="font-size: 20px; font-weight: 700;">연 매출 ${(T.annualRevenue / 100000000).toFixed(0)}억 · 공구 진행 ${T.requiredTotalDeals}건 → 예상 성공 ${T.targetSuccessDeals}건 (성공률 ${T.successRate}%)</div>
+            <div style="font-size: 13px; opacity: 0.9; margin-bottom: 4px;">🎯 ${currentYear}년 목표 진행 현황</div>
+            <div style="font-size: 20px; font-weight: 700;">
+              공구 ${yearDeals.length}/${T.requiredTotalDeals}건 (${totalDealsProgress}%) ·
+              성공 ${successfulDeals.length}/${T.targetSuccessDeals}건 ·
+              매출 ${(totalSalesAmount / 100000000).toFixed(1)}/${(T.annualRevenue / 100000000)}억
+            </div>
           </div>
           <div style="text-align: right;">
             <div style="font-size: 12px; opacity: 0.8;">남은 기간</div>
@@ -22257,32 +22315,78 @@ function renderSalesDashboardContent() {
         </div>
       </div>
 
-      <!-- ⏰ 주간/월간 필요 액션 -->
+      <!-- ⏰ 주간/월간 목표 대비 현황 -->
       <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <div style="font-size: 16px; font-weight: 700; color: ${C.black}; margin-bottom: 16px;">⏰ 남은 기간 필요 액션</div>
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
-          <div style="text-align: center; padding: 20px; background: ${C.blueLight}; border-radius: 14px;">
-            <div style="font-size: 32px; font-weight: 800; color: ${C.blue};">${weeklyNeededDeals}</div>
-            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">주간 필요 공구</div>
+        <div style="font-size: 16px; font-weight: 700; color: ${C.black}; margin-bottom: 16px;">⏰ 주간/월간 목표 대비 현황</div>
+
+        <!-- 이번 주/이번 달 진행 현황 -->
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 16px;">
+          <!-- 이번 주 -->
+          <div style="background: ${weeklyProgress >= 100 ? C.greenLight : C.blueLight}; border-radius: 14px; padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div style="font-size: 14px; font-weight: 600; color: ${C.gray700};">📅 이번 주</div>
+              <div style="font-size: 12px; font-weight: 600; color: ${weeklyProgress >= 100 ? C.green : C.blue};">${weeklyProgress}%</div>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <div style="font-size: 36px; font-weight: 800; color: ${weeklyProgress >= 100 ? C.green : C.blue};">${thisWeekDeals.length}</div>
+              <div style="font-size: 16px; color: ${C.gray500};">/ ${weeklyTargetDeals}건</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.6); height: 8px; border-radius: 4px; margin-top: 12px; overflow: hidden;">
+              <div style="background: ${weeklyProgress >= 100 ? C.green : C.blue}; height: 100%; width: ${weeklyProgress}%; border-radius: 4px; transition: width 0.3s;"></div>
+            </div>
+            <div style="font-size: 11px; color: ${C.gray600}; margin-top: 8px;">
+              ${weeklyProgress >= 100 ? '✅ 주간 목표 달성!' : `⚡ ${Math.max(weeklyTargetDeals - thisWeekDeals.length, 0)}건 더 필요`}
+            </div>
           </div>
-          <div style="text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 14px;">
-            <div style="font-size: 32px; font-weight: 800; color: ${C.black};">${monthlyNeededDeals}</div>
-            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">월간 필요 공구</div>
-          </div>
-          <div style="text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 14px;">
-            <div style="font-size: 32px; font-weight: 800; color: ${C.black};">${remainingTotalDeals}</div>
-            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">남은 전체 공구</div>
-          </div>
-          <div style="text-align: center; padding: 20px; background: ${C.greenLight}; border-radius: 14px;">
-            <div style="font-size: 32px; font-weight: 800; color: ${C.green};">${remainingSuccessDeals}</div>
-            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">남은 성공 목표</div>
+
+          <!-- 이번 달 -->
+          <div style="background: ${monthlyProgress >= 100 ? C.greenLight : C.gray50}; border-radius: 14px; padding: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div style="font-size: 14px; font-weight: 600; color: ${C.gray700};">📆 이번 달</div>
+              <div style="font-size: 12px; font-weight: 600; color: ${monthlyProgress >= 100 ? C.green : C.black};">${monthlyProgress}%</div>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <div style="font-size: 36px; font-weight: 800; color: ${monthlyProgress >= 100 ? C.green : C.black};">${monthDeals.length}</div>
+              <div style="font-size: 16px; color: ${C.gray500};">/ ${monthlyTargetDeals}건</div>
+            </div>
+            <div style="background: ${C.gray200}; height: 8px; border-radius: 4px; margin-top: 12px; overflow: hidden;">
+              <div style="background: ${monthlyProgress >= 100 ? C.green : C.primary}; height: 100%; width: ${monthlyProgress}%; border-radius: 4px; transition: width 0.3s;"></div>
+            </div>
+            <div style="font-size: 11px; color: ${C.gray600}; margin-top: 8px;">
+              ${monthlyProgress >= 100 ? '✅ 월간 목표 달성!' : `⚡ ${Math.max(monthlyTargetDeals - monthDeals.length, 0)}건 더 필요 (성공 ${monthSuccessfulDeals.length}건)`}
+            </div>
           </div>
         </div>
+
+        <!-- 남은 기간 필요 목표 -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+          <div style="text-align: center; padding: 16px; background: ${C.blueLight}; border-radius: 12px;">
+            <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 4px;">주간 페이스</div>
+            <div style="font-size: 24px; font-weight: 800; color: ${C.blue};">${weeklyNeededDeals}</div>
+            <div style="font-size: 10px; color: ${C.gray500}; margin-top: 2px;">건/주</div>
+          </div>
+          <div style="text-align: center; padding: 16px; background: ${C.gray50}; border-radius: 12px;">
+            <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 4px;">월간 페이스</div>
+            <div style="font-size: 24px; font-weight: 800; color: ${C.black};">${monthlyNeededDeals}</div>
+            <div style="font-size: 10px; color: ${C.gray500}; margin-top: 2px;">건/월</div>
+          </div>
+          <div style="text-align: center; padding: 16px; background: ${C.gray50}; border-radius: 12px;">
+            <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 4px;">남은 공구</div>
+            <div style="font-size: 24px; font-weight: 800; color: ${C.black};">${remainingTotalDeals}</div>
+            <div style="font-size: 10px; color: ${C.gray500}; margin-top: 2px;">건</div>
+          </div>
+          <div style="text-align: center; padding: 16px; background: ${C.greenLight}; border-radius: 12px;">
+            <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 4px;">남은 성공</div>
+            <div style="font-size: 24px; font-weight: 800; color: ${C.green};">${remainingSuccessDeals}</div>
+            <div style="font-size: 10px; color: ${C.gray500}; margin-top: 2px;">건</div>
+          </div>
+        </div>
+
         <div style="margin-top: 16px; padding: 14px; background: ${C.yellowLight}; border-radius: 10px;">
           <div style="font-size: 13px; color: ${C.gray700};">
-            💡 <strong>성공률 ${T.successRate}% 기준:</strong>
-            주 ${weeklyNeededDeals}건 공구 → 예상 성공 ${Math.round(weeklyNeededDeals * T.successRate / 100)}건 →
-            예상 순익 <strong style="color: ${C.green};">${formatNumber(Math.round(weeklyNeededDeals * T.successRate / 100 * T.avgDealRevenue * 0.22))}원</strong>/주
+            💡 <strong>공구설계 계산기 기준:</strong>
+            주 ${T.weeklyRequiredDeals}건 공구 → 예상 성공 ${Math.round(T.weeklyRequiredDeals * T.successRate / 100)}건 →
+            예상 순익 <strong style="color: ${C.green};">${formatNumber(Math.round(T.weeklyRequiredDeals * T.successRate / 100 * T.avgDealRevenue * 0.22))}원</strong>/주
           </div>
         </div>
       </div>
@@ -22388,6 +22492,152 @@ function renderSalesDashboardContent() {
             </table>
           </div>
         `}
+      </div>
+
+      <!-- 👥 셀러 영업 파이프라인 (리스트업 → 컨택 → 입점) -->
+      <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: ${C.black};">👥 셀러 영업 파이프라인</div>
+          <div style="font-size: 12px; color: ${C.gray400};">이번 달 신규: ${sellerJourney.monthNew}명</div>
+        </div>
+
+        <!-- 파이프라인 퍼널 -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+          <!-- 리스트업 (등록) -->
+          <div style="flex: 1; text-align: center;">
+            <div style="background: linear-gradient(135deg, ${C.blue}, #3B82F6); color: white; padding: 20px; border-radius: 12px; margin-bottom: 8px;">
+              <div style="font-size: 32px; font-weight: 800;">${sellerJourney.total}</div>
+              <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">명</div>
+            </div>
+            <div style="font-size: 13px; font-weight: 600; color: ${C.gray700};">📋 리스트업</div>
+            <div style="font-size: 11px; color: ${C.gray500};">전체 등록</div>
+          </div>
+          <div style="font-size: 24px; color: ${C.gray300}; margin: 0 8px;">→</div>
+
+          <!-- 컨택 -->
+          <div style="flex: 1; text-align: center;">
+            <div style="background: ${C.blueLight}; color: ${C.blue}; padding: 20px; border-radius: 12px; margin-bottom: 8px;">
+              <div style="font-size: 32px; font-weight: 800;">${sellerJourney.contacted}</div>
+              <div style="font-size: 12px; opacity: 0.8; margin-top: 4px;">${sellerJourney.total > 0 ? Math.round(sellerJourney.contacted / sellerJourney.total * 100) : 0}%</div>
+            </div>
+            <div style="font-size: 13px; font-weight: 600; color: ${C.gray700};">📞 첫 컨택</div>
+            <div style="font-size: 11px; color: ${C.gray500};">연락 완료</div>
+          </div>
+          <div style="font-size: 24px; color: ${C.gray300}; margin: 0 8px;">→</div>
+
+          <!-- 온보딩 -->
+          <div style="flex: 1; text-align: center;">
+            <div style="background: ${C.yellowLight}; color: ${C.yellow}; padding: 20px; border-radius: 12px; margin-bottom: 8px;">
+              <div style="font-size: 32px; font-weight: 800;">${sellerJourney.onboarded}</div>
+              <div style="font-size: 12px; opacity: 0.8; margin-top: 4px;">${sellerJourney.contacted > 0 ? Math.round(sellerJourney.onboarded / sellerJourney.contacted * 100) : 0}%</div>
+            </div>
+            <div style="font-size: 13px; font-weight: 600; color: ${C.gray700};">📝 온보딩</div>
+            <div style="font-size: 11px; color: ${C.gray500};">설명 완료</div>
+          </div>
+          <div style="font-size: 24px; color: ${C.gray300}; margin: 0 8px;">→</div>
+
+          <!-- 서류 완료 -->
+          <div style="flex: 1; text-align: center;">
+            <div style="background: ${C.gray50}; color: ${C.gray700}; padding: 20px; border-radius: 12px; margin-bottom: 8px;">
+              <div style="font-size: 32px; font-weight: 800;">${sellerJourney.documented}</div>
+              <div style="font-size: 12px; opacity: 0.8; margin-top: 4px;">${sellerJourney.onboarded > 0 ? Math.round(sellerJourney.documented / sellerJourney.onboarded * 100) : 0}%</div>
+            </div>
+            <div style="font-size: 13px; font-weight: 600; color: ${C.gray700};">📄 서류 제출</div>
+            <div style="font-size: 11px; color: ${C.gray500};">입점 준비</div>
+          </div>
+          <div style="font-size: 24px; color: ${C.gray300}; margin: 0 8px;">→</div>
+
+          <!-- 첫 공구 -->
+          <div style="flex: 1; text-align: center;">
+            <div style="background: linear-gradient(135deg, ${C.green}, #059669); color: white; padding: 20px; border-radius: 12px; margin-bottom: 8px;">
+              <div style="font-size: 32px; font-weight: 800;">${sellerJourney.firstDeal}</div>
+              <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">${sellerJourney.documented > 0 ? Math.round(sellerJourney.firstDeal / sellerJourney.documented * 100) : 0}%</div>
+            </div>
+            <div style="font-size: 13px; font-weight: 600; color: ${C.gray700};">🎉 입점 완료</div>
+            <div style="font-size: 11px; color: ${C.gray500};">첫 공구 진행</div>
+          </div>
+        </div>
+
+        <!-- 전환율 요약 -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px; background: ${C.gray50}; border-radius: 10px;">
+          <div style="text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: ${C.blue};">${sellerJourney.total > 0 ? Math.round(sellerJourney.contacted / sellerJourney.total * 100) : 0}%</div>
+            <div style="font-size: 11px; color: ${C.gray500};">리스트업→컨택</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: ${C.yellow};">${sellerJourney.contacted > 0 ? Math.round(sellerJourney.onboarded / sellerJourney.contacted * 100) : 0}%</div>
+            <div style="font-size: 11px; color: ${C.gray500};">컨택→온보딩</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: ${C.gray700};">${sellerJourney.onboarded > 0 ? Math.round(sellerJourney.documented / sellerJourney.onboarded * 100) : 0}%</div>
+            <div style="font-size: 11px; color: ${C.gray500};">온보딩→서류</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: ${C.green};">${sellerJourney.total > 0 ? Math.round(sellerJourney.firstDeal / sellerJourney.total * 100) : 0}%</div>
+            <div style="font-size: 11px; color: ${C.gray500};">전체 입점률</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 🏭 공급사/셀러 통합 현황 -->
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 20px;">
+        <!-- 공급사 현황 -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: ${C.black};">🏭 공급사 현황</div>
+            <a href="#" onclick="event.preventDefault(); navigateTo('suppliers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+            <div style="background: ${C.gray50}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.black};">${allSuppliers.length}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">전체</div>
+            </div>
+            <div style="background: ${C.greenLight}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.green};">${contractedSuppliers.length}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">계약완료</div>
+            </div>
+            <div style="background: ${C.blueLight}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.blue};">${thisMonthSuppliers.length}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">이번달 신규</div>
+            </div>
+            <div style="background: ${C.primary}15; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.primary};">${suppliers30Commission.length}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">30%↑ 수수료</div>
+            </div>
+          </div>
+          <div style="margin-top: 12px; font-size: 12px; color: ${C.gray500};">
+            월 목표: ${T.monthlyNewSuppliers}개 신규 · 현재 ${thisMonthSuppliers.length}개 (${Math.round(thisMonthSuppliers.length / T.monthlyNewSuppliers * 100)}%)
+          </div>
+        </div>
+
+        <!-- 셀러 현황 -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: ${C.black};">👤 셀러 현황</div>
+            <a href="#" onclick="event.preventDefault(); navigateTo('sellers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+            <div style="background: ${C.gray50}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.black};">${allSellers.length}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">전체</div>
+            </div>
+            <div style="background: ${C.greenLight}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.green};">${sellerJourney.firstDeal}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">입점완료</div>
+            </div>
+            <div style="background: ${C.blueLight}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.blue};">${sellerJourney.monthNew}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">이번달 신규</div>
+            </div>
+            <div style="background: ${C.yellowLight}; padding: 16px; border-radius: 10px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800; color: ${C.yellow};">${sellerJourney.contacted - sellerJourney.firstDeal}</div>
+              <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">진행중</div>
+            </div>
+          </div>
+          <div style="margin-top: 12px; font-size: 12px; color: ${C.gray500};">
+            월 목표: ${T.monthlyNewSellers}명 신규 · 현재 ${sellerJourney.monthNew}명 (${Math.round(sellerJourney.monthNew / T.monthlyNewSellers * 100)}%)
+          </div>
+        </div>
       </div>
 
       <!-- 📌 전략 요약 -->
