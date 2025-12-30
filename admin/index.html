@@ -9404,8 +9404,8 @@ async function toggleSellerListField(id, field, value) {
     return;
   }
 
-  // 온보딩 체크 시 세부 체크리스트 모달 띄우기
-  if (field === 'onboarding' && value === true) {
+  // 온보딩 필드 클릭 시 항상 체크리스트 모달 띄우기 (신규/수정 모두)
+  if (field === 'onboarding') {
     showSellerListOnboardingModal(id);
     return;
   }
@@ -9509,18 +9509,41 @@ function showSellerListOnboardingModal(sellerId) {
   const seller = state.sellerList.find(s => s.id === sellerId);
   if (!seller) return;
 
+  const isEdit = seller.onboarding || seller.contacted;
+
   const m = document.getElementById('modal');
   m.className = 'modal show';
   m.innerHTML = `
     <div class="modal-content" style="max-width: 520px;">
       <div class="modal-header" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white;">
-        <h3 style="color: white;">🤝 온보딩 체크리스트</h3>
+        <h3 style="color: white;">🤝 온보딩 체크리스트 ${isEdit ? '(수정)' : ''}</h3>
         <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
       </div>
       <div class="modal-body" style="padding: 24px;">
         <div style="text-align: center; margin-bottom: 20px;">
           <div style="font-size: 18px; font-weight: 700; color: #1d4ed8;">${seller.accountName}</div>
           <div style="font-size: 13px; color: var(--gray-500);">${seller.category || ''} · ${seller.channel || ''}</div>
+        </div>
+
+        <!-- 유입경로 선택 -->
+        <div style="background: #fef3c7; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-size: 13px; font-weight: 600; color: #b45309; margin-bottom: 12px;">📍 유입경로</div>
+          <div style="display: flex; gap: 12px;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: white; border-radius: 8px; border: 2px solid ${seller.sourceChannel === 'outbound' ? '#f59e0b' : '#e5e7eb'};">
+              <input type="radio" name="sl-source-channel" value="outbound" ${seller.sourceChannel === 'outbound' ? 'checked' : ''} style="accent-color: #f59e0b;">
+              <div>
+                <div style="font-size: 13px; font-weight: 600;">🎯 아웃바운드</div>
+                <div style="font-size: 11px; color: #6b7684;">직접 발굴/제안</div>
+              </div>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: white; border-radius: 8px; border: 2px solid ${seller.sourceChannel === 'inbound' ? '#f59e0b' : '#e5e7eb'};">
+              <input type="radio" name="sl-source-channel" value="inbound" ${seller.sourceChannel === 'inbound' ? 'checked' : ''} style="accent-color: #f59e0b;">
+              <div>
+                <div style="font-size: 13px; font-weight: 600;">📥 인바운드</div>
+                <div style="font-size: 11px; color: #6b7684;">외부 유입/문의</div>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div style="background: #eff6ff; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
@@ -9555,7 +9578,7 @@ function showSellerListOnboardingModal(sellerId) {
         </div>
 
         <div style="display: flex; gap: 12px;">
-          <button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>
+          ${isEdit ? `<button class="btn" style="flex: 1; background: #fee2e2; color: #dc2626; border: none;" onclick="clearSellerOnboarding('${sellerId}')">온보딩 해제</button>` : `<button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>`}
           <button class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #3b82f6, #1d4ed8);" onclick="saveSellerListOnboarding('${sellerId}')">
             저장
           </button>
@@ -9568,8 +9591,11 @@ function showSellerListOnboardingModal(sellerId) {
 // 셀러리스트 온보딩 저장
 async function saveSellerListOnboarding(sellerId) {
   try {
-    await db.collection('sellerList').doc(sellerId).update({
+    const sourceChannel = document.querySelector('input[name="sl-source-channel"]:checked')?.value || '';
+
+    const updateData = {
       onboarding: true,
+      sourceChannel: sourceChannel,
       obContact: document.getElementById('sl-ob-contact')?.checked || false,
       obGuide: document.getElementById('sl-ob-guide')?.checked || false,
       obForm: document.getElementById('sl-ob-form')?.checked || false,
@@ -9578,13 +9604,56 @@ async function saveSellerListOnboarding(sellerId) {
       obNotes: document.getElementById('sl-ob-notes')?.value || '',
       updatedAt: new Date().toISOString(),
       updatedBy: getCurrentUserId()
-    });
+    };
+
+    await db.collection('sellerList').doc(sellerId).update(updateData);
+
+    // 로컬 state 업데이트
+    const idx = state.sellerList.findIndex(s => s.id === sellerId);
+    if (idx !== -1) {
+      Object.assign(state.sellerList[idx], updateData);
+      renderSellerList();
+    }
 
     showToast('🤝 온보딩 체크리스트가 저장되었습니다');
     closeModal();
   } catch(e) {
     console.error(e);
     showToast('저장에 실패했습니다');
+  }
+}
+
+// 셀러리스트 온보딩 해제
+async function clearSellerOnboarding(sellerId) {
+  if (!confirm('온보딩 상태를 해제하시겠습니까?')) return;
+
+  try {
+    const updateData = {
+      onboarding: false,
+      contacted: false,
+      obContact: false,
+      obGuide: false,
+      obForm: false,
+      obBank: false,
+      obIdCard: false,
+      updatedAt: new Date().toISOString(),
+      updatedBy: getCurrentUserId()
+    };
+
+    await db.collection('sellerList').doc(sellerId).update(updateData);
+
+    // 로컬 state 업데이트
+    const idx = state.sellerList.findIndex(s => s.id === sellerId);
+    if (idx !== -1) {
+      Object.assign(state.sellerList[idx], updateData);
+      renderSellerList();
+    }
+
+    showToast('온보딩이 해제되었습니다');
+    closeModal();
+  } catch(e) {
+    console.error(e);
+    showToast('해제에 실패했습니다');
   }
 }
 
@@ -11700,8 +11769,8 @@ async function toggleProductListField(id, field, value) {
     return;
   }
 
-  // 온보딩 체크 시 세부 체크리스트 모달 띄우기
-  if (field === 'onboarding' && value === true) {
+  // 온보딩 필드 클릭 시 항상 체크리스트 모달 띄우기 (신규/수정 모두)
+  if (field === 'onboarding') {
     showProductListOnboardingModal(id);
     return;
   }
@@ -11805,18 +11874,41 @@ function showProductListOnboardingModal(productId) {
   const product = state.productList.find(p => p.id === productId);
   if (!product) return;
 
+  const isEdit = product.onboarding || product.contacted;
+
   const m = document.getElementById('modal');
   m.className = 'modal show';
   m.innerHTML = `
     <div class="modal-content" style="max-width: 520px;">
       <div class="modal-header" style="background: linear-gradient(135deg, #22c55e, #16a34a); color: white;">
-        <h3 style="color: white;">🤝 온보딩 체크리스트</h3>
+        <h3 style="color: white;">🤝 온보딩 체크리스트 ${isEdit ? '(수정)' : ''}</h3>
         <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
       </div>
       <div class="modal-body" style="padding: 24px;">
         <div style="text-align: center; margin-bottom: 20px;">
           <div style="font-size: 18px; font-weight: 700; color: #16a34a;">${product.brandName || product.productName}</div>
           <div style="font-size: 13px; color: var(--gray-500);">${product.category || ''} · ${product.productName || ''}</div>
+        </div>
+
+        <!-- 유입경로 선택 -->
+        <div style="background: #fef3c7; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-size: 13px; font-weight: 600; color: #b45309; margin-bottom: 12px;">📍 유입경로</div>
+          <div style="display: flex; gap: 12px;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: white; border-radius: 8px; border: 2px solid ${product.sourceChannel === 'outbound' ? '#f59e0b' : '#e5e7eb'};">
+              <input type="radio" name="pl-source-channel" value="outbound" ${product.sourceChannel === 'outbound' ? 'checked' : ''} style="accent-color: #f59e0b;">
+              <div>
+                <div style="font-size: 13px; font-weight: 600;">🎯 아웃바운드</div>
+                <div style="font-size: 11px; color: #6b7684;">직접 발굴/제안</div>
+              </div>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 12px; background: white; border-radius: 8px; border: 2px solid ${product.sourceChannel === 'inbound' ? '#f59e0b' : '#e5e7eb'};">
+              <input type="radio" name="pl-source-channel" value="inbound" ${product.sourceChannel === 'inbound' ? 'checked' : ''} style="accent-color: #f59e0b;">
+              <div>
+                <div style="font-size: 13px; font-weight: 600;">📥 인바운드</div>
+                <div style="font-size: 11px; color: #6b7684;">외부 유입/문의</div>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div style="background: #f0fdf4; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
@@ -11851,7 +11943,7 @@ function showProductListOnboardingModal(productId) {
         </div>
 
         <div style="display: flex; gap: 12px;">
-          <button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>
+          ${isEdit ? `<button class="btn" style="flex: 1; background: #fee2e2; color: #dc2626; border: none;" onclick="clearProductOnboarding('${productId}')">온보딩 해제</button>` : `<button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>`}
           <button class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #22c55e, #16a34a);" onclick="saveProductListOnboarding('${productId}')">
             저장
           </button>
@@ -11864,8 +11956,11 @@ function showProductListOnboardingModal(productId) {
 // 상품리스트 온보딩 저장
 async function saveProductListOnboarding(productId) {
   try {
-    await db.collection('productList').doc(productId).update({
+    const sourceChannel = document.querySelector('input[name="pl-source-channel"]:checked')?.value || '';
+
+    const updateData = {
       onboarding: true,
+      sourceChannel: sourceChannel,
       obContact: document.getElementById('pl-ob-contact')?.checked || false,
       obGuide: document.getElementById('pl-ob-guide')?.checked || false,
       obProductInfo: document.getElementById('pl-ob-product')?.checked || false,
@@ -11874,13 +11969,56 @@ async function saveProductListOnboarding(productId) {
       obNotes: document.getElementById('pl-ob-notes')?.value || '',
       updatedAt: new Date().toISOString(),
       updatedBy: getCurrentUserId()
-    });
+    };
+
+    await db.collection('productList').doc(productId).update(updateData);
+
+    // 로컬 state 업데이트
+    const idx = state.productList.findIndex(p => p.id === productId);
+    if (idx !== -1) {
+      Object.assign(state.productList[idx], updateData);
+      renderProductList();
+    }
 
     showToast('🤝 온보딩 체크리스트가 저장되었습니다');
     closeModal();
   } catch(e) {
     console.error(e);
     showToast('저장에 실패했습니다');
+  }
+}
+
+// 상품리스트 온보딩 해제
+async function clearProductOnboarding(productId) {
+  if (!confirm('온보딩 상태를 해제하시겠습니까?')) return;
+
+  try {
+    const updateData = {
+      onboarding: false,
+      contacted: false,
+      obContact: false,
+      obGuide: false,
+      obProductInfo: false,
+      obBizLicense: false,
+      obBank: false,
+      updatedAt: new Date().toISOString(),
+      updatedBy: getCurrentUserId()
+    };
+
+    await db.collection('productList').doc(productId).update(updateData);
+
+    // 로컬 state 업데이트
+    const idx = state.productList.findIndex(p => p.id === productId);
+    if (idx !== -1) {
+      Object.assign(state.productList[idx], updateData);
+      renderProductList();
+    }
+
+    showToast('온보딩이 해제되었습니다');
+    closeModal();
+  } catch(e) {
+    console.error(e);
+    showToast('해제에 실패했습니다');
   }
 }
 
