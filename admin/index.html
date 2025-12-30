@@ -22067,7 +22067,7 @@ function renderSalesDashboardContent() {
   // 올해 데이터 필터링
   const yearDeals = allDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
   const yearSettlements = allSettlements.filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisYearStr));
-  const monthDeals = allDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisMonth));
+  const monthDeals = allDeals.filter(d => (d.endDate || '').startsWith(thisMonth));
   const monthSettlements = allSettlements.filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisMonth));
 
   // 성공 공구 계산 (isSuccess=true 또는 달성여부='성공')
@@ -22107,13 +22107,14 @@ function renderSalesDashboardContent() {
   const remainingTotalDeals = Math.max(T.requiredTotalDeals - yearDeals.length, 0);
   const weeklyNeededDeals = Math.ceil(remainingTotalDeals / Math.max(remainingWeeks, 1));
 
-  // 📅 이번 주 데이터 계산
+  // 📅 이번 주 데이터 계산 (공구 완료일 기준)
   const weekStart = new Date(now);
   weekStart.setDate(now.getDate() - now.getDay()); // 일요일 시작
   weekStart.setHours(0, 0, 0, 0);
   const thisWeekDeals = allDeals.filter(d => {
-    const dealDate = new Date(d.startDate || d.createdAt || '');
-    return dealDate >= weekStart && dealDate <= now;
+    if (!d.endDate) return false;
+    const endDate = new Date(d.endDate);
+    return endDate >= weekStart && endDate <= now;
   });
   const thisWeekSuccessDeals = thisWeekDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
 
@@ -22195,6 +22196,22 @@ function renderSalesDashboardContent() {
   });
   const topMonthSuppliers = Object.values(monthSupplierSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
   const topMonthSellers = Object.values(monthSellerSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
+
+  // 📦 상품별 판매량/매출액 TOP 계산 (cafe24 주문 데이터 기반)
+  const cafe24Orders = state.cafe24Orders || [];
+  const productSalesMap = {};
+  cafe24Orders.forEach(order => {
+    const productName = order.product_name || order.product_option || '기타';
+    const orderDate = order.order_date || order.createdAt || '';
+    if (!orderDate.startsWith(thisYearStr)) return;
+    if (!productSalesMap[productName]) {
+      productSalesMap[productName] = { name: productName, quantity: 0, sales: 0 };
+    }
+    productSalesMap[productName].quantity += Number(order.quantity) || 1;
+    productSalesMap[productName].sales += Number(order.total_amount) || 0;
+  });
+  const topProductsByQty = Object.values(productSalesMap).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
+  const topProductsBySales = Object.values(productSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 5);
 
   // 팀원별 실적 계산 (파이프라인 포함)
   const memberStats = members.filter(m => m.role !== 'ceo').map(member => {
@@ -22315,37 +22332,37 @@ function renderSalesDashboardContent() {
       <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px;">
         <!-- 연 매출 -->
         <div style="background: ${C.white}; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);">
-          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">연 매출</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">연 매출 <span title="올해 성공 공구의 총 판매금액 합계" style="cursor: help; color: ${C.gray400};">?</span></div>
           <div style="font-size: 20px; font-weight: 700; color: ${C.black};">${(totalSalesAmount / 100000000).toFixed(2)}억</div>
           <div style="background: ${C.gray100}; height: 4px; border-radius: 2px; margin-top: 8px;"><div style="background: ${getProgressColor(revenueProgress)}; height: 100%; width: ${revenueProgress}%; border-radius: 2px;"></div></div>
         </div>
         <!-- 연 순익 -->
         <div style="background: ${C.white}; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);">
-          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">연 순익</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">연 순익 <span title="매출 - 공급가 = 순수익 (수수료 수익)" style="cursor: help; color: ${C.gray400};">?</span></div>
           <div style="font-size: 20px; font-weight: 700; color: ${C.green};">${formatNumber(totalProfitAmount)}원</div>
           <div style="background: ${C.gray100}; height: 4px; border-radius: 2px; margin-top: 8px;"><div style="background: ${getProgressColor(profitProgress)}; height: 100%; width: ${profitProgress}%; border-radius: 2px;"></div></div>
         </div>
         <!-- 이번 주 -->
         <div style="background: ${weeklyProgress >= 100 ? C.greenLight : C.blueLight}; border-radius: 12px; padding: 14px;">
-          <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 6px;">📅 이번 주</div>
+          <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 6px;">📅 이번 주 <span title="공구 완료일 기준 (일요일~오늘)" style="cursor: help; color: ${C.gray400};">?</span></div>
           <div style="font-size: 20px; font-weight: 700; color: ${weeklyProgress >= 100 ? C.green : C.blue};">${thisWeekDeals.length}<span style="font-size: 12px; color: ${C.gray500};">/${weeklyTargetDeals}</span></div>
           <div style="font-size: 10px; color: ${C.gray600}; margin-top: 4px;">${weeklyProgress >= 100 ? '✅ 달성' : `${Math.max(weeklyTargetDeals - thisWeekDeals.length, 0)}건 필요`}</div>
         </div>
         <!-- 이번 달 -->
         <div style="background: ${monthlyProgress >= 100 ? C.greenLight : C.gray50}; border-radius: 12px; padding: 14px;">
-          <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 6px;">📆 이번 달</div>
+          <div style="font-size: 11px; color: ${C.gray600}; margin-bottom: 6px;">📆 이번 달 <span title="공구 완료일 기준 (1일~말일)" style="cursor: help; color: ${C.gray400};">?</span></div>
           <div style="font-size: 20px; font-weight: 700; color: ${monthlyProgress >= 100 ? C.green : C.black};">${monthDeals.length}<span style="font-size: 12px; color: ${C.gray500};">/${monthlyTargetDeals}</span></div>
           <div style="font-size: 10px; color: ${C.gray600}; margin-top: 4px;">${monthlyProgress >= 100 ? '✅ 달성' : `${Math.max(monthlyTargetDeals - monthDeals.length, 0)}건 필요`}</div>
         </div>
         <!-- 남은 목표 -->
         <div style="background: ${C.white}; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);">
-          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">남은 공구</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">남은 공구 <span title="연간 목표 ${T.requiredTotalDeals}건 - 현재 공구 수" style="cursor: help; color: ${C.gray400};">?</span></div>
           <div style="font-size: 20px; font-weight: 700; color: ${C.black};">${remainingTotalDeals}건</div>
           <div style="font-size: 10px; color: ${C.gray500}; margin-top: 4px;">주 ${weeklyNeededDeals} / 월 ${monthlyNeededDeals}</div>
         </div>
         <!-- 30% 수수료 -->
         <div style="background: ${commission30Ratio >= T.commission30Ratio ? C.greenLight : C.white}; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.04);">
-          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">30% 수수료</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">30% 수수료 <span title="수수료 30% 이상 공급사 비율" style="cursor: help; color: ${C.gray400};">?</span></div>
           <div style="font-size: 20px; font-weight: 700; color: ${commission30Ratio >= T.commission30Ratio ? C.green : C.yellow};">${commission30Ratio}%</div>
           <div style="font-size: 10px; color: ${C.gray500}; margin-top: 4px;">목표 ${T.commission30Ratio}%</div>
         </div>
@@ -22366,14 +22383,14 @@ function renderSalesDashboardContent() {
               <thead>
                 <tr style="background: ${C.gray50}; border-bottom: 2px solid ${C.gray200};">
                   <th style="padding: 14px 12px; text-align: left; font-weight: 600; color: ${C.gray700};">팀원</th>
-                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">공급사</th>
-                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">셀러</th>
-                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">연 공구</th>
-                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">이번달</th>
-                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">성공</th>
-                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">성공률</th>
-                  <th style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.gray700};">매출</th>
-                  <th style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.gray700};">순익</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">공급사 <span title="담당 공급사 수" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">셀러 <span title="담당 셀러 수" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">연 공구 <span title="올해 시작한 공구 수" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">이번달 <span title="이번 달 시작한 공구 수" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">성공 <span title="달성여부=성공인 공구 수" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">성공률 <span title="성공 공구 / 전체 공구 × 100" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.gray700};">매출 <span title="성공 공구의 판매금액 합계" style="cursor: help; color: ${C.gray400};">?</span></th>
+                  <th style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.gray700};">순익 <span title="매출 - 공급가 (수수료 수익)" style="cursor: help; color: ${C.gray400};">?</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -22433,7 +22450,7 @@ function renderSalesDashboardContent() {
         <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div style="font-size: 15px; font-weight: 700; color: ${C.black};">🏭 공급사 판매 TOP</div>
-            <a href="#" onclick="event.preventDefault(); navigateTo('suppliers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+            <a href="#" onclick="event.preventDefault(); switchTab('suppliers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
           </div>
 
           <!-- 이번 달 TOP 3 -->
@@ -22473,7 +22490,7 @@ function renderSalesDashboardContent() {
         <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div style="font-size: 15px; font-weight: 700; color: ${C.black};">👤 셀러 판매 TOP</div>
-            <a href="#" onclick="event.preventDefault(); navigateTo('sellers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+            <a href="#" onclick="event.preventDefault(); switchTab('sellers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
           </div>
 
           <!-- 이번 달 TOP 3 -->
@@ -22507,6 +22524,47 @@ function renderSalesDashboardContent() {
               </div>
             `).join('')}
           </div>
+        </div>
+      </div>
+
+      <!-- 📦 상품 TOP (판매량/매출액) -->
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 20px;">
+        <!-- 판매량 TOP -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: ${C.black};">📦 판매량 TOP</div>
+            <a href="#" onclick="event.preventDefault(); switchTab('cafe24Orders');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+          </div>
+          ${topProductsByQty.length === 0 ? `
+            <div style="text-align: center; padding: 24px; color: ${C.gray400}; font-size: 13px;">주문 데이터 없음</div>
+          ` : topProductsByQty.map((p, i) => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; ${i < topProductsByQty.length - 1 ? `border-bottom: 1px solid ${C.gray100};` : ''}">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: ${i < 3 ? '#8B5CF6' : C.gray200}; color: ${i < 3 ? 'white' : C.gray600}; border-radius: 50%; font-size: 11px; font-weight: 700;">${i + 1}</span>
+                <span style="font-size: 13px; color: ${C.gray800}; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${p.name}</span>
+              </div>
+              <span style="font-weight: 700; color: #8B5CF6; font-size: 13px;">${formatNumber(p.quantity)}개</span>
+            </div>
+          `).join('')}
+        </div>
+
+        <!-- 매출액 TOP -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: ${C.black};">💰 매출액 TOP</div>
+            <a href="#" onclick="event.preventDefault(); switchTab('cafe24Orders');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+          </div>
+          ${topProductsBySales.length === 0 ? `
+            <div style="text-align: center; padding: 24px; color: ${C.gray400}; font-size: 13px;">주문 데이터 없음</div>
+          ` : topProductsBySales.map((p, i) => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; ${i < topProductsBySales.length - 1 ? `border-bottom: 1px solid ${C.gray100};` : ''}">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: ${i < 3 ? '#059669' : C.gray200}; color: ${i < 3 ? 'white' : C.gray600}; border-radius: 50%; font-size: 11px; font-weight: 700;">${i + 1}</span>
+                <span style="font-size: 13px; color: ${C.gray800}; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${p.name}</span>
+              </div>
+              <span style="font-weight: 700; color: #059669; font-size: 13px;">${formatNumber(p.sales)}원</span>
+            </div>
+          `).join('')}
         </div>
       </div>
 
