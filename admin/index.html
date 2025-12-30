@@ -21999,22 +21999,28 @@ async function saveMyPassword(e) {
 }
 
 // ==================== 영업 현황 대시보드 ====================
-// 전략기획 연동 - 2026년 목표치 (성공률 반영)
-const SALES_TARGET = {
-  annualRevenue: 500000000,       // 연간 목표 매출: 5억원
-  successRate: 30,                 // 목표 성공률: 30%
-  avgDealRevenue: 4630000,         // 성공 공구당 평균 매출: 463만원
-  targetSuccessDeals: 108,         // 연간 성공 공구 목표: 108건
-  // 성공률 30% 반영 시 필요 전체 공구 = 108 / 0.3 = 360건
-  get requiredTotalDeals() { return Math.ceil(this.targetSuccessDeals / (this.successRate / 100)); },
-  get monthlyRequiredDeals() { return Math.ceil(this.requiredTotalDeals / 12); },
-  get weeklyRequiredDeals() { return Math.ceil(this.requiredTotalDeals / 52); },
-  monthlyProfit: 4000000,          // 월 목표 순익: 400만원
-  annualProfit: 48000000,          // 연 목표 순익: 4,800만원
-  commission30Ratio: 70,           // 30% 수수료 비중 목표: 70%
-  monthlyNewSuppliers: 3,          // 월 신규 공급사: 2-3개
-  monthlyNewSellers: 15            // 월 신규 셀러: 10-15명
-};
+// 🎯 전략기획 통합 목표치 (영업현황 + 전략기획 공유)
+// 이 값은 전략설정에서 수정 가능하며, 전략기획과 영업현황 모두 이 값을 참조합니다.
+function getStrategyTarget() {
+  // Firebase에서 저장된 설정이 있으면 우선 사용
+  const saved = state.strategyData || {};
+  return {
+    annualRevenue: saved.annualRevenue || 500000000,         // 연간 목표 매출: 5억원
+    successRate: saved.successRate || 30,                    // 목표 성공률: 30%
+    avgDealRevenue: saved.avgDealRevenue || 4630000,         // 성공 공구당 평균 매출: 463만원
+    targetSuccessDeals: saved.targetSuccessDeals || 108,     // 연간 성공 공구 목표: 108건
+    monthlySuccessDeals: saved.monthlySuccessDeals || 9,     // 월간 성공 공구 목표: 9건
+    monthlyProfit: saved.monthlyProfit || 4000000,           // 월 목표 순익: 400만원
+    annualProfit: saved.annualProfit || 48000000,            // 연 목표 순익: 4,800만원
+    commission30Ratio: saved.commission30Ratio || 70,        // 30% 수수료 비중 목표: 70%
+    monthlyNewSuppliers: saved.monthlyNewSuppliers || 3,     // 월 신규 공급사: 2-3개
+    monthlyNewSellers: saved.monthlyNewSellers || 15,        // 월 신규 셀러: 10-15명
+    // 성공률 반영 계산 (getter)
+    get requiredTotalDeals() { return Math.ceil(this.targetSuccessDeals / (this.successRate / 100)); },
+    get monthlyRequiredDeals() { return Math.ceil(this.requiredTotalDeals / 12); },
+    get weeklyRequiredDeals() { return Math.ceil(this.requiredTotalDeals / 52); }
+  };
+}
 
 function renderSalesDashboard() {
   const app = document.getElementById('app');
@@ -22082,8 +22088,8 @@ function renderSalesDashboardContent() {
   const completedDeals = yearDeals.filter(d => d.status === 'completed' || d.isSuccess !== undefined || d.달성여부);
   const currentSuccessRate = completedDeals.length > 0 ? Math.round((successfulDeals.length / completedDeals.length) * 100) : 0;
 
-  // 목표 대비 진행률 계산 (성공률 30% 반영)
-  const T = SALES_TARGET;
+  // 목표 대비 진행률 계산 (성공률 반영, 전략기획 연동)
+  const T = getStrategyTarget();
   const revenueProgress = Math.min(100, Math.round((totalSalesAmount / T.annualRevenue) * 100));
   const profitProgress = Math.min(100, Math.round((totalProfitAmount / T.annualProfit) * 100));
   const successDealsProgress = Math.min(100, Math.round((successfulDeals.length / T.targetSuccessDeals) * 100));
@@ -30635,21 +30641,16 @@ async function loadStrategy2026Data() {
 function renderStrategy2026Content(data) {
   var content = document.getElementById('strategy2026-content');
 
-  // 목표 설정
-  var TARGET = {
-    annualRevenue: 500000000, // 5억
-    monthlyDeals: 9,
-    annualDeals: 108,
-    commission30Ratio: 70, // 70%
-    avgDealRevenue: 4630000, // 463만원
-    monthlyProfit: 4000000 // 375~450만 평균
-  };
+  // 🎯 전략기획 통합 목표치 사용 (영업현황과 동기화)
+  var TARGET = getStrategyTarget();
 
   // 진행률 계산
   var revenueProgress = Math.min(100, Math.round((data.annualRevenue / TARGET.annualRevenue) * 100));
-  var dealsProgress = Math.min(100, Math.round((data.deals2026.length / TARGET.annualDeals) * 100));
+  var dealsProgress = Math.min(100, Math.round((data.deals2026.length / TARGET.targetSuccessDeals) * 100));
   var commission30Progress = Math.min(100, Math.round((data.commission30Ratio / TARGET.commission30Ratio) * 100));
-  var thisMonthDealsProgress = Math.min(100, Math.round((data.dealsThisMonth.length / TARGET.monthlyDeals) * 100));
+  var thisMonthDealsProgress = Math.min(100, Math.round((data.dealsThisMonth.length / TARGET.monthlySuccessDeals) * 100));
+  // 성공률 반영 필요 전체 공구 진행률
+  var requiredDealsProgress = Math.min(100, Math.round((data.deals2026.length / TARGET.requiredTotalDeals) * 100));
 
   var html = '';
 
@@ -30665,20 +30666,20 @@ function renderStrategy2026Content(data) {
   html += '<div style="background: white; height: 100%; width: ' + revenueProgress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
 
-  // 연간 공구
+  // 연간 공구 (성공률 반영)
   html += '<div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
-  html += '<div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">연간 공구</div>';
+  html += '<div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">연간 공구 (성공률 ' + TARGET.successRate + '% 반영)</div>';
   html += '<div style="font-size: 28px; font-weight: 800; color: var(--gray-900);">' + data.deals2026.length + '건</div>';
-  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">목표 108건 대비 ' + dealsProgress + '%</div>';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">필요 ' + TARGET.requiredTotalDeals + '건 대비 ' + requiredDealsProgress + '% (성공 목표 ' + TARGET.targetSuccessDeals + '건)</div>';
   html += '<div style="background: var(--gray-200); height: 6px; border-radius: 3px; margin-top: 12px;">';
-  html += '<div style="background: var(--primary); height: 100%; width: ' + dealsProgress + '%; border-radius: 3px;"></div>';
+  html += '<div style="background: var(--primary); height: 100%; width: ' + requiredDealsProgress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
 
-  // 이번 달 공구
+  // 이번 달 공구 (성공률 반영)
   html += '<div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">';
   html += '<div style="font-size: 13px; color: var(--gray-500); margin-bottom: 8px;">이번 달 공구</div>';
   html += '<div style="font-size: 28px; font-weight: 800; color: var(--gray-900);">' + data.dealsThisMonth.length + '건</div>';
-  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">목표 9건 대비 ' + thisMonthDealsProgress + '%</div>';
+  html += '<div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">필요 ' + TARGET.monthlyRequiredDeals + '건 (성공 목표 ' + TARGET.monthlySuccessDeals + '건)</div>';
   html += '<div style="background: var(--gray-200); height: 6px; border-radius: 3px; margin-top: 12px;">';
   html += '<div style="background: ' + (thisMonthDealsProgress >= 100 ? 'var(--success)' : 'var(--info)') + '; height: 100%; width: ' + thisMonthDealsProgress + '%; border-radius: 3px;"></div>';
   html += '</div></div>';
