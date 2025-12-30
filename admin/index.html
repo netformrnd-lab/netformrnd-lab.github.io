@@ -21999,10 +21999,26 @@ async function saveMyPassword(e) {
 }
 
 // ==================== 영업 현황 대시보드 ====================
+// 전략기획 연동 - 2026년 목표치 (성공률 반영)
+const SALES_TARGET = {
+  annualRevenue: 500000000,       // 연간 목표 매출: 5억원
+  successRate: 30,                 // 목표 성공률: 30%
+  avgDealRevenue: 4630000,         // 성공 공구당 평균 매출: 463만원
+  targetSuccessDeals: 108,         // 연간 성공 공구 목표: 108건
+  // 성공률 30% 반영 시 필요 전체 공구 = 108 / 0.3 = 360건
+  get requiredTotalDeals() { return Math.ceil(this.targetSuccessDeals / (this.successRate / 100)); },
+  get monthlyRequiredDeals() { return Math.ceil(this.requiredTotalDeals / 12); },
+  get weeklyRequiredDeals() { return Math.ceil(this.requiredTotalDeals / 52); },
+  monthlyProfit: 4000000,          // 월 목표 순익: 400만원
+  annualProfit: 48000000,          // 연 목표 순익: 4,800만원
+  commission30Ratio: 70,           // 30% 수수료 비중 목표: 70%
+  monthlyNewSuppliers: 3,          // 월 신규 공급사: 2-3개
+  monthlyNewSellers: 15            // 월 신규 셀러: 10-15명
+};
+
 function renderSalesDashboard() {
   const app = document.getElementById('app');
-  
-  // 초기 로딩 표시
+
   app.innerHTML = `
     <div style="background: #F2F4F6; min-height: 100vh; margin: -24px; padding: 24px;">
       <div style="text-align: center; padding: 60px;">
@@ -22011,206 +22027,130 @@ function renderSalesDashboard() {
       </div>
     </div>
   `;
-  
-  loadSalesDashboardWithOKR();
+
+  loadSalesDashboardData();
 }
 
-async function loadSalesDashboardWithOKR() {
+async function loadSalesDashboardData() {
   try {
-    // OKR 데이터 가져오기
-    const currentQuarter = getQuarter();
-    const quarterKey = currentQuarter.year + '-Q' + currentQuarter.quarter;
-    
-    const okrSnapshot = await db.collection('okrs').where('quarter', '==', quarterKey).get();
-    const okrList = [];
-    okrSnapshot.forEach(doc => {
-      okrList.push({ id: doc.id, ...doc.data() });
-    });
-    
-    // 실제 데이터 계산
-    const allSettlements = state.sellerSettlements || [];
-    const actualData = {
-      sales: allSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0),
-      profit: allSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0),
-      dealCount: state.deals?.length || 0,
-      sellerCount: state.sellers?.length || 0,
-      supplierCount: state.suppliers?.length || 0,
-      orderCount: allSettlements.reduce((sum, s) => {
-        const items = s.items || [];
-        return sum + items.reduce((qSum, item) => qSum + (Number(item.quantity) || 0), 0);
-      }, 0)
-    };
-    
-    // 영업 관련 KR만 필터링 + 실제 데이터 연동
-    const salesKRs = [];
-    okrList.forEach(okr => {
-      if (okr.keyResults) {
-        okr.keyResults.forEach(kr => {
-          if (kr.type && kr.type !== 'manual') {
-            // 타입별로 실제 데이터 자동 매핑
-            let actualValue = kr.actual || 0;
-            if (kr.type === 'sales') actualValue = actualData.sales;
-            else if (kr.type === 'profit') actualValue = actualData.profit;
-            else if (kr.type === 'dealCount') actualValue = actualData.dealCount;
-            else if (kr.type === 'sellerCount') actualValue = actualData.sellerCount;
-            else if (kr.type === 'supplierCount') actualValue = actualData.supplierCount;
-            else if (kr.type === 'orderCount') actualValue = actualData.orderCount;
-            
-            salesKRs.push({
-              ...kr,
-              actual: actualValue,
-              okrId: okr.id,
-              okrObjective: okr.objective,
-              memberId: okr.memberId
-            });
-          }
-        });
-      }
-    });
-    
-    renderSalesDashboardContent(salesKRs, quarterKey);
+    renderSalesDashboardContent();
   } catch (error) {
     console.error('영업현황 로드 오류:', error);
-    renderSalesDashboardContent([], '');
+    document.getElementById('app').innerHTML = '<div style="text-align: center; padding: 60px; color: #F04452;">데이터 로드 오류</div>';
   }
 }
 
-function renderSalesDashboardContent(salesKRs, quarterKey) {
+function renderSalesDashboardContent() {
   const app = document.getElementById('app');
   const members = state.teamMembers || [];
   const currentUser = state.currentUser || {};
   const isAdmin = currentUser.role === 'admin';
-  
-  // 사이드바 프로필 업데이트
+
   updateSidebarUserProfile();
-  
-  // 목표 데이터 가져오기
-  const goals = state.salesGoals || {};
-  
-  // 미배정 데이터 집계
-  const unassignedSuppliers = state.suppliers.filter(s => !s.registeredBy);
-  const unassignedSellers = state.sellers.filter(s => !s.registeredBy);
-  const unassignedDeals = state.deals.filter(d => !d.registeredBy);
-  
-  // 이번달/전월 기준
+
+  // 날짜 기준
   const now = new Date();
+  const currentYear = now.getFullYear();
   const thisMonth = now.toISOString().slice(0, 7);
-  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const lastMonth = lastMonthDate.toISOString().slice(0, 7);
-  
+  const thisYearStr = String(currentYear);
+
   // 정산 데이터
   const allSettlements = state.sellerSettlements || [];
-  
-  // 팀원별 실적 계산 (판매건수, 매출, 순수익 포함)
-  const memberStats = members.map(member => {
-    // 담당자로 등록된 항목
-    const suppliers = state.suppliers.filter(s => s.registeredBy === member.id);
-    const sellers = state.sellers.filter(s => s.registeredBy === member.id);
-    const deals = state.deals.filter(d => d.registeredBy === member.id);
-    
-    // 이번 달 / 전월 입점
-    const monthlySuppliers = suppliers.filter(s => s.createdAt?.startsWith(thisMonth));
-    const monthlySellers = sellers.filter(s => s.createdAt?.startsWith(thisMonth));
-    const monthlyDeals = deals.filter(d => d.createdAt?.startsWith(thisMonth));
-    
-    const lastMonthSuppliers = suppliers.filter(s => s.createdAt?.startsWith(lastMonth));
-    const lastMonthSellers = sellers.filter(s => s.createdAt?.startsWith(lastMonth));
-    const lastMonthDeals = deals.filter(d => d.createdAt?.startsWith(lastMonth));
-    
-    // 담당 셀러 이름 목록
-    const sellerNames = sellers.map(s => s.name).filter(Boolean);
-    
-    // 정산 데이터 연동 (담당 셀러들의 정산 데이터)
-    const memberSettlements = allSettlements.filter(s => {
-      // 1. registeredBy로 직접 연결
+  const allDeals = state.deals || [];
+
+  // 올해 데이터 필터링
+  const yearDeals = allDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
+  const yearSettlements = allSettlements.filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisYearStr));
+  const monthDeals = allDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisMonth));
+  const monthSettlements = allSettlements.filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisMonth));
+
+  // 성공 공구 계산 (isSuccess=true 또는 달성여부='성공')
+  const successfulDeals = yearDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
+  const monthSuccessfulDeals = monthDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
+
+  // 30% 수수료 공구
+  const deals30Percent = yearDeals.filter(d => Number(d.commissionRate || d.supplierCommission || 0) >= 30);
+  const commission30Ratio = yearDeals.length > 0 ? Math.round((deals30Percent.length / yearDeals.length) * 100) : 0;
+
+  // 전체 통계
+  const totalSalesAmount = yearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const totalProfitAmount = yearSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+  const monthSalesAmount = monthSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const monthProfitAmount = monthSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+
+  // 현재 성공률 (성공 공구 / 종료된 공구)
+  const completedDeals = yearDeals.filter(d => d.status === 'completed' || d.isSuccess !== undefined || d.달성여부);
+  const currentSuccessRate = completedDeals.length > 0 ? Math.round((successfulDeals.length / completedDeals.length) * 100) : 0;
+
+  // 목표 대비 진행률 계산 (성공률 30% 반영)
+  const T = SALES_TARGET;
+  const revenueProgress = Math.min(100, Math.round((totalSalesAmount / T.annualRevenue) * 100));
+  const profitProgress = Math.min(100, Math.round((totalProfitAmount / T.annualProfit) * 100));
+  const successDealsProgress = Math.min(100, Math.round((successfulDeals.length / T.targetSuccessDeals) * 100));
+  const totalDealsProgress = Math.min(100, Math.round((yearDeals.length / T.requiredTotalDeals) * 100));
+  const commission30Progress = Math.min(100, Math.round((commission30Ratio / T.commission30Ratio) * 100));
+
+  // 남은 기간 계산
+  const yearEnd = new Date(currentYear, 11, 31);
+  const remainingDays = Math.ceil((yearEnd - now) / (1000 * 60 * 60 * 24));
+  const remainingWeeks = Math.ceil(remainingDays / 7);
+  const remainingMonths = 12 - now.getMonth();
+
+  // 남은 목표 계산
+  const remainingSuccessDeals = Math.max(T.targetSuccessDeals - successfulDeals.length, 0);
+  const remainingTotalDeals = Math.max(T.requiredTotalDeals - yearDeals.length, 0);
+  const weeklyNeededDeals = Math.ceil(remainingTotalDeals / Math.max(remainingWeeks, 1));
+  const monthlyNeededDeals = Math.ceil(remainingTotalDeals / Math.max(remainingMonths, 1));
+
+  // 팀원별 실적 계산
+  const memberStats = members.filter(m => m.role !== 'ceo').map(member => {
+    const mSuppliers = state.suppliers.filter(s => s.registeredBy === member.id);
+    const mSellers = state.sellers.filter(s => s.registeredBy === member.id);
+    const mDeals = allDeals.filter(d => d.registeredBy === member.id);
+    const mYearDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
+    const mMonthDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisMonth));
+    const mSuccessDeals = mYearDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
+
+    const sellerNames = mSellers.map(s => s.name).filter(Boolean);
+    const mSettlements = allSettlements.filter(s => {
       if (s.registeredBy === member.id) return true;
-      // 2. 담당 셀러 이름으로 연결
-      const settlementSellerName = s.sellerName || '';
-      return sellerNames.some(name => {
-        if (!name) return false;
-        const namePart = name.split('/')[0];
-        return settlementSellerName.includes(namePart) || settlementSellerName.includes(name);
-      });
+      const sName = s.sellerName || '';
+      return sellerNames.some(name => name && (sName.includes(name.split('/')[0]) || sName.includes(name)));
     });
-    
-    // 이번달/전월 정산
-    const thisMonthSettlements = memberSettlements.filter(s => {
-      const dateStr = s.settlementDate || s.createdAt || '';
-      return dateStr.startsWith(thisMonth) || dateStr.includes(thisMonth.replace('-', '.'));
-    });
-    const lastMonthSettlements = memberSettlements.filter(s => {
-      const dateStr = s.settlementDate || s.createdAt || '';
-      return dateStr.startsWith(lastMonth) || dateStr.includes(lastMonth.replace('-', '.'));
-    });
-    
-    // 매출 집계
-    const totalSales = memberSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-    const totalProfit = memberSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
-    
-    // 실제 판매 수량 합계 (정산의 items에서 quantity 합산)
-    const totalQuantity = memberSettlements.reduce((sum, s) => {
-      const items = s.items || [];
-      return sum + items.reduce((qSum, item) => qSum + (Number(item.quantity) || 0), 0);
-    }, 0);
-    
-    const thisMonthSales = thisMonthSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-    const thisMonthProfit = thisMonthSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
-    
-    // 성공률 계산 (공구설계 달성률)
-    // 성공 = 달성여부가 '성공'이거나 isSuccess가 true인 공구
-    const successfulDeals = deals.filter(d => d.isSuccess === true || d.달성여부 === '성공' || d.status === 'completed').length;
-    const totalDealsForRate = deals.filter(d => d.status === 'completed' || d.status === 'cancelled' || d.isSuccess !== undefined || d.달성여부).length;
-    const memberSuccessRate = totalDealsForRate > 0 ? Math.round((successfulDeals / totalDealsForRate) * 100) : 0;
+
+    const mYearSettlements = mSettlements.filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisYearStr));
+    const totalSales = mYearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+    const totalProfit = mYearSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+
+    const mCompletedDeals = mYearDeals.filter(d => d.status === 'completed' || d.isSuccess !== undefined || d.달성여부);
+    const mSuccessRate = mCompletedDeals.length > 0 ? Math.round((mSuccessDeals.length / mCompletedDeals.length) * 100) : 0;
 
     return {
       ...member,
-      totalSuppliers: suppliers.length,
-      totalSellers: sellers.length,
-      totalDeals: deals.length,
-      monthlySuppliers: monthlySuppliers.length,
-      monthlySellers: monthlySellers.length,
-      monthlyDeals: monthlyDeals.length,
-      lastMonthSuppliers: lastMonthSuppliers.length,
-      lastMonthSellers: lastMonthSellers.length,
-      lastMonthDeals: lastMonthDeals.length,
-      salesCount: memberSettlements.length,
-      totalQuantity,  // 실제 판매 수량
-      thisMonthSalesCount: thisMonthSettlements.length,
-      totalSales,
-      totalProfit,
-      thisMonthSales,
-      thisMonthProfit,
-      successfulDeals,
-      memberSuccessRate
+      suppliers: mSuppliers.length,
+      sellers: mSellers.length,
+      yearDeals: mYearDeals.length,
+      monthDeals: mMonthDeals.length,
+      successDeals: mSuccessDeals.length,
+      successRate: mSuccessRate,
+      sales: totalSales,
+      profit: totalProfit
     };
   });
-  
-  // 전체 통계
-  const totalSupplierCount = state.suppliers.length;
-  const totalSellerCount = state.sellers.length;
-  const totalDealCount = state.deals.length;
-  const totalSalesCount = allSettlements.length;
-  const totalSalesAmount = allSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const totalProfitAmount = allSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
-  
-  // 전체 판매 수량 (성공률 계산용)
-  const totalQuantityAll = allSettlements.reduce((sum, s) => {
-    const items = s.items || [];
-    return sum + items.reduce((qSum, item) => qSum + (Number(item.quantity) || 0), 0);
-  }, 0);
-  const expectedSalesAll = totalDealCount * 300;
-  const teamSuccessRate = expectedSalesAll > 0 ? ((totalQuantityAll / expectedSalesAll) * 100).toFixed(1) : '0.0';
-  
-  // 목표 달성률 계산 (소수점 1자리)
-  const calcRate = (current, goal) => goal > 0 ? Math.min((current / goal) * 100, 100).toFixed(3) : '0.000';
-  const calcRateNum = (current, goal) => goal > 0 ? Math.min((current / goal) * 100, 100) : 0;
-  
-  // 토스 컬러 팔레트
-  const tossColors = {
+
+  // 컬러
+  const C = {
+    primary: '#fc9600',
     blue: '#0064FF',
-    blueDark: '#0050CC',
     blueLight: '#E8F3FF',
+    green: '#00C471',
+    greenLight: '#E8F8F0',
+    red: '#F04452',
+    redLight: '#FEE2E4',
+    yellow: '#F59E0B',
+    yellowLight: '#FEF3C7',
     black: '#191F28',
+    gray900: '#191F28',
     gray700: '#333D4B',
     gray600: '#4E5968',
     gray500: '#6B7684',
@@ -22219,738 +22159,246 @@ function renderSalesDashboardContent(salesKRs, quarterKey) {
     gray200: '#D1D6DB',
     gray100: '#E5E8EB',
     gray50: '#F2F4F6',
-    white: '#FFFFFF',
-    green: '#00C471',
-    red: '#F04452',
-    yellow: '#FFC107'
+    white: '#FFFFFF'
   };
-  
+
+  // 진행 상태 색상
+  const getProgressColor = (progress) => progress >= 80 ? C.green : progress >= 50 ? C.yellow : C.red;
+  const getProgressBg = (progress) => progress >= 80 ? C.greenLight : progress >= 50 ? C.yellowLight : C.redLight;
+
   app.innerHTML = `
-    <div style="background: ${tossColors.gray50}; min-height: 100vh; margin: -24px; padding: 24px;">
+    <div style="background: ${C.gray50}; min-height: 100vh; margin: -24px; padding: 24px;">
+
       <!-- 헤더 -->
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
         <div>
-          <h1 style="font-size: 26px; font-weight: 700; color: ${tossColors.black}; margin: 0;">영업현황</h1>
-          <p style="color: ${tossColors.gray500}; margin-top: 8px; font-size: 15px;">팀원별 입점, 매출 성과를 확인합니다.</p>
+          <h1 style="font-size: 26px; font-weight: 700; color: ${C.black}; margin: 0;">영업현황</h1>
+          <p style="color: ${C.gray500}; margin-top: 6px; font-size: 14px;">${currentYear}년 목표 달성 현황 · 전략기획 연동</p>
         </div>
-        ${isAdmin ? `
-          <button onclick="openGoalCalculator()" style="
-            padding: 12px 20px;
-            font-size: 14px;
-            font-weight: 600;
-            background: ${tossColors.white};
-            color: ${tossColors.blue};
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: all 0.2s;
-          ">📊 공구설계 계산기</button>
-        ` : ''}
-      </div>
-
-    <!-- 팀원별 영업 성과 -->
-    <div style="background: ${tossColors.white}; border-radius: 20px; padding: 28px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-        <div>
-          <div style="font-size: 13px; font-weight: 600; color: ${tossColors.blue}; margin-bottom: 4px;">공구설계 기반</div>
-          <div style="font-size: 20px; font-weight: 700; color: ${tossColors.black};">팀원별 영업 성과</div>
-        </div>
-        ${state.strategyData ? `
-        <div style="padding: 8px 14px; background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 8px; display: flex; align-items: center; gap: 6px;">
-          <span style="font-size: 12px;">🎯</span>
-          <span style="font-size: 11px; color: #92400e; font-weight: 500;">전략기획 연동</span>
-        </div>
-        ` : ''}
-      </div>
-
-      <!-- 팀원별 성과 카드 -->
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
-        ${memberStats.filter(m => m.role !== 'ceo').map(member => {
-          const successRateColor = member.memberSuccessRate >= 30 ? tossColors.green : member.memberSuccessRate >= 20 ? '#F59E0B' : tossColors.red;
-          const successRateBg = member.memberSuccessRate >= 30 ? '#E8F5E9' : member.memberSuccessRate >= 20 ? '#FFF8E1' : '#FFEBEE';
-          return `
-          <div style="background: ${tossColors.gray50}; border-radius: 16px; padding: 20px; border: 1px solid ${tossColors.gray100};">
-            <!-- 팀원 헤더 -->
-            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid ${tossColors.gray200};">
-              <div style="width: 40px; height: 40px; background: linear-gradient(135deg, ${tossColors.blue}, #3B82F6); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 16px;">
-                ${(member.name || member.id || '?').charAt(0)}
-              </div>
-              <div>
-                <div style="font-size: 16px; font-weight: 700; color: ${tossColors.black};">${member.name || member.id}</div>
-                <div style="font-size: 12px; color: ${tossColors.gray500};">${member.role || '팀원'}</div>
-              </div>
-              <!-- 성공률 뱃지 -->
-              <div style="margin-left: auto; background: ${successRateBg}; padding: 6px 12px; border-radius: 20px;">
-                <span style="font-size: 14px; font-weight: 700; color: ${successRateColor};">${member.memberSuccessRate}%</span>
-                <span style="font-size: 10px; color: ${tossColors.gray500}; margin-left: 2px;">성공률</span>
-              </div>
-            </div>
-
-            <!-- 주요 지표 -->
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px;">
-              <!-- 매출 -->
-              <div style="text-align: center; padding: 12px 8px; background: ${tossColors.blueLight}; border-radius: 12px;">
-                <div style="font-size: 15px; font-weight: 700; color: ${tossColors.blue};">${formatNumber(member.totalSales)}원</div>
-                <div style="font-size: 10px; color: ${tossColors.gray500}; margin-top: 4px;">매출</div>
-              </div>
-              <!-- 공구건 -->
-              <div style="text-align: center; padding: 12px 8px; background: ${tossColors.white}; border-radius: 12px; border: 1px solid ${tossColors.gray200};">
-                <div style="font-size: 15px; font-weight: 700; color: ${tossColors.black};">${member.totalDeals}건</div>
-                <div style="font-size: 10px; color: ${tossColors.gray500}; margin-top: 4px;">공구</div>
-              </div>
-              <!-- 순이익 -->
-              <div style="text-align: center; padding: 12px 8px; background: linear-gradient(135deg, ${tossColors.green}10, ${tossColors.green}20); border-radius: 12px;">
-                <div style="font-size: 15px; font-weight: 700; color: ${tossColors.green};">${formatNumber(member.totalProfit)}원</div>
-                <div style="font-size: 10px; color: ${tossColors.gray500}; margin-top: 4px;">순이익</div>
-              </div>
-            </div>
-
-            <!-- 입점 현황 -->
-            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
-              <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: ${tossColors.white}; border-radius: 10px; border: 1px solid ${tossColors.gray100};">
-                <span style="font-size: 16px;">🏭</span>
-                <div>
-                  <div style="font-size: 14px; font-weight: 600; color: ${tossColors.black};">${member.totalSuppliers}</div>
-                  <div style="font-size: 10px; color: ${tossColors.gray400};">공급사입점</div>
-                </div>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: ${tossColors.white}; border-radius: 10px; border: 1px solid ${tossColors.gray100};">
-                <span style="font-size: 16px;">🛍️</span>
-                <div>
-                  <div style="font-size: 14px; font-weight: 600; color: ${tossColors.black};">${member.totalSellers}</div>
-                  <div style="font-size: 10px; color: ${tossColors.gray400};">셀러입점</div>
-                </div>
-              </div>
-            </div>
-          </div>
-          `;
-        }).join('')}
-      </div>
-
-      <!-- 팀 전체 요약 -->
-      <div style="margin-top: 20px; padding: 20px; background: linear-gradient(135deg, ${tossColors.blue}, #3B82F6); border-radius: 16px; color: white;">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
-          <div style="text-align: center; flex: 1; min-width: 100px;">
-            <div style="font-size: 22px; font-weight: 700;">${formatNumber(totalSalesAmount)}원</div>
-            <div style="font-size: 11px; opacity: 0.9; margin-top: 4px;">총 매출</div>
-          </div>
-          <div style="text-align: center; flex: 1; min-width: 80px;">
-            <div style="font-size: 22px; font-weight: 700;">${totalDealCount}</div>
-            <div style="font-size: 11px; opacity: 0.9; margin-top: 4px;">총 공구</div>
-          </div>
-          <div style="text-align: center; flex: 1; min-width: 80px;">
-            <div style="font-size: 22px; font-weight: 700;">${teamSuccessRate}%</div>
-            <div style="font-size: 11px; opacity: 0.9; margin-top: 4px;">팀 성공률</div>
-          </div>
+        <div style="display: flex; gap: 10px;">
           ${isAdmin ? `
-          <div style="text-align: center; flex: 1; min-width: 100px;">
-            <div style="font-size: 22px; font-weight: 700;">${formatNumber(totalProfitAmount)}원</div>
-            <div style="font-size: 11px; opacity: 0.9; margin-top: 4px;">총 순이익</div>
-          </div>
+          <button onclick="openGoalCalculator()" style="padding: 10px 18px; font-size: 13px; font-weight: 600; background: ${C.white}; color: ${C.blue}; border: 1px solid ${C.gray200}; border-radius: 10px; cursor: pointer;">
+            🧮 공구설계 계산기
+          </button>
           ` : ''}
-          <div style="text-align: center; flex: 1; min-width: 80px;">
-            <div style="font-size: 22px; font-weight: 700;">${totalSupplierCount}</div>
-            <div style="font-size: 11px; opacity: 0.9; margin-top: 4px;">총 공급사</div>
-          </div>
-          <div style="text-align: center; flex: 1; min-width: 80px;">
-            <div style="font-size: 22px; font-weight: 700;">${totalSellerCount}</div>
-            <div style="font-size: 11px; opacity: 0.9; margin-top: 4px;">총 셀러</div>
-          </div>
         </div>
       </div>
-    </div>
-    
-    <!-- 주간 목표 가이드 (매주 자동 분석) -->
-    ${goals.calcParams ? (() => {
-      // 현재 날짜 기준 계산
-      const today = new Date();
-      const yearStart = new Date(today.getFullYear(), 0, 1);
-      const yearEnd = new Date(today.getFullYear(), 11, 31);
-      const dayOfWeek = today.getDay();
-      const isMonday = dayOfWeek === 1;
-      
-      // 올해 총 주수와 현재 주차
-      const totalWeeks = 52;
-      const currentWeek = Math.ceil((today - yearStart) / (7 * 24 * 60 * 60 * 1000));
-      const remainingWeeks = Math.max(totalWeeks - currentWeek, 1);
-      const remainingMonths = Math.max(12 - today.getMonth(), 1);
-      
-      // 목표 대비 남은 수치
-      const goalDeals = goals.deals || 0;
-      const remainingDeals = Math.max(goalDeals - totalDealCount, 0);
-      const weeklyNeededDeals = Math.ceil(remainingDeals / remainingWeeks);
-      const monthlyNeededDeals = Math.ceil(remainingDeals / remainingMonths);
-      
-      const goalSales = goals.salesAmount || 0;
-      const remainingSales = Math.max(goalSales - totalSalesAmount, 0);
-      const weeklyNeededSales = Math.ceil(remainingSales / remainingWeeks);
-      
-      const goalProfit = goals.profitAmount || 0;
-      const remainingProfit = Math.max(goalProfit - totalProfitAmount, 0);
-      const weeklyNeededProfit = Math.ceil(remainingProfit / remainingWeeks);
-      
-      // 달성률
-      const dealsRate = goalDeals > 0 ? Math.round((totalDealCount / goalDeals) * 100) : 0;
-      const salesRate = goalSales > 0 ? Math.round((totalSalesAmount / goalSales) * 100) : 0;
-      
-      // 상태 판단
-      const expectedDealsNow = Math.round(goalDeals * (currentWeek / totalWeeks));
-      const isOnTrack = totalDealCount >= expectedDealsNow;
-      const behindBy = expectedDealsNow - totalDealCount;
-      
-      return `
-      <div style="background: ${tossColors.white}; border-radius: 20px; padding: 28px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); ${isMonday ? `border: 2px solid ${tossColors.red};` : ''}">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+
+      <!-- 🎯 전략 목표 알림 -->
+      <div style="background: linear-gradient(135deg, ${C.primary}, #e08600); border-radius: 16px; padding: 20px 24px; margin-bottom: 20px; color: white;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
           <div>
-            <div style="font-size: 13px; font-weight: 600; color: ${isMonday ? tossColors.red : tossColors.blue}; margin-bottom: 4px;">
-              ${isMonday ? '🔔 월요일 브리핑' : '주간 가이드'}
-            </div>
-            <div style="font-size: 18px; font-weight: 700; color: ${tossColors.black};">
-              ${today.getFullYear()}년 ${currentWeek}주차
-            </div>
-            <div style="font-size: 13px; color: ${tossColors.gray500}; margin-top: 4px;">
-              남은 기간 ${remainingWeeks}주 (${remainingMonths}개월)
-            </div>
+            <div style="font-size: 13px; opacity: 0.9; margin-bottom: 4px;">🎯 ${currentYear}년 전략 목표 (성공률 ${T.successRate}% 반영)</div>
+            <div style="font-size: 20px; font-weight: 700;">연 매출 ${(T.annualRevenue / 100000000).toFixed(0)}억 · 성공 공구 ${T.targetSuccessDeals}건 · 필요 전체 공구 ${T.requiredTotalDeals}건</div>
           </div>
           <div style="text-align: right;">
-            <div style="font-size: 12px; color: ${tossColors.gray400}; margin-bottom: 4px;">현재 진행률</div>
-            <div style="font-size: 32px; font-weight: 700; color: ${isOnTrack ? tossColors.green : tossColors.red};">${dealsRate}%</div>
-          </div>
-        </div>
-        
-        ${!isOnTrack && behindBy > 0 ? `
-          <div style="background: #FEF2F2; border-radius: 12px; padding: 14px; margin-bottom: 20px;">
-            <div style="font-size: 14px; color: ${tossColors.red}; font-weight: 600;">
-              ⚠️ 예상 진도보다 ${behindBy}건 뒤처져 있어요
-            </div>
-          </div>
-        ` : isOnTrack ? `
-          <div style="background: #F0FDF4; border-radius: 12px; padding: 14px; margin-bottom: 20px;">
-            <div style="font-size: 14px; color: ${tossColors.green}; font-weight: 600;">
-              ✅ 목표 진도에 맞게 진행되고 있어요
-            </div>
-          </div>
-        ` : ''}
-        
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
-          <div style="text-align: center; padding: 20px 16px; background: ${tossColors.blue}; border-radius: 16px; color: white;">
-            <div style="font-size: 32px; font-weight: 700;">${weeklyNeededDeals}</div>
-            <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">주간 필요 공구건</div>
-          </div>
-          <div style="text-align: center; padding: 20px 16px; background: ${tossColors.gray50}; border-radius: 16px;">
-            <div style="font-size: 32px; font-weight: 700; color: ${tossColors.black};">${monthlyNeededDeals}</div>
-            <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">월간 필요 공구</div>
-          </div>
-          <div style="text-align: center; padding: 20px 16px; background: ${tossColors.gray50}; border-radius: 16px;">
-            <div style="font-size: 18px; font-weight: 700; color: ${tossColors.black};">${formatNumber(weeklyNeededSales)}원</div>
-            <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">주간 필요 매출</div>
-          </div>
-          <div style="text-align: center; padding: 20px 16px; background: ${tossColors.gray50}; border-radius: 16px;">
-            <div style="font-size: 18px; font-weight: 700; color: ${tossColors.green};">${formatNumber(weeklyNeededProfit)}원</div>
-            <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">주간 필요 순익</div>
-          </div>
-        </div>
-        
-        <div style="margin-top: 20px; padding: 16px; background: ${tossColors.blueLight}; border-radius: 12px;">
-          <div style="font-size: 13px; color: ${tossColors.gray700}; line-height: 1.6;">
-            💡 <strong>이번 주 액션:</strong> 
-            공구 ${weeklyNeededDeals}건 진행 시 약 
-            <strong style="color: ${tossColors.blue};">${formatNumber(weeklyNeededDeals * goals.calcParams.salesPerDeal * goals.calcParams.marginPerItem * (goals.calcParams.successRate / 100))}원 순익</strong> 예상
+            <div style="font-size: 12px; opacity: 0.8;">남은 기간</div>
+            <div style="font-size: 24px; font-weight: 700;">${remainingMonths}개월 ${remainingDays % 30}일</div>
           </div>
         </div>
       </div>
-    `;
-    })() : ''}
-    
-    <!-- 담당자 미배정 알림 -->
-    ${(unassignedSuppliers.length + unassignedSellers.length + unassignedDeals.length) > 0 ? `
-      <div style="padding: 20px 24px; background: ${tossColors.white}; border-radius: 16px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-          <div>
-            <div style="font-weight: 600; color: ${tossColors.black}; margin-bottom: 4px;">⚠️ 담당자 미배정</div>
-            <div style="font-size: 14px; color: ${tossColors.gray500};">
-              공급사 ${unassignedSuppliers.length}건 · 셀러 ${unassignedSellers.length}건 · 공구 ${unassignedDeals.length}건
-            </div>
-          </div>
-          <div style="display: flex; gap: 8px;">
-            ${isAdmin ? `
-            <button onclick="openAssignManagerModal()" style="
-              padding: 12px 20px;
-              font-size: 14px;
-              font-weight: 600;
-              background: ${tossColors.white};
-              color: ${tossColors.blue};
-              border: 1px solid ${tossColors.blue};
-              border-radius: 12px;
-              cursor: pointer;
-            ">담당자 수정</button>
-            ` : ''}
-            <button onclick="viewAssignmentStatus()" style="
-              padding: 12px 20px;
-              font-size: 14px;
-              font-weight: 600;
-              background: ${tossColors.blue};
-              color: white;
-              border: none;
-              border-radius: 12px;
-              cursor: pointer;
-            ">${isAdmin ? '배정하기' : '배정보기'}</button>
-          </div>
-        </div>
-      </div>
-    ` : `
-      ${isAdmin ? `
-      <div style="padding: 20px 24px; background: ${tossColors.white}; border-radius: 16px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <div style="font-weight: 600; color: ${tossColors.black}; margin-bottom: 4px;">✅ 담당자 배정 완료</div>
-            <div style="font-size: 14px; color: ${tossColors.gray500};">모든 데이터에 담당자가 배정되어 있습니다.</div>
-          </div>
-          <button onclick="openAssignManagerModal()" style="
-            padding: 12px 20px;
-            font-size: 14px;
-            font-weight: 600;
-            background: ${tossColors.white};
-            color: ${tossColors.blue};
-            border: 1px solid ${tossColors.blue};
-            border-radius: 12px;
-            cursor: pointer;
-          ">담당자 수정</button>
-        </div>
-      </div>
-      ` : ''}
-    `}
-    
-    ${(() => {
-      // 로그인한 사용자 찾기
-      const currentMember = memberStats.find(m => m.id === currentUser?.odiyaId || m.loginId === currentUser?.loginId);
-      let otherMembers = memberStats.filter(m => m.id !== currentMember?.id);
-      
-      // 저장된 순서 적용
-      const savedOrder = JSON.parse(localStorage.getItem('memberCardOrder') || '[]');
-      if (savedOrder.length > 0) {
-        otherMembers = otherMembers.sort((a, b) => {
-          const aIdx = savedOrder.indexOf(a.id);
-          const bIdx = savedOrder.indexOf(b.id);
-          if (aIdx === -1 && bIdx === -1) return 0;
-          if (aIdx === -1) return 1;
-          if (bIdx === -1) return -1;
-          return aIdx - bIdx;
-        });
-      }
-      
-      // 멤버 카드 생성 함수
-      const renderMemberCard = (m, isMe = false) => {
-        const supplierDiff = m.monthlySuppliers - m.lastMonthSuppliers;
-        const sellerDiff = m.monthlySellers - m.lastMonthSellers;
-        const dealDiff = m.monthlyDeals - m.lastMonthDeals;
-        const mGoal = (state.memberGoals || {})[m.id] || {};
-        const hasGoal = mGoal.suppliers || mGoal.sellers || mGoal.deals || mGoal.salesAmount;
-        
-        // 개인 주간 가이드 계산
-        const today = new Date();
-        const yearStart = new Date(today.getFullYear(), 0, 1);
-        const totalWeeks = 52;
-        const currentWeek = Math.ceil((today - yearStart) / (7 * 24 * 60 * 60 * 1000));
-        const remainingWeeks = Math.max(totalWeeks - currentWeek, 1);
-        
-        const memberRemainingDeals = hasGoal && mGoal.deals ? Math.max(mGoal.deals - m.totalDeals, 0) : 0;
-        const memberWeeklyNeededDeals = Math.ceil(memberRemainingDeals / remainingWeeks);
-        const memberRemainingProfit = hasGoal && mGoal.profitAmount ? Math.max(mGoal.profitAmount - m.totalProfit, 0) : 0;
-        const memberWeeklyNeededProfit = Math.ceil(memberRemainingProfit / remainingWeeks);
-        
-        // 성공률 계산 (실제 판매수량 / (공구수 × 300))
-        const expectedSales = m.totalDeals * 300;
-        const successRate = expectedSales > 0 ? ((m.totalQuantity / expectedSales) * 100).toFixed(1) : 0;
-        
-        // AI 코칭 메시지 생성
-        let coachingMsg = '';
-        if (hasGoal && mGoal.deals) {
-          const dealsRate = mGoal.deals > 0 ? (m.totalDeals / mGoal.deals * 100) : 0;
-          const expectedProgress = (currentWeek / totalWeeks) * 100;
-          
-          if (successRate >= 30) {
-            coachingMsg = '👏 성공률 ' + successRate + '%로 우수합니다! 현재 페이스 유지하면서 공구 수를 늘려보세요.';
-          } else if (successRate >= 20) {
-            coachingMsg = '💪 성공률 ' + successRate + '%, 목표 30%까지 ' + (30 - successRate).toFixed(1) + '%p 남았어요. 셀러 팔로업에 집중해보세요.';
-          } else if (successRate >= 10) {
-            coachingMsg = '📈 성공률 ' + successRate + '%, 셀러 선정 기준을 점검해보세요. 팔로워 수와 참여율이 높은 셀러 우선!';
-          } else if (m.totalDeals > 0) {
-            coachingMsg = '🎯 성공률 ' + successRate + '%, 공구 품질 개선이 필요해요. 인기 카테고리 제품으로 전환을 고려해보세요.';
-          } else {
-            coachingMsg = '🚀 첫 공구를 시작해보세요! 주간 ' + memberWeeklyNeededDeals + '건 목표로 도전!';
-          }
-          
-          if (dealsRate < expectedProgress - 10) {
-            coachingMsg += ' ⚠️ 목표 대비 진도가 늦어요, 이번 주 집중!';
-          }
-        }
-        
-        // 목표 달성률 계산 (소수 2째자리)
-        const myGoalRate = mGoal.salesAmount && mGoal.salesAmount > 0 ? (m.totalSales / mGoal.salesAmount * 100).toFixed(2) : '0.00';
 
-        // 본인일 경우 사이드바에도 동일한 값 표시
-        if (isMe) {
-          const rateEl = document.getElementById('userGoalRate');
-          if (rateEl) rateEl.textContent = myGoalRate + '%';
-        }
-        
-        return `
-        <div style="padding: 24px; background: ${tossColors.white}; border-radius: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); ${isMe ? `border: 2px solid ${tossColors.blue};` : ''}">
-          ${isMe ? `
-          <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid ${tossColors.gray100};">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <div style="font-size: 13px; font-weight: 600; color: ${tossColors.blue}; margin-bottom: 4px;">내 실적</div>
-                <div style="font-size: 20px; font-weight: 700; color: ${tossColors.black};">오늘도 화이팅! 💪</div>
-              </div>
-              ${hasGoal ? `
-              <div style="text-align: right;">
-                <div style="font-size: 11px; color: ${tossColors.gray400}; margin-bottom: 4px;">목표 달성률</div>
-                <div style="font-size: 28px; font-weight: 700; color: ${tossColors.blue};">${myGoalRate}%</div>
-              </div>
-              ` : ''}
-            </div>
+      <!-- 📊 핵심 KPI 그리드 -->
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px;">
+
+        <!-- 연 매출 -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: ${C.gray500};">연 매출</div>
+            <div style="font-size: 12px; font-weight: 600; color: ${getProgressColor(revenueProgress)};">${revenueProgress}%</div>
           </div>
-          ` : ''}
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <div>
-                <div style="font-weight: 700; font-size: 18px; color: ${tossColors.black};">
-                  ${m.name}
-                  ${isMe ? `<span style="font-size: 11px; background: ${tossColors.blue}; color: white; padding: 3px 8px; border-radius: 6px; margin-left: 8px;">나</span>` : ''}
-                </div>
-                <div style="font-size: 13px; color: ${tossColors.gray500}; margin-top: 4px;">${m.loginId || '-'} · ${m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'guest' ? '게스트' : '일반'}</div>
-              </div>
-            </div>
-            <div style="text-align: right; font-size: 12px; color: ${tossColors.gray400};">
-              이번 달 vs 전월
-            </div>
-          </div>
-          
-          ${hasGoal && mGoal.deals ? `
-          <!-- 개인 주간 가이드 + AI 코칭 -->
-          <div style="background: ${tossColors.blueLight}; border-radius: 16px; padding: 16px; margin-bottom: 16px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div style="font-size: 13px; color: ${tossColors.blue}; font-weight: 600;">이번 주 목표</div>
-              <div style="font-size: 12px; color: ${tossColors.gray500};">남은 ${remainingWeeks}주</div>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px;">
-              <div style="text-align: center; background: ${tossColors.white}; border-radius: 12px; padding: 14px;">
-                <div style="font-size: 24px; font-weight: 700; color: ${tossColors.blue};">${memberWeeklyNeededDeals}</div>
-                <div style="font-size: 11px; color: ${tossColors.gray500}; margin-top: 4px;">주간 필요 공구건</div>
-              </div>
-              <div style="text-align: center; background: ${tossColors.white}; border-radius: 12px; padding: 14px;">
-                <div style="font-size: 18px; font-weight: 700; color: ${tossColors.green};">${formatNumber(memberWeeklyNeededProfit)}원</div>
-                <div style="font-size: 11px; color: ${tossColors.gray500}; margin-top: 4px;">주간 필요 순익</div>
-              </div>
-            </div>
-            ${coachingMsg ? `
-              <div style="margin-top: 12px; padding: 14px; background: ${tossColors.white}; border-radius: 12px;">
-                <div style="font-size: 12px; color: ${tossColors.gray700}; line-height: 1.6;">
-                  🤖 <strong style="color: ${tossColors.blue};">AI 코칭</strong> ${coachingMsg}
-                </div>
-              </div>
-            ` : ''}
-          </div>
-          ` : ''}
-          
-          <!-- 1행: 입점/등록 현황 -->
-          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px;">
-            <div style="text-align: center; padding: 16px; background: ${tossColors.gray100}; border-radius: 14px;">
-              <div style="font-size: 26px; font-weight: 700; color: ${tossColors.black};">${m.totalSuppliers}${mGoal.suppliers ? `<span style="font-size: 14px; color: ${tossColors.gray400};">/${mGoal.suppliers}</span>` : ''}</div>
-              <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">공급사</div>
-              <div style="font-size: 11px; margin-top: 6px; color: ${supplierDiff >= 0 ? tossColors.blue : tossColors.gray400};">
-                ${supplierDiff >= 0 ? '↑' : '↓'} ${Math.abs(supplierDiff)}
-              </div>
-            </div>
-            <div style="text-align: center; padding: 16px; background: ${tossColors.gray100}; border-radius: 14px;">
-              <div style="font-size: 26px; font-weight: 700; color: ${tossColors.black};">${m.totalSellers}${mGoal.sellers ? `<span style="font-size: 14px; color: ${tossColors.gray400};">/${mGoal.sellers}</span>` : ''}</div>
-              <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">셀러</div>
-              <div style="font-size: 11px; margin-top: 6px; color: ${sellerDiff >= 0 ? tossColors.blue : tossColors.gray400};">
-                ${sellerDiff >= 0 ? '↑' : '↓'} ${Math.abs(sellerDiff)}
-              </div>
-            </div>
-            <div style="text-align: center; padding: 16px; background: ${tossColors.gray100}; border-radius: 14px;">
-              <div style="font-size: 26px; font-weight: 700; color: ${tossColors.black};">${m.totalDeals}${mGoal.deals ? `<span style="font-size: 14px; color: ${tossColors.gray400};">/${mGoal.deals}</span>` : ''}</div>
-              <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">공구</div>
-              <div style="font-size: 11px; margin-top: 6px; color: ${dealDiff >= 0 ? tossColors.blue : tossColors.gray400};">
-                ${dealDiff >= 0 ? '↑' : '↓'} ${Math.abs(dealDiff)}
-              </div>
-            </div>
-          </div>
-          
-          <!-- 2행: 성공률/매출/수익 현황 -->
-          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
-            <div style="text-align: center; padding: 16px; background: ${successRate >= 30 ? '#E8F5E9' : successRate >= 20 ? '#FFF8E1' : '#FFEBEE'}; border-radius: 14px;">
-              <div style="font-size: 26px; font-weight: 700; color: ${successRate >= 30 ? tossColors.green : successRate >= 20 ? '#F59E0B' : tossColors.red};">${successRate}%</div>
-              <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">성공률</div>
-              <div style="font-size: 11px; margin-top: 6px; color: ${tossColors.gray400};">
-                ${m.totalQuantity}개 / ${expectedSales}개
-              </div>
-            </div>
-            <div style="text-align: center; padding: 16px; background: ${tossColors.blueLight}; border-radius: 14px;">
-              <div style="font-size: 18px; font-weight: 700; color: ${tossColors.blue};">${formatNumber(m.totalSales)}원</div>
-              <div style="font-size: 12px; color: ${tossColors.gray500}; margin-top: 4px;">매출</div>
-              <div style="font-size: 11px; margin-top: 6px; color: ${tossColors.gray400};">
-                이번달 ${formatNumber(m.thisMonthSales)}원
-              </div>
-            </div>
-            <div style="text-align: center; padding: 16px; background: linear-gradient(135deg, ${tossColors.blue}, #3B82F6); border-radius: 14px;">
-              <div style="font-size: 18px; font-weight: 700; color: white;">${formatNumber(m.totalProfit)}원</div>
-              <div style="font-size: 12px; color: rgba(255,255,255,0.8); margin-top: 4px;">순수익</div>
-              <div style="font-size: 11px; margin-top: 6px; color: rgba(255,255,255,0.7);">
-                이번달 ${formatNumber(m.thisMonthProfit)}원
-              </div>
-            </div>
+          <div style="font-size: 24px; font-weight: 700; color: ${C.black}; margin-bottom: 4px;">${(totalSalesAmount / 100000000).toFixed(2)}억</div>
+          <div style="font-size: 12px; color: ${C.gray400};">목표 ${(T.annualRevenue / 100000000)}억</div>
+          <div style="background: ${C.gray100}; height: 6px; border-radius: 3px; margin-top: 12px; overflow: hidden;">
+            <div style="background: ${getProgressColor(revenueProgress)}; height: 100%; width: ${revenueProgress}%; border-radius: 3px; transition: width 0.3s;"></div>
           </div>
         </div>
-        `;
-      };
-      
-      return `
-      <!-- 나의 실적 -->
-      ${currentMember ? `
-        <div style="margin-bottom: 16px;">
-          ${renderMemberCard(currentMember, true)}
-        </div>
-      ` : ''}
-      
-      <!-- 팀원별 실적 -->
-      <div style="background: ${tossColors.white}; border-radius: 20px; padding: 28px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-          <div>
-            <div style="font-size: 13px; font-weight: 600; color: ${tossColors.blue}; margin-bottom: 4px;">팀원</div>
-            <div style="font-size: 20px; font-weight: 700; color: ${tossColors.black};">팀원별 실적 <span style="font-size: 12px; color: ${tossColors.gray400}; font-weight: 400;">드래그로 순서 변경</span></div>
+
+        <!-- 연 순익 -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: ${C.gray500};">연 순익</div>
+            <div style="font-size: 12px; font-weight: 600; color: ${getProgressColor(profitProgress)};">${profitProgress}%</div>
+          </div>
+          <div style="font-size: 24px; font-weight: 700; color: ${C.green}; margin-bottom: 4px;">${formatNumber(totalProfitAmount)}원</div>
+          <div style="font-size: 12px; color: ${C.gray400};">목표 ${formatNumber(T.annualProfit)}원</div>
+          <div style="background: ${C.gray100}; height: 6px; border-radius: 3px; margin-top: 12px; overflow: hidden;">
+            <div style="background: ${getProgressColor(profitProgress)}; height: 100%; width: ${profitProgress}%; border-radius: 3px;"></div>
           </div>
         </div>
-        ${otherMembers.length === 0 ? `
-          <div style="text-align: center; padding: 60px 40px; color: ${tossColors.gray500};">
-            <div style="font-size: 48px; margin-bottom: 16px;">👥</div>
-            <p style="font-size: 15px;">다른 팀원이 없어요</p>
+
+        <!-- 성공 공구 -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: ${C.gray500};">성공 공구</div>
+            <div style="font-size: 12px; font-weight: 600; color: ${getProgressColor(successDealsProgress)};">${successDealsProgress}%</div>
           </div>
-        ` : `
-          <div id="teamMembersContainer" style="display: grid; gap: 16px;">
-            ${otherMembers.map((m, idx) => `
-              <div class="draggable-member" draggable="true" data-member-id="${m.id}" data-index="${idx}" style="cursor: grab;">
-                ${renderMemberCard(m, false)}
-              </div>
-            `).join('')}
+          <div style="font-size: 24px; font-weight: 700; color: ${C.black}; margin-bottom: 4px;">${successfulDeals.length}건</div>
+          <div style="font-size: 12px; color: ${C.gray400};">목표 ${T.targetSuccessDeals}건 (전체 ${yearDeals.length}건)</div>
+          <div style="background: ${C.gray100}; height: 6px; border-radius: 3px; margin-top: 12px; overflow: hidden;">
+            <div style="background: ${getProgressColor(successDealsProgress)}; height: 100%; width: ${successDealsProgress}%; border-radius: 3px;"></div>
           </div>
-        `}
+        </div>
+
+        <!-- 성공률 -->
+        <div style="background: ${currentSuccessRate >= T.successRate ? `linear-gradient(135deg, ${C.green}, #00a060)` : C.white}; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); ${currentSuccessRate >= T.successRate ? 'color: white;' : ''}">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <div style="font-size: 13px; ${currentSuccessRate >= T.successRate ? 'opacity: 0.9;' : `color: ${C.gray500};`}">성공률</div>
+            <div style="font-size: 12px; font-weight: 600; ${currentSuccessRate >= T.successRate ? '' : `color: ${currentSuccessRate >= T.successRate ? C.green : C.red};`}">${currentSuccessRate >= T.successRate ? '목표 달성!' : `목표 ${T.successRate}%`}</div>
+          </div>
+          <div style="font-size: 32px; font-weight: 800; margin-bottom: 4px;">${currentSuccessRate}%</div>
+          <div style="font-size: 12px; ${currentSuccessRate >= T.successRate ? 'opacity: 0.8;' : `color: ${C.gray400};`}">종료 ${completedDeals.length}건 중 ${successfulDeals.length}건 성공</div>
+        </div>
       </div>
-      `;
-    })()}
-    
-    <!-- 셀러/상품 리스트 영업 성과 -->
-    ${(() => {
-      const allSellerList = state.sellerList || [];
-      const allProductList = state.productList || [];
-      
-      // 담당자별 셀러리스트 통계
-      const listUserStats = {};
-      
-      allSellerList.forEach(s => {
-        const user = s.createdBy || '미지정';
-        if (!listUserStats[user]) {
-          listUserStats[user] = {
-            sellerRegistered: 0, sellerContacted: 0, sellerProposed: 0, sellerContracted: 0,
-            productRegistered: 0, productContacted: 0, productProposed: 0, productContracted: 0
-          };
-        }
-        listUserStats[user].sellerRegistered++;
-        if (s.contacted) listUserStats[user].sellerContacted++;
-        if (s.proposed) listUserStats[user].sellerProposed++;
-        if (s.contracted) listUserStats[user].sellerContracted++;
-      });
-      
-      allProductList.forEach(p => {
-        const user = p.createdBy || '미지정';
-        if (!listUserStats[user]) {
-          listUserStats[user] = {
-            sellerRegistered: 0, sellerContacted: 0, sellerProposed: 0, sellerContracted: 0,
-            productRegistered: 0, productContacted: 0, productProposed: 0, productContracted: 0
-          };
-        }
-        listUserStats[user].productRegistered++;
-        if (p.contacted) listUserStats[user].productContacted++;
-        if (p.proposed) listUserStats[user].productProposed++;
-        if (p.contracted) listUserStats[user].productContracted++;
-      });
-      
-      const totalListStats = {
-        sellerRegistered: allSellerList.length,
-        sellerContacted: allSellerList.filter(s => s.contacted).length,
-        sellerProposed: allSellerList.filter(s => s.proposed).length,
-        sellerContracted: allSellerList.filter(s => s.contracted).length,
-        productRegistered: allProductList.length,
-        productContacted: allProductList.filter(p => p.contacted).length,
-        productProposed: allProductList.filter(p => p.proposed).length,
-        productContracted: allProductList.filter(p => p.contracted).length
-      };
-      
-      const convRate = (from, to) => from > 0 ? ((to / from) * 100).toFixed(1) : '0';
-      
-      if (allSellerList.length === 0 && allProductList.length === 0) return '';
-      
-      return `
-      <div style="background: ${tossColors.white}; border-radius: 20px; padding: 28px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-        <div style="margin-bottom: 20px;">
-          <div style="font-size: 13px; font-weight: 600; color: #8b5cf6; margin-bottom: 4px;">탐색 영업</div>
-          <div style="font-size: 20px; font-weight: 700; color: ${tossColors.black};">셀러/상품 리스트 성과</div>
-        </div>
-        
-        <!-- 전체 퍼널 -->
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 24px;">
-          <!-- 셀러 리스트 퍼널 -->
-          <div style="padding: 20px; background: linear-gradient(135deg, #eff6ff, #dbeafe); border-radius: 16px;">
-            <h4 style="color: #1e40af; margin-bottom: 14px; font-size: 14px; font-weight: 600;">👤 셀러 리스트</h4>
-            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-              <div style="text-align: center; padding: 10px 14px; background: white; border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: #6b7280;">${totalListStats.sellerRegistered}</div>
-                <div style="font-size: 10px; color: #9ca3af;">등록</div>
-              </div>
-              <div style="color: #9ca3af; font-size: 12px;">→</div>
-              <div style="text-align: center; padding: 10px 14px; background: white; border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: #22c55e;">${totalListStats.sellerProposed}</div>
-                <div style="font-size: 10px; color: #22c55e;">제안</div>
-              </div>
-              <div style="color: #9ca3af; font-size: 12px;">→</div>
-              <div style="text-align: center; padding: 10px 14px; background: white; border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: #3b82f6;">${totalListStats.sellerContacted}</div>
-                <div style="font-size: 10px; color: #3b82f6;">컨택</div>
-              </div>
-              <div style="color: #9ca3af; font-size: 12px;">→</div>
-              <div style="text-align: center; padding: 10px 14px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: white;">${totalListStats.sellerContracted}</div>
-                <div style="font-size: 10px; color: rgba(255,255,255,0.8);">계약</div>
-              </div>
-            </div>
-            <div style="margin-top: 12px; font-size: 11px; color: #6b7280;">
-              제안률 ${convRate(totalListStats.sellerRegistered, totalListStats.sellerProposed)}% · 컨택률 ${convRate(totalListStats.sellerProposed, totalListStats.sellerContacted)}% · 계약률 ${convRate(totalListStats.sellerContacted, totalListStats.sellerContracted)}%
-            </div>
+
+      <!-- ⏰ 주간/월간 필요 액션 -->
+      <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+        <div style="font-size: 16px; font-weight: 700; color: ${C.black}; margin-bottom: 16px;">⏰ 남은 기간 필요 액션</div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <div style="text-align: center; padding: 20px; background: ${C.blueLight}; border-radius: 14px;">
+            <div style="font-size: 32px; font-weight: 800; color: ${C.blue};">${weeklyNeededDeals}</div>
+            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">주간 필요 공구</div>
           </div>
-          
-          <!-- 상품 리스트 퍼널 -->
-          <div style="padding: 20px; background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 16px;">
-            <h4 style="color: #92400e; margin-bottom: 14px; font-size: 14px; font-weight: 600;">📦 상품 리스트</h4>
-            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-              <div style="text-align: center; padding: 10px 14px; background: white; border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: #6b7280;">${totalListStats.productRegistered}</div>
-                <div style="font-size: 10px; color: #9ca3af;">등록</div>
-              </div>
-              <div style="color: #9ca3af; font-size: 12px;">→</div>
-              <div style="text-align: center; padding: 10px 14px; background: white; border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: #22c55e;">${totalListStats.productProposed}</div>
-                <div style="font-size: 10px; color: #22c55e;">제안</div>
-              </div>
-              <div style="color: #9ca3af; font-size: 12px;">→</div>
-              <div style="text-align: center; padding: 10px 14px; background: white; border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: #3b82f6;">${totalListStats.productContacted}</div>
-                <div style="font-size: 10px; color: #3b82f6;">컨택</div>
-              </div>
-              <div style="color: #9ca3af; font-size: 12px;">→</div>
-              <div style="text-align: center; padding: 10px 14px; background: linear-gradient(135deg, #22c55e, #16a34a); border-radius: 10px; min-width: 60px;">
-                <div style="font-size: 22px; font-weight: 700; color: white;">${totalListStats.productContracted}</div>
-                <div style="font-size: 10px; color: rgba(255,255,255,0.8);">계약</div>
-              </div>
-            </div>
-            <div style="margin-top: 12px; font-size: 11px; color: #6b7280;">
-              제안률 ${convRate(totalListStats.productRegistered, totalListStats.productProposed)}% · 컨택률 ${convRate(totalListStats.productProposed, totalListStats.productContacted)}% · 계약률 ${convRate(totalListStats.productContacted, totalListStats.productContracted)}%
-            </div>
+          <div style="text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 14px;">
+            <div style="font-size: 32px; font-weight: 800; color: ${C.black};">${monthlyNeededDeals}</div>
+            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">월간 필요 공구</div>
+          </div>
+          <div style="text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 14px;">
+            <div style="font-size: 32px; font-weight: 800; color: ${C.black};">${remainingTotalDeals}</div>
+            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">남은 전체 공구</div>
+          </div>
+          <div style="text-align: center; padding: 20px; background: ${C.greenLight}; border-radius: 14px;">
+            <div style="font-size: 32px; font-weight: 800; color: ${C.green};">${remainingSuccessDeals}</div>
+            <div style="font-size: 12px; color: ${C.gray600}; margin-top: 6px;">남은 성공 목표</div>
           </div>
         </div>
-        
-        <!-- 담당자별 성과 테이블 -->
-        ${Object.keys(listUserStats).length > 0 ? `
-        <div style="overflow-x: auto;">
-          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-            <thead>
-              <tr style="background: ${tossColors.gray50};">
-                <th style="padding: 12px; text-align: left; font-weight: 600; color: ${tossColors.gray700}; border-bottom: 2px solid ${tossColors.gray200};">담당자</th>
-                <th style="padding: 12px; text-align: center; font-weight: 600; color: ${tossColors.gray700}; border-bottom: 2px solid ${tossColors.gray200};" colspan="4">셀러 리스트</th>
-                <th style="padding: 12px; text-align: center; font-weight: 600; color: ${tossColors.gray700}; border-bottom: 2px solid ${tossColors.gray200};" colspan="4">상품 리스트</th>
-              </tr>
-              <tr style="background: ${tossColors.gray50};">
-                <th style="padding: 8px; text-align: left; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};"></th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">등록</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">제안</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">컨택</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">계약</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">등록</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">제안</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">컨택</th>
-                <th style="padding: 8px; text-align: center; font-weight: 500; color: ${tossColors.gray500}; border-bottom: 1px solid ${tossColors.gray200};">계약</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${Object.entries(listUserStats)
-                .sort((a, b) => (b[1].sellerContracted + b[1].productContracted) - (a[1].sellerContracted + a[1].productContracted))
-                .map(([email, stats]) => {
-                  const userName = email === '미지정' ? '미지정' : email.split('@')[0];
+        <div style="margin-top: 16px; padding: 14px; background: ${C.yellowLight}; border-radius: 10px;">
+          <div style="font-size: 13px; color: ${C.gray700};">
+            💡 <strong>성공률 ${T.successRate}% 기준:</strong>
+            주 ${weeklyNeededDeals}건 공구 → 예상 성공 ${Math.round(weeklyNeededDeals * T.successRate / 100)}건 →
+            예상 순익 <strong style="color: ${C.green};">${formatNumber(Math.round(weeklyNeededDeals * T.successRate / 100 * T.avgDealRevenue * 0.22))}원</strong>/주
+          </div>
+        </div>
+      </div>
+
+      <!-- 📋 이번 달 현황 -->
+      <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px;">
+        <div style="background: ${C.white}; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 22px; font-weight: 700; color: ${C.black};">${monthDeals.length}</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">이번달 공구</div>
+          <div style="font-size: 10px; color: ${monthDeals.length >= T.monthlyRequiredDeals ? C.green : C.red}; margin-top: 2px;">목표 ${T.monthlyRequiredDeals}건</div>
+        </div>
+        <div style="background: ${C.white}; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 22px; font-weight: 700; color: ${C.green};">${monthSuccessfulDeals.length}</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">이번달 성공</div>
+        </div>
+        <div style="background: ${C.white}; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 18px; font-weight: 700; color: ${C.blue};">${formatNumber(monthSalesAmount)}원</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">이번달 매출</div>
+        </div>
+        <div style="background: ${C.white}; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 18px; font-weight: 700; color: ${C.green};">${formatNumber(monthProfitAmount)}원</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">이번달 순익</div>
+          <div style="font-size: 10px; color: ${monthProfitAmount >= T.monthlyProfit ? C.green : C.red}; margin-top: 2px;">목표 ${formatNumber(T.monthlyProfit)}원</div>
+        </div>
+        <div style="background: ${C.white}; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 22px; font-weight: 700; color: ${commission30Ratio >= T.commission30Ratio ? C.green : C.yellow};">${commission30Ratio}%</div>
+          <div style="font-size: 11px; color: ${C.gray500}; margin-top: 4px;">30% 수수료 비중</div>
+          <div style="font-size: 10px; color: ${commission30Ratio >= T.commission30Ratio ? C.green : C.yellow}; margin-top: 2px;">목표 ${T.commission30Ratio}%</div>
+        </div>
+      </div>
+
+      <!-- 👥 팀원별 영업 성과 -->
+      <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: ${C.black};">👥 팀원별 영업 성과 (${currentYear}년)</div>
+          <div style="font-size: 12px; color: ${C.gray400};">전체 공급사 ${state.suppliers?.length || 0}개 · 셀러 ${state.sellers?.length || 0}명</div>
+        </div>
+
+        ${memberStats.length === 0 ? `
+          <div style="text-align: center; padding: 40px; color: ${C.gray500};">등록된 팀원이 없습니다.</div>
+        ` : `
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <thead>
+                <tr style="background: ${C.gray50}; border-bottom: 2px solid ${C.gray200};">
+                  <th style="padding: 14px 12px; text-align: left; font-weight: 600; color: ${C.gray700};">팀원</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">공급사</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">셀러</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">연 공구</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">이번달</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">성공</th>
+                  <th style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.gray700};">성공률</th>
+                  <th style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.gray700};">매출</th>
+                  <th style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.gray700};">순익</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${memberStats.map(m => {
+                  const rateColor = m.successRate >= 30 ? C.green : m.successRate >= 20 ? C.yellow : C.red;
+                  const rateBg = m.successRate >= 30 ? C.greenLight : m.successRate >= 20 ? C.yellowLight : C.redLight;
                   return `
-                    <tr style="border-bottom: 1px solid ${tossColors.gray100};">
-                      <td style="padding: 12px;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                          <div style="width: 28px; height: 28px; border-radius: 50%; background: ${tossColors.blueLight}; display: flex; align-items: center; justify-content: center; font-weight: 600; color: ${tossColors.blue}; font-size: 12px;">
-                            ${userName.charAt(0).toUpperCase()}
+                    <tr style="border-bottom: 1px solid ${C.gray100};">
+                      <td style="padding: 14px 12px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                          <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, ${C.blue}, #3B82F6); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 13px;">
+                            ${(m.name || m.id || '?').charAt(0)}
                           </div>
-                          <span style="font-weight: 500;">${userName}</span>
+                          <div>
+                            <div style="font-weight: 600; color: ${C.black};">${m.name || m.id}</div>
+                            <div style="font-size: 11px; color: ${C.gray400};">${m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : '팀원'}</div>
+                          </div>
                         </div>
                       </td>
-                      <td style="padding: 12px; text-align: center;">${stats.sellerRegistered}</td>
-                      <td style="padding: 12px; text-align: center; color: #22c55e; font-weight: 600;">${stats.sellerProposed}</td>
-                      <td style="padding: 12px; text-align: center; color: #3b82f6; font-weight: 600;">${stats.sellerContacted}</td>
-                      <td style="padding: 12px; text-align: center;">
-                        ${stats.sellerContracted > 0 ? `<span style="background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; padding: 4px 10px; border-radius: 12px; font-weight: 700;">${stats.sellerContracted}</span>` : '-'}
+                      <td style="padding: 14px 12px; text-align: center; font-weight: 500;">${m.suppliers}</td>
+                      <td style="padding: 14px 12px; text-align: center; font-weight: 500;">${m.sellers}</td>
+                      <td style="padding: 14px 12px; text-align: center; font-weight: 600; color: ${C.black};">${m.yearDeals}</td>
+                      <td style="padding: 14px 12px; text-align: center; color: ${C.blue}; font-weight: 600;">${m.monthDeals}</td>
+                      <td style="padding: 14px 12px; text-align: center; color: ${C.green}; font-weight: 600;">${m.successDeals}</td>
+                      <td style="padding: 14px 12px; text-align: center;">
+                        <span style="background: ${rateBg}; color: ${rateColor}; padding: 4px 10px; border-radius: 12px; font-weight: 700; font-size: 12px;">${m.successRate}%</span>
                       </td>
-                      <td style="padding: 12px; text-align: center;">${stats.productRegistered}</td>
-                      <td style="padding: 12px; text-align: center; color: #22c55e; font-weight: 600;">${stats.productProposed}</td>
-                      <td style="padding: 12px; text-align: center; color: #3b82f6; font-weight: 600;">${stats.productContacted}</td>
-                      <td style="padding: 12px; text-align: center;">
-                        ${stats.productContracted > 0 ? `<span style="background: linear-gradient(135deg, #22c55e, #16a34a); color: white; padding: 4px 10px; border-radius: 12px; font-weight: 700;">${stats.productContracted}</span>` : '-'}
-                      </td>
+                      <td style="padding: 14px 12px; text-align: right; font-weight: 500; color: ${C.gray700};">${formatNumber(m.sales)}원</td>
+                      <td style="padding: 14px 12px; text-align: right; font-weight: 600; color: ${C.green};">${formatNumber(m.profit)}원</td>
                     </tr>
                   `;
                 }).join('')}
-            </tbody>
-          </table>
-        </div>
-        ` : ''}
-        
-        <!-- 최근 입점 계약 -->
-        ${allSellerList.filter(s => s.contracted).length > 0 ? `
-        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid ${tossColors.gray100};">
-          <div style="font-size: 14px; font-weight: 600; color: #7c3aed; margin-bottom: 12px;">🎉 최근 입점 계약</div>
-          <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-            ${allSellerList.filter(s => s.contracted).slice(0, 5).map(s => `
-              <div style="padding: 10px 14px; background: linear-gradient(135deg, #f5f3ff, #ede9fe); border-radius: 10px; border: 1px solid #c4b5fd;">
-                <div style="font-weight: 600; color: #5b21b6; font-size: 13px;">${s.accountName}</div>
-                <div style="font-size: 11px; color: #7c3aed;">${s.category || '-'}</div>
-              </div>
-            `).join('')}
+              </tbody>
+              <tfoot>
+                <tr style="background: ${C.gray50}; border-top: 2px solid ${C.gray200};">
+                  <td style="padding: 14px 12px; font-weight: 700; color: ${C.black};">합계</td>
+                  <td style="padding: 14px 12px; text-align: center; font-weight: 700;">${state.suppliers?.length || 0}</td>
+                  <td style="padding: 14px 12px; text-align: center; font-weight: 700;">${state.sellers?.length || 0}</td>
+                  <td style="padding: 14px 12px; text-align: center; font-weight: 700;">${yearDeals.length}</td>
+                  <td style="padding: 14px 12px; text-align: center; font-weight: 700; color: ${C.blue};">${monthDeals.length}</td>
+                  <td style="padding: 14px 12px; text-align: center; font-weight: 700; color: ${C.green};">${successfulDeals.length}</td>
+                  <td style="padding: 14px 12px; text-align: center;">
+                    <span style="background: ${currentSuccessRate >= 30 ? C.greenLight : currentSuccessRate >= 20 ? C.yellowLight : C.redLight}; color: ${currentSuccessRate >= 30 ? C.green : currentSuccessRate >= 20 ? C.yellow : C.red}; padding: 4px 10px; border-radius: 12px; font-weight: 700; font-size: 12px;">${currentSuccessRate}%</span>
+                  </td>
+                  <td style="padding: 14px 12px; text-align: right; font-weight: 700; color: ${C.gray900};">${formatNumber(totalSalesAmount)}원</td>
+                  <td style="padding: 14px 12px; text-align: right; font-weight: 700; color: ${C.green};">${formatNumber(totalProfitAmount)}원</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
+        `}
+      </div>
+
+      <!-- 📌 전략 요약 -->
+      <div style="margin-top: 20px; padding: 16px 20px; background: ${C.gray50}; border-radius: 12px; border: 1px solid ${C.gray200};">
+        <div style="font-size: 13px; color: ${C.gray600}; line-height: 1.7;">
+          📌 <strong>전략기획 연동:</strong>
+          연 매출 ${(T.annualRevenue / 100000000)}억 달성 = 성공 공구 ${T.targetSuccessDeals}건 필요 →
+          성공률 ${T.successRate}% 반영 시 <strong>전체 ${T.requiredTotalDeals}건 공구</strong> 필요
+          (월 ${T.monthlyRequiredDeals}건, 주 ${T.weeklyRequiredDeals}건)
         </div>
-        ` : ''}
       </div>
-      `;
-    })()}
-    
-    <div style="padding: 20px; background: ${tossColors.white}; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-      <div style="font-size: 14px; color: ${tossColors.gray600}; line-height: 1.6;">
-        💡 <strong>데이터 연동:</strong> 공급사/셀러/공구 등록 시 담당자를 배정하면 해당 팀원의 실적에 자동 반영됩니다. 
-        셀러 정산 데이터도 담당 셀러 기준으로 연동됩니다.
-      </div>
-    </div>
+
     </div>
   `;
-  
-  // 드래그앤드롭 초기화
-  setTimeout(() => initMemberDragDrop(), 100);
 }
 
-// 팀원 카드 드래그앤드롭 초기화
+// 팀원 카드 드래그앤드롭 초기화 - deprecated, keeping for compatibility
 function initMemberDragDrop() {
   const container = document.getElementById('teamMembersContainer');
   if (!container) return;
