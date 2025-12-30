@@ -22150,6 +22150,52 @@ function renderSalesDashboardContent() {
   const suppliers30Commission = allSuppliers.filter(s => Number(s.commissionRate || 0) >= 30);
   const monthlyNeededDeals = Math.ceil(remainingTotalDeals / Math.max(remainingMonths, 1));
 
+  // 🏆 TOP 성과 랭킹 계산
+  // 공급사별 판매액 집계
+  const supplierSalesMap = {};
+  allSettlements.forEach(s => {
+    const brand = s.brandName || s.supplierName || '미지정';
+    if (!supplierSalesMap[brand]) {
+      supplierSalesMap[brand] = { name: brand, sales: 0, count: 0 };
+    }
+    supplierSalesMap[brand].sales += Number(s.salesAmount) || 0;
+    supplierSalesMap[brand].count += 1;
+  });
+  const topSuppliers = Object.values(supplierSalesMap)
+    .filter(s => s.sales > 0)
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 5);
+
+  // 셀러별 판매액 집계
+  const sellerSalesMap = {};
+  allSettlements.forEach(s => {
+    const seller = s.sellerName || '미지정';
+    if (!sellerSalesMap[seller]) {
+      sellerSalesMap[seller] = { name: seller, sales: 0, margin: 0, count: 0 };
+    }
+    sellerSalesMap[seller].sales += Number(s.salesAmount) || 0;
+    sellerSalesMap[seller].margin += Number(s.marginAmount) || 0;
+    sellerSalesMap[seller].count += 1;
+  });
+  const topSellers = Object.values(sellerSalesMap)
+    .filter(s => s.sales > 0)
+    .sort((a, b) => b.sales - a.sales)
+    .slice(0, 5);
+
+  // 이번 달 TOP 성과
+  const monthSupplierSalesMap = {};
+  const monthSellerSalesMap = {};
+  monthSettlements.forEach(s => {
+    const brand = s.brandName || s.supplierName || '미지정';
+    const seller = s.sellerName || '미지정';
+    if (!monthSupplierSalesMap[brand]) monthSupplierSalesMap[brand] = { name: brand, sales: 0 };
+    if (!monthSellerSalesMap[seller]) monthSellerSalesMap[seller] = { name: seller, sales: 0 };
+    monthSupplierSalesMap[brand].sales += Number(s.salesAmount) || 0;
+    monthSellerSalesMap[seller].sales += Number(s.salesAmount) || 0;
+  });
+  const topMonthSuppliers = Object.values(monthSupplierSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
+  const topMonthSellers = Object.values(monthSellerSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
+
   // 팀원별 실적 계산
   const memberStats = members.filter(m => m.role !== 'ceo').map(member => {
     const mSuppliers = state.suppliers.filter(s => s.registeredBy === member.id);
@@ -22492,6 +22538,89 @@ function renderSalesDashboardContent() {
             </table>
           </div>
         `}
+      </div>
+
+      <!-- 🏆 TOP 성과 랭킹 -->
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 20px;">
+        <!-- 공급사 TOP -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: ${C.black};">🏭 공급사 판매 TOP</div>
+            <a href="#" onclick="event.preventDefault(); navigateTo('suppliers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+          </div>
+
+          <!-- 이번 달 TOP 3 -->
+          <div style="margin-bottom: 16px;">
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid ${C.gray100};">📆 이번 달</div>
+            ${topMonthSuppliers.length === 0 ? `
+              <div style="text-align: center; padding: 16px; color: ${C.gray400}; font-size: 13px;">데이터 없음</div>
+            ` : topMonthSuppliers.map((s, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: ${i === 0 ? C.primary + '10' : C.gray50}; border-radius: 8px; margin-bottom: 6px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 16px;">${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</span>
+                  <span style="font-weight: 600; color: ${C.gray900}; font-size: 13px;">${s.name}</span>
+                </div>
+                <span style="font-weight: 700; color: ${i === 0 ? C.primary : C.gray700}; font-size: 13px;">${formatNumber(s.sales)}원</span>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- 연간 TOP 5 -->
+          <div>
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid ${C.gray100};">📅 연간 누적</div>
+            ${topSuppliers.length === 0 ? `
+              <div style="text-align: center; padding: 16px; color: ${C.gray400}; font-size: 13px;">데이터 없음</div>
+            ` : topSuppliers.map((s, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; ${i < topSuppliers.length - 1 ? `border-bottom: 1px solid ${C.gray100};` : ''}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: ${i < 3 ? C.primary : C.gray200}; color: ${i < 3 ? 'white' : C.gray600}; border-radius: 50%; font-size: 11px; font-weight: 700;">${i + 1}</span>
+                  <span style="font-size: 13px; color: ${C.gray700};">${s.name}</span>
+                </div>
+                <span style="font-size: 12px; color: ${C.gray600};">${formatNumber(s.sales)}원</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- 셀러 TOP -->
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="font-size: 15px; font-weight: 700; color: ${C.black};">👤 셀러 판매 TOP</div>
+            <a href="#" onclick="event.preventDefault(); navigateTo('sellers');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+          </div>
+
+          <!-- 이번 달 TOP 3 -->
+          <div style="margin-bottom: 16px;">
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid ${C.gray100};">📆 이번 달</div>
+            ${topMonthSellers.length === 0 ? `
+              <div style="text-align: center; padding: 16px; color: ${C.gray400}; font-size: 13px;">데이터 없음</div>
+            ` : topMonthSellers.map((s, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: ${i === 0 ? C.green + '15' : C.gray50}; border-radius: 8px; margin-bottom: 6px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="font-size: 16px;">${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</span>
+                  <span style="font-weight: 600; color: ${C.gray900}; font-size: 13px;">${s.name}</span>
+                </div>
+                <span style="font-weight: 700; color: ${i === 0 ? C.green : C.gray700}; font-size: 13px;">${formatNumber(s.sales)}원</span>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- 연간 TOP 5 -->
+          <div>
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid ${C.gray100};">📅 연간 누적</div>
+            ${topSellers.length === 0 ? `
+              <div style="text-align: center; padding: 16px; color: ${C.gray400}; font-size: 13px;">데이터 없음</div>
+            ` : topSellers.map((s, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; ${i < topSellers.length - 1 ? `border-bottom: 1px solid ${C.gray100};` : ''}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; background: ${i < 3 ? C.green : C.gray200}; color: ${i < 3 ? 'white' : C.gray600}; border-radius: 50%; font-size: 11px; font-weight: 700;">${i + 1}</span>
+                  <span style="font-size: 13px; color: ${C.gray700};">${s.name}</span>
+                </div>
+                <span style="font-size: 12px; color: ${C.gray600};">${formatNumber(s.sales)}원</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
       </div>
 
       <!-- 👥 셀러 영업 파이프라인 (리스트업 → 컨택 → 입점) -->
