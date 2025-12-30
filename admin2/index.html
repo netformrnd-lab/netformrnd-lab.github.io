@@ -2309,13 +2309,20 @@ async function loadAdminPassword() {
   }
 }
 
-// 🎯 권한 체크 함수 - 게스트는 보기만 가능
+// 🎯 권한 체크 함수 - 대표님/게스트는 보기만 가능
 function canEdit() {
   const user = state.currentAdmin;
   if (!user) return false;
-  // 게스트는 수정 불가
-  if (user.role === 'guest') return false;
+  // 대표님, 게스트는 수정 불가 (보기 전용)
+  if (user.role === 'ceo' || user.role === 'guest') return false;
   return true;
+}
+
+// 🎯 대표님 역할 체크 (보기 전용 모드)
+function isCeoRole() {
+  const user = state.currentAdmin;
+  if (!user) return false;
+  return user.role === 'ceo';
 }
 
 // 🎯 관리자 전용 권한 체크 - admin 역할만 가능
@@ -2611,7 +2618,7 @@ function updateSidebarUserProfile() {
   document.getElementById('userName').textContent = user.name || '-';
   
   // 역할
-  const roleText = user.role === 'admin' ? '관리자' : user.role === 'manager' ? '매니저' : user.role === 'guest' ? '게스트' : '일반';
+  const roleText = user.role === 'admin' ? '관리자' : user.role === 'manager' ? '매니저' : user.role === 'ceo' ? '대표님' : user.role === 'guest' ? '게스트' : '일반';
   document.getElementById('userRole').textContent = roleText;
   
   // 목표 달성률 계산
@@ -21587,9 +21594,10 @@ function renderTeamMembers() {
             ${members.map(m => {
               const roleStyle = m.role === 'admin' ? 'background: linear-gradient(145deg, #fef2f2, #fee2e2); color: #dc2626;' :
                                m.role === 'manager' ? 'background: linear-gradient(145deg, #fff8f0, #ffedd5); color: var(--primary);' :
+                               m.role === 'ceo' ? 'background: linear-gradient(145deg, #faf5ff, #f3e8ff); color: #7c3aed;' :
                                m.role === 'guest' ? 'background: linear-gradient(145deg, #fef3c7, #fde68a); color: #92400e;' :
                                'background: var(--gray-100); color: var(--gray-600);';
-              const roleText = m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'guest' ? '게스트' : '일반';
+              const roleText = m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'ceo' ? '대표님' : m.role === 'guest' ? '게스트' : '일반';
               return `
                 <tr>
                   <td style="font-weight: 600;">${m.name}</td>
@@ -21685,13 +21693,14 @@ function openTeamMemberModal(memberId = null) {
           <div class="form-group">
             <label class="form-label">역할 *</label>
             <select class="form-select" id="memberRole" required>
+              <option value="ceo" ${member?.role === 'ceo' ? 'selected' : ''}>👑 대표님 (보기전용)</option>
               <option value="guest" ${member?.role === 'guest' ? 'selected' : ''}>👀 게스트 (보기전용)</option>
               <option value="staff" ${!member?.role || member?.role === 'staff' ? 'selected' : ''}>일반</option>
               <option value="manager" ${member?.role === 'manager' ? 'selected' : ''}>매니저</option>
               <option value="admin" ${member?.role === 'admin' ? 'selected' : ''}>관리자</option>
             </select>
             <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">
-              💡 게스트: 조회만 가능 / 일반: 기본 기능 / 매니저: 팀 관리 / 관리자: 전체 권한
+              💡 대표님: 전체 조회만 가능 / 게스트: 조회만 가능 / 일반: 기본 기능 / 매니저: 팀 관리 / 관리자: 전체 권한
             </div>
           </div>
           <div class="form-group">
@@ -21966,6 +21975,8 @@ function renderSalesDashboardContent(salesKRs, quarterKey) {
   const members = state.teamMembers || [];
   const currentUser = state.currentUser || {};
   const isAdmin = currentUser.role === 'admin';
+  const isCeo = currentUser.role === 'ceo';
+  const canEditData = isAdmin && !isCeo; // 대표님은 수정 불가
   
   // 사이드바 프로필 업데이트
   updateSidebarUserProfile();
@@ -22415,7 +22426,7 @@ function renderSalesDashboardContent(salesKRs, quarterKey) {
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
-            ${isAdmin ? `
+            ${canEditData ? `
             <button onclick="openAssignManagerModal()" style="
               padding: 12px 20px;
               font-size: 14px;
@@ -22436,12 +22447,12 @@ function renderSalesDashboardContent(salesKRs, quarterKey) {
               border: none;
               border-radius: 12px;
               cursor: pointer;
-            ">${isAdmin ? '배정하기' : '배정보기'}</button>
+            ">${canEditData ? '배정하기' : '배정보기'}</button>
           </div>
         </div>
       </div>
     ` : `
-      ${isAdmin ? `
+      ${canEditData ? `
       <div style="padding: 20px 24px; background: ${tossColors.white}; border-radius: 16px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div>
@@ -22562,7 +22573,7 @@ function renderSalesDashboardContent(salesKRs, quarterKey) {
                   ${m.name}
                   ${isMe ? `<span style="font-size: 11px; background: ${tossColors.blue}; color: white; padding: 3px 8px; border-radius: 6px; margin-left: 8px;">나</span>` : ''}
                 </div>
-                <div style="font-size: 13px; color: ${tossColors.gray500}; margin-top: 4px;">${m.loginId || '-'} · ${m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'guest' ? '게스트' : '일반'}</div>
+                <div style="font-size: 13px; color: ${tossColors.gray500}; margin-top: 4px;">${m.loginId || '-'} · ${m.role === 'admin' ? '관리자' : m.role === 'manager' ? '매니저' : m.role === 'ceo' ? '대표님' : m.role === 'guest' ? '게스트' : '일반'}</div>
               </div>
             </div>
             <div style="text-align: right; font-size: 12px; color: ${tossColors.gray400};">
@@ -23365,7 +23376,7 @@ function openGoalSettingModalReal() {
                 </div>
                 <div>
                   <div style="font-weight: 600;">${member.name}</div>
-                  <div style="font-size: 12px; color: var(--gray-500);">${member.role === 'admin' ? '관리자' : member.role === 'manager' ? '매니저' : member.role === 'guest' ? '게스트' : '일반'}</div>
+                  <div style="font-size: 12px; color: var(--gray-500);">${member.role === 'admin' ? '관리자' : member.role === 'manager' ? '매니저' : member.role === 'ceo' ? '대표님' : member.role === 'guest' ? '게스트' : '일반'}</div>
                 </div>
               </div>
               <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
@@ -29240,11 +29251,16 @@ function renderOKRManagement() {
   const currentUser = state.currentUser || state.currentAdmin || {};
   const members = state.teamMembers || [];
   const isAdmin = currentUser.role === 'admin';
+  const isCeo = currentUser.role === 'ceo';
+  const canViewAll = isAdmin || isCeo;
 
   app.innerHTML = `
-    <div class="page-header">
-      <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">📊 KPI 관리</h1>
-      <p style="color: var(--gray-600); margin-top: 8px;">전략 목표 달성을 위한 핵심 지표를 설정하고 관리하세요</p>
+    <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
+      <div>
+        <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900);">📊 KPI 관리</h1>
+        <p style="color: var(--gray-600); margin-top: 8px;">전략 목표 달성을 위한 핵심 지표를 설정하고 관리하세요</p>
+      </div>
+      ${isCeo ? `<div style="padding: 10px 16px; background: #faf5ff; color: #7c3aed; border-radius: 10px; font-size: 13px; font-weight: 600;">👑 보기 전용 모드</div>` : ''}
     </div>
 
     <div class="content">
@@ -29267,14 +29283,16 @@ function renderOKRManagement() {
       </div>
 
       <div style="background: white; border-radius: 12px; padding: 24px; margin-bottom: 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+        ${!isCeo ? `
         <button onclick="openOKRModal()" style="background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
           + 새 OKR 등록
         </button>
+        ` : ''}
 
         <div style="flex: 1; min-width: 200px;">
           <select id="okr-member-filter" onchange="loadOKRList()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; background: white;">
-            <option value="mine" ${!isAdmin ? 'selected' : ''}>🎯 내 OKR</option>
-            <option value="all" ${isAdmin ? 'selected' : ''}>👥 전체 팀원</option>
+            ${isCeo ? `<option value="all" selected>👥 전체 팀원</option>` : `<option value="mine" ${!canViewAll ? 'selected' : ''}>🎯 내 OKR</option>`}
+            ${!isCeo ? `<option value="all" ${canViewAll ? 'selected' : ''}>👥 전체 팀원</option>` : ''}
             ${members.map(m => `<option value="${m.id}">${m.name}</option>`).join('')}
           </select>
         </div>
@@ -33452,6 +33470,8 @@ function renderWorkLog() {
   var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
   var currentMember = getCurrentMember();
   var isAdmin = state.currentUser?.role === 'admin';
+  var isCeo = state.currentUser?.role === 'ceo';
+  var canViewAll = isAdmin || isCeo; // 대표님도 전체 조회 가능
   var teamMembers = state.teamMembers || [];
   
   // 토스 스타일 컬러
@@ -33474,6 +33494,7 @@ function renderWorkLog() {
           <h1 style="font-size: 26px; font-weight: 700; color: ${colors.black}; margin: 0;">📓 업무일지</h1>
           <p style="color: ${colors.gray500}; margin-top: 8px; font-size: 15px;">팀원별 업무 관리 및 자동 기록</p>
         </div>
+        ${!isCeo ? `
         <div style="display: flex; gap: 10px;">
           <button onclick="openQuickTaskModal()" style="padding: 12px 20px; font-size: 14px; font-weight: 600; background: ${colors.blue}; color: white; border: none; border-radius: 12px; cursor: pointer;">
             ➕ 새 업무
@@ -33487,6 +33508,11 @@ function renderWorkLog() {
           </button>
           ` : ''}
         </div>
+        ` : `
+        <div style="padding: 10px 16px; background: #faf5ff; color: #7c3aed; border-radius: 10px; font-size: 13px; font-weight: 600;">
+          👑 보기 전용 모드
+        </div>
+        `}
       </div>
       
       <!-- 컨트롤 바 -->
@@ -33503,8 +33529,8 @@ function renderWorkLog() {
           <!-- 팀원 필터 (드롭다운) -->
           <div style="display: flex; align-items: center; gap: 10px;">
             <select id="member-filter-select" onchange="setMemberFilterBySelect(this.value)" style="padding: 10px 16px; border: 1px solid ${colors.gray100}; border-radius: 10px; font-size: 14px; font-weight: 500; min-width: 160px; cursor: pointer;">
-              <option value="my">👤 내 업무</option>
-              <option value="all" ${isAdmin ? '' : 'disabled'}>👥 팀 전체 ${isAdmin ? '' : '(관리자만)'}</option>
+              ${isCeo ? `<option value="all" selected>👥 팀 전체</option>` : `<option value="my">👤 내 업무</option>`}
+              ${!isCeo ? `<option value="all" ${canViewAll ? '' : 'disabled'}>👥 팀 전체 ${canViewAll ? '' : '(관리자만)'}</option>` : ''}
               <optgroup label="팀원별 보기">
                 ${teamMembers.map(m => `<option value="member_${m.id}">${m.name}</option>`).join('')}
               </optgroup>
