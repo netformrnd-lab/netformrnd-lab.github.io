@@ -22196,10 +22196,26 @@ function renderSalesDashboardContent() {
   const topMonthSuppliers = Object.values(monthSupplierSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
   const topMonthSellers = Object.values(monthSellerSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
 
-  // 팀원별 실적 계산
+  // 팀원별 실적 계산 (파이프라인 포함)
   const memberStats = members.filter(m => m.role !== 'ceo').map(member => {
     const mSuppliers = state.suppliers.filter(s => s.registeredBy === member.id);
     const mSellers = state.sellers.filter(s => s.registeredBy === member.id);
+
+    // 셀러 파이프라인 단계별 카운트
+    const sellerPipeline = {
+      total: mSellers.length,
+      contacted: mSellers.filter(s => s.journeyFirstContact).length,
+      onboarded: mSellers.filter(s => s.journeyOnboarding).length,
+      documented: mSellers.filter(s => s.journeyDocuments).length,
+      firstDeal: mSellers.filter(s => s.journeyFirstDeal).length
+    };
+
+    // 공급사 파이프라인 단계별 카운트
+    const supplierPipeline = {
+      total: mSuppliers.length,
+      contracted: mSuppliers.filter(s => s.contractStatus === 'completed').length,
+      hasProducts: mSuppliers.filter(s => s.hasProductInfo).length
+    };
     const mDeals = allDeals.filter(d => d.registeredBy === member.id);
     const mYearDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
     const mMonthDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisMonth));
@@ -22228,7 +22244,9 @@ function renderSalesDashboardContent() {
       successDeals: mSuccessDeals.length,
       successRate: mSuccessRate,
       sales: totalSales,
-      profit: totalProfit
+      profit: totalProfit,
+      sellerPipeline,
+      supplierPipeline
     };
   });
 
@@ -22621,6 +22639,75 @@ function renderSalesDashboardContent() {
             `).join('')}
           </div>
         </div>
+      </div>
+
+      <!-- 📊 팀원별 파이프라인 성과 -->
+      <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div style="font-size: 16px; font-weight: 700; color: ${C.black};">📊 팀원별 파이프라인 성과</div>
+          <a href="#" onclick="event.preventDefault(); switchTab('guide'); guideTab='pipeline'; renderGuide();" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">파이프라인 가이드 →</a>
+        </div>
+
+        ${memberStats.length === 0 ? `
+          <div style="text-align: center; padding: 40px; color: ${C.gray500};">등록된 팀원이 없습니다.</div>
+        ` : `
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+              <thead>
+                <tr style="background: linear-gradient(135deg, #EEF2FF, #FEF3C7);">
+                  <th rowspan="2" style="padding: 10px 8px; text-align: left; font-weight: 600; color: ${C.gray700}; border-bottom: 2px solid ${C.gray200};">팀원</th>
+                  <th colspan="5" style="padding: 8px; text-align: center; font-weight: 700; color: #B45309; border-bottom: 1px solid #FCD34D; background: #FEF3C7;">👤 셀러 파이프라인</th>
+                  <th colspan="3" style="padding: 8px; text-align: center; font-weight: 700; color: #4338CA; border-bottom: 1px solid #C7D2FE; background: #EEF2FF;">🏭 공급사 파이프라인</th>
+                </tr>
+                <tr style="background: ${C.gray50};">
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">리스트업</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">컨택</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">온보딩</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">서류</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: #B45309; border-bottom: 2px solid ${C.gray200};">입점</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">리스트업</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">상품등록</th>
+                  <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: #4338CA; border-bottom: 2px solid ${C.gray200};">계약완료</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${memberStats.map(m => `
+                  <tr style="border-bottom: 1px solid ${C.gray100};">
+                    <td style="padding: 12px 8px;">
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <div style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, ${C.blue}, #3B82F6); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 11px;">
+                          ${(m.name || m.id || '?').charAt(0)}
+                        </div>
+                        <span style="font-weight: 600; color: ${C.black};">${m.name || m.id}</span>
+                      </div>
+                    </td>
+                    <td style="padding: 8px 6px; text-align: center; font-weight: 600;">${m.sellerPipeline.total}</td>
+                    <td style="padding: 8px 6px; text-align: center; color: ${m.sellerPipeline.contacted > 0 ? C.blue : C.gray400};">${m.sellerPipeline.contacted}</td>
+                    <td style="padding: 8px 6px; text-align: center; color: ${m.sellerPipeline.onboarded > 0 ? C.yellow : C.gray400};">${m.sellerPipeline.onboarded}</td>
+                    <td style="padding: 8px 6px; text-align: center; color: ${m.sellerPipeline.documented > 0 ? C.gray700 : C.gray400};">${m.sellerPipeline.documented}</td>
+                    <td style="padding: 8px 6px; text-align: center;"><span style="background: ${m.sellerPipeline.firstDeal > 0 ? '#FEF3C7' : C.gray100}; color: ${m.sellerPipeline.firstDeal > 0 ? '#B45309' : C.gray400}; padding: 2px 8px; border-radius: 10px; font-weight: 700;">${m.sellerPipeline.firstDeal}</span></td>
+                    <td style="padding: 8px 6px; text-align: center; font-weight: 600;">${m.supplierPipeline.total}</td>
+                    <td style="padding: 8px 6px; text-align: center; color: ${m.supplierPipeline.hasProducts > 0 ? C.gray700 : C.gray400};">${m.supplierPipeline.hasProducts}</td>
+                    <td style="padding: 8px 6px; text-align: center;"><span style="background: ${m.supplierPipeline.contracted > 0 ? '#EEF2FF' : C.gray100}; color: ${m.supplierPipeline.contracted > 0 ? '#4338CA' : C.gray400}; padding: 2px 8px; border-radius: 10px; font-weight: 700;">${m.supplierPipeline.contracted}</span></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot>
+                <tr style="background: ${C.gray50}; border-top: 2px solid ${C.gray200};">
+                  <td style="padding: 12px 8px; font-weight: 700;">합계</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700;">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.total, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: ${C.blue};">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.contacted, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: ${C.yellow};">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.onboarded, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700;">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.documented, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #B45309;">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.firstDeal, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700;">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.total, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700;">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.hasProducts, 0)}</td>
+                  <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #4338CA;">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.contracted, 0)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        `}
       </div>
 
       <!-- 👥 셀러 영업 파이프라인 (리스트업 → 컨택 → 입점) -->
@@ -28247,11 +28334,14 @@ function renderGuide() {
         <button onclick="switchGuideTab('tools')" style="padding: 12px 16px; font-size: 14px; font-weight: 600; border: none; cursor: pointer; border-radius: 8px 8px 0 0; transition: all 0.2s; ${guideTab === 'tools' ? 'background: var(--primary); color: white;' : 'background: var(--gray-100); color: var(--gray-600);'}">
           🛠️ 주요 기능
         </button>
+        <button onclick="switchGuideTab('pipeline')" style="padding: 12px 16px; font-size: 14px; font-weight: 600; border: none; cursor: pointer; border-radius: 8px 8px 0 0; transition: all 0.2s; ${guideTab === 'pipeline' ? 'background: var(--primary); color: white;' : 'background: var(--gray-100); color: var(--gray-600);'}">
+          🔄 파이프라인
+        </button>
       </div>
 
       <!-- 컨텐츠 영역 -->
       <div style="background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.06);">
-        ${guideTab === 'essence' ? getEssenceContent() : guideTab === 'process' ? getProcessContent() : guideTab === 'partner' ? getPartnerContent() : guideTab === 'menu' ? getMenuContent() : getToolsContent()}
+        ${guideTab === 'essence' ? getEssenceContent() : guideTab === 'process' ? getProcessContent() : guideTab === 'partner' ? getPartnerContent() : guideTab === 'menu' ? getMenuContent() : guideTab === 'tools' ? getToolsContent() : getPipelineContent()}
       </div>
 
       <!-- 하단 도움말 -->
@@ -28918,6 +29008,173 @@ function getToolsContent() {
           <div><strong>마진</strong> = 남는 돈 (이익)</div>
           <div><strong>PG</strong> = 카드결제 수수료</div>
           <div><strong>정산</strong> = 돈 나눠주기</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 파이프라인 가이드 탭
+function getPipelineContent() {
+  return `
+    <div style="margin-bottom: 24px;">
+      <div style="font-size: 20px; font-weight: 700; color: #191F28; margin-bottom: 8px;">🔄 영업 파이프라인 가이드</div>
+      <div style="font-size: 14px; color: #6B7684;">각 파이프라인의 단계별 정의와 담당자 역할을 안내합니다.</div>
+    </div>
+
+    <!-- 공급사 파이프라인 -->
+    <div style="background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 16px; padding: 24px; margin-bottom: 20px; border: 1px solid #C7D2FE;">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+        <div style="font-size: 28px;">🏭</div>
+        <div>
+          <div style="font-size: 18px; font-weight: 700; color: #4338CA;">공급사 입점 파이프라인</div>
+          <div style="font-size: 13px; color: #6366F1;">공급사 발굴부터 첫 공구까지의 여정</div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px;">
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center; border: 2px solid #4338CA;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📋</div>
+          <div style="font-size: 12px; font-weight: 700; color: #4338CA;">1. 리스트업</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">잠재 공급사 발굴</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📞</div>
+          <div style="font-size: 12px; font-weight: 700; color: #4338CA;">2. 첫 컨택</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">연락/제안</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📊</div>
+          <div style="font-size: 12px; font-weight: 700; color: #4338CA;">3. 미팅/상담</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">조건 협의</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📄</div>
+          <div style="font-size: 12px; font-weight: 700; color: #4338CA;">4. 서류 수령</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">사업자/통장/상품정보</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📝</div>
+          <div style="font-size: 12px; font-weight: 700; color: #4338CA;">5. 계약 완료</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">계약서 체결</div>
+        </div>
+        <div style="background: #4338CA; border-radius: 10px; padding: 14px; text-align: center; color: white;">
+          <div style="font-size: 20px; margin-bottom: 6px;">🎉</div>
+          <div style="font-size: 12px; font-weight: 700;">6. 첫 공구</div>
+          <div style="font-size: 10px; opacity: 0.9; margin-top: 4px;">입점 완료!</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 셀러 파이프라인 -->
+    <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 16px; padding: 24px; margin-bottom: 20px; border: 1px solid #FCD34D;">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+        <div style="font-size: 28px;">👤</div>
+        <div>
+          <div style="font-size: 18px; font-weight: 700; color: #B45309;">셀러 입점 파이프라인</div>
+          <div style="font-size: 13px; color: #D97706;">셀러 발굴부터 첫 공구까지의 여정</div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;">
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center; border: 2px solid #B45309;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📋</div>
+          <div style="font-size: 12px; font-weight: 700; color: #B45309;">1. 리스트업</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">셀러 후보 등록</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📞</div>
+          <div style="font-size: 12px; font-weight: 700; color: #B45309;">2. 첫 컨택</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">DM/연락</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📘</div>
+          <div style="font-size: 12px; font-weight: 700; color: #B45309;">3. 온보딩</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">서비스 안내</div>
+        </div>
+        <div style="background: white; border-radius: 10px; padding: 14px; text-align: center;">
+          <div style="font-size: 20px; margin-bottom: 6px;">📄</div>
+          <div style="font-size: 12px; font-weight: 700; color: #B45309;">4. 서류 제출</div>
+          <div style="font-size: 10px; color: #6B7684; margin-top: 4px;">정산 정보</div>
+        </div>
+        <div style="background: #B45309; border-radius: 10px; padding: 14px; text-align: center; color: white;">
+          <div style="font-size: 20px; margin-bottom: 6px;">🎉</div>
+          <div style="font-size: 12px; font-weight: 700;">5. 첫 공구</div>
+          <div style="font-size: 10px; opacity: 0.9; margin-top: 4px;">입점 완료!</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 공구 진행 파이프라인 -->
+    <div style="background: linear-gradient(135deg, #DCFCE7, #BBF7D0); border-radius: 16px; padding: 24px; margin-bottom: 20px; border: 1px solid #86EFAC;">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+        <div style="font-size: 28px;">🛒</div>
+        <div>
+          <div style="font-size: 18px; font-weight: 700; color: #166534;">공구 진행 파이프라인</div>
+          <div style="font-size: 13px; color: #22C55E;">공구 기획부터 정산 완료까지 11단계</div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px;">
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📦</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">샘플 전달</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">💳</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">결제링크 전달</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">🎬</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">콘텐츠 전달</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📺</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">광고 세팅</div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px;">
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📖</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">셀러 가이드</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📊</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">주문 모니터링</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">💬</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">CS 대응</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📋</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">발주서 전달</div>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📄</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">셀러 정산서</div>
+        </div>
+        <div style="background: white; border-radius: 8px; padding: 10px; text-align: center;">
+          <div style="font-size: 14px;">📑</div>
+          <div style="font-size: 11px; font-weight: 600; color: #166534;">공급사 정산서</div>
+        </div>
+        <div style="background: #166534; border-radius: 8px; padding: 10px; text-align: center; color: white;">
+          <div style="font-size: 14px;">✅</div>
+          <div style="font-size: 11px; font-weight: 600;">정산 완료</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 담당자 측정 안내 -->
+    <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; border: 1px solid var(--gray-200);">
+      <div style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin-bottom: 12px;">📊 성과 측정 방식</div>
+      <div style="font-size: 13px; color: var(--gray-600); line-height: 1.8;">
+        • <strong>각 단계 완료 시</strong> 담당자가 자동 기록됩니다<br>
+        • <strong>영업현황 대시보드</strong>에서 팀원별 파이프라인 성과를 확인할 수 있습니다<br>
+        • <strong>리스트업 담당자</strong>와 <strong>입점 완료 담당자</strong>가 다를 수 있습니다 (협업 측정)
+      </div>
+      <div style="margin-top: 16px; padding: 12px; background: #FEF3C7; border-radius: 8px;">
+        <div style="font-size: 12px; color: #92400E;">
+          💡 <strong>팁:</strong> 셀러/공급사 상세 페이지에서 각 단계 체크박스를 클릭하면 현재 로그인한 사용자가 담당자로 기록됩니다.
         </div>
       </div>
     </div>
