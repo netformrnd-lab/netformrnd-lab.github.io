@@ -3230,6 +3230,8 @@ let state = {
   // 영업 목표
   salesGoals: {},
   memberGoals: {},
+  // 전략기획 데이터 (전략센터 연동)
+  strategyData: null,
   // 현재 로그인 사용자
   currentAdmin: null,
   currentUser: null
@@ -3414,14 +3416,35 @@ function setupListeners() {
     render();
   });
   
-  // 영업 목표 설정
+  // 영업 목표 설정 (레거시 - 전략기획에서 덮어씀)
   db.collection('settings').doc('salesGoals').onSnapshot(doc => {
     if (doc.exists) {
       state.salesGoals = doc.data();
     }
     render();
   });
-  
+
+  // 전략기획 데이터 로드 (전략센터와 연동)
+  db.collection('strategies').doc('current').onSnapshot(doc => {
+    if (doc.exists) {
+      state.strategyData = doc.data();
+      // 전략기획의 targets를 salesGoals에 통합
+      if (state.strategyData?.targets) {
+        const targets = state.strategyData.targets;
+        state.salesGoals = {
+          ...state.salesGoals,
+          salesAmount: targets.annualRevenue || state.salesGoals?.salesAmount || 0,
+          profitAmount: targets.annualProfit || state.salesGoals?.profitAmount || 0,
+          deals: targets.annualDeals || state.salesGoals?.deals || 0,
+          suppliers: targets.supplierGoal || state.salesGoals?.suppliers || 0,
+          sellers: targets.sellerGoal || state.salesGoals?.sellers || 0,
+          successRate: targets.successRate || state.salesGoals?.successRate || 70
+        };
+      }
+    }
+    render();
+  });
+
   // 팀원별 목표 설정
   db.collection('settings').doc('memberGoals').onSnapshot(doc => {
     if (doc.exists) {
@@ -22322,8 +22345,35 @@ function renderSalesDashboardContent(salesKRs, quarterKey) {
               <div style="font-size: 12px; opacity: 0.8; margin-top: 8px;">목표 ${formatNumber(goals.profitAmount)}원</div>
             </div>
           ` : ''}
+          ${goals.successRate ? `
+            <div style="background: linear-gradient(135deg, #10b981, #059669); border-radius: 16px; padding: 20px; text-align: center; color: white;">
+              <div style="font-size: 28px; font-weight: 700;">${(() => {
+                const completedDeals = state.deals.filter(d => d.status === 'completed').length;
+                const totalDealsAttempted = state.deals.filter(d => ['completed', 'cancelled'].includes(d.status)).length;
+                const actualSuccessRate = totalDealsAttempted > 0 ? Math.round((completedDeals / totalDealsAttempted) * 100) : 0;
+                return actualSuccessRate;
+              })()}%</div>
+              <div style="font-size: 13px; opacity: 0.9; margin-top: 8px;">성공률</div>
+              <div style="height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px; margin-top: 12px;">
+                <div style="height: 100%; width: ${(() => {
+                  const completedDeals = state.deals.filter(d => d.status === 'completed').length;
+                  const totalDealsAttempted = state.deals.filter(d => ['completed', 'cancelled'].includes(d.status)).length;
+                  const actualSuccessRate = totalDealsAttempted > 0 ? Math.round((completedDeals / totalDealsAttempted) * 100) : 0;
+                  return Math.min(100, Math.round((actualSuccessRate / goals.successRate) * 100));
+                })()}%; background: white; border-radius: 2px;"></div>
+              </div>
+              <div style="font-size: 12px; opacity: 0.8; margin-top: 8px;">목표 ${goals.successRate}%</div>
+            </div>
+          ` : ''}
         </div>
-        
+
+        ${state.strategyData ? `
+        <div style="margin-top: 12px; padding: 10px 14px; background: linear-gradient(135deg, #fef3c7, #fde68a); border-radius: 8px; display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 14px;">🎯</span>
+          <span style="font-size: 12px; color: #92400e; font-weight: 500;">전략기획과 연동됨 | ${state.strategyData.year || new Date().getFullYear()}년 ${state.strategyData.phase || ''}</span>
+        </div>
+        ` : ''}
+
         <!-- 목표 설정 근거 -->
         ${goals.calcParams ? `
         <div style="margin-top: 20px; padding: 16px; background: ${tossColors.blueLight}; border-radius: 12px;">
