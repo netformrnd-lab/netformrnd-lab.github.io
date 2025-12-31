@@ -9195,7 +9195,7 @@ function renderCafe24Groups() {
         }
 
         dealProductOptions = dealProducts.map(dp => {
-          const isSelected = dp.sku === group.matchedProductSku;
+          const isSelected = String(dp.sku) === String(group.matchedProductSku);
           return `<option value="${dp.sku}" data-supply="${dp.supplyPrice || 0}" data-margin="${dp.marginRate || 0}" ${isSelected ? 'selected' : ''}>
             ${dp.productName || dp.sku} (${(dp.supplyPrice || 0).toLocaleString()}원)
           </option>`;
@@ -9371,11 +9371,54 @@ function confirmGroupMapping(groupKey) {
     return;
   }
 
+  // 확정 전 현재 선택 상태 저장 (디버그 및 안전장치)
+  const currentSku = group.matchedProductSku;
+  const currentProductName = group.matchedProductName;
+  console.log('[확정] 확정 전 상태:', groupKey, 'SKU:', currentSku, '상품명:', currentProductName);
+
   // 확정 표시
   group.confirmed = true;
 
+  // 선택 상태가 유지되는지 확인
+  if (group.matchedProductSku !== currentSku) {
+    console.warn('[확정] SKU가 변경됨! 복원:', currentSku);
+    group.matchedProductSku = currentSku;
+    group.matchedProductName = currentProductName;
+  }
+
   showToast('✅ 매칭이 확정되었습니다');
-  renderCafe24Groups();
+
+  // 해당 그룹 UI만 업데이트 (전체 리렌더링 방지)
+  const groupEl = document.querySelector(`[data-group-key="${groupKey}"]`);
+  if (groupEl) {
+    // 배경색 및 테두리 변경 (확정 스타일)
+    groupEl.style.background = '#eff6ff';
+    groupEl.style.borderColor = '#3b82f6';
+
+    // select 요소들 비활성화
+    groupEl.querySelectorAll('select').forEach(sel => sel.disabled = true);
+
+    // 확정 버튼 → 취소 버튼으로 교체
+    const btnContainer = groupEl.querySelector('.confirm-btn-container');
+    if (btnContainer) {
+      btnContainer.innerHTML = `
+        <span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;">✓ 확정</span>
+        <button onclick="unconfirmGroupMapping('${groupKey}')" class="btn btn-sm btn-secondary" style="padding: 8px 16px; font-size: 13px; background: #e2e8f0; color: #475569; border: none; border-radius: 8px; cursor: pointer;">
+          ↩ 취소
+        </button>
+      `;
+    }
+
+    // 기존 뱃지 제거 (자동매칭, 수동선택 등)
+    groupEl.querySelectorAll('span[style*="background: #059669"], span[style*="background: #f59e0b"]').forEach(badge => {
+      if (badge.textContent.includes('자동매칭') || badge.textContent.includes('수동선택')) {
+        badge.remove();
+      }
+    });
+  }
+
+  updateMappingStatus();
+  updateSettlementPreview();
 }
 
 // 그룹 매핑 확정 취소
