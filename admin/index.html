@@ -9061,16 +9061,19 @@ async function parseCafe24Excel(input) {
         }
       }
 
-      // 그룹화 (자체상품코드 또는 주문상품명 기준)
-      const groupKey = productCode || productOption || productNameBasic;
+      // 🎯 그룹화 (상품코드 + 단가 기준) - 같은 상품이라도 가격이 다르면 다른 SKU
+      // unitPrice를 포함해서 38,800원 배도라지와 45,800원 배도라지를 다른 그룹으로 처리
+      const baseKey = productCode || productOption || productNameBasic;
+      const groupKey = `${baseKey}_${unitPrice}`;
       if (!cafe24GroupedData[groupKey]) {
         cafe24GroupedData[groupKey] = {
           productCode: productCode, // 자체상품코드
-          productName: groupKey,
+          productName: baseKey,  // UI 표시용 (가격 제외)
           productBasicName: productNameBasic,
           productOption: productOption,
           supplier: supplierName,
           sellerName: sellerName,
+          unitPrice: unitPrice,  // 🎯 SKU 단가 (그룹 구분용)
           supplyPrice: matchedSupplyPrice, // 상품DB 매칭 공급단가
           marginRate: matchedMarginRate, // 상품DB 매칭 마진율
           orders: [],
@@ -9083,9 +9086,11 @@ async function parseCafe24Excel(input) {
         };
       }
 
-      cafe24GroupedData[groupKey].orders.push({ orderId, qty: quantity, price: totalAmount, unitPrice });
+      // 🎯 SKU별 매출 = 단가 × 수량 (totalAmount는 주문 전체 금액이므로 사용 안함)
+      const skuSales = unitPrice * quantity;
+      cafe24GroupedData[groupKey].orders.push({ orderId, qty: quantity, price: skuSales, unitPrice });
       cafe24GroupedData[groupKey].totalQty += quantity;
-      cafe24GroupedData[groupKey].totalSales += totalAmount;
+      cafe24GroupedData[groupKey].totalSales += skuSales;
       // 공급단가/마진율이 아직 없으면 업데이트
       if (!cafe24GroupedData[groupKey].supplyPrice && matchedSupplyPrice) {
         cafe24GroupedData[groupKey].supplyPrice = matchedSupplyPrice;
@@ -9237,6 +9242,7 @@ function renderCafe24Groups() {
               <div style="font-size: 12px; color: var(--gray-500);">
                 셀러: <strong>${group.sellerName || '-'}</strong> |
                 공급사: ${group.supplier || '-'} |
+                단가: <strong style="color: #6366f1;">${formatNumber(group.unitPrice || 0)}원</strong> |
                 <span style="color: var(--primary); font-weight: 600;">${group.orders.length}건</span> /
                 <span style="color: var(--success); font-weight: 600;">${formatNumber(group.totalSales)}원</span>
               </div>
