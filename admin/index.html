@@ -8579,8 +8579,12 @@ function viewSettlementReport(dealId) {
       }
     }
 
-    // 3. 기본값 적용 (공구 마진율 우선)
-    marginRate = marginRate || deal.sellerMarginRate || 20;
+    // 3. 기본값 적용 (마진율 0%도 유효한 값으로 처리)
+    if (marginRate === undefined || marginRate === null || marginRate === '') {
+      marginRate = (deal.sellerMarginRate !== undefined && deal.sellerMarginRate !== null && deal.sellerMarginRate !== '')
+        ? Number(deal.sellerMarginRate)
+        : 20;
+    }
     supplyPrice = supplyPrice || deal.supplyPrice || 0;
 
     // 🎯 타사 상품: supplyPrice가 0이면 판매단가에서 마진율 빼서 자동 계산
@@ -19852,20 +19856,25 @@ function openUnifiedSettlementModal(item = null, dealId = null) {
     const productType = deal.productType || supplier?.supplierType || 'inhouse';
     toggleProductType(productType);
 
-    // 4. 마진율 자동 입력 (공구 상품별 마진율 우선 사용)
+    // 4. 마진율 자동 입력 (공구 상품별 마진율 우선 사용, 0%도 유효한 값으로 처리)
     // selectedProducts에서 첫 번째 상품의 마진율 또는 평균 마진율 사용
-    let marginRate = 10; // 기본값
+    let marginRate = null; // 기본값을 null로 설정하여 0%와 구분
     if (deal.selectedProducts && deal.selectedProducts.length > 0) {
-      const productsWithMargin = deal.selectedProducts.filter(p => p.marginRate && Number(p.marginRate) > 0);
+      // 마진율이 명시적으로 설정된 상품만 필터 (0%도 유효)
+      const productsWithMargin = deal.selectedProducts.filter(p =>
+        p.marginRate !== undefined && p.marginRate !== null && p.marginRate !== ''
+      );
       if (productsWithMargin.length > 0) {
         // 상품별 마진율의 평균 계산
         const avgMarginRate = productsWithMargin.reduce((sum, p) => sum + Number(p.marginRate), 0) / productsWithMargin.length;
         marginRate = Math.round(avgMarginRate * 10) / 10; // 소수점 1자리
       }
     }
-    // selectedProducts에 마진율이 없으면 기존 방식 폴백
-    if (marginRate === 10 && (deal.marginRate || deal.sellerMarginRate || seller?.defaultMarginRate)) {
-      marginRate = deal.marginRate || deal.sellerMarginRate || seller?.defaultMarginRate || 10;
+    // selectedProducts에 마진율이 없으면 기존 방식 폴백 (0%도 유효한 값으로 처리)
+    if (marginRate === null) {
+      const fallbackRate = [deal.marginRate, deal.sellerMarginRate, seller?.defaultMarginRate]
+        .find(v => v !== undefined && v !== null && v !== '');
+      marginRate = fallbackRate !== undefined ? Number(fallbackRate) : 10;
     }
     document.getElementById('us-marginRate').value = marginRate;
 
