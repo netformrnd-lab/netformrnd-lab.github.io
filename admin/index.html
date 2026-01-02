@@ -2473,6 +2473,16 @@ function formatNumber(num) {
   return Number(num).toLocaleString('ko-KR');
 }
 
+// 🎯 상품명에서 키워드 추출 (정산서 상품 매칭용)
+function extractProductKeywords(name) {
+  if (!name) return [];
+  // 한글/영문 단어 추출 (2글자 이상), 특수문자와 숫자 제거
+  return name.replace(/[^\w가-힣\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2)
+    .map(w => w.toLowerCase());
+}
+
 function showLogin() {
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('app-wrapper').style.display = 'none';
@@ -9773,17 +9783,44 @@ function updateSettlementPreview() {
 
     // group.marginRate가 없으면 selectedProducts에서 찾기
     if (productMarginRate === null && deal.selectedProducts?.length > 0) {
-      // 상품명으로 매칭
-      const matchedProduct = deal.selectedProducts.find(p =>
+      // 🎯 개선된 매칭: 1) 직접 포함 2) 키워드 매칭 3) 공통 마진율 사용
+      const groupKeywords = extractProductKeywords(group.productName);
+
+      // 1) 직접 포함 매칭
+      let matchedProduct = deal.selectedProducts.find(p =>
         p.productName && group.productName &&
         (p.productName.includes(group.productName) || group.productName.includes(p.productName))
       );
+
+      // 2) 키워드 퍼지 매칭 (공통 키워드 2개 이상)
+      if (!matchedProduct && groupKeywords.length > 0) {
+        matchedProduct = deal.selectedProducts.find(p => {
+          if (!p.productName) return false;
+          const productKeywords = extractProductKeywords(p.productName);
+          const commonKeywords = groupKeywords.filter(kw =>
+            productKeywords.some(pk => pk.includes(kw) || kw.includes(pk))
+          );
+          return commonKeywords.length >= 2;
+        });
+      }
+
+      // 3) 매칭된 상품의 마진율 사용
       if (matchedProduct && matchedProduct.marginRate !== undefined && matchedProduct.marginRate !== null && matchedProduct.marginRate !== '') {
         productMarginRate = Number(matchedProduct.marginRate);
-      } else if (deal.sellerMarginRate !== undefined && deal.sellerMarginRate !== null && deal.sellerMarginRate !== '') {
-        productMarginRate = Number(deal.sellerMarginRate);
       } else {
-        productMarginRate = 20;
+        // 4) 매칭 실패 시: 공구 상품들의 공통 마진율 사용 (모든 상품이 같은 마진율이면)
+        const marginRates = deal.selectedProducts
+          .filter(p => p.marginRate !== undefined && p.marginRate !== null && p.marginRate !== '')
+          .map(p => Number(p.marginRate));
+
+        if (marginRates.length > 0 && marginRates.every(r => r === marginRates[0])) {
+          // 모든 상품이 동일한 마진율이면 해당 값 사용
+          productMarginRate = marginRates[0];
+        } else if (deal.sellerMarginRate !== undefined && deal.sellerMarginRate !== null && deal.sellerMarginRate !== '') {
+          productMarginRate = Number(deal.sellerMarginRate);
+        } else {
+          productMarginRate = 20;
+        }
       }
     }
     if (productMarginRate === null) {
@@ -9792,14 +9829,25 @@ function updateSettlementPreview() {
         : 20;
     }
 
-    // 🎯 상품별 공급단가 가져오기
+    // 🎯 상품별 공급단가 가져오기 (마진율과 동일한 매칭 로직 적용)
     let productSupplyPrice = group.supplyPrice || 0;
     if (!productSupplyPrice && deal.selectedProducts?.length > 0) {
-      const matchedProduct = deal.selectedProducts.find(p =>
+      const gkw = extractProductKeywords(group.productName);
+
+      // 1) 직접 포함 매칭
+      let matched = deal.selectedProducts.find(p =>
         p.productName && group.productName &&
         (p.productName.includes(group.productName) || group.productName.includes(p.productName))
       );
-      productSupplyPrice = matchedProduct?.supplyPrice || 0;
+      // 2) 키워드 퍼지 매칭
+      if (!matched && gkw.length > 0) {
+        matched = deal.selectedProducts.find(p => {
+          if (!p.productName) return false;
+          const pkw = extractProductKeywords(p.productName);
+          return gkw.filter(k => pkw.some(pk => pk.includes(k) || k.includes(pk))).length >= 2;
+        });
+      }
+      productSupplyPrice = matched?.supplyPrice || 0;
     }
 
     if (!dealSettlements[dealId]) {
@@ -9922,23 +9970,52 @@ async function applyCafe24Mapping() {
     const dealId = group.mappedDealId;
     const deal = state.deals.find(d => d.id === dealId);
 
-    // 🎯 상품별 마진율 가져오기
-    let productMarginRate = group.marginRate || 0;
+    // 🎯 상품별 마진율 가져오기 (0%도 유효한 값으로 처리)
+    let productMarginRate = (group.marginRate !== undefined && group.marginRate !== null && group.marginRate !== '')
+      ? Number(group.marginRate) : null;
     let productSupplyPrice = group.supplyPrice || 0;
 
     // selectedProducts에서 매칭된 상품의 마진율/공급단가 찾기
     if (deal?.selectedProducts?.length > 0) {
-      const matchedProduct = deal.selectedProducts.find(p =>
+      // 🎯 개선된 매칭 로직 (공통 함수 사용)
+      const gkw = extractProductKeywords(group.productName);
+
+      // 1) 직접 포함 매칭
+      let matchedProduct = deal.selectedProducts.find(p =>
         p.productName && group.productName &&
         (p.productName.includes(group.productName) || group.productName.includes(p.productName))
       );
+      // 2) 키워드 퍼지 매칭
+      if (!matchedProduct && gkw.length > 0) {
+        matchedProduct = deal.selectedProducts.find(p => {
+          if (!p.productName) return false;
+          const pkw = extractProductKeywords(p.productName);
+          return gkw.filter(k => pkw.some(pk => pk.includes(k) || k.includes(pk))).length >= 2;
+        });
+      }
+
       if (matchedProduct) {
-        if (!productMarginRate) productMarginRate = matchedProduct.marginRate || 0;
+        if (productMarginRate === null && matchedProduct.marginRate !== undefined && matchedProduct.marginRate !== null && matchedProduct.marginRate !== '') {
+          productMarginRate = Number(matchedProduct.marginRate);
+        }
         if (!productSupplyPrice) productSupplyPrice = matchedProduct.supplyPrice || 0;
+      }
+
+      // 3) 매칭 실패 시 공구 상품들의 공통 마진율 사용
+      if (productMarginRate === null) {
+        const marginRates = deal.selectedProducts
+          .filter(p => p.marginRate !== undefined && p.marginRate !== null && p.marginRate !== '')
+          .map(p => Number(p.marginRate));
+        if (marginRates.length > 0 && marginRates.every(r => r === marginRates[0])) {
+          productMarginRate = marginRates[0];
+        }
       }
     }
     // 폴백: 공구 마진율
-    if (!productMarginRate) productMarginRate = deal?.sellerMarginRate || 20;
+    if (productMarginRate === null) {
+      productMarginRate = (deal?.sellerMarginRate !== undefined && deal?.sellerMarginRate !== null && deal?.sellerMarginRate !== '')
+        ? Number(deal.sellerMarginRate) : 20;
+    }
 
     if (!dealUpdates[dealId]) {
       dealUpdates[dealId] = {
