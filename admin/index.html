@@ -1983,13 +1983,6 @@
               <div class="nav-item" data-tab="settlement" onclick="switchTab('settlement')" style="font-size: 13px;">
                 <span>3️⃣ 정산서 생성 & 관리</span>
               </div>
-              <div style="border-top: 1px dashed rgba(255,255,255,0.2); margin: 8px 0;"></div>
-              <div class="nav-item" data-tab="cafe24SettlementData" onclick="switchTab('cafe24SettlementData')" style="font-size: 13px;">
-                <span>📊 정산 데이터 현황</span>
-              </div>
-              <div class="nav-item" data-tab="cafe24Rankings" onclick="switchTab('cafe24Rankings')" style="font-size: 13px;">
-                <span>🏆 셀러/공급사 순위</span>
-              </div>
             </div>
           </div>
 
@@ -6431,8 +6424,6 @@ function render() {
     case 'cafe24Orders': renderCafe24Orders(); break;
     case 'cafe24Stats': renderCafe24Stats(); break;
     case 'cafe24Settings': renderCafe24Settings(); break;
-    case 'cafe24SettlementData': renderCafe24SettlementData(); break;
-    case 'cafe24Rankings': renderCafe24Rankings(); break;
     case 'guide': renderGuide(); break;
     case 'growthDashboard': renderGrowthDashboard(); break;
     case 'growthGuide': renderGrowthGuide(); break;
@@ -7461,21 +7452,31 @@ async function renderSettlement() {
   const allSellerSettlements = state.sellerSettlements || [];
   const allSupplierSettlements = state.supplierSettlements || [];
 
-  // 자사 상품 정산 (미완료 먼저, 완료 아래로)
-  const inhouseSettlements = allSellerSettlements.filter(s => s.productType === 'inhouse')
-    .sort((a, b) => (a.isCompleted ? 1 : 0) - (b.isCompleted ? 1 : 0));
-  const inhouseSalesAmount = inhouseSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const inhouseMarginAmount = inhouseSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
-  const inhouseActualPayment = inhouseSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
-  const inhousePendingCount = inhouseSettlements.filter(s => !s.isCompleted).length;
+  // 현재 필터 상태
+  const currentFilter = window.settlementFilter || 'all';
 
-  // 타사 상품 정산 (미완료 먼저, 완료 아래로)
-  const externalSettlements = allSellerSettlements.filter(s => s.productType === 'external')
+  // 자사 상품 정산 - 전체 (KPI 계산용)
+  const allInhouseSettlements = allSellerSettlements.filter(s => s.productType === 'inhouse');
+  const inhouseSalesAmount = allInhouseSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const inhouseMarginAmount = allInhouseSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+  const inhouseActualPayment = allInhouseSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const inhousePendingCount = allInhouseSettlements.filter(s => !s.isCompleted).length;
+
+  // 타사 상품 정산 - 전체 (KPI 계산용)
+  const allExternalSettlements = allSellerSettlements.filter(s => s.productType === 'external');
+
+  // 필터 적용된 정산 목록 (표시용)
+  const inhouseSettlements = allInhouseSettlements
+    .filter(s => currentFilter === 'all' ? true : currentFilter === 'pending' ? !s.isCompleted : s.isCompleted)
     .sort((a, b) => (a.isCompleted ? 1 : 0) - (b.isCompleted ? 1 : 0));
-  const externalSalesAmount = externalSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const externalMarginAmount = externalSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
-  const externalActualPayment = externalSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
-  const externalPendingCount = externalSettlements.filter(s => !s.isCompleted).length;
+
+  const externalSettlements = allExternalSettlements
+    .filter(s => currentFilter === 'all' ? true : currentFilter === 'pending' ? !s.isCompleted : s.isCompleted)
+    .sort((a, b) => (a.isCompleted ? 1 : 0) - (b.isCompleted ? 1 : 0));
+  const externalSalesAmount = allExternalSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const externalMarginAmount = allExternalSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+  const externalActualPayment = allExternalSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const externalPendingCount = allExternalSettlements.filter(s => !s.isCompleted).length;
 
   // 공급사 정산
   const supplierTotalAmount = allSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalAmount) || 0), 0);
@@ -7485,8 +7486,15 @@ async function renderSettlement() {
 
   const totalPgFee = Math.round(totalSalesAmount * 0.04);
 
-  // 정산대기 금액 (pendingSettlement 기준)
-  const totalPendingAmount = pendingSettlement.reduce((sum, d) => sum + (Number(d.totalSales) || 0), 0);
+  // 정산대기 금액 (정산서 isCompleted 기준)
+  const inhousePendingAmount = inhouseSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const externalPendingAmount = externalSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const supplierPendingAmount = allSupplierSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.totalSupplyAmount) || Number(s.supplyAmount) || 0) + (Number(s.totalVatAmount) || Number(s.vatAmount) || 0), 0);
+  const totalPendingAmount = inhousePendingAmount + externalPendingAmount + supplierPendingAmount;
+
+  // 정산 진행률 계산 (정산서 기준)
+  const totalSettlementCount = inhouseSettlements.length + externalSettlements.length + allSupplierSettlements.length;
+  const completedSettlementCount = inhouseSettlements.filter(s => s.isCompleted).length + externalSettlements.filter(s => s.isCompleted).length + allSupplierSettlements.filter(s => s.isCompleted).length;
 
   // 순이익 계산
   const totalSellerPayout = inhouseActualPayment + externalActualPayment;
@@ -7507,10 +7515,26 @@ async function renderSettlement() {
     return Math.floor((today - new Date(endDate)) / (1000 * 60 * 60 * 24));
   };
 
+  // 정산 필터 상태 (전역)
+  if (typeof window.settlementFilter === 'undefined') window.settlementFilter = 'all';
+
   app.innerHTML = `
-    <div class="page-header" style="margin-bottom: 24px;">
-      <h1 class="page-title" style="font-size: 24px; font-weight: 700;">정산 관리</h1>
-      <p style="color: var(--gray-500); font-size: 14px; margin-top: 4px;">공구 마감 후 3~7일 이내 정산 권장</p>
+    <div class="page-header" style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div>
+        <h1 class="page-title" style="font-size: 24px; font-weight: 700;">정산 관리</h1>
+        <p style="color: var(--gray-500); font-size: 14px; margin-top: 4px;">공구 마감 후 3~7일 이내 정산 권장</p>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button onclick="setSettlementFilter('all')" style="padding: 8px 16px; border-radius: 8px; border: 2px solid ${window.settlementFilter === 'all' ? '#3b82f6' : 'var(--gray-200)'}; background: ${window.settlementFilter === 'all' ? '#eff6ff' : 'white'}; color: ${window.settlementFilter === 'all' ? '#1d4ed8' : 'var(--gray-600)'}; font-weight: 600; cursor: pointer; font-size: 13px;">
+          전체
+        </button>
+        <button onclick="setSettlementFilter('pending')" style="padding: 8px 16px; border-radius: 8px; border: 2px solid ${window.settlementFilter === 'pending' ? '#f59e0b' : 'var(--gray-200)'}; background: ${window.settlementFilter === 'pending' ? '#fef3c7' : 'white'}; color: ${window.settlementFilter === 'pending' ? '#92400e' : 'var(--gray-600)'}; font-weight: 600; cursor: pointer; font-size: 13px;">
+          ⏳ 대기중 (${inhousePendingCount + externalPendingCount})
+        </button>
+        <button onclick="setSettlementFilter('completed')" style="padding: 8px 16px; border-radius: 8px; border: 2px solid ${window.settlementFilter === 'completed' ? '#10b981' : 'var(--gray-200)'}; background: ${window.settlementFilter === 'completed' ? '#dcfce7' : 'white'}; color: ${window.settlementFilter === 'completed' ? '#166534' : 'var(--gray-600)'}; font-weight: 600; cursor: pointer; font-size: 13px;">
+          ✅ 완료 (${completedSettlementCount})
+        </button>
+      </div>
     </div>
 
     <!-- 빠른 액션 -->
@@ -7567,8 +7591,8 @@ async function renderSettlement() {
         <div style="font-size: 18px; font-weight: 700; color: ${netProfit >= 0 ? '#10b981' : '#ef4444'};">${formatNumber(netProfit)}원</div>
       </div>
       <div style="background: white; border-radius: 12px; padding: 16px; border: 1px solid var(--gray-200);">
-        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">진행률</div>
-        <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${fullySettled.length}/${completedDeals.length}</div>
+        <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">정산 진행률</div>
+        <div style="font-size: 18px; font-weight: 700; color: ${completedSettlementCount === totalSettlementCount ? '#10b981' : 'var(--gray-800)'};">${completedSettlementCount}/${totalSettlementCount}</div>
       </div>
     </div>
 
@@ -7931,6 +7955,12 @@ async function renderSettlement() {
       })()}
     </div>
   `;
+}
+
+// 정산 필터 변경
+function setSettlementFilter(filter) {
+  window.settlementFilter = filter;
+  renderSalesManagement();
 }
 
 // ========== 정산 관리 함수 ==========
