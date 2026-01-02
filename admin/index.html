@@ -3370,6 +3370,12 @@ function setupListeners() {
     state.supplierSettlements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
+
+  // 콘텐츠 제작료 정산서
+  db.collection('contentFeeSettlements').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.contentFeeSettlements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
   
   // 브랜드(공급사) 목록
   db.collection('settlementBrands').orderBy('name').onSnapshot(snapshot => {
@@ -7508,7 +7514,7 @@ async function renderSettlement() {
     </div>
 
     <!-- 빠른 액션 -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px;">
       <button onclick="openCafe24MappingModal()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: white; border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='#3b82f6'" onmouseout="this.style.borderColor='var(--gray-200)'">
         <span style="font-size: 24px;">📊</span>
         <div style="text-align: left;">
@@ -7521,6 +7527,13 @@ async function renderSettlement() {
         <div style="text-align: left;">
           <div style="font-weight: 600; color: #166534;">정산서 생성</div>
           <div style="font-size: 12px; color: #15803d;">상품데이터 → 정산서</div>
+        </div>
+      </button>
+      <button onclick="openContentFeeModal()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: linear-gradient(135deg, #fdf4ff, #f5d0fe); border: 2px solid #c026d3; border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+        <span style="font-size: 24px;">🎬</span>
+        <div style="text-align: left;">
+          <div style="font-weight: 600; color: #86198f;">콘텐츠 제작료</div>
+          <div style="font-size: 12px; color: #a21caf;">셀러 제작료 수기등록</div>
         </div>
       </button>
       <button onclick="generateManagementReport()" style="display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: white; border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.borderColor='#22c55e'" onmouseout="this.style.borderColor='var(--gray-200)'">
@@ -7827,6 +7840,95 @@ async function renderSettlement() {
         </div>
       </div>
       ` : ''}
+
+      <!-- 🎬 콘텐츠 제작료 정산 -->
+      ${(() => {
+        const contentFees = (state.contentFeeSettlements || []).sort((a, b) => (a.isCompleted ? 1 : 0) - (b.isCompleted ? 1 : 0));
+        const pendingCount = contentFees.filter(f => !f.isCompleted).length;
+        const totalFeeAmount = contentFees.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
+
+        return contentFees.length > 0 || true ? `
+      <div style="margin-bottom: 24px;">
+        <div style="background: white; border-radius: 16px; border: 1px solid #d8b4fe; overflow: hidden;">
+          <div style="background: linear-gradient(135deg, #fdf4ff, #f5d0fe); padding: 16px; border-bottom: 1px solid #d8b4fe; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-size: 15px; font-weight: 700; color: #86198f; margin: 0; display: flex; align-items: center; gap: 8px;">
+              🎬 콘텐츠 제작료
+              <span style="background: #c026d3; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">${contentFees.length}건</span>
+              <span style="background: #fdf4ff; color: #86198f; padding: 2px 8px; border-radius: 10px; font-size: 11px; border: 1px solid #d8b4fe;">${formatNumber(totalFeeAmount)}원</span>
+            </h3>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              ${pendingCount > 0 ? `<span style="background: #fef3c7; color: #92400e; padding: 4px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;">대기 ${pendingCount}건</span>` : `<span style="background: #dcfce7; color: #166534; padding: 4px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;">✓ 모두 완료</span>`}
+              <button onclick="openContentFeeModal()" style="padding: 6px 12px; background: #c026d3; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">+ 제작료 등록</button>
+            </div>
+          </div>
+          <div style="max-height: 350px; overflow-y: auto;">
+            ${contentFees.length === 0 ? `
+              <div style="padding: 40px; text-align: center; color: var(--gray-400);">
+                <div style="font-size: 32px; margin-bottom: 8px;">🎬</div>
+                <div>콘텐츠 제작료 정산이 없습니다</div>
+                <button onclick="openContentFeeModal()" style="margin-top: 12px; padding: 8px 16px; background: #c026d3; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px;">+ 제작료 등록하기</button>
+              </div>
+            ` : `
+              <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+                <thead>
+                  <tr style="background: #fdf4ff; position: sticky; top: 0;">
+                    <th style="padding: 10px 8px; text-align: left; font-weight: 600; color: #86198f;">셀러</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: #86198f;">콘텐츠</th>
+                    <th style="padding: 10px 8px; text-align: left; font-weight: 600; color: var(--gray-600);">설명</th>
+                    <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: #86198f;">제작료</th>
+                    <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: #059669;">실지급액</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: var(--gray-600);">정산일</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: var(--gray-600);">연결공구</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: var(--gray-600);">상태</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: var(--gray-600);">관리</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${contentFees.map(f => {
+                    const linkedSettlement = f.linkedSettlementId ? state.sellerSettlements?.find(s => s.id === f.linkedSettlementId) : null;
+                    return `
+                    <tr style="border-bottom: 1px solid var(--gray-100);" class="hover-row">
+                      <td style="padding: 10px 8px;">
+                        <div style="font-weight: 600; color: var(--gray-800);">${f.sellerName || '-'}</div>
+                        <div style="font-size: 10px; color: var(--gray-400);">${f.brandName || '-'}</div>
+                      </td>
+                      <td style="padding: 10px 8px; text-align: center;">
+                        <span style="background: #f5d0fe; color: #86198f; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600;">
+                          ${f.contentType || '기타'}
+                        </span>
+                      </td>
+                      <td style="padding: 10px 8px; color: var(--gray-600); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${f.description || ''}">${f.description || '-'}</td>
+                      <td style="padding: 10px 8px; text-align: right; color: #86198f; font-weight: 600;">${formatNumber(f.feeAmount || 0)}원</td>
+                      <td style="padding: 10px 8px; text-align: right; font-weight: 700; color: #059669;">${formatNumber(f.actualPayment || 0)}원</td>
+                      <td style="padding: 10px 8px; text-align: center; font-size: 11px; color: var(--gray-600);">${f.settlementDate || '-'}</td>
+                      <td style="padding: 10px 8px; text-align: center;">
+                        ${linkedSettlement ? `
+                          <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 6px; border-radius: 4px; font-size: 10px; cursor: pointer;" onclick="viewSellerSettlementDetail('${linkedSettlement.id}')" title="판매정산서 보기">
+                            🔗 ${linkedSettlement.dealPeriod || '연결됨'}
+                          </span>
+                        ` : `<span style="color: var(--gray-400); font-size: 10px;">-</span>`}
+                      </td>
+                      <td style="padding: 10px 8px; text-align: center;">
+                        <span style="background: ${f.isCompleted ? '#dcfce7' : '#fef3c7'}; color: ${f.isCompleted ? '#166534' : '#92400e'}; padding: 3px 8px; border-radius: 6px; font-size: 10px; font-weight: 600;">
+                          ${f.isCompleted ? '완료' : '대기'}
+                        </span>
+                      </td>
+                      <td style="padding: 10px 8px; text-align: center;">
+                        <div style="display: flex; gap: 4px; justify-content: center;">
+                          <button onclick="openContentFeeModal(state.contentFeeSettlements.find(x=>x.id==='${f.id}'))" style="padding: 4px 8px; background: #fdf4ff; border: 1px solid #d8b4fe; border-radius: 4px; cursor: pointer; font-size: 10px; color: #86198f;" title="수정">✏️</button>
+                          ${!f.isCompleted ? `<button onclick="toggleContentFeeComplete('${f.id}')" style="padding: 4px 8px; background: #c026d3; border: none; border-radius: 4px; cursor: pointer; font-size: 10px; color: white;">완료</button>` : `<button onclick="toggleContentFeeComplete('${f.id}')" style="padding: 4px 8px; background: #e5e7eb; border: none; border-radius: 4px; cursor: pointer; font-size: 10px; color: #6b7280;">↩</button>`}
+                        </div>
+                      </td>
+                    </tr>
+                  `;}).join('')}
+                </tbody>
+              </table>
+            `}
+          </div>
+        </div>
+      </div>
+        ` : '';
+      })()}
     </div>
   `;
 }
@@ -7909,6 +8011,60 @@ function viewSellerSettlementDetail(settlementId) {
             </div>
           </div>
         ` : ''}
+
+        <!-- 콘텐츠 제작료 (연결된 것 또는 같은 셀러) -->
+        ${(() => {
+          const linkedContentFees = (state.contentFeeSettlements || []).filter(f =>
+            f.linkedSettlementId === settlementId ||
+            (f.sellerName === settlement.sellerName && f.dealPeriod === settlement.dealPeriod)
+          );
+          const totalContentFee = linkedContentFees.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
+
+          return linkedContentFees.length > 0 ? `
+          <div style="margin-bottom: 20px;">
+            <div style="font-size: 14px; font-weight: 600; color: #86198f; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              🎬 콘텐츠 제작료
+              <span style="background: #f5d0fe; color: #86198f; padding: 2px 8px; border-radius: 8px; font-size: 11px;">${linkedContentFees.length}건</span>
+              <span style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 8px; font-size: 11px;">${formatNumber(totalContentFee)}원</span>
+            </div>
+            <div style="background: #fdf4ff; border: 1px solid #d8b4fe; border-radius: 8px; padding: 12px;">
+              ${linkedContentFees.map(f => `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #e9d5ff;">
+                  <div>
+                    <span style="background: #f5d0fe; color: #86198f; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-right: 8px;">${f.contentType || '기타'}</span>
+                    <span style="font-size: 12px; color: var(--gray-700);">${f.description || '-'}</span>
+                  </div>
+                  <div style="text-align: right;">
+                    <div style="font-size: 13px; font-weight: 600; color: #86198f;">${formatNumber(f.feeAmount || 0)}원</div>
+                    <div style="font-size: 11px; color: #059669;">실지급: ${formatNumber(f.actualPayment || 0)}원</div>
+                  </div>
+                </div>
+              `).join('')}
+              <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 12px; margin-top: 8px; border-top: 2px solid #c026d3;">
+                <div style="font-weight: 600; color: #86198f;">제작료 합계</div>
+                <div style="font-size: 16px; font-weight: 700; color: #059669;">${formatNumber(totalContentFee)}원</div>
+              </div>
+            </div>
+          </div>
+          ` : '';
+        })()}
+
+        <!-- 총 정산 금액 (판매 마진 + 콘텐츠 제작료) -->
+        ${(() => {
+          const linkedContentFees = (state.contentFeeSettlements || []).filter(f =>
+            f.linkedSettlementId === settlementId ||
+            (f.sellerName === settlement.sellerName && f.dealPeriod === settlement.dealPeriod)
+          );
+          const totalContentFee = linkedContentFees.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
+          const grandTotal = actualPayment + totalContentFee;
+
+          return linkedContentFees.length > 0 ? `
+          <div style="background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 12px; padding: 16px; margin-bottom: 20px; text-align: center;">
+            <div style="font-size: 12px; color: rgba(255,255,255,0.8); margin-bottom: 4px;">💰 셀러 총 정산액 (판매마진 + 제작료)</div>
+            <div style="font-size: 24px; font-weight: 800; color: white;">${formatNumber(grandTotal)}원</div>
+          </div>
+          ` : '';
+        })()}
 
         <!-- 버튼 -->
         <div style="display: flex; gap: 12px; justify-content: center;">
@@ -16389,6 +16545,225 @@ async function toggleExternalSettlement(type, id, setComplete) {
       });
       showToast(setComplete ? '✅ 공급사 정산완료' : '⏳ 공급사 정산대기');
     }
+  } catch (err) {
+    console.error(err);
+    showToast('오류가 발생했습니다', 'error');
+  }
+}
+
+// ========== 콘텐츠 제작료 정산 ==========
+function openContentFeeModal(item = null) {
+  if (!canEdit()) { showNoPermission(); return; }
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  const isEdit = item !== null;
+  const today = new Date().toISOString().slice(0, 10);
+  const c = item || { sellerName: '', brandName: '', dealPeriod: '', contentType: '', description: '', feeAmount: '', withholdingTax: '', actualPayment: '', settlementDate: today, notes: '' };
+
+  // 기존 정산서에서 셀러/공구 조합 가져오기
+  const sellerDealOptions = (state.sellerSettlements || []).map(s => ({
+    sellerName: s.sellerName,
+    brandName: s.brandName,
+    dealPeriod: s.dealPeriod,
+    settlementId: s.id
+  })).filter((v, i, a) => a.findIndex(x => x.sellerName === v.sellerName && x.dealPeriod === v.dealPeriod) === i);
+
+  m.innerHTML = \`
+    <div class="modal-content" style="max-width: 550px;">
+      <div class="modal-header">
+        <h2 class="modal-title">🎬 콘텐츠 제작료 \${isEdit ? '수정' : '등록'}</h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div style="background: linear-gradient(135deg, #fdf4ff, #f5d0fe); border-radius: 12px; padding: 16px; margin-bottom: 20px; border-left: 4px solid #c026d3;">
+        <div style="font-weight: 600; color: #86198f;">셀러 콘텐츠 제작료 지급</div>
+        <div style="font-size: 13px; color: #a21caf;">판매정산서와 연결하여 통합 관리됩니다</div>
+      </div>
+      <form onsubmit="submitContentFee(event, '\${c.id || ''}')">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">셀러명 *</label>
+            <select class="form-input" id="cf-sellerName" required onchange="updateContentFeeOptions()">
+              <option value="">선택하세요</option>
+              \${state.sellers.map(sel => \`<option value="\${sel.name}" \${c.sellerName === sel.name ? 'selected' : ''}>\${sel.name}</option>\`).join('')}
+              <option value="_other" \${c.sellerName && !state.sellers.find(sel => sel.name === c.sellerName) ? 'selected' : ''}>직접 입력...</option>
+            </select>
+            <input type="text" class="form-input" id="cf-sellerNameCustom" value="\${c.sellerName && !state.sellers.find(sel => sel.name === c.sellerName) ? c.sellerName : ''}" placeholder="직접 입력" style="display: \${c.sellerName && !state.sellers.find(sel => sel.name === c.sellerName) ? 'block' : 'none'}; margin-top: 8px;">
+          </div>
+          <div class="form-group">
+            <label class="form-label">연결 공구 (선택)</label>
+            <select class="form-input" id="cf-linkedDeal" onchange="fillFromLinkedDeal()">
+              <option value="">연결 안함 (독립 정산)</option>
+              \${sellerDealOptions.map(opt => \`<option value="\${opt.settlementId}" data-seller="\${opt.sellerName}" data-brand="\${opt.brandName}" data-period="\${opt.dealPeriod}" \${c.linkedSettlementId === opt.settlementId ? 'selected' : ''}>\${opt.sellerName} - \${opt.dealPeriod || opt.brandName}</option>\`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">브랜드(공급사)</label>
+            <input type="text" class="form-input" id="cf-brandName" value="\${c.brandName}" placeholder="브랜드명">
+          </div>
+          <div class="form-group">
+            <label class="form-label">공구 기간</label>
+            <input type="text" class="form-input" id="cf-dealPeriod" value="\${c.dealPeriod}" placeholder="2025-01-01~2025-01-07">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">콘텐츠 유형 *</label>
+            <select class="form-input" id="cf-contentType" required>
+              <option value="">선택하세요</option>
+              <option value="릴스" \${c.contentType === '릴스' ? 'selected' : ''}>📱 릴스</option>
+              <option value="피드" \${c.contentType === '피드' ? 'selected' : ''}>📷 피드</option>
+              <option value="스토리" \${c.contentType === '스토리' ? 'selected' : ''}>⏱ 스토리</option>
+              <option value="라이브" \${c.contentType === '라이브' ? 'selected' : ''}>🔴 라이브</option>
+              <option value="유튜브" \${c.contentType === '유튜브' ? 'selected' : ''}>▶️ 유튜브</option>
+              <option value="블로그" \${c.contentType === '블로그' ? 'selected' : ''}>📝 블로그</option>
+              <option value="기타" \${c.contentType === '기타' ? 'selected' : ''}>📦 기타</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">정산일 *</label>
+            <input type="date" class="form-input" id="cf-settlementDate" value="\${c.settlementDate}" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">콘텐츠 상세 설명</label>
+          <input type="text" class="form-input" id="cf-description" value="\${c.description || ''}" placeholder="예: 신상품 홍보 릴스 2건, 라이브 1시간">
+        </div>
+        <div style="background: #fdf4ff; border-radius: 12px; padding: 16px; margin: 16px 0; border: 1px solid #e9d5ff;">
+          <div style="font-weight: 600; color: #86198f; margin-bottom: 12px;">💰 제작료 정산</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">제작료 (원) *</label>
+              <input type="number" class="form-input" id="cf-feeAmount" value="\${c.feeAmount || ''}" placeholder="100000" required oninput="calculateContentFee()" style="font-weight: 600;">
+            </div>
+            <div class="form-group">
+              <label class="form-label">원천세 (3.3%)</label>
+              <input type="number" class="form-input" id="cf-withholdingTax" value="\${c.withholdingTax || ''}" placeholder="자동 계산" readonly style="background: var(--gray-50);">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">실지급액</label>
+            <input type="number" class="form-input" id="cf-actualPayment" value="\${c.actualPayment || ''}" placeholder="자동 계산" readonly style="background: #dcfce7; font-weight: 700; color: #166534; font-size: 16px;">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">비고</label>
+          <textarea class="form-textarea" id="cf-notes" rows="2" placeholder="추가 메모">\${c.notes || ''}</textarea>
+        </div>
+        <div class="modal-footer">
+          \${isEdit ? \`<button type="button" class="btn btn-secondary" style="color: var(--danger);" onclick="deleteContentFee('\${c.id}')">삭제</button>\` : ''}
+          <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+          <button type="submit" class="btn btn-primary" style="background: #c026d3;">\${isEdit ? '수정하기' : '등록하기'}</button>
+        </div>
+      </form>
+    </div>
+  \`;
+
+  // 초기 계산
+  if (c.feeAmount) calculateContentFee();
+}
+
+function updateContentFeeOptions() {
+  const sellerSelect = document.getElementById('cf-sellerName');
+  const customInput = document.getElementById('cf-sellerNameCustom');
+  if (sellerSelect.value === '_other') {
+    customInput.style.display = 'block';
+    customInput.focus();
+  } else {
+    customInput.style.display = 'none';
+  }
+}
+
+function fillFromLinkedDeal() {
+  const select = document.getElementById('cf-linkedDeal');
+  const option = select.options[select.selectedIndex];
+  if (option && option.value) {
+    const sellerName = option.dataset.seller;
+    const brandName = option.dataset.brand;
+    const dealPeriod = option.dataset.period;
+
+    document.getElementById('cf-sellerName').value = sellerName || '';
+    document.getElementById('cf-brandName').value = brandName || '';
+    document.getElementById('cf-dealPeriod').value = dealPeriod || '';
+  }
+}
+
+function calculateContentFee() {
+  const feeAmount = Number(document.getElementById('cf-feeAmount')?.value) || 0;
+  const withholdingTax = Math.round(feeAmount * 0.033);
+  const actualPayment = feeAmount - withholdingTax;
+
+  document.getElementById('cf-withholdingTax').value = withholdingTax;
+  document.getElementById('cf-actualPayment').value = actualPayment;
+}
+
+async function submitContentFee(e, editId = '') {
+  e.preventDefault();
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const sellerNameSelect = document.getElementById('cf-sellerName').value;
+  const sellerNameCustom = document.getElementById('cf-sellerNameCustom').value;
+  const sellerName = sellerNameSelect === '_other' ? sellerNameCustom : sellerNameSelect;
+
+  const data = {
+    type: 'contentFee',
+    sellerName,
+    brandName: document.getElementById('cf-brandName').value,
+    dealPeriod: document.getElementById('cf-dealPeriod').value,
+    linkedSettlementId: document.getElementById('cf-linkedDeal').value || null,
+    contentType: document.getElementById('cf-contentType').value,
+    description: document.getElementById('cf-description').value,
+    feeAmount: Number(document.getElementById('cf-feeAmount').value) || 0,
+    withholdingTax: Number(document.getElementById('cf-withholdingTax').value) || 0,
+    actualPayment: Number(document.getElementById('cf-actualPayment').value) || 0,
+    settlementDate: document.getElementById('cf-settlementDate').value,
+    notes: document.getElementById('cf-notes').value,
+    isCompleted: false,
+    updatedAt: new Date().toISOString()
+  };
+
+  try {
+    if (editId) {
+      await db.collection('contentFeeSettlements').doc(editId).update(data);
+      showToast('✅ 콘텐츠 제작료가 수정되었습니다');
+    } else {
+      data.createdAt = new Date().toISOString();
+      await db.collection('contentFeeSettlements').add(data);
+      showToast('✅ 콘텐츠 제작료가 등록되었습니다');
+    }
+    closeModal();
+  } catch (err) {
+    console.error('콘텐츠 제작료 저장 오류:', err);
+    showToast('오류가 발생했습니다', 'error');
+  }
+}
+
+async function deleteContentFee(id) {
+  if (!canEdit()) { showNoPermission(); return; }
+  if (!confirm('이 콘텐츠 제작료 정산을 삭제하시겠습니까?')) return;
+
+  try {
+    await db.collection('contentFeeSettlements').doc(id).delete();
+    showToast('삭제되었습니다');
+    closeModal();
+  } catch (err) {
+    console.error('삭제 오류:', err);
+    showToast('삭제 중 오류가 발생했습니다', 'error');
+  }
+}
+
+async function toggleContentFeeComplete(id) {
+  if (!canEdit()) { showNoPermission(); return; }
+  const fee = (state.contentFeeSettlements || []).find(f => f.id === id);
+  if (!fee) return;
+
+  try {
+    await db.collection('contentFeeSettlements').doc(id).update({
+      isCompleted: !fee.isCompleted,
+      completedAt: !fee.isCompleted ? new Date().toISOString() : null
+    });
+    showToast(fee.isCompleted ? '⏳ 정산대기로 변경' : '✅ 정산완료');
   } catch (err) {
     console.error(err);
     showToast('오류가 발생했습니다', 'error');
