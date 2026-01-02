@@ -5982,10 +5982,39 @@ function renderOrders(container) {
   const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
   const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
 
-  // 내 딜과 연결된 주문만 필터링
-  let myOrders = state.cafe24Orders.filter(order =>
-    order.deal_id && myDealIds.includes(order.deal_id)
-  );
+  // 🔧 FIX: supplier_name / brand_name 또는 seller_name 기준으로 필터링 (어드민과 동일)
+  const isSupplier = state.userType === 'supplier';
+  const currentName = (state.currentUser?.name || '').trim().toLowerCase();
+  const cleanCurrentName = currentName.replace(/[\s\-\_\(\)]/g, '');
+
+  // 내 주문 필터링 함수
+  const isMyOrder = (order) => {
+    // 1. deal_id 매칭 (기존 방식)
+    if (order.deal_id && myDealIds.includes(order.deal_id)) return true;
+
+    // 2. supplier_name / brand_name 또는 seller_name 매칭 (어드민 방식)
+    if (isSupplier) {
+      const supplierName = (order.supplier_name || '').trim().toLowerCase();
+      const brandName = (order.brand_name || '').trim().toLowerCase();
+      const cleanSupplier = supplierName.replace(/[\s\-\_\(\)]/g, '');
+      const cleanBrand = brandName.replace(/[\s\-\_\(\)]/g, '');
+
+      if (supplierName === currentName || brandName === currentName) return true;
+      if (cleanSupplier && (cleanSupplier.includes(cleanCurrentName) || cleanCurrentName.includes(cleanSupplier))) return true;
+      if (cleanBrand && (cleanBrand.includes(cleanCurrentName) || cleanCurrentName.includes(cleanBrand))) return true;
+    } else {
+      // 셀러: seller_name 매칭
+      const sellerName = (order.seller_name || '').trim().toLowerCase();
+      const cleanSeller = sellerName.replace(/[\s\-\_\(\)]/g, '');
+
+      if (sellerName === currentName) return true;
+      if (cleanSeller && (cleanSeller.includes(cleanCurrentName) || cleanCurrentName.includes(cleanSeller))) return true;
+    }
+
+    return false;
+  };
+
+  let myOrders = state.cafe24Orders.filter(isMyOrder);
 
   // 기간별 필터링
   const allOrders = [...myOrders]; // 전체 주문 보관
@@ -6002,19 +6031,27 @@ function renderOrders(container) {
     });
   }
 
-  // 딜별로 그룹화
-  const ordersByDeal = {};
+  // 🔧 FIX: 셀러별(공급사용) / 공급사별(셀러용) 그룹화 (어드민 방식)
+  const ordersByGroup = {};
   myOrders.forEach(order => {
-    const dealId = order.deal_id;
-    if (!ordersByDeal[dealId]) {
-      const deal = myDeals.find(d => d.id === dealId);
-      ordersByDeal[dealId] = {
-        deal: deal,
-        orders: []
+    // 공급사: 셀러명 기준 그룹화 / 셀러: 공급사명 기준 그룹화
+    const groupKey = isSupplier
+      ? (order.seller_name || '미지정')
+      : (order.supplier_name || order.brand_name || '미지정');
+
+    if (!ordersByGroup[groupKey]) {
+      ordersByGroup[groupKey] = {
+        name: groupKey,
+        orders: [],
+        products: new Set()
       };
     }
-    ordersByDeal[dealId].orders.push(order);
+    ordersByGroup[groupKey].orders.push(order);
+    if (order.product_name) ordersByGroup[groupKey].products.add(order.product_name);
   });
+
+  // 주문 건수 기준 정렬
+  const sortedGroups = Object.values(ordersByGroup).sort((a, b) => b.orders.length - a.orders.length);
 
   // 통계 계산
   const totalOrders = myOrders.length;
@@ -6022,7 +6059,6 @@ function renderOrders(container) {
   const pendingOrders = totalOrders - paidOrders;
   const totalAmount = myOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
 
-  const isSupplier = state.userType === 'supplier';
   const themeColor = isSupplier ? 'var(--primary)' : '#10b981';
 
   // 기간 텍스트
@@ -6118,31 +6154,27 @@ function renderOrders(container) {
       </div>
     </div>
 
-    <!-- 딜별 주문 목록 -->
-    ${Object.keys(ordersByDeal).length === 0 ? `
+    <!-- 🔧 FIX: 셀러별(공급사) / 공급사별(셀러) 주문 목록 -->
+    ${sortedGroups.length === 0 ? `
       <div style="padding: 60px 20px; text-align: center; background: linear-gradient(145deg, #ffffff, #f8f8f8); border-radius: 16px;">
         <div style="font-size: 48px; margin-bottom: 16px;">📦</div>
         <p style="color: var(--gray-500); font-size: 14px;">주문 내역이 없습니다</p>
       </div>
-    ` : Object.entries(ordersByDeal).map(([dealId, data]) => {
-      const deal = data.deal;
-      const orders = data.orders;
+    ` : sortedGroups.map((group, groupIdx) => {
+      const orders = group.orders;
+      const productCount = group.products.size;
+      const groupAmount = orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
       return `
         <div style="background: linear-gradient(145deg, #ffffff, #f9f9f9); border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border-left: 4px solid ${themeColor};">
           <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid ${themeColor};">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-              <span style="font-size: 16px;">📦</span>
-              <div style="font-weight: 700; font-size: 17px; color: var(--gray-900);">${deal?.title || '공구명 없음'}</div>
+              <span style="display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; background: ${groupIdx < 3 ? themeColor : '#e5e7eb'}; color: ${groupIdx < 3 ? 'white' : '#6b7280'}; border-radius: 50%; font-size: 11px; font-weight: 700;">${groupIdx + 1}</span>
+              <div style="font-weight: 700; font-size: 17px; color: var(--gray-900);">${isSupplier ? '👤' : '🏭'} ${group.name}</div>
             </div>
             <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
-              ${deal?.startDate && deal?.endDate ? `
-                <div style="display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--gray-600);">
-                  <span>📅</span>
-                  <span>${deal.startDate} ~ ${deal.endDate}</span>
-                </div>
-              ` : ''}
+              <div style="font-size: 11px; color: var(--gray-600);">상품 ${productCount}종</div>
               <div style="font-size: 12px; color: ${themeColor}; font-weight: 600;">
-                주문 ${orders.length}건 · ${formatNumber(orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원
+                주문 ${orders.length}건 · ${formatNumber(groupAmount)}원
               </div>
             </div>
           </div>
@@ -6161,7 +6193,7 @@ function renderOrders(container) {
                 </tr>
               </thead>
               <tbody>
-                ${orders.map(order => {
+                ${orders.slice(0, 50).map(order => {
                   // 최근 1개월 내역 체크
                   let isRecentOrder = false;
                   if (order.order_date) {
@@ -6212,6 +6244,13 @@ function renderOrders(container) {
                   </tr>
                   `;
                 }).join('')}
+                ${orders.length > 50 ? `
+                  <tr>
+                    <td colspan="${isSupplier ? 7 : 6}" style="padding: 12px; text-align: center; color: var(--gray-500); font-size: 11px;">
+                      ... 외 ${orders.length - 50}건 더 있음
+                    </td>
+                  </tr>
+                ` : ''}
               </tbody>
             </table>
           </div>
