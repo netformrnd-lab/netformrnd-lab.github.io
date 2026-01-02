@@ -1875,23 +1875,7 @@
               <span style="font-weight: 600; font-size: 14px; color: #191F28;" id="userName">-</span>
               <span style="font-size: 12px; color: #8B95A1; margin-left: 6px;" id="userRole">-</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <!-- 🔔 알림 벨 -->
-              <div style="position: relative;">
-                <button onclick="toggleNotificationPanel()" id="notification-bell" style="background: none; border: none; cursor: pointer; font-size: 18px; padding: 4px; position: relative;">
-                  🔔
-                  <span id="notification-badge" style="display: none; position: absolute; top: 0; right: 0; width: 16px; height: 16px; background: #ef4444; color: white; border-radius: 50%; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;">0</span>
-                </button>
-                <div id="notification-panel" style="display: none; position: absolute; top: 100%; right: 0; width: 300px; background: white; border: 1px solid var(--gray-200); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 1000; margin-top: 8px;">
-                  <div style="padding: 12px 16px; border-bottom: 1px solid var(--gray-100); display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: 600; font-size: 14px;">알림</span>
-                    <button onclick="toggleNotificationPanel()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">×</button>
-                  </div>
-                  <div id="notification-list" style="max-height: 300px; overflow-y: auto;"></div>
-                </div>
-              </div>
-              <div style="font-size: 16px; font-weight: 700; color: #0064FF;" id="userGoalRate">-</div>
-            </div>
+            <div style="font-size: 16px; font-weight: 700; color: #0064FF;" id="userGoalRate">-</div>
           </div>
         </div>
 
@@ -3232,6 +3216,9 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
+// ========== 전역 상수 (하드코딩 방지) ==========
+const SETTLEMENT_DELAY_THRESHOLD = 7;  // 정산 지연 기준일 (D+7 이상이면 지연)
+
 // 상태 관리
 let state = {
   currentTab: 'calendar',
@@ -3355,8 +3342,9 @@ function setupListeners() {
   db.collection('deals').orderBy('startDate', 'desc').onSnapshot(snapshot => {
     state.deals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
-    // 알림 업데이트
-    if (typeof updateNotifications === 'function') updateNotifications();
+    // 퀵 업무 허브 배지 업데이트 (열려있으면 전체 렌더, 닫혀있으면 배지만)
+    if (typeof updateQuickHubBadge === 'function') updateQuickHubBadge();
+    if (quickHubOpen && typeof renderQuickHub === 'function') renderQuickHub();
   });
   
   db.collection('suppliers').orderBy('name').onSnapshot(snapshot => {
@@ -3451,7 +3439,16 @@ function setupListeners() {
     state.urgentSales = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
-  
+
+  // 업무(Tasks) - 퀵 업무 허브와 동기화
+  db.collection('tasks').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 퀵 허브 배지 업데이트 (열려있으면 전체 렌더, 닫혀있으면 배지만)
+    if (typeof updateQuickHubBadge === 'function') updateQuickHubBadge();
+    if (quickHubOpen && typeof renderQuickHub === 'function') renderQuickHub();
+    render();
+  });
+
   // 셀러 제안 (sellerProposals)
   db.collection('sellerProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
     state.sellerProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -4229,125 +4226,8 @@ document.addEventListener('click', function(e) {
   }
 });
 
-// ========== 알림 시스템 ==========
-function toggleNotificationPanel() {
-  const panel = document.getElementById('notification-panel');
-  if (panel) {
-    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    if (panel.style.display === 'block') {
-      updateNotifications();
-    }
-  }
-}
-
-function updateNotifications() {
-  const notifications = [];
-  const today = new Date();
-
-  // 1. 정산 지연 알림 (D+7 초과)
-  (state.deals || []).forEach(deal => {
-    if (deal.status === 'completed' && !deal.journeyComplete) {
-      const endDate = new Date(deal.endDate);
-      const daysSinceEnd = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
-      if (daysSinceEnd > 7) {
-        notifications.push({
-          type: 'warning',
-          icon: '⚠️',
-          title: '정산 지연',
-          message: `"${deal.title}" 정산 D+${daysSinceEnd}`,
-          action: () => { openDealModal(deal); toggleNotificationPanel(); }
-        });
-      }
-    }
-  });
-
-  // 2. 오늘 시작하는 공구
-  (state.deals || []).forEach(deal => {
-    const startDate = new Date(deal.startDate);
-    if (startDate.toDateString() === today.toDateString()) {
-      notifications.push({
-        type: 'info',
-        icon: '🚀',
-        title: '오늘 시작',
-        message: `"${deal.title}" 공구 시작`,
-        action: () => { openDealModal(deal); toggleNotificationPanel(); }
-      });
-    }
-  });
-
-  // 3. 내일 시작하는 공구
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  (state.deals || []).forEach(deal => {
-    const startDate = new Date(deal.startDate);
-    if (startDate.toDateString() === tomorrow.toDateString()) {
-      notifications.push({
-        type: 'info',
-        icon: '📅',
-        title: '내일 시작',
-        message: `"${deal.title}" 공구 시작 예정`,
-        action: () => { openDealModal(deal); toggleNotificationPanel(); }
-      });
-    }
-  });
-
-  // 4. 서류 미비 공급사
-  const missingDocs = (state.suppliers || []).filter(s =>
-    s.contracted && (!s.hasBizRegistration || !s.hasBankAccount || !s.hasContract)
-  );
-  if (missingDocs.length > 0) {
-    notifications.push({
-      type: 'warning',
-      icon: '📋',
-      title: '서류 미비',
-      message: `${missingDocs.length}개 공급사 서류 필요`,
-      action: () => { switchTab('suppliers'); toggleNotificationPanel(); }
-    });
-  }
-
-  // 배지 업데이트
-  const badge = document.getElementById('notification-badge');
-  if (badge) {
-    if (notifications.length > 0) {
-      badge.style.display = 'flex';
-      badge.textContent = notifications.length > 9 ? '9+' : notifications.length;
-    } else {
-      badge.style.display = 'none';
-    }
-  }
-
-  // 알림 목록 렌더링
-  const list = document.getElementById('notification-list');
-  if (list) {
-    if (notifications.length === 0) {
-      list.innerHTML = '<div style="padding: 24px; text-align: center; color: var(--gray-500); font-size: 13px;">새로운 알림이 없습니다</div>';
-    } else {
-      list.innerHTML = notifications.map((n, i) => `
-        <div onclick="notificationClick(${i})" style="padding: 12px 16px; cursor: pointer; border-bottom: 1px solid var(--gray-100); display: flex; align-items: flex-start; gap: 10px; transition: background 0.15s;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
-          <span style="font-size: 16px;">${n.icon}</span>
-          <div style="flex: 1; min-width: 0;">
-            <div style="font-size: 12px; font-weight: 600; color: ${n.type === 'warning' ? '#dc2626' : '#3b82f6'}; margin-bottom: 2px;">${n.title}</div>
-            <div style="font-size: 13px; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${n.message}</div>
-          </div>
-        </div>
-      `).join('');
-      window.notifications = notifications;
-    }
-  }
-}
-
-function notificationClick(index) {
-  if (window.notifications && window.notifications[index]) {
-    window.notifications[index].action();
-  }
-}
-
-// 페이지 로드 시 알림 업데이트 (데이터 로드 후)
-function initNotifications() {
-  setTimeout(() => {
-    updateNotifications();
-  }, 2000);
-}
+// ========== 알림 시스템 (퀵 업무 허브로 통합됨) ==========
+// 알림 기능은 오른쪽 하단 퀵 업무 허브에서 제공됩니다.
 
 // 날짜 네비게이션
 function prevMonth() {
@@ -4669,7 +4549,7 @@ function openDealModal(deal = null) {
           } else if (d.journeySellerSettle && d.journeySupplierSettle) {
             settlementStatus = '📋 정산서 제작 완료';
             settlementColor = 'var(--info)';
-          } else if (daysSinceEnd > 7) {
+          } else if (daysSinceEnd > SETTLEMENT_DELAY_THRESHOLD) {
             settlementStatus = '⚠️ 정산 지연 (D+' + daysSinceEnd + ')';
             settlementColor = 'var(--danger)';
           } else if (daysSinceEnd >= 0) {
@@ -38885,7 +38765,270 @@ async function submitBulkReferences() {
   loadReferences();
 }
 
+// ========== 퀵 업무 허브 (Quick Task Hub) ==========
+let quickHubOpen = false;
+let quickHubTab = 'alerts'; // alerts, today, week
+
+function toggleQuickHub() {
+  quickHubOpen = !quickHubOpen;
+  const hub = document.getElementById('quick-task-hub');
+  const btn = document.getElementById('quick-hub-btn');
+  if (hub) {
+    hub.style.display = quickHubOpen ? 'block' : 'none';
+    if (quickHubOpen) renderQuickHub();
+  }
+  if (btn) {
+    btn.style.transform = quickHubOpen ? 'scale(0.95)' : 'scale(1)';
+  }
+}
+
+function setQuickHubTab(tab) {
+  quickHubTab = tab;
+  renderQuickHub();
+}
+
+function renderQuickHub() {
+  const content = document.getElementById('quick-hub-content');
+  if (!content) return;
+
+  const currentUser = state.currentAdmin || state.currentUser || {};
+  const userId = currentUser.id || currentUser.name || '';
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+
+  // 오늘 날짜 기준 이번 주 계산
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate() - today.getDay());
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+
+  // 다음 주
+  const nextWeekStart = new Date(weekEnd);
+  nextWeekStart.setDate(weekEnd.getDate() + 1);
+  const nextWeekEnd = new Date(nextWeekStart);
+  nextWeekEnd.setDate(nextWeekStart.getDate() + 6);
+
+  // 업무 데이터 (기존 tasks 컬렉션 활용)
+  const allTasks = state.tasks || [];
+  const myTasks = allTasks.filter(t => !userId || t.assignee === userId || t.createdBy === userId);
+
+  // 오늘 할 일
+  const todayTasks = myTasks.filter(t => t.dueDate === todayStr && t.status !== 'completed');
+
+  // 이번 주 완료
+  const weekCompleted = myTasks.filter(t => {
+    if (t.status !== 'completed') return false;
+    const completedDate = new Date(t.completedAt || t.updatedAt || t.createdAt);
+    return completedDate >= weekStart && completedDate <= weekEnd;
+  });
+
+  // 다음 주 예정
+  const nextWeekTasks = myTasks.filter(t => {
+    if (!t.dueDate || t.status === 'completed') return false;
+    const dueDate = new Date(t.dueDate);
+    return dueDate >= nextWeekStart && dueDate <= nextWeekEnd;
+  });
+
+  // 긴급 업무 (D-day 또는 지남, 또는 priority: high)
+  const urgentTasks = myTasks.filter(t => {
+    if (t.status === 'completed') return false;
+    if (t.priority === 'high' || t.priority === 'urgent') return true;
+    if (!t.dueDate) return false;
+    const dueDate = new Date(t.dueDate);
+    const diff = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+    return diff <= 1;
+  });
+
+  // 알림 생성 (정산 지연 + 공구 시작 + 긴급 업무)
+  const alerts = [];
+
+  // 정산 지연 알림
+  (state.deals || []).forEach(deal => {
+    if (deal.status === 'completed' && !deal.journeyComplete) {
+      const endDate = new Date(deal.endDate);
+      const daysSinceEnd = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
+      if (daysSinceEnd > SETTLEMENT_DELAY_THRESHOLD) {
+        alerts.push({ type: 'warning', icon: '⚠️', text: '"' + deal.title + '" 정산 D+' + daysSinceEnd, action: 'deal', id: deal.id });
+      }
+    }
+  });
+
+  // 오늘/내일 시작 공구
+  (state.deals || []).forEach(deal => {
+    const startDate = new Date(deal.startDate);
+    if (startDate.toDateString() === today.toDateString()) {
+      alerts.push({ type: 'info', icon: '🚀', text: '"' + deal.title + '" 오늘 시작', action: 'deal', id: deal.id });
+    }
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (startDate.toDateString() === tomorrow.toDateString()) {
+      alerts.push({ type: 'info', icon: '📅', text: '"' + deal.title + '" 내일 시작', action: 'deal', id: deal.id });
+    }
+  });
+
+  // 긴급 업무
+  urgentTasks.forEach(task => {
+    alerts.push({ type: 'urgent', icon: '🔥', text: task.title, action: 'task', id: task.id });
+  });
+
+  // 탭별 컨텐츠
+  let tabContent = '';
+
+  if (quickHubTab === 'alerts') {
+    if (alerts.length === 0) {
+      tabContent = '<div style="padding: 24px; text-align: center; color: var(--gray-400);"><div style="font-size: 32px; margin-bottom: 8px;">✨</div>긴급 알림이 없습니다</div>';
+    } else {
+      tabContent = alerts.map((a, i) =>
+        '<div onclick="handleQuickHubAction(\'' + a.action + '\', \'' + a.id + '\')" style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 8px;" onmouseover="this.style.background=\'var(--gray-50)\'" onmouseout="this.style.background=\'white\'">' +
+          '<span>' + a.icon + '</span>' +
+          '<span style="flex: 1; font-size: 13px; color: var(--gray-700); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + a.text + '</span>' +
+        '</div>'
+      ).join('');
+    }
+  } else if (quickHubTab === 'today') {
+    if (todayTasks.length === 0) {
+      tabContent = '<div style="padding: 24px; text-align: center; color: var(--gray-400);"><div style="font-size: 32px; margin-bottom: 8px;">🎉</div>오늘 할 일이 없습니다</div>';
+    } else {
+      tabContent = todayTasks.map(t =>
+        '<div style="padding: 10px 12px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 8px;">' +
+          '<input type="checkbox" onclick="quickCompleteTask(\'' + t.id + '\')" style="width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer;">' +
+          '<span style="flex: 1; font-size: 13px; color: var(--gray-700);">' + t.title + '</span>' +
+          (t.priority === 'high' ? '<span style="font-size: 10px; background: var(--danger-light, #fef2f2); color: var(--danger); padding: 2px 6px; border-radius: 4px;">긴급</span>' : '') +
+        '</div>'
+      ).join('');
+    }
+    tabContent += '<button onclick="openQuickAddTask()" style="width: 100%; padding: 12px; background: var(--primary-light); color: var(--primary); border: none; font-size: 13px; font-weight: 600; cursor: pointer;">+ 업무 추가</button>';
+  } else if (quickHubTab === 'week') {
+    tabContent = '<div style="padding: 12px;">' +
+      '<div style="margin-bottom: 12px;">' +
+        '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">📊 이번 주 완료</div>' +
+        '<div style="font-size: 24px; font-weight: 700; color: var(--success);">' + weekCompleted.length + '건</div>' +
+      '</div>' +
+      '<div style="margin-bottom: 12px;">' +
+        '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">📅 다음 주 예정</div>' +
+        '<div style="font-size: 24px; font-weight: 700; color: var(--primary);">' + nextWeekTasks.length + '건</div>' +
+      '</div>';
+
+    if (nextWeekTasks.length > 0) {
+      tabContent += '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">예정 업무:</div>';
+      tabContent += nextWeekTasks.slice(0, 3).map(t =>
+        '<div style="padding: 6px 8px; background: var(--gray-50); border-radius: var(--btn-radius); margin-bottom: 4px; font-size: 12px; color: var(--gray-700);">' + t.title + '</div>'
+      ).join('');
+    }
+    tabContent += '</div>';
+  }
+
+  // 배지 카운트
+  const badgeCount = alerts.length;
+  const badge = document.getElementById('quick-hub-badge');
+  if (badge) {
+    badge.style.display = badgeCount > 0 ? 'flex' : 'none';
+    badge.textContent = badgeCount > 9 ? '9+' : badgeCount;
+  }
+
+  content.innerHTML =
+    '<div style="display: flex; border-bottom: 1px solid var(--gray-200);">' +
+      '<button onclick="setQuickHubTab(\'alerts\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'alerts' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'alerts' ? 'var(--primary)' : 'transparent') + '; font-size: 12px; font-weight: 600; color: ' + (quickHubTab === 'alerts' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">🔔 알림 (' + alerts.length + ')</button>' +
+      '<button onclick="setQuickHubTab(\'today\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'today' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'today' ? 'var(--primary)' : 'transparent') + '; font-size: 12px; font-weight: 600; color: ' + (quickHubTab === 'today' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">📋 오늘 (' + todayTasks.length + ')</button>' +
+      '<button onclick="setQuickHubTab(\'week\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'week' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'week' ? 'var(--primary)' : 'transparent') + '; font-size: 12px; font-weight: 600; color: ' + (quickHubTab === 'week' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">📊 주간</button>' +
+    '</div>' +
+    '<div style="max-height: 300px; overflow-y: auto;">' + tabContent + '</div>';
+}
+
+function handleQuickHubAction(action, id) {
+  toggleQuickHub();
+  if (action === 'deal') {
+    const deal = (state.deals || []).find(d => d.id === id);
+    if (deal) openDealModal(deal);
+  } else if (action === 'task') {
+    switchTab('tasks');
+  }
+}
+
+function quickCompleteTask(taskId) {
+  const task = (state.tasks || []).find(t => t.id === taskId);
+  if (task && db) {
+    db.collection('tasks').doc(taskId).update({
+      status: 'completed',
+      completedAt: new Date().toISOString()
+    }).then(() => {
+      showToast('✅ 업무 완료!');
+      renderQuickHub();
+    });
+  }
+}
+
+function openQuickAddTask() {
+  toggleQuickHub();
+  switchTab('tasks');
+  // 업무 추가 모달 열기 (tasks 탭에 있는 기능 활용)
+  setTimeout(() => {
+    if (typeof openTaskModal === 'function') openTaskModal();
+  }, 300);
+}
+
+// 퀵 허브 배지 업데이트 (전역 함수로 분리 - 리스너에서 호출 가능)
+function updateQuickHubBadge() {
+  const alerts = [];
+  const today = new Date();
+
+  // 정산 지연 알림
+  (state.deals || []).forEach(deal => {
+    if (deal.status === 'completed' && !deal.journeyComplete) {
+      const endDate = new Date(deal.endDate);
+      const daysSinceEnd = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
+      if (daysSinceEnd > SETTLEMENT_DELAY_THRESHOLD) alerts.push(1);
+    }
+    const startDate = new Date(deal.startDate);
+    if (startDate.toDateString() === today.toDateString()) alerts.push(1);
+  });
+
+  // 긴급 업무 알림
+  const todayStr = today.toISOString().split('T')[0];
+  (state.tasks || []).forEach(task => {
+    if (task.status === 'completed') return;
+    if (task.priority === 'high' || task.priority === 'urgent') {
+      alerts.push(1);
+    } else if (task.dueDate) {
+      const dueDate = new Date(task.dueDate);
+      const diff = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+      if (diff <= 1) alerts.push(1);
+    }
+  });
+
+  const badge = document.getElementById('quick-hub-badge');
+  if (badge) {
+    badge.style.display = alerts.length > 0 ? 'flex' : 'none';
+    badge.textContent = alerts.length > 9 ? '9+' : alerts.length;
+  }
+}
+
+// 페이지 로드 후 초기 배지 업데이트
+setTimeout(() => {
+  if (typeof updateQuickHubBadge === 'function') {
+    updateQuickHubBadge();
+  }
+}, 3000);
+
 </script>
+
+<!-- 🚀 퀵 업무 허브 (고정 UI) -->
+<div id="quick-hub-container" style="position: fixed; bottom: 24px; right: 24px; z-index: 9999;">
+  <!-- 퀵 허브 패널 -->
+  <div id="quick-task-hub" style="display: none; width: 320px; background: white; border-radius: var(--card-radius); box-shadow: 0 8px 32px rgba(0,0,0,0.15); margin-bottom: 12px; overflow: hidden; border: 1px solid var(--gray-200);">
+    <div style="background: linear-gradient(135deg, var(--primary), #3b82f6); padding: 14px 16px; display: flex; justify-content: space-between; align-items: center;">
+      <span style="font-weight: 600; color: white; font-size: 14px;">📋 내 업무 허브</span>
+      <button onclick="toggleQuickHub()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 24px; height: 24px; border-radius: var(--btn-radius); cursor: pointer; font-size: 14px;">×</button>
+    </div>
+    <div id="quick-hub-content"></div>
+  </div>
+
+  <!-- 플로팅 버튼 -->
+  <button id="quick-hub-btn" onclick="toggleQuickHub()" style="width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), #3b82f6); border: none; box-shadow: 0 4px 16px rgba(30, 64, 175, 0.4); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; position: relative;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform=quickHubOpen?'scale(0.95)':'scale(1)'">
+    <span style="font-size: 24px;">📋</span>
+    <span id="quick-hub-badge" style="display: none; position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; background: var(--danger); color: white; border-radius: 10px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px;">0</span>
+  </button>
+</div>
 
 </body>
 </html>
