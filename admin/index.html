@@ -2473,6 +2473,16 @@ function formatNumber(num) {
   return Number(num).toLocaleString('ko-KR');
 }
 
+// 🎯 상품명에서 키워드 추출 (정산서 상품 매칭용)
+function extractProductKeywords(name) {
+  if (!name) return [];
+  // 한글/영문 단어 추출 (2글자 이상), 특수문자와 숫자 제거
+  return name.replace(/[^\w가-힣\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2)
+    .map(w => w.toLowerCase());
+}
+
 function showLogin() {
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('app-wrapper').style.display = 'none';
@@ -7846,20 +7856,20 @@ function viewSellerSettlementDetail(settlementId) {
                 <thead>
                   <tr style="background: var(--gray-50);">
                     <th style="padding: 10px 8px; text-align: left;">상품명</th>
-                    <th style="padding: 10px 8px; text-align: right;">수량</th>
-                    <th style="padding: 10px 8px; text-align: right;">금액</th>
-                    <th style="padding: 10px 8px; text-align: right;">마진율</th>
-                    <th style="padding: 10px 8px; text-align: right;">마진금액</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 70px;">수량</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 100px;">금액</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 70px;">마진율</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 100px;">마진금액</th>
                   </tr>
                 </thead>
                 <tbody>
                   ${salesItems.map(item => `
                     <tr style="border-bottom: 1px solid var(--gray-100);">
                       <td style="padding: 8px;">${item.productName || '-'}</td>
-                      <td style="padding: 8px; text-align: right;">${formatNumber(item.quantity || 0)}개</td>
-                      <td style="padding: 8px; text-align: right;">${formatNumber(item.amount || 0)}원</td>
-                      <td style="padding: 8px; text-align: right;">${item.marginRate || 0}%</td>
-                      <td style="padding: 8px; text-align: right; color: #059669; font-weight: 600;">${formatNumber(item.marginAmount || 0)}원</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 70px;">${formatNumber(item.quantity || 0)}개</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 100px;">${formatNumber(item.amount || 0)}원</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 70px;">${item.marginRate || 0}%</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 100px; color: #059669; font-weight: 600;">${formatNumber(item.marginAmount || 0)}원</td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -7870,6 +7880,9 @@ function viewSellerSettlementDetail(settlementId) {
 
         <!-- 버튼 -->
         <div style="display: flex; gap: 12px; justify-content: center;">
+          <button onclick="downloadSellerSettlementPDF('${settlementId}')" class="btn" style="background: #1e40af; color: white; border: none;">
+            📄 PDF 다운로드
+          </button>
           <button onclick="toggleSellerSettlementComplete('${settlementId}')" class="btn ${settlement.isCompleted ? 'btn-secondary' : 'btn-primary'}" style="${!settlement.isCompleted ? 'background: #059669;' : ''}">
             ${settlement.isCompleted ? '⏪ 대기로 변경' : '✅ 정산 완료'}
           </button>
@@ -7882,6 +7895,287 @@ function viewSellerSettlementDetail(settlementId) {
     </div>
   `;
   modal.className = 'modal show';
+}
+
+// 셀러 정산서 PDF 다운로드
+function downloadSellerSettlementPDF(settlementId) {
+  const settlement = state.sellerSettlements?.find(s => s.id === settlementId);
+  if (!settlement) {
+    showToast('정산서를 찾을 수 없습니다');
+    return;
+  }
+
+  const salesItems = settlement.salesItems || [];
+  const today = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '. ');
+  const withholdingTax = settlement.withholdingTax || Math.round((settlement.marginAmount || 0) * 0.033);
+  const actualPayment = settlement.actualPayment || ((settlement.marginAmount || 0) - withholdingTax);
+
+  // 상품별 합계 계산
+  const totalQty = salesItems.reduce((sum, item) => sum + (item.quantity || 0), 0);
+  const totalSales = salesItems.reduce((sum, item) => sum + (item.salesAmount || item.amount || 0), 0);
+
+  const printWindow = window.open('', '_blank');
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>셀러 정산서 - ${settlement.sellerName}</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Malgun Gothic', sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #1e40af; font-size: 28px; margin-bottom: 8px; }
+        .header p { color: #666; font-size: 14px; }
+        .info-table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+        .info-table td { padding: 12px 16px; border: 1px solid #e5e7eb; }
+        .info-table .label { background: #f8fafc; font-weight: 600; width: 140px; color: #374151; }
+        .section-title { font-size: 15px; font-weight: 700; color: #1e40af; margin: 24px 0 12px; display: flex; align-items: center; gap: 8px; }
+        .section-title::before { content: '📦'; }
+        .data-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+        .data-table th { background: #eff6ff; padding: 12px 16px; border: 1px solid #bfdbfe; font-weight: 600; color: #1e40af; }
+        .data-table td { padding: 12px 16px; border: 1px solid #e5e7eb; }
+        .data-table .right { text-align: right; }
+        .data-table .total-row { background: #f8fafc; font-weight: 700; }
+        .summary-section { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; margin-top: 24px; }
+        .summary-title { font-size: 15px; font-weight: 700; color: #1e40af; margin-bottom: 16px; }
+        .summary-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #dbeafe; }
+        .summary-row:last-child { border-bottom: none; }
+        .summary-row .label { color: #374151; }
+        .summary-row .value { font-weight: 600; color: #1e40af; }
+        .summary-row.total { background: #dbeafe; margin: 12px -20px -20px; padding: 16px 20px; border-radius: 0 0 8px 8px; }
+        .summary-row.total .value { font-size: 20px; font-weight: 800; color: #1e40af; }
+        .footer { text-align: center; margin-top: 40px; color: #9ca3af; font-size: 12px; }
+        @media print { body { padding: 20px; } }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>셀러 정산서</h1>
+        <p>모여라딜 | ${today}</p>
+      </div>
+
+      <table class="info-table">
+        <tr>
+          <td class="label">셀러</td>
+          <td>${settlement.sellerName || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">브랜드</td>
+          <td>${settlement.brandName || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">공구기간</td>
+          <td>${settlement.dealPeriod || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">정산일</td>
+          <td>${settlement.settlementDate || today}</td>
+        </tr>
+      </table>
+
+      <div class="section-title">판매 상품 내역</div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="text-align: left;">판매상품</th>
+            <th style="width: 100px;">단가</th>
+            <th style="width: 80px;">수량</th>
+            <th style="width: 120px;">판매금액</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${salesItems.map(item => `
+            <tr>
+              <td>${item.productName || '-'}</td>
+              <td class="right">${formatNumber(item.unitPrice || item.dealPrice || 0)}원</td>
+              <td class="right">${item.quantity || 0}</td>
+              <td class="right">${formatNumber(item.salesAmount || item.amount || 0)}원</td>
+            </tr>
+          `).join('')}
+          <tr class="total-row">
+            <td><strong>합계</strong></td>
+            <td></td>
+            <td class="right"><strong>${totalQty}</strong></td>
+            <td class="right"><strong>${formatNumber(totalSales)}원</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="summary-section">
+        <div class="summary-title">💰 셀러 정산 금액</div>
+        <div class="summary-row">
+          <span class="label">판매금액</span>
+          <span class="value">${formatNumber(settlement.salesAmount || 0)}원</span>
+        </div>
+        <div class="summary-row">
+          <span class="label">마진율</span>
+          <span class="value">${settlement.marginRate || 0}%</span>
+        </div>
+        <div class="summary-row">
+          <span class="label">마진금액</span>
+          <span class="value">${formatNumber(settlement.marginAmount || 0)}원</span>
+        </div>
+        <div class="summary-row">
+          <span class="label">원천세 (3.3%)</span>
+          <span class="value">-${formatNumber(withholdingTax)}원</span>
+        </div>
+        <div class="summary-row total">
+          <span class="label"><strong>합계 정산금액</strong></span>
+          <span class="value">${formatNumber(actualPayment)}원</span>
+        </div>
+      </div>
+
+      <div class="footer">본 정산서는 모여라딜에서 발행되었습니다.</div>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.onload = function() {
+    printWindow.print();
+  };
+}
+
+// 공급사 정산서 PDF 다운로드
+function downloadSupplierSettlementPDF(settlementId) {
+  const settlement = state.supplierSettlements?.find(s => s.id === settlementId);
+  if (!settlement) {
+    showToast('정산서를 찾을 수 없습니다');
+    return;
+  }
+
+  const supplyItems = settlement.supplyItems || [];
+  const today = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\. /g, '. ');
+  const totalSupplyAmount = settlement.totalSupplyAmount || settlement.supplyAmount || 0;
+  const totalVatAmount = settlement.totalVatAmount || settlement.vatAmount || 0;
+  const totalAmount = settlement.totalAmount || (totalSupplyAmount + totalVatAmount);
+
+  // 상품별 합계 계산
+  const totalQty = supplyItems.reduce((sum, item) => sum + (item.quantity || 0), 0) || settlement.totalQuantity || 0;
+  const totalSales = supplyItems.reduce((sum, item) => sum + (item.supplyAmount || 0), 0);
+
+  // 셀러 정보 찾기
+  const matchedSeller = state.sellerSettlements?.find(s =>
+    s.dealId === settlement.dealId ||
+    (s.dealPeriod === settlement.dealPeriod && s.brandName === settlement.supplierName)
+  );
+
+  const printWindow = window.open('', '_blank');
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>공급사 정산서 - ${settlement.supplierName}</title>
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Malgun Gothic', sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 { color: #92400e; font-size: 28px; margin-bottom: 8px; }
+        .header p { color: #666; font-size: 14px; }
+        .info-table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+        .info-table td { padding: 12px 16px; border: 1px solid #e5e7eb; }
+        .info-table .label { background: #fef3c7; font-weight: 600; width: 140px; color: #92400e; }
+        .section-title { font-size: 15px; font-weight: 700; color: #92400e; margin: 24px 0 12px; display: flex; align-items: center; gap: 8px; }
+        .section-title::before { content: '📦'; }
+        .data-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+        .data-table th { background: #fef3c7; padding: 12px 16px; border: 1px solid #fcd34d; font-weight: 600; color: #92400e; }
+        .data-table td { padding: 12px 16px; border: 1px solid #e5e7eb; }
+        .data-table .right { text-align: right; }
+        .data-table .total-row { background: #fffbeb; font-weight: 700; }
+        .summary-section { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 20px; margin-top: 24px; }
+        .summary-title { font-size: 15px; font-weight: 700; color: #92400e; margin-bottom: 16px; }
+        .summary-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #fde68a; }
+        .summary-row:last-child { border-bottom: none; }
+        .summary-row .label { color: #374151; }
+        .summary-row .value { font-weight: 600; color: #92400e; }
+        .summary-row.total { background: #fde68a; margin: 12px -20px -20px; padding: 16px 20px; border-radius: 0 0 8px 8px; }
+        .summary-row.total .value { font-size: 20px; font-weight: 800; color: #92400e; }
+        .footer { text-align: center; margin-top: 40px; color: #9ca3af; font-size: 12px; }
+        @media print { body { padding: 20px; } }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>공급사 정산서</h1>
+        <p>모여라딜 | ${today}</p>
+      </div>
+
+      <table class="info-table">
+        <tr>
+          <td class="label">공급사(브랜드)</td>
+          <td>${settlement.supplierName || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">셀러</td>
+          <td>${settlement.sellerName || matchedSeller?.sellerName || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">공구기간</td>
+          <td>${settlement.dealPeriod || '-'}</td>
+        </tr>
+        <tr>
+          <td class="label">정산일</td>
+          <td>${settlement.settlementDate || today}</td>
+        </tr>
+      </table>
+
+      <div class="section-title">판매 상품 내역</div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="text-align: left;">판매상품</th>
+            <th style="width: 100px;">단가</th>
+            <th style="width: 80px;">수량</th>
+            <th style="width: 120px;">판매금액</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${supplyItems.length > 0 ? supplyItems.map(item => `
+            <tr>
+              <td>${item.productName || '-'}</td>
+              <td class="right">${formatNumber(item.supplyPrice || 0)}원</td>
+              <td class="right">${item.quantity || 0}</td>
+              <td class="right">${formatNumber(item.supplyAmount || 0)}원</td>
+            </tr>
+          `).join('') : `
+            <tr>
+              <td colspan="4" style="text-align: center; color: #9ca3af;">상품 상세 내역이 없습니다</td>
+            </tr>
+          `}
+          <tr class="total-row">
+            <td><strong>합계</strong></td>
+            <td></td>
+            <td class="right"><strong>${totalQty}</strong></td>
+            <td class="right"><strong>${formatNumber(totalSales || totalSupplyAmount)}원</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="summary-section">
+        <div class="summary-title">💰 공급사 정산 금액</div>
+        <div class="summary-row">
+          <span class="label">공급가액</span>
+          <span class="value">${formatNumber(Math.round(totalSupplyAmount / 1.1))}원</span>
+        </div>
+        <div class="summary-row">
+          <span class="label">부가세 (10%)</span>
+          <span class="value">${formatNumber(Math.round(totalSupplyAmount / 1.1 * 0.1))}원</span>
+        </div>
+        <div class="summary-row total">
+          <span class="label"><strong>합계 정산금액 (V+)</strong></span>
+          <span class="value">${formatNumber(totalSupplyAmount)}원</span>
+        </div>
+      </div>
+
+      <div class="footer">본 정산서는 모여라딜에서 발행되었습니다.</div>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+  printWindow.onload = function() {
+    printWindow.print();
+  };
 }
 
 // 공급사 정산서 상세 보기
@@ -7916,11 +8210,11 @@ function viewSupplierSettlementDetail(settlementId) {
           </div>
           <div style="background: #fef3c7; padding: 16px; border-radius: 12px; text-align: center;">
             <div style="font-size: 11px; color: #92400e; margin-bottom: 4px;">공급가액 (VAT 포함)</div>
-            <div style="font-size: 18px; font-weight: 800; color: #92400e;">${formatNumber(settlement.supplyAmount || 0)}원</div>
+            <div style="font-size: 18px; font-weight: 800; color: #92400e;">${formatNumber(settlement.totalSupplyAmount || settlement.supplyAmount || 0)}원</div>
           </div>
           <div style="background: #fef3c7; padding: 16px; border-radius: 12px; text-align: center;">
             <div style="font-size: 11px; color: #92400e; margin-bottom: 4px;">VAT</div>
-            <div style="font-size: 16px; font-weight: 700; color: #b45309;">${formatNumber(settlement.vatAmount || 0)}원</div>
+            <div style="font-size: 16px; font-weight: 700; color: #b45309;">${formatNumber(settlement.totalVatAmount || settlement.vatAmount || 0)}원</div>
           </div>
         </div>
 
@@ -7933,18 +8227,18 @@ function viewSupplierSettlementDetail(settlementId) {
                 <thead>
                   <tr style="background: #fffbeb;">
                     <th style="padding: 10px 8px; text-align: left;">상품명</th>
-                    <th style="padding: 10px 8px; text-align: right;">수량</th>
-                    <th style="padding: 10px 8px; text-align: right;">공급단가</th>
-                    <th style="padding: 10px 8px; text-align: right;">공급가액</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 80px;">수량</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 100px;">공급단가</th>
+                    <th style="padding: 10px 12px; text-align: right; width: 120px;">공급가액</th>
                   </tr>
                 </thead>
                 <tbody>
                   ${supplyItems.map(item => `
                     <tr style="border-bottom: 1px solid var(--gray-100);">
                       <td style="padding: 8px;">${item.productName || '-'}</td>
-                      <td style="padding: 8px; text-align: right;">${formatNumber(item.quantity || 0)}개</td>
-                      <td style="padding: 8px; text-align: right;">${formatNumber(item.supplyPrice || 0)}원</td>
-                      <td style="padding: 8px; text-align: right; color: #92400e; font-weight: 600;">${formatNumber(item.supplyAmount || 0)}원</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 80px;">${formatNumber(item.quantity || 0)}개</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 100px;">${formatNumber(item.supplyPrice || 0)}원</td>
+                      <td style="padding: 8px 12px; text-align: right; width: 120px; color: #92400e; font-weight: 600;">${formatNumber(item.supplyAmount || 0)}원</td>
                     </tr>
                   `).join('')}
                 </tbody>
@@ -7955,6 +8249,9 @@ function viewSupplierSettlementDetail(settlementId) {
 
         <!-- 버튼 -->
         <div style="display: flex; gap: 12px; justify-content: center;">
+          <button onclick="downloadSupplierSettlementPDF('${settlementId}')" class="btn" style="background: #92400e; color: white; border: none;">
+            📄 PDF 다운로드
+          </button>
           <button onclick="toggleSupplierSettlementComplete('${settlementId}')" class="btn ${settlement.isCompleted ? 'btn-secondary' : 'btn-primary'}" style="${!settlement.isCompleted ? 'background: #b45309;' : ''}">
             ${settlement.isCompleted ? '⏪ 대기로 변경' : '✅ 정산 완료'}
           </button>
@@ -9486,17 +9783,44 @@ function updateSettlementPreview() {
 
     // group.marginRate가 없으면 selectedProducts에서 찾기
     if (productMarginRate === null && deal.selectedProducts?.length > 0) {
-      // 상품명으로 매칭
-      const matchedProduct = deal.selectedProducts.find(p =>
+      // 🎯 개선된 매칭: 1) 직접 포함 2) 키워드 매칭 3) 공통 마진율 사용
+      const groupKeywords = extractProductKeywords(group.productName);
+
+      // 1) 직접 포함 매칭
+      let matchedProduct = deal.selectedProducts.find(p =>
         p.productName && group.productName &&
         (p.productName.includes(group.productName) || group.productName.includes(p.productName))
       );
+
+      // 2) 키워드 퍼지 매칭 (공통 키워드 2개 이상)
+      if (!matchedProduct && groupKeywords.length > 0) {
+        matchedProduct = deal.selectedProducts.find(p => {
+          if (!p.productName) return false;
+          const productKeywords = extractProductKeywords(p.productName);
+          const commonKeywords = groupKeywords.filter(kw =>
+            productKeywords.some(pk => pk.includes(kw) || kw.includes(pk))
+          );
+          return commonKeywords.length >= 2;
+        });
+      }
+
+      // 3) 매칭된 상품의 마진율 사용
       if (matchedProduct && matchedProduct.marginRate !== undefined && matchedProduct.marginRate !== null && matchedProduct.marginRate !== '') {
         productMarginRate = Number(matchedProduct.marginRate);
-      } else if (deal.sellerMarginRate !== undefined && deal.sellerMarginRate !== null && deal.sellerMarginRate !== '') {
-        productMarginRate = Number(deal.sellerMarginRate);
       } else {
-        productMarginRate = 20;
+        // 4) 매칭 실패 시: 공구 상품들의 공통 마진율 사용 (모든 상품이 같은 마진율이면)
+        const marginRates = deal.selectedProducts
+          .filter(p => p.marginRate !== undefined && p.marginRate !== null && p.marginRate !== '')
+          .map(p => Number(p.marginRate));
+
+        if (marginRates.length > 0 && marginRates.every(r => r === marginRates[0])) {
+          // 모든 상품이 동일한 마진율이면 해당 값 사용
+          productMarginRate = marginRates[0];
+        } else if (deal.sellerMarginRate !== undefined && deal.sellerMarginRate !== null && deal.sellerMarginRate !== '') {
+          productMarginRate = Number(deal.sellerMarginRate);
+        } else {
+          productMarginRate = 20;
+        }
       }
     }
     if (productMarginRate === null) {
@@ -9505,14 +9829,25 @@ function updateSettlementPreview() {
         : 20;
     }
 
-    // 🎯 상품별 공급단가 가져오기
+    // 🎯 상품별 공급단가 가져오기 (마진율과 동일한 매칭 로직 적용)
     let productSupplyPrice = group.supplyPrice || 0;
     if (!productSupplyPrice && deal.selectedProducts?.length > 0) {
-      const matchedProduct = deal.selectedProducts.find(p =>
+      const gkw = extractProductKeywords(group.productName);
+
+      // 1) 직접 포함 매칭
+      let matched = deal.selectedProducts.find(p =>
         p.productName && group.productName &&
         (p.productName.includes(group.productName) || group.productName.includes(p.productName))
       );
-      productSupplyPrice = matchedProduct?.supplyPrice || 0;
+      // 2) 키워드 퍼지 매칭
+      if (!matched && gkw.length > 0) {
+        matched = deal.selectedProducts.find(p => {
+          if (!p.productName) return false;
+          const pkw = extractProductKeywords(p.productName);
+          return gkw.filter(k => pkw.some(pk => pk.includes(k) || k.includes(pk))).length >= 2;
+        });
+      }
+      productSupplyPrice = matched?.supplyPrice || 0;
     }
 
     if (!dealSettlements[dealId]) {
@@ -9635,23 +9970,52 @@ async function applyCafe24Mapping() {
     const dealId = group.mappedDealId;
     const deal = state.deals.find(d => d.id === dealId);
 
-    // 🎯 상품별 마진율 가져오기
-    let productMarginRate = group.marginRate || 0;
+    // 🎯 상품별 마진율 가져오기 (0%도 유효한 값으로 처리)
+    let productMarginRate = (group.marginRate !== undefined && group.marginRate !== null && group.marginRate !== '')
+      ? Number(group.marginRate) : null;
     let productSupplyPrice = group.supplyPrice || 0;
 
     // selectedProducts에서 매칭된 상품의 마진율/공급단가 찾기
     if (deal?.selectedProducts?.length > 0) {
-      const matchedProduct = deal.selectedProducts.find(p =>
+      // 🎯 개선된 매칭 로직 (공통 함수 사용)
+      const gkw = extractProductKeywords(group.productName);
+
+      // 1) 직접 포함 매칭
+      let matchedProduct = deal.selectedProducts.find(p =>
         p.productName && group.productName &&
         (p.productName.includes(group.productName) || group.productName.includes(p.productName))
       );
+      // 2) 키워드 퍼지 매칭
+      if (!matchedProduct && gkw.length > 0) {
+        matchedProduct = deal.selectedProducts.find(p => {
+          if (!p.productName) return false;
+          const pkw = extractProductKeywords(p.productName);
+          return gkw.filter(k => pkw.some(pk => pk.includes(k) || k.includes(pk))).length >= 2;
+        });
+      }
+
       if (matchedProduct) {
-        if (!productMarginRate) productMarginRate = matchedProduct.marginRate || 0;
+        if (productMarginRate === null && matchedProduct.marginRate !== undefined && matchedProduct.marginRate !== null && matchedProduct.marginRate !== '') {
+          productMarginRate = Number(matchedProduct.marginRate);
+        }
         if (!productSupplyPrice) productSupplyPrice = matchedProduct.supplyPrice || 0;
+      }
+
+      // 3) 매칭 실패 시 공구 상품들의 공통 마진율 사용
+      if (productMarginRate === null) {
+        const marginRates = deal.selectedProducts
+          .filter(p => p.marginRate !== undefined && p.marginRate !== null && p.marginRate !== '')
+          .map(p => Number(p.marginRate));
+        if (marginRates.length > 0 && marginRates.every(r => r === marginRates[0])) {
+          productMarginRate = marginRates[0];
+        }
       }
     }
     // 폴백: 공구 마진율
-    if (!productMarginRate) productMarginRate = deal?.sellerMarginRate || 20;
+    if (productMarginRate === null) {
+      productMarginRate = (deal?.sellerMarginRate !== undefined && deal?.sellerMarginRate !== null && deal?.sellerMarginRate !== '')
+        ? Number(deal.sellerMarginRate) : 20;
+    }
 
     if (!dealUpdates[dealId]) {
       dealUpdates[dealId] = {
