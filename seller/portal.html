@@ -160,6 +160,18 @@
             </div>
         </div>
 
+        <!-- 베스트 상품 & 월별 추이 -->
+        <div class="stats-row" style="grid-template-columns: repeat(2, 1fr); margin-bottom: 24px;">
+            <div style="background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                <div style="font-size: 14px; font-weight: 600; color: #dc2626; margin-bottom: 16px;">🔥 베스트 판매 상품</div>
+                <div id="bestProducts" style="font-size: 13px; color: #666;">로딩중...</div>
+            </div>
+            <div style="background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                <div style="font-size: 14px; font-weight: 600; color: #2563eb; margin-bottom: 16px;">📊 월별 정산 현황</div>
+                <div id="monthlyStats" style="font-size: 13px; color: #666;">로딩중...</div>
+            </div>
+        </div>
+
         <h2 class="section-title">정산 내역 <span class="badge" id="listCount">0</span></h2>
 
         <div class="table-container">
@@ -295,6 +307,10 @@
             document.getElementById('pendingCount').textContent = pending;
             document.getElementById('listCount').textContent = total;
 
+            // 베스트 상품 계산 (salesItems 또는 items 필드에서)
+            renderBestProducts();
+            renderMonthlyStats();
+
             if (settlements.length === 0) {
                 tbody.innerHTML = '';
                 emptyState.style.display = 'block';
@@ -355,6 +371,84 @@
 
         function closeModal() {
             document.getElementById('statementModal').classList.remove('active');
+        }
+
+        function renderBestProducts() {
+            const productSales = {};
+
+            settlements.forEach(s => {
+                // salesItems 또는 items 배열에서 상품별 판매액 집계
+                const items = s.salesItems || s.items || [];
+                items.forEach(item => {
+                    const name = item.productName || item.name || '알 수 없음';
+                    const amount = Number(item.amount) || Number(item.price) || 0;
+                    const qty = Number(item.quantity) || Number(item.qty) || 1;
+                    productSales[name] = (productSales[name] || 0) + (amount * qty);
+                });
+
+                // items가 없으면 brandName으로 집계
+                if (items.length === 0 && s.brandName) {
+                    productSales[s.brandName] = (productSales[s.brandName] || 0) + (Number(s.salesAmount) || 0);
+                }
+            });
+
+            const topProducts = Object.entries(productSales)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5);
+
+            const container = document.getElementById('bestProducts');
+            if (topProducts.length === 0) {
+                container.innerHTML = '<div style="color: #999; font-size: 12px;">판매 데이터가 없습니다</div>';
+                return;
+            }
+
+            container.innerHTML = topProducts.map(([name, amount], i) => `
+                <div style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="width: 20px; height: 20px; background: ${i === 0 ? '#fef3c7' : i === 1 ? '#f3f4f6' : i === 2 ? '#fed7aa' : '#f9fafb'}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: ${i === 0 ? '#d97706' : '#666'};">${i + 1}</span>
+                        <span style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${name}</span>
+                    </div>
+                    <span style="font-weight: 600; color: #dc2626;">${Number(amount).toLocaleString()}원</span>
+                </div>
+            `).join('');
+        }
+
+        function renderMonthlyStats() {
+            const monthlyData = {};
+
+            settlements.forEach(s => {
+                const date = s.settlementDate || s.createdAt || '';
+                const month = date.substring(0, 7) || '미정';
+                if (!monthlyData[month]) {
+                    monthlyData[month] = { count: 0, amount: 0, completed: 0 };
+                }
+                monthlyData[month].count++;
+                monthlyData[month].amount += Number(s.actualPayment) || 0;
+                if (s.isCompleted) monthlyData[month].completed++;
+            });
+
+            const sortedMonths = Object.entries(monthlyData)
+                .sort((a, b) => b[0].localeCompare(a[0]))
+                .slice(0, 4);
+
+            const container = document.getElementById('monthlyStats');
+            if (sortedMonths.length === 0) {
+                container.innerHTML = '<div style="color: #999; font-size: 12px;">정산 데이터가 없습니다</div>';
+                return;
+            }
+
+            container.innerHTML = sortedMonths.map(([month, data]) => `
+                <div style="padding: 8px 0; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <span style="font-weight: 500;">${month}</span>
+                        <span style="font-size: 11px; color: #999; margin-left: 6px;">${data.count}건</span>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-weight: 600; color: #2563eb;">${Number(data.amount).toLocaleString()}원</div>
+                        <div style="font-size: 10px; color: ${data.completed === data.count ? '#10b981' : '#f59e0b'};">${data.completed}/${data.count} 완료</div>
+                    </div>
+                </div>
+            `).join('');
         }
 
         function downloadStatement(idx) {

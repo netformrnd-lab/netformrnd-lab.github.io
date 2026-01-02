@@ -39029,27 +39029,62 @@ function renderQuickHub() {
   const memberGoals = goals.memberGoals || {};
   const myGoal = memberGoals[userId] || memberGoals[currentUser.loginId] || {};
   const mySellers = (state.sellers || []).filter(s => s.registeredBy === userId);
+  const mySuppliers = (state.suppliers || []).filter(s => s.registeredBy === userId);
   const allSettlements = state.sellerSettlements || [];
   const mySettlements = allSettlements.filter(s => s.registeredBy === userId);
   const mySales = mySettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
   const targetSales = myGoal.salesAmount || 0;
   const okrRate = targetSales > 0 ? Math.min(Math.round((mySales / targetSales) * 100), 100) : 0;
 
-  // AI 인사이트 생성
+  // 온보딩 현황 계산
+  const sellerOnboarded = mySellers.filter(s => s.onboarding || s.contacted).length;
+  const sellerContracted = mySellers.filter(s => s.contracted).length;
+  const supplierOnboarded = mySuppliers.filter(s => s.hasOnboardingGuide || s.portalRegistered).length;
+  const supplierContracted = mySuppliers.filter(s => s.contractStatus === 'completed').length;
+
+  // AI 인사이트 생성 (다양한 인사이트 중 랜덤 또는 우선순위)
   let aiInsight = '';
+  const insights = [];
+
+  // 공구 성과 인사이트
   if (dealSuccessRate >= 80) {
-    aiInsight = '공구 성공률이 매우 우수합니다! 이 페이스를 유지하세요.';
+    insights.push('공구 성공률 ' + dealSuccessRate + '%! 탁월한 성과입니다 🏆');
   } else if (dealSuccessRate >= 60) {
-    aiInsight = '좋은 성과입니다. 정산 완료율을 높이면 더 좋겠습니다.';
+    insights.push('공구 성공률이 양호합니다. 정산 완료로 더 올려보세요.');
   } else if (completedDeals.length === 0) {
-    aiInsight = '아직 완료된 공구가 없습니다. 첫 공구를 성공시켜 보세요!';
+    insights.push('첫 공구 성공을 향해 힘내세요! 💪');
   } else {
-    aiInsight = '정산 완료까지 마무리하면 성공률이 올라갑니다.';
+    insights.push('정산까지 마무리하면 성공률이 올라갑니다.');
   }
 
-  if (alerts.length > 0) {
-    aiInsight += ' 현재 ' + alerts.length + '건의 알림이 있습니다.';
+  // 온보딩 인사이트
+  const sellerOnboardingRate = mySellers.length > 0 ? Math.round((sellerOnboarded / mySellers.length) * 100) : 0;
+  const supplierOnboardingRate = mySuppliers.length > 0 ? Math.round((supplierOnboarded / mySuppliers.length) * 100) : 0;
+
+  if (mySellers.length > 0 && sellerOnboardingRate < 50) {
+    insights.push('셀러 온보딩률 ' + sellerOnboardingRate + '%. 연락이 필요합니다.');
+  } else if (mySellers.length > 0 && sellerContracted === 0) {
+    insights.push('계약 완료된 셀러가 없습니다. 계약을 진행해보세요.');
   }
+
+  if (mySuppliers.length > 0 && supplierContracted === 0) {
+    insights.push('공급사 계약을 완료하면 공구 진행이 가능합니다.');
+  }
+
+  // 알림 인사이트
+  if (alerts.length > 0) {
+    insights.push('📢 ' + alerts.length + '건의 알림 확인이 필요합니다.');
+  }
+
+  // 목표 달성 인사이트
+  if (okrRate >= 100) {
+    insights.push('🎯 목표 달성 완료! 축하드립니다!');
+  } else if (okrRate >= 80) {
+    insights.push('목표까지 ' + (100 - okrRate) + '% 남았습니다. 조금만 더!');
+  }
+
+  // 가장 중요한 인사이트 선택 (alerts > 목표 > 온보딩 > 공구)
+  aiInsight = insights[0] || '오늘도 좋은 하루 되세요!';
 
   // 탭별 컨텐츠
   let tabContent = '';
@@ -39090,19 +39125,31 @@ function renderQuickHub() {
           '<div style="font-size: 28px; font-weight: 700; color: ' + (okrRate >= 70 ? '#4ade80' : okrRate >= 50 ? '#fbbf24' : '#f87171') + '; text-shadow: 0 0 20px ' + (okrRate >= 70 ? 'rgba(74, 222, 128, 0.4)' : okrRate >= 50 ? 'rgba(251, 191, 36, 0.4)' : 'rgba(248, 113, 113, 0.4)') + ';">' + okrRate + '<span style="font-size: 14px; color: #64748b;">%</span></div>' +
         '</div>' +
       '</div>' +
-      // 하단 미니 스탯
+      // 담당 현황 (공급사/셀러)
+      '<div style="margin-bottom: 12px;">' +
+        '<div style="font-size: 10px; color: #64748b; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;"><span>👥</span> 담당 현황</div>' +
+        '<div style="display: flex; gap: 8px;">' +
+          '<div style="flex: 1; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.25); border-radius: 10px; padding: 10px; text-align: center;">' +
+            '<div style="font-size: 18px; font-weight: 700; color: #fb923c;">' + mySuppliers.length + '</div>' +
+            '<div style="font-size: 9px; color: #64748b;">공급사</div>' +
+            '<div style="font-size: 8px; color: #475569; margin-top: 2px;">온보딩 ' + supplierOnboarded + ' · 계약 ' + supplierContracted + '</div>' +
+          '</div>' +
+          '<div style="flex: 1; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.25); border-radius: 10px; padding: 10px; text-align: center;">' +
+            '<div style="font-size: 18px; font-weight: 700; color: #a78bfa;">' + mySellers.length + '</div>' +
+            '<div style="font-size: 9px; color: #64748b;">셀러</div>' +
+            '<div style="font-size: 8px; color: #475569; margin-top: 2px;">온보딩 ' + sellerOnboarded + ' · 계약 ' + sellerContracted + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      // 하단 미니 스탯 (공구/알림)
       '<div style="display: flex; gap: 8px; margin-bottom: 16px;">' +
-        '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; text-align: center;">' +
-          '<div style="font-size: 20px; font-weight: 700; color: #38bdf8; margin-bottom: 2px;">' + ongoingDeals.length + '</div>' +
-          '<div style="font-size: 10px; color: #64748b;">진행중</div>' +
+        '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; text-align: center;">' +
+          '<div style="font-size: 18px; font-weight: 700; color: #38bdf8;">' + ongoingDeals.length + '</div>' +
+          '<div style="font-size: 9px; color: #64748b;">진행중 공구</div>' +
         '</div>' +
-        '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; text-align: center;">' +
-          '<div style="font-size: 20px; font-weight: 700; color: #a78bfa; margin-bottom: 2px;">' + mySellers.length + '</div>' +
-          '<div style="font-size: 10px; color: #64748b;">담당 셀러</div>' +
-        '</div>' +
-        '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; text-align: center;">' +
-          '<div style="font-size: 20px; font-weight: 700; color: ' + (alerts.length > 0 ? '#fbbf24' : '#4ade80') + '; margin-bottom: 2px;">' + alerts.length + '</div>' +
-          '<div style="font-size: 10px; color: #64748b;">알림</div>' +
+        '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; text-align: center;">' +
+          '<div style="font-size: 18px; font-weight: 700; color: ' + (alerts.length > 0 ? '#fbbf24' : '#4ade80') + ';">' + alerts.length + '</div>' +
+          '<div style="font-size: 9px; color: #64748b;">알림</div>' +
         '</div>' +
       '</div>' +
       // AI 인사이트

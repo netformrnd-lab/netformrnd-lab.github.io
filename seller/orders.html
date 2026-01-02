@@ -116,6 +116,18 @@
             <p class="page-desc">카페24 주문 데이터 기준 (10분마다 자동 수집)</p>
         </div>
 
+        <!-- 날짜 필터 -->
+        <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <select id="dateFilter" onchange="loadOrders(this.value)" style="padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; background: white; min-width: 140px;">
+                <option value="">전체 기간</option>
+                <option value="today">오늘</option>
+                <option value="week">지난 7일</option>
+                <option value="month">지난 30일</option>
+                <option value="3months">지난 3개월</option>
+            </select>
+            <span id="dateRangeDisplay" style="font-size: 13px; color: #666;"></span>
+        </div>
+
         <div class="stats-row">
             <div class="stat-card">
                 <div class="stat-label">총 주문</div>
@@ -216,13 +228,49 @@
             }
         });
 
-        async function loadOrders() {
+        async function loadOrders(filterType = '') {
             try {
+                // 날짜 범위 계산
+                const today = new Date();
+                let startDate = null;
+                let endDate = today.toISOString().split('T')[0];
+
+                if (filterType === 'today') {
+                    startDate = endDate;
+                } else if (filterType === 'week') {
+                    const weekAgo = new Date(today);
+                    weekAgo.setDate(today.getDate() - 7);
+                    startDate = weekAgo.toISOString().split('T')[0];
+                } else if (filterType === 'month') {
+                    const monthAgo = new Date(today);
+                    monthAgo.setMonth(today.getMonth() - 1);
+                    startDate = monthAgo.toISOString().split('T')[0];
+                } else if (filterType === '3months') {
+                    const threeMonthsAgo = new Date(today);
+                    threeMonthsAgo.setMonth(today.getMonth() - 3);
+                    startDate = threeMonthsAgo.toISOString().split('T')[0];
+                }
+
+                // 날짜 범위 표시
+                const dateRangeDisplay = document.getElementById('dateRangeDisplay');
+                if (startDate) {
+                    dateRangeDisplay.textContent = `${startDate} ~ ${endDate}`;
+                } else {
+                    dateRangeDisplay.textContent = '';
+                }
+
                 // 카페24 주문 데이터 가져오기 (seller_name으로 필터링)
-                const ordersSnapshot = await db.collection('cafe24_orders')
-                    .where('seller_name', '==', currentSeller.name)
+                let query = db.collection('cafe24_orders')
+                    .where('seller_name', '==', currentSeller.name);
+
+                // 날짜 필터가 있으면 서버 사이드에서 필터링 (성능 개선)
+                if (startDate) {
+                    query = query.where('order_date', '>=', startDate);
+                }
+
+                const ordersSnapshot = await query
                     .orderBy('order_date', 'desc')
-                    .limit(1000)
+                    .limit(2000)  // 한도 증가
                     .get();
 
                 const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
