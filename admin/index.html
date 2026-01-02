@@ -1870,12 +1870,9 @@
 
         <!-- 로그인 사용자 정보 -->
         <div id="userProfileBox" style="padding: 12px 16px; margin-bottom: 12px; border-bottom: 1px solid #E5E8EB;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <span style="font-weight: 600; font-size: 14px; color: #191F28;" id="userName">-</span>
-              <span style="font-size: 12px; color: #8B95A1; margin-left: 6px;" id="userRole">-</span>
-            </div>
-            <div style="font-size: 16px; font-weight: 700; color: #0064FF;" id="userGoalRate">-</div>
+          <div style="display: flex; align-items: center;">
+            <span style="font-weight: 600; font-size: 14px; color: #191F28;" id="userName">-</span>
+            <span style="font-size: 12px; color: #8B95A1; margin-left: 6px;" id="userRole">-</span>
           </div>
         </div>
 
@@ -38897,9 +38894,9 @@ async function submitBulkReferences() {
   loadReferences();
 }
 
-// ========== 퀵 업무 허브 (Quick Task Hub) ==========
+// ========== 퀵 업무 허브 (Quick Task Hub) + J.A.R.V.I.S. ==========
 let quickHubOpen = false;
-let quickHubTab = 'alerts'; // alerts, today, week
+let quickHubTab = 'jarvis'; // jarvis, alerts, today
 
 function toggleQuickHub() {
   quickHubOpen = !quickHubOpen;
@@ -39003,10 +39000,94 @@ function renderQuickHub() {
     alerts.push({ type: 'urgent', icon: '🔥', text: task.title, action: 'task', id: task.id });
   });
 
+  // ========== J.A.R.V.I.S. 개인 성과 계산 ==========
+  const userName = currentUser.name || '팀원';
+  const hour = today.getHours();
+  const greeting = hour < 12 ? '좋은 아침입니다' : hour < 18 ? '좋은 오후입니다' : '좋은 저녁입니다';
+
+  // 공구 성공률 계산 (내가 담당한 공구)
+  const myDeals = (state.deals || []).filter(d => d.assignee === userId || d.createdBy === userId);
+  const completedDeals = myDeals.filter(d => d.status === 'completed');
+  const successDeals = completedDeals.filter(d => d.journeyComplete === true);
+  const dealSuccessRate = completedDeals.length > 0 ? Math.round((successDeals.length / completedDeals.length) * 100) : 0;
+
+  // 이번 달 공구 현황
+  const thisMonth = today.getMonth();
+  const thisYear = today.getFullYear();
+  const monthDeals = myDeals.filter(d => {
+    const startDate = new Date(d.startDate);
+    return startDate.getMonth() === thisMonth && startDate.getFullYear() === thisYear;
+  });
+  const ongoingDeals = monthDeals.filter(d => {
+    const start = new Date(d.startDate);
+    const end = new Date(d.endDate);
+    return today >= start && today <= end;
+  });
+
+  // OKR/목표 달성률 계산
+  const goals = state.salesGoals || {};
+  const memberGoals = goals.memberGoals || {};
+  const myGoal = memberGoals[userId] || memberGoals[currentUser.loginId] || {};
+  const mySellers = (state.sellers || []).filter(s => s.registeredBy === userId);
+  const allSettlements = state.sellerSettlements || [];
+  const mySettlements = allSettlements.filter(s => s.registeredBy === userId);
+  const mySales = mySettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const targetSales = myGoal.salesAmount || 0;
+  const okrRate = targetSales > 0 ? Math.min(Math.round((mySales / targetSales) * 100), 100) : 0;
+
+  // AI 인사이트 생성
+  let aiInsight = '';
+  if (dealSuccessRate >= 80) {
+    aiInsight = '공구 성공률이 매우 우수합니다! 이 페이스를 유지하세요.';
+  } else if (dealSuccessRate >= 60) {
+    aiInsight = '좋은 성과입니다. 정산 완료율을 높이면 더 좋겠습니다.';
+  } else if (completedDeals.length === 0) {
+    aiInsight = '아직 완료된 공구가 없습니다. 첫 공구를 성공시켜 보세요!';
+  } else {
+    aiInsight = '정산 완료까지 마무리하면 성공률이 올라갑니다.';
+  }
+
+  if (alerts.length > 0) {
+    aiInsight += ' 현재 ' + alerts.length + '건의 알림이 있습니다.';
+  }
+
   // 탭별 컨텐츠
   let tabContent = '';
 
-  if (quickHubTab === 'alerts') {
+  if (quickHubTab === 'jarvis') {
+    tabContent = '<div style="padding: 16px; background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%); color: white; min-height: 200px;">' +
+      '<div style="text-align: center; margin-bottom: 16px;">' +
+        '<div style="font-size: 11px; color: #94a3b8; margin-bottom: 4px;">J.A.R.V.I.S.</div>' +
+        '<div style="font-size: 14px; font-weight: 600; color: #38bdf8;">"' + greeting + ', ' + userName + '님"</div>' +
+      '</div>' +
+      '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">' +
+        '<div style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 8px; padding: 12px; text-align: center;">' +
+          '<div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">공구 성공률</div>' +
+          '<div style="font-size: 24px; font-weight: 700; color: ' + (dealSuccessRate >= 70 ? '#4ade80' : dealSuccessRate >= 50 ? '#fbbf24' : '#f87171') + ';">' + dealSuccessRate + '%</div>' +
+          '<div style="font-size: 10px; color: #64748b;">' + successDeals.length + '/' + completedDeals.length + '건 완료</div>' +
+        '</div>' +
+        '<div style="background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 8px; padding: 12px; text-align: center;">' +
+          '<div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">목표 달성률</div>' +
+          '<div style="font-size: 24px; font-weight: 700; color: ' + (okrRate >= 70 ? '#4ade80' : okrRate >= 50 ? '#fbbf24' : '#f87171') + ';">' + okrRate + '%</div>' +
+          '<div style="font-size: 10px; color: #64748b;">' + (mySales / 10000).toFixed(0) + '만/' + (targetSales / 10000).toFixed(0) + '만원</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;">' +
+        '<div style="background: rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; text-align: center;">' +
+          '<div style="font-size: 18px; font-weight: 700; color: #38bdf8;">' + ongoingDeals.length + '</div>' +
+          '<div style="font-size: 10px; color: #64748b;">진행중 공구</div>' +
+        '</div>' +
+        '<div style="background: rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; text-align: center;">' +
+          '<div style="font-size: 18px; font-weight: 700; color: #a78bfa;">' + mySellers.length + '</div>' +
+          '<div style="font-size: 10px; color: #64748b;">담당 셀러</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 12px;">' +
+        '<div style="font-size: 10px; color: #38bdf8; margin-bottom: 4px;">💡 AI 인사이트</div>' +
+        '<div style="font-size: 12px; color: #e2e8f0; line-height: 1.5;">' + aiInsight + '</div>' +
+      '</div>' +
+    '</div>';
+  } else if (quickHubTab === 'alerts') {
     if (alerts.length === 0) {
       tabContent = '<div style="padding: 24px; text-align: center; color: var(--gray-400);"><div style="font-size: 32px; margin-bottom: 8px;">✨</div>긴급 알림이 없습니다</div>';
     } else {
@@ -39030,24 +39111,6 @@ function renderQuickHub() {
       ).join('');
     }
     tabContent += '<button onclick="openQuickAddTask()" style="width: 100%; padding: 12px; background: var(--primary-light); color: var(--primary); border: none; font-size: 13px; font-weight: 600; cursor: pointer;">+ 업무 추가</button>';
-  } else if (quickHubTab === 'week') {
-    tabContent = '<div style="padding: 12px;">' +
-      '<div style="margin-bottom: 12px;">' +
-        '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">📊 이번 주 완료</div>' +
-        '<div style="font-size: 24px; font-weight: 700; color: var(--success);">' + weekCompleted.length + '건</div>' +
-      '</div>' +
-      '<div style="margin-bottom: 12px;">' +
-        '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">📅 다음 주 예정</div>' +
-        '<div style="font-size: 24px; font-weight: 700; color: var(--primary);">' + nextWeekTasks.length + '건</div>' +
-      '</div>';
-
-    if (nextWeekTasks.length > 0) {
-      tabContent += '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">예정 업무:</div>';
-      tabContent += nextWeekTasks.slice(0, 3).map(t =>
-        '<div style="padding: 6px 8px; background: var(--gray-50); border-radius: var(--btn-radius); margin-bottom: 4px; font-size: 12px; color: var(--gray-700);">' + t.title + '</div>'
-      ).join('');
-    }
-    tabContent += '</div>';
   }
 
   // 배지 카운트
@@ -39060,11 +39123,11 @@ function renderQuickHub() {
 
   content.innerHTML =
     '<div style="display: flex; border-bottom: 1px solid var(--gray-200);">' +
-      '<button onclick="setQuickHubTab(\'alerts\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'alerts' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'alerts' ? 'var(--primary)' : 'transparent') + '; font-size: 12px; font-weight: 600; color: ' + (quickHubTab === 'alerts' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">🔔 알림 (' + alerts.length + ')</button>' +
-      '<button onclick="setQuickHubTab(\'today\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'today' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'today' ? 'var(--primary)' : 'transparent') + '; font-size: 12px; font-weight: 600; color: ' + (quickHubTab === 'today' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">📋 오늘 (' + todayTasks.length + ')</button>' +
-      '<button onclick="setQuickHubTab(\'week\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'week' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'week' ? 'var(--primary)' : 'transparent') + '; font-size: 12px; font-weight: 600; color: ' + (quickHubTab === 'week' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">📊 주간</button>' +
+      '<button onclick="setQuickHubTab(\'jarvis\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'jarvis' ? '#0f172a' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'jarvis' ? '#38bdf8' : 'transparent') + '; font-size: 11px; font-weight: 600; color: ' + (quickHubTab === 'jarvis' ? '#38bdf8' : 'var(--gray-500)') + '; cursor: pointer;">🤖 J.A.R.V.I.S.</button>' +
+      '<button onclick="setQuickHubTab(\'alerts\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'alerts' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'alerts' ? 'var(--primary)' : 'transparent') + '; font-size: 11px; font-weight: 600; color: ' + (quickHubTab === 'alerts' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">🔔 알림' + (alerts.length > 0 ? ' (' + alerts.length + ')' : '') + '</button>' +
+      '<button onclick="setQuickHubTab(\'today\')" style="flex: 1; padding: 10px; border: none; background: ' + (quickHubTab === 'today' ? 'white' : 'var(--gray-50)') + '; border-bottom: 2px solid ' + (quickHubTab === 'today' ? 'var(--primary)' : 'transparent') + '; font-size: 11px; font-weight: 600; color: ' + (quickHubTab === 'today' ? 'var(--primary)' : 'var(--gray-500)') + '; cursor: pointer;">📋 오늘</button>' +
     '</div>' +
-    '<div style="max-height: 300px; overflow-y: auto;">' + tabContent + '</div>';
+    '<div style="max-height: 320px; overflow-y: auto;">' + tabContent + '</div>';
 }
 
 function handleQuickHubAction(action, id) {
