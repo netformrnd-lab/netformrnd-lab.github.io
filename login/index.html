@@ -2290,6 +2290,98 @@ function renderDashboard(container) {
     return today > end;
   });
   
+  // 🆕 공급사용: 실시간 주문 현황 (카페24 API 10분 자동 동기화 데이터)
+  let orderStatsHtml = '';
+  if (state.userType === 'supplier') {
+    const currentName = (state.currentUser?.name || '').trim().toLowerCase();
+    const cleanCurrentName = currentName.replace(/[\s\-\_\(\)]/g, '');
+
+    // 내 주문 필터링 (supplier_name / brand_name 매칭)
+    const myOrders = (state.cafe24Orders || []).filter(order => {
+      const supplierName = (order.supplier_name || '').trim().toLowerCase();
+      const brandName = (order.brand_name || '').trim().toLowerCase();
+      const cleanSupplier = supplierName.replace(/[\s\-\_\(\)]/g, '');
+      const cleanBrand = brandName.replace(/[\s\-\_\(\)]/g, '');
+
+      if (supplierName === currentName || brandName === currentName) return true;
+      if (cleanSupplier && (cleanSupplier.includes(cleanCurrentName) || cleanCurrentName.includes(cleanSupplier))) return true;
+      if (cleanBrand && (cleanBrand.includes(cleanCurrentName) || cleanCurrentName.includes(cleanBrand))) return true;
+      return false;
+    });
+
+    // 기간별 필터링
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay() + 1);
+    const weekStartStr = weekStart.toISOString().split('T')[0];
+    const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+
+    const todayOrders = myOrders.filter(o => o.order_date && o.order_date.startsWith(todayStr));
+    const weekOrders = myOrders.filter(o => o.order_date && o.order_date >= weekStartStr);
+    const monthOrders = myOrders.filter(o => o.order_date && o.order_date >= monthStartStr);
+
+    // 총 수량 계산
+    const totalQty = myOrders.reduce((sum, o) => sum + (Number(o.quantity) || 1), 0);
+    const todayQty = todayOrders.reduce((sum, o) => sum + (Number(o.quantity) || 1), 0);
+    const weekQty = weekOrders.reduce((sum, o) => sum + (Number(o.quantity) || 1), 0);
+
+    // 송장 미입력 건수
+    const noTrackingCount = myOrders.filter(o => !o.tracking_number).length;
+
+    // 마지막 업데이트 시간
+    const lastUpdate = new Date().toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+
+    orderStatsHtml = `
+      <div class="card" style="margin-bottom: 16px; background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border: 1px solid #93c5fd;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 class="card-title" style="margin: 0; color: #1e40af;">📦 실시간 주문 현황</h3>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 10px; color: #3b82f6;">🔄 ${lastUpdate} 업데이트</span>
+            <span onclick="alert('카페24 API 연동으로 10분마다 자동 수집됩니다.\\n모여라딜 업무 없이도 자동으로 데이터가 공유됩니다.\\n\\n💡 송장 입력: 주문현황 메뉴에서 입력 가능')" style="cursor: pointer; width: 16px; height: 16px; background: #3b82f6; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; color: white;">?</span>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px;">
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">오늘 주문</div>
+            <div style="font-size: 20px; font-weight: 700; color: #dc2626;">${todayOrders.length}</div>
+            <div style="font-size: 10px; color: #9ca3af;">${todayQty}개</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">이번주</div>
+            <div style="font-size: 20px; font-weight: 700; color: #2563eb;">${weekOrders.length}</div>
+            <div style="font-size: 10px; color: #9ca3af;">${weekQty}개</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">이번달</div>
+            <div style="font-size: 20px; font-weight: 700; color: #059669;">${monthOrders.length}</div>
+            <div style="font-size: 10px; color: #9ca3af;">${monthOrders.reduce((sum, o) => sum + (Number(o.quantity) || 1), 0)}개</div>
+          </div>
+          <div style="background: white; border-radius: 10px; padding: 12px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="font-size: 10px; color: #6b7280; margin-bottom: 4px;">전체</div>
+            <div style="font-size: 20px; font-weight: 700; color: #374151;">${myOrders.length}</div>
+            <div style="font-size: 10px; color: #9ca3af;">${totalQty}개</div>
+          </div>
+        </div>
+
+        ${noTrackingCount > 0 ? `
+          <div style="background: #fef3c7; border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 16px;">📝</span>
+              <span style="font-size: 12px; color: #92400e; font-weight: 500;">송장 미입력 <b>${noTrackingCount}건</b></span>
+            </div>
+            <button onclick="renderPage('orders')" style="background: #f59e0b; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;">송장 입력하기 →</button>
+          </div>
+        ` : `
+          <div style="background: #dcfce7; border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">✅</span>
+            <span style="font-size: 12px; color: #166534; font-weight: 500;">모든 주문 송장 입력 완료!</span>
+          </div>
+        `}
+      </div>
+    `;
+  }
+
   // 공급사용: 공구 진행 TOP 5 계산
   let topProductsHtml = '';
   let productStats = [];
@@ -2577,6 +2669,9 @@ function renderDashboard(container) {
       
       <!-- 공급사 대시보드 매출 통계 -->
       ${renderSupplierDashboardStats()}
+
+      <!-- 🆕 실시간 주문 현황 (카페24 API 10분 자동 동기화) -->
+      ${orderStatsHtml}
     ` : `
       <!-- ========================================== -->
       <!-- 셀러 대시보드 - 모여라딜 스타일 -->
@@ -6180,13 +6275,16 @@ function renderOrders(container) {
           </div>
 
           <div style="overflow-x: auto;">
-            <table style="width: 100%; font-size: 12px;">
+            <table style="width: 100%; font-size: 11px; min-width: 900px;">
               <thead>
                 <tr style="background: var(--gray-50);">
-                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600);">주문번호</th>
-                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600);">주문일</th>
-                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600);">상품명</th>
+                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600); white-space: nowrap;">주문번호</th>
+                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600); white-space: nowrap;">주문일</th>
+                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600); min-width: 150px;">상품명</th>
                   <th style="padding: 8px; text-align: center; font-weight: 600; color: var(--gray-600);">수량</th>
+                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600);">고객명</th>
+                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600);">연락처</th>
+                  <th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600); min-width: 180px;">주소</th>
                   <th style="padding: 8px; text-align: right; font-weight: 600; color: var(--gray-600);">금액</th>
                   <th style="padding: 8px; text-align: center; font-weight: 600; color: var(--gray-600);">상태</th>
                   ${isSupplier ? '<th style="padding: 8px; text-align: left; font-weight: 600; color: var(--gray-600);">송장번호</th>' : ''}
@@ -6200,23 +6298,32 @@ function renderOrders(container) {
                     const orderDate = new Date(order.order_date);
                     isRecentOrder = orderDate >= oneMonthAgo;
                   }
+                  // 상품명: product_option 우선, 없으면 product_name
+                  const productName = order.product_option || order.product_name || '-';
+                  // 주소 줄임 처리
+                  const shortAddress = (order.shipping_address || '').length > 30
+                    ? (order.shipping_address || '').substring(0, 30) + '...'
+                    : (order.shipping_address || '-');
                   return `
                   <tr style="border-bottom: 1px solid var(--gray-100);">
-                    <td style="padding: 10px 8px; color: var(--gray-700);">${order.order_id || '-'}</td>
-                    <td style="padding: 10px 8px; color: var(--gray-700);">
-                      <div style="display: flex; align-items: center; gap: 6px;">
+                    <td style="padding: 8px; color: var(--gray-700); font-size: 10px;">${order.order_id || '-'}</td>
+                    <td style="padding: 8px; color: var(--gray-700); white-space: nowrap;">
+                      <div style="display: flex; align-items: center; gap: 4px;">
                         <span>${order.order_date ? order.order_date.substring(0, 10) : '-'}</span>
-                        ${isRecentOrder ? '<span style="background: linear-gradient(145deg, #3b82f6, #2563eb); color: white; font-size: 9px; padding: 2px 6px; border-radius: 6px; font-weight: 600; white-space: nowrap;">최근</span>' : ''}
+                        ${isRecentOrder ? '<span style="background: linear-gradient(145deg, #3b82f6, #2563eb); color: white; font-size: 8px; padding: 1px 4px; border-radius: 4px; font-weight: 600;">최근</span>' : ''}
                       </div>
                     </td>
-                    <td style="padding: 10px 8px; color: var(--gray-700);">${order.product_name || '-'}</td>
-                    <td style="padding: 10px 8px; text-align: center; color: var(--gray-700);">${order.quantity || 0}</td>
-                    <td style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-900);">${formatNumber(Number(order.total_amount) || 0)}원</td>
-                    <td style="padding: 10px 8px; text-align: center;">
+                    <td style="padding: 8px; color: var(--gray-700); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${productName}">${productName}</td>
+                    <td style="padding: 8px; text-align: center; color: var(--gray-700);">${order.quantity || 1}</td>
+                    <td style="padding: 8px; color: var(--gray-900); font-weight: 500;">${order.buyer_name || '-'}</td>
+                    <td style="padding: 8px; color: var(--gray-700);">${order.buyer_phone || '-'}</td>
+                    <td style="padding: 8px; color: var(--gray-600); font-size: 10px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${order.shipping_address || ''}">${shortAddress}</td>
+                    <td style="padding: 8px; text-align: right; font-weight: 600; color: var(--gray-900);">${formatNumber(Number(order.total_amount) || 0)}원</td>
+                    <td style="padding: 8px; text-align: center;">
                       <span style="
-                        padding: 4px 8px;
-                        border-radius: 6px;
-                        font-size: 10px;
+                        padding: 3px 6px;
+                        border-radius: 4px;
+                        font-size: 9px;
                         font-weight: 600;
                         background: ${order.order_status && order.order_status.includes('결제완료') ? '#e8f5e9' : '#fff3e0'};
                         color: ${order.order_status && order.order_status.includes('결제완료') ? '#2e7d32' : '#ef6c00'};
@@ -6225,18 +6332,18 @@ function renderOrders(container) {
                       </span>
                     </td>
                     ${isSupplier ? `
-                      <td style="padding: 10px 8px;">
+                      <td style="padding: 8px;">
                         <input
                           type="text"
                           value="${order.tracking_number || ''}"
                           placeholder="송장번호"
                           onchange="updateTrackingNumber('${order.id}', this.value)"
                           style="
-                            width: 120px;
-                            padding: 4px 8px;
+                            width: 110px;
+                            padding: 4px 6px;
                             border: 1px solid var(--gray-300);
                             border-radius: 4px;
-                            font-size: 11px;
+                            font-size: 10px;
                           "
                         />
                       </td>
@@ -6246,7 +6353,7 @@ function renderOrders(container) {
                 }).join('')}
                 ${orders.length > 50 ? `
                   <tr>
-                    <td colspan="${isSupplier ? 7 : 6}" style="padding: 12px; text-align: center; color: var(--gray-500); font-size: 11px;">
+                    <td colspan="${isSupplier ? 10 : 9}" style="padding: 12px; text-align: center; color: var(--gray-500); font-size: 11px;">
                       ... 외 ${orders.length - 50}건 더 있음
                     </td>
                   </tr>
