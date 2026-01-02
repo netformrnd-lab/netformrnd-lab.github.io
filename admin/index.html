@@ -15036,6 +15036,43 @@ async function refreshManagementReport() {
     const inhouseSettlements = sellerSettlements.filter(s => s.productType === 'inhouse');
     const externalSettlements = sellerSettlements.filter(s => s.productType === 'external');
 
+    // 콘텐츠 제작료 조회 및 필터링
+    let contentFeeSettlements = [...(state.contentFeeSettlements || [])];
+
+    // 기간 필터링
+    if (periodFilter !== 'all') {
+      const now = new Date();
+      let startDate, endDate;
+      if (periodFilter === 'this_month') {
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      } else if (periodFilter === 'last_month') {
+        startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+      }
+
+      if (startDate && endDate) {
+        const startStr = startDate.toISOString().slice(0, 7);
+        const endStr = endDate.toISOString().slice(0, 7);
+        contentFeeSettlements = contentFeeSettlements.filter(s => {
+          const period = s.settlementDate || s.createdAt || '';
+          return period.includes(startStr) || period.includes(endStr);
+        });
+      }
+    }
+
+    // 상태 필터링
+    if (statusFilter === 'pending') {
+      contentFeeSettlements = contentFeeSettlements.filter(s => !s.isCompleted);
+    } else if (statusFilter === 'completed') {
+      contentFeeSettlements = contentFeeSettlements.filter(s => s.isCompleted);
+    }
+
+    // 콘텐츠 제작료 집계
+    const contentFeeTotalAmount = contentFeeSettlements.reduce((sum, s) => sum + (Number(s.feeAmount) || 0), 0);
+    const contentFeeTotalTax = contentFeeSettlements.reduce((sum, s) => sum + (Number(s.withholdingTax) || 0), 0);
+    const contentFeeTotalPayment = contentFeeSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+
     // 자사 상품 집계
     const inhouseTotalSales = inhouseSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
     const inhouseTotalMargin = inhouseSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
@@ -15057,7 +15094,8 @@ async function refreshManagementReport() {
 
     // 대기건수 계산
     const pendingCount = sellerSettlements.filter(s => !s.isCompleted).length +
-                         supplierSettlements.filter(s => !s.isCompleted).length;
+                         supplierSettlements.filter(s => !s.isCompleted).length +
+                         contentFeeSettlements.filter(s => !s.isCompleted).length;
 
     // 정산일 (오늘)
     const settlementDate = new Date().toISOString().slice(0, 10);
@@ -15379,6 +15417,64 @@ async function refreshManagementReport() {
       `;
     };
 
+    // ========== 콘텐츠 제작료 테이블 생성 ==========
+    const buildContentFeeTable = () => {
+      if (contentFeeSettlements.length === 0) {
+        return '<div style="padding:40px;text-align:center;color:#6b7280;">콘텐츠 제작료 정산 내역이 없습니다</div>';
+      }
+
+      let rows = '';
+      contentFeeSettlements.forEach(f => {
+        rows += `<tr>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;"><strong>${(f.sellerName || '-').replace(/</g, '&lt;')}</strong></td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;">${(f.brandName || '-').replace(/</g, '&lt;')}</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;font-size:9px;">${f.dealPeriod || '-'}</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;">
+            <span style="background:#f5d0fe;color:#86198f;padding:2px 6px;border-radius:4px;font-size:9px;">${f.contentType || '기타'}</span>
+          </td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:left;font-size:9px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(f.description || '-').replace(/</g, '&lt;')}</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;font-weight:600;color:#86198f;">${formatNumber(f.feeAmount || 0)}원</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;">${formatNumber(f.withholdingTax || 0)}원</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;font-weight:700;color:#059669;background:#dcfce7;">${formatNumber(f.actualPayment || 0)}원</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;font-size:9px;">${f.settlementDate || '-'}</td>
+          <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;">
+            <span style="background:${f.isCompleted ? '#dcfce7' : '#fef3c7'};color:${f.isCompleted ? '#166534' : '#92400e'};padding:2px 6px;border-radius:4px;font-size:9px;">${f.isCompleted ? '완료' : '대기'}</span>
+          </td>
+        </tr>`;
+      });
+
+      // 합계 행
+      rows += `<tr style="background:#fdf4ff;font-weight:700;">
+        <td colspan="5" style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;">합계 (${contentFeeSettlements.length}건)</td>
+        <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;color:#86198f;">${formatNumber(contentFeeTotalAmount)}원</td>
+        <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;">${formatNumber(contentFeeTotalTax)}원</td>
+        <td style="padding:6px 4px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;font-weight:700;color:#059669;background:#a7f3d0;">${formatNumber(contentFeeTotalPayment)}원</td>
+        <td colspan="2" style="padding:6px 4px;border:1px solid #e5e7eb;text-align:center;white-space:nowrap;"></td>
+      </tr>`;
+
+      return `
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead>
+              <tr style="background:#fdf4ff;">
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:10%;white-space:nowrap;">셀러명</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:8%;white-space:nowrap;">브랜드</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:12%;white-space:nowrap;">공구기간</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:8%;white-space:nowrap;">콘텐츠</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:20%;white-space:nowrap;">설명</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:10%;white-space:nowrap;background:#f5d0fe;">제작료</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:8%;white-space:nowrap;">원천세(3.3%)</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:10%;white-space:nowrap;background:#c084fc;color:white;">실지급액</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:8%;white-space:nowrap;">정산일</th>
+                <th style="padding:6px 4px;border:1px solid #d8b4fe;text-align:center;width:6%;white-space:nowrap;">상태</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    };
+
     // 전체 HTML 생성
     result.innerHTML = `
       <!-- 헤더 -->
@@ -15415,6 +15511,17 @@ async function refreshManagementReport() {
         </div>
         ${buildExternalTable()}
       </div>
+
+      <!-- 3 콘텐츠 제작료 - 셀러 정산 -->
+      <div style="margin-bottom:32px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:6px;border-bottom:2px solid #c026d3;">
+          <span style="background:#c026d3;color:white;padding:3px 8px;border-radius:6px;font-size:12px;font-weight:600;">3</span>
+          <h3 style="font-size:14px;font-weight:700;color:#86198f;margin:0;">🎬 콘텐츠 제작료</h3>
+          <span style="font-size:11px;color:#6b7280;">(${contentFeeSettlements.length}건)</span>
+          <span style="font-size:11px;color:#059669;font-weight:600;">총 ${formatNumber(contentFeeTotalPayment)}원</span>
+        </div>
+        ${buildContentFeeTable()}
+      </div>
     `;
 
     loading.style.display = 'none';
@@ -15427,9 +15534,11 @@ async function refreshManagementReport() {
       inhouseSettlements,
       externalSettlements,
       supplierSettlements,
+      contentFeeSettlements,
       inhouseTotalSales, inhouseTotalMargin, inhouseTotalTax, inhouseTotalPayment,
       externalTotalSales, externalTotalMargin, externalTotalTax, externalTotalPayment,
       supplierTotalSupply, supplierTotalVat, supplierTotalAmount,
+      contentFeeTotalAmount, contentFeeTotalTax, contentFeeTotalPayment,
       pendingCount
     };
 
