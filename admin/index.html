@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>모여라딜 - 관리자 시스템</title>
+  <title>딜리오(DELIO) - 모여라딜 관리자 시스템</title>
 
   <!-- PWA Manifest -->
   <link rel="manifest" href="/admin/manifest.json">
@@ -1820,7 +1820,8 @@
     <div class="login-container">
       <div class="login-logo">
         <img src="logo-horizontal.png" alt="모여라딜">
-        <div class="login-logo-desc">관리자 전용</div>
+        <div style="margin-top: 8px; font-size: 18px; font-weight: 700; background: linear-gradient(135deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 2px;">DELIO</div>
+        <div class="login-logo-desc">딜리오 관리자 시스템</div>
       </div>
       
       <div class="login-card">
@@ -24972,11 +24973,37 @@ function renderSalesDashboardContent() {
   const deals30Percent = yearDeals.filter(d => Number(d.commissionRate || d.supplierCommission || 0) >= 30);
   const commission30Ratio = yearDeals.length > 0 ? Math.round((deals30Percent.length / yearDeals.length) * 100) : 0;
 
-  // 전체 통계
+  // 전체 통계 (매출)
   const totalSalesAmount = yearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const totalProfitAmount = yearSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
   const monthSalesAmount = monthSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
-  const monthProfitAmount = monthSettlements.reduce((sum, s) => sum + (Number(s.marginAmount) || 0), 0);
+
+  // 🔧 FIX: 정산 페이지와 동일한 순익 계산 (자사/타사 분리)
+  // 자사(inhouse) 정산
+  const yearInhouseSettlements = yearSettlements.filter(s => s.productType !== 'external');
+  const inhouseSalesAmt = yearInhouseSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const inhouseSellerPayout = yearInhouseSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const inhousePgFeeAmt = Math.round(inhouseSalesAmt * 0.04);
+  const inhouseProfitAmt = inhouseSalesAmt - inhouseSellerPayout - inhousePgFeeAmt;
+
+  // 타사(external) 정산 - 셀러정산 + 공급사정산 모두 고려
+  const yearExternalSettlements = yearSettlements.filter(s => s.productType === 'external');
+  const externalSalesAmt = yearExternalSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+  const externalSellerPayout = yearExternalSettlements.reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const externalPgFeeAmt = Math.round(externalSalesAmt * 0.04);
+
+  // 공급사 정산 (연간)
+  const yearSupplierSettlements = (state.supplierSettlements || []).filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisYearStr));
+  const supplierPayoutAmt = yearSupplierSettlements.reduce((sum, s) => sum + (Number(s.totalSupplyAmount) || Number(s.supplyAmount) || 0) + (Number(s.totalVatAmount) || Number(s.vatAmount) || 0), 0);
+  const externalProfitAmt = externalSalesAmt - externalSellerPayout - supplierPayoutAmt - externalPgFeeAmt;
+
+  // 총 순익 = 자사 순익 + 타사 순익
+  const totalProfitAmount = inhouseProfitAmt + externalProfitAmt;
+  const monthProfitAmount = monthSettlements.reduce((sum, s) => {
+    const sales = Number(s.salesAmount) || 0;
+    const payout = Number(s.actualPayment) || 0;
+    const pgFee = Math.round(sales * 0.04);
+    return sum + (sales - payout - pgFee);
+  }, 0);
 
   // 현재 성공률 (성공 공구 / 종료된 공구)
   const completedDeals = yearDeals.filter(d => d.status === 'completed' || d.isSuccess !== undefined || d.달성여부);
@@ -25264,11 +25291,15 @@ function renderSalesDashboardContent() {
           <div style="font-size: 20px; font-weight: 700; color: ${C.black};">${(totalSalesAmount / 100000000).toFixed(2)}억</div>
           <div style="background: ${C.gray100}; height: 4px; border-radius: 2px; margin-top: 8px;"><div style="background: ${getProgressColor(revenueProgress)}; height: 100%; width: ${revenueProgress}%; border-radius: 2px;"></div></div>
         </div>
-        <!-- 연 순익 -->
+        <!-- 연 순익 (자사/타사 분리 표시) -->
         <div onclick="switchTab('settlement')" style="background: ${C.white}; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); cursor: pointer; transition: transform 0.15s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
           <div style="font-size: 11px; color: ${C.gray500}; margin-bottom: 6px;">연 순익</div>
-          <div style="font-size: 20px; font-weight: 700; color: ${C.green};">${formatNumber(totalProfitAmount)}원</div>
-          <div style="background: ${C.gray100}; height: 4px; border-radius: 2px; margin-top: 8px;"><div style="background: ${getProgressColor(profitProgress)}; height: 100%; width: ${profitProgress}%; border-radius: 2px;"></div></div>
+          <div style="font-size: 20px; font-weight: 700; color: ${totalProfitAmount >= 0 ? C.green : C.red};">${formatNumber(totalProfitAmount)}원</div>
+          <div style="display: flex; justify-content: space-between; font-size: 9px; color: ${C.gray400}; margin-top: 4px;">
+            <span title="자사 상품 순익">자사 ${formatNumber(inhouseProfitAmt)}원</span>
+            <span title="타사 상품 순익">타사 ${formatNumber(externalProfitAmt)}원</span>
+          </div>
+          <div style="background: ${C.gray100}; height: 4px; border-radius: 2px; margin-top: 6px;"><div style="background: ${getProgressColor(profitProgress)}; height: 100%; width: ${profitProgress}%; border-radius: 2px;"></div></div>
         </div>
         <!-- 이번 주 -->
         <div onclick="switchTab('dealManagement')" style="background: ${weeklyProgress >= 100 ? C.greenLight : C.blueLight}; border-radius: 12px; padding: 14px; cursor: pointer; transition: transform 0.15s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
@@ -39097,7 +39128,7 @@ function renderQuickHub() {
   let tabContent = '';
 
   if (quickHubTab === 'jarvis') {
-    // 1열 레이아웃 - 세련된 Iron Man HUD 스타일
+    // 1열 레이아웃 - 세련된 Iron Man HUD 스타일 (가독성 개선)
     tabContent = '<div style="padding: 16px; color: white;">' +
       // 인사말 섹션
       '<div style="text-align: center; margin-bottom: 20px; padding: 12px; background: rgba(56, 189, 248, 0.08); border-radius: 12px; border: 1px solid rgba(56, 189, 248, 0.15);">' +
@@ -39112,11 +39143,11 @@ function renderQuickHub() {
               '<span style="font-size: 18px;">📦</span>' +
             '</div>' +
             '<div>' +
-              '<div style="font-size: 11px; color: #94a3b8; margin-bottom: 2px;">공구 성공률</div>' +
-              '<div style="font-size: 10px; color: #64748b;">' + successDeals.length + '/' + completedDeals.length + '건 완료</div>' +
+              '<div style="font-size: 11px; color: #cbd5e1; margin-bottom: 2px;">공구 성공률</div>' +
+              '<div style="font-size: 10px; color: #94a3b8;">' + successDeals.length + '/' + completedDeals.length + '건 완료</div>' +
             '</div>' +
           '</div>' +
-          '<div style="font-size: 28px; font-weight: 700; color: ' + (dealSuccessRate >= 70 ? '#4ade80' : dealSuccessRate >= 50 ? '#fbbf24' : '#f87171') + '; text-shadow: 0 0 20px ' + (dealSuccessRate >= 70 ? 'rgba(74, 222, 128, 0.4)' : dealSuccessRate >= 50 ? 'rgba(251, 191, 36, 0.4)' : 'rgba(248, 113, 113, 0.4)') + ';">' + dealSuccessRate + '<span style="font-size: 14px; color: #64748b;">%</span></div>' +
+          '<div style="font-size: 28px; font-weight: 700; color: ' + (dealSuccessRate >= 70 ? '#4ade80' : dealSuccessRate >= 50 ? '#fbbf24' : '#f87171') + '; text-shadow: 0 0 20px ' + (dealSuccessRate >= 70 ? 'rgba(74, 222, 128, 0.4)' : dealSuccessRate >= 50 ? 'rgba(251, 191, 36, 0.4)' : 'rgba(248, 113, 113, 0.4)') + ';">' + dealSuccessRate + '<span style="font-size: 14px; color: #94a3b8;">%</span></div>' +
         '</div>' +
         // 목표 달성률
         '<div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 12px; padding: 14px; display: flex; align-items: center; justify-content: space-between;">' +
@@ -39125,26 +39156,26 @@ function renderQuickHub() {
               '<span style="font-size: 18px;">🎯</span>' +
             '</div>' +
             '<div>' +
-              '<div style="font-size: 11px; color: #94a3b8; margin-bottom: 2px;">목표 달성률</div>' +
-              '<div style="font-size: 10px; color: #64748b;">' + (mySales / 10000).toFixed(0) + '만 / ' + (targetSales / 10000).toFixed(0) + '만원</div>' +
+              '<div style="font-size: 11px; color: #cbd5e1; margin-bottom: 2px;">목표 달성률</div>' +
+              '<div style="font-size: 10px; color: #94a3b8;">' + (mySales / 10000).toFixed(0) + '만 / ' + (targetSales / 10000).toFixed(0) + '만원</div>' +
             '</div>' +
           '</div>' +
-          '<div style="font-size: 28px; font-weight: 700; color: ' + (okrRate >= 70 ? '#4ade80' : okrRate >= 50 ? '#fbbf24' : '#f87171') + '; text-shadow: 0 0 20px ' + (okrRate >= 70 ? 'rgba(74, 222, 128, 0.4)' : okrRate >= 50 ? 'rgba(251, 191, 36, 0.4)' : 'rgba(248, 113, 113, 0.4)') + ';">' + okrRate + '<span style="font-size: 14px; color: #64748b;">%</span></div>' +
+          '<div style="font-size: 28px; font-weight: 700; color: ' + (okrRate >= 70 ? '#4ade80' : okrRate >= 50 ? '#fbbf24' : '#f87171') + '; text-shadow: 0 0 20px ' + (okrRate >= 70 ? 'rgba(74, 222, 128, 0.4)' : okrRate >= 50 ? 'rgba(251, 191, 36, 0.4)' : 'rgba(248, 113, 113, 0.4)') + ';">' + okrRate + '<span style="font-size: 14px; color: #94a3b8;">%</span></div>' +
         '</div>' +
       '</div>' +
       // 담당 현황 (공급사/셀러)
       '<div style="margin-bottom: 12px;">' +
-        '<div style="font-size: 10px; color: #64748b; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;"><span>👥</span> 담당 현황</div>' +
+        '<div style="font-size: 10px; color: #94a3b8; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;"><span>👥</span> 담당 현황</div>' +
         '<div style="display: flex; gap: 8px;">' +
           '<div style="flex: 1; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.25); border-radius: 10px; padding: 10px; text-align: center;">' +
             '<div style="font-size: 18px; font-weight: 700; color: #fb923c;">' + mySuppliers.length + '</div>' +
-            '<div style="font-size: 9px; color: #64748b;">공급사</div>' +
-            '<div style="font-size: 8px; color: #475569; margin-top: 2px;">온보딩 ' + supplierOnboarded + ' · 계약 ' + supplierContracted + '</div>' +
+            '<div style="font-size: 9px; color: #cbd5e1;">공급사</div>' +
+            '<div style="font-size: 8px; color: #94a3b8; margin-top: 2px;">온보딩 ' + supplierOnboarded + ' · 계약 ' + supplierContracted + '</div>' +
           '</div>' +
           '<div style="flex: 1; background: rgba(167, 139, 250, 0.1); border: 1px solid rgba(167, 139, 250, 0.25); border-radius: 10px; padding: 10px; text-align: center;">' +
             '<div style="font-size: 18px; font-weight: 700; color: #a78bfa;">' + mySellers.length + '</div>' +
-            '<div style="font-size: 9px; color: #64748b;">셀러</div>' +
-            '<div style="font-size: 8px; color: #475569; margin-top: 2px;">온보딩 ' + sellerOnboarded + ' · 계약 ' + sellerContracted + '</div>' +
+            '<div style="font-size: 9px; color: #cbd5e1;">셀러</div>' +
+            '<div style="font-size: 8px; color: #94a3b8; margin-top: 2px;">온보딩 ' + sellerOnboarded + ' · 계약 ' + sellerContracted + '</div>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -39152,11 +39183,11 @@ function renderQuickHub() {
       '<div style="display: flex; gap: 8px; margin-bottom: 16px;">' +
         '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; text-align: center;">' +
           '<div style="font-size: 18px; font-weight: 700; color: #38bdf8;">' + ongoingDeals.length + '</div>' +
-          '<div style="font-size: 9px; color: #64748b;">진행중 공구</div>' +
+          '<div style="font-size: 9px; color: #cbd5e1;">진행중 공구</div>' +
         '</div>' +
         '<div style="flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 10px; text-align: center;">' +
           '<div style="font-size: 18px; font-weight: 700; color: ' + (alerts.length > 0 ? '#fbbf24' : '#4ade80') + ';">' + alerts.length + '</div>' +
-          '<div style="font-size: 9px; color: #64748b;">알림</div>' +
+          '<div style="font-size: 9px; color: #cbd5e1;">알림</div>' +
         '</div>' +
       '</div>' +
       // AI 인사이트
