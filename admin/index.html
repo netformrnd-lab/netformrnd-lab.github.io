@@ -3216,6 +3216,9 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
+// ========== 전역 상수 (하드코딩 방지) ==========
+const SETTLEMENT_DELAY_THRESHOLD = 7;  // 정산 지연 기준일 (D+7 이상이면 지연)
+
 // 상태 관리
 let state = {
   currentTab: 'calendar',
@@ -3339,7 +3342,8 @@ function setupListeners() {
   db.collection('deals').orderBy('startDate', 'desc').onSnapshot(snapshot => {
     state.deals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
-    // 퀵 업무 허브 배지 업데이트
+    // 퀵 업무 허브 배지 업데이트 (열려있으면 전체 렌더, 닫혀있으면 배지만)
+    if (typeof updateQuickHubBadge === 'function') updateQuickHubBadge();
     if (quickHubOpen && typeof renderQuickHub === 'function') renderQuickHub();
   });
   
@@ -3435,7 +3439,16 @@ function setupListeners() {
     state.urgentSales = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
-  
+
+  // 업무(Tasks) - 퀵 업무 허브와 동기화
+  db.collection('tasks').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 퀵 허브 배지 업데이트 (열려있으면 전체 렌더, 닫혀있으면 배지만)
+    if (typeof updateQuickHubBadge === 'function') updateQuickHubBadge();
+    if (quickHubOpen && typeof renderQuickHub === 'function') renderQuickHub();
+    render();
+  });
+
   // 셀러 제안 (sellerProposals)
   db.collection('sellerProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
     state.sellerProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -4536,7 +4549,7 @@ function openDealModal(deal = null) {
           } else if (d.journeySellerSettle && d.journeySupplierSettle) {
             settlementStatus = '📋 정산서 제작 완료';
             settlementColor = 'var(--info)';
-          } else if (daysSinceEnd > 7) {
+          } else if (daysSinceEnd > SETTLEMENT_DELAY_THRESHOLD) {
             settlementStatus = '⚠️ 정산 지연 (D+' + daysSinceEnd + ')';
             settlementColor = 'var(--danger)';
           } else if (daysSinceEnd >= 0) {
@@ -38834,7 +38847,7 @@ function renderQuickHub() {
     if (deal.status === 'completed' && !deal.journeyComplete) {
       const endDate = new Date(deal.endDate);
       const daysSinceEnd = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
-      if (daysSinceEnd > 7) {
+      if (daysSinceEnd > SETTLEMENT_DELAY_THRESHOLD) {
         alerts.push({ type: 'warning', icon: '⚠️', text: '"' + deal.title + '" 정산 D+' + daysSinceEnd, action: 'deal', id: deal.id });
       }
     }
@@ -38880,7 +38893,7 @@ function renderQuickHub() {
         '<div style="padding: 10px 12px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 8px;">' +
           '<input type="checkbox" onclick="quickCompleteTask(\'' + t.id + '\')" style="width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer;">' +
           '<span style="flex: 1; font-size: 13px; color: var(--gray-700);">' + t.title + '</span>' +
-          (t.priority === 'high' ? '<span style="font-size: 10px; background: #fef2f2; color: #dc2626; padding: 2px 6px; border-radius: 4px;">긴급</span>' : '') +
+          (t.priority === 'high' ? '<span style="font-size: 10px; background: var(--danger-light, #fef2f2); color: var(--danger); padding: 2px 6px; border-radius: 4px;">긴급</span>' : '') +
         '</div>'
       ).join('');
     }
@@ -38899,7 +38912,7 @@ function renderQuickHub() {
     if (nextWeekTasks.length > 0) {
       tabContent += '<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px;">예정 업무:</div>';
       tabContent += nextWeekTasks.slice(0, 3).map(t =>
-        '<div style="padding: 6px 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px; font-size: 12px; color: var(--gray-700);">' + t.title + '</div>'
+        '<div style="padding: 6px 8px; background: var(--gray-50); border-radius: var(--btn-radius); margin-bottom: 4px; font-size: 12px; color: var(--gray-700);">' + t.title + '</div>'
       ).join('');
     }
     tabContent += '</div>';
@@ -38954,29 +38967,46 @@ function openQuickAddTask() {
   }, 300);
 }
 
-// 페이지 로드 후 퀵 허브 배지 업데이트
+// 퀵 허브 배지 업데이트 (전역 함수로 분리 - 리스너에서 호출 가능)
+function updateQuickHubBadge() {
+  const alerts = [];
+  const today = new Date();
+
+  // 정산 지연 알림
+  (state.deals || []).forEach(deal => {
+    if (deal.status === 'completed' && !deal.journeyComplete) {
+      const endDate = new Date(deal.endDate);
+      const daysSinceEnd = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
+      if (daysSinceEnd > SETTLEMENT_DELAY_THRESHOLD) alerts.push(1);
+    }
+    const startDate = new Date(deal.startDate);
+    if (startDate.toDateString() === today.toDateString()) alerts.push(1);
+  });
+
+  // 긴급 업무 알림
+  const todayStr = today.toISOString().split('T')[0];
+  (state.tasks || []).forEach(task => {
+    if (task.status === 'completed') return;
+    if (task.priority === 'high' || task.priority === 'urgent') {
+      alerts.push(1);
+    } else if (task.dueDate) {
+      const dueDate = new Date(task.dueDate);
+      const diff = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
+      if (diff <= 1) alerts.push(1);
+    }
+  });
+
+  const badge = document.getElementById('quick-hub-badge');
+  if (badge) {
+    badge.style.display = alerts.length > 0 ? 'flex' : 'none';
+    badge.textContent = alerts.length > 9 ? '9+' : alerts.length;
+  }
+}
+
+// 페이지 로드 후 초기 배지 업데이트
 setTimeout(() => {
-  if (typeof renderQuickHub === 'function') {
-    // 초기 배지만 업데이트
-    const updateBadge = () => {
-      const alerts = [];
-      const today = new Date();
-      (state.deals || []).forEach(deal => {
-        if (deal.status === 'completed' && !deal.journeyComplete) {
-          const endDate = new Date(deal.endDate);
-          const daysSinceEnd = Math.floor((today - endDate) / (1000 * 60 * 60 * 24));
-          if (daysSinceEnd > 7) alerts.push(1);
-        }
-        const startDate = new Date(deal.startDate);
-        if (startDate.toDateString() === today.toDateString()) alerts.push(1);
-      });
-      const badge = document.getElementById('quick-hub-badge');
-      if (badge) {
-        badge.style.display = alerts.length > 0 ? 'flex' : 'none';
-        badge.textContent = alerts.length > 9 ? '9+' : alerts.length;
-      }
-    };
-    updateBadge();
+  if (typeof updateQuickHubBadge === 'function') {
+    updateQuickHubBadge();
   }
 }, 3000);
 
@@ -38985,18 +39015,18 @@ setTimeout(() => {
 <!-- 🚀 퀵 업무 허브 (고정 UI) -->
 <div id="quick-hub-container" style="position: fixed; bottom: 24px; right: 24px; z-index: 9999;">
   <!-- 퀵 허브 패널 -->
-  <div id="quick-task-hub" style="display: none; width: 320px; background: white; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); margin-bottom: 12px; overflow: hidden; border: 1px solid var(--gray-200);">
-    <div style="background: linear-gradient(135deg, #1e40af, #3b82f6); padding: 14px 16px; display: flex; justify-content: space-between; align-items: center;">
+  <div id="quick-task-hub" style="display: none; width: 320px; background: white; border-radius: var(--card-radius); box-shadow: 0 8px 32px rgba(0,0,0,0.15); margin-bottom: 12px; overflow: hidden; border: 1px solid var(--gray-200);">
+    <div style="background: linear-gradient(135deg, var(--primary), #3b82f6); padding: 14px 16px; display: flex; justify-content: space-between; align-items: center;">
       <span style="font-weight: 600; color: white; font-size: 14px;">📋 내 업무 허브</span>
-      <button onclick="toggleQuickHub()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; font-size: 14px;">×</button>
+      <button onclick="toggleQuickHub()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 24px; height: 24px; border-radius: var(--btn-radius); cursor: pointer; font-size: 14px;">×</button>
     </div>
     <div id="quick-hub-content"></div>
   </div>
 
   <!-- 플로팅 버튼 -->
-  <button id="quick-hub-btn" onclick="toggleQuickHub()" style="width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, #1e40af, #3b82f6); border: none; box-shadow: 0 4px 16px rgba(30, 64, 175, 0.4); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; position: relative;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform=quickHubOpen?'scale(0.95)':'scale(1)'">
+  <button id="quick-hub-btn" onclick="toggleQuickHub()" style="width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), #3b82f6); border: none; box-shadow: 0 4px 16px rgba(30, 64, 175, 0.4); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; position: relative;" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform=quickHubOpen?'scale(0.95)':'scale(1)'">
     <span style="font-size: 24px;">📋</span>
-    <span id="quick-hub-badge" style="display: none; position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; background: #ef4444; color: white; border-radius: 10px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px;">0</span>
+    <span id="quick-hub-badge" style="display: none; position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; background: var(--danger); color: white; border-radius: 10px; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px;">0</span>
   </button>
 </div>
 
