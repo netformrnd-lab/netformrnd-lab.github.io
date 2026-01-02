@@ -7635,9 +7635,17 @@ async function renderSettlement() {
                 자사 상품 정산서가 없습니다
               </div>
             ` : `
+              <div style="padding: 8px 12px; background: #f8fafc; border-bottom: 1px solid var(--gray-200); display: flex; align-items: center; gap: 12px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                  <input type="checkbox" id="selectAllInhouse" onchange="toggleSelectAllSettlements('inhouse')" style="width: 16px; height: 16px;">
+                  <span style="font-size: 12px; color: var(--gray-600);">전체선택</span>
+                </label>
+                <button onclick="deleteSelectedSettlements('seller')" class="btn btn-sm" style="background: #fee2e2; color: #dc2626; font-size: 11px; padding: 4px 10px;">🗑 선택삭제</button>
+              </div>
               <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
                 <thead>
                   <tr style="background: #f8fafc; position: sticky; top: 0;">
+                    <th style="padding: 10px 6px; width: 40px;"></th>
                     <th style="padding: 10px 8px; text-align: left; font-weight: 600; color: var(--gray-600);">셀러</th>
                     <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">매출액</th>
                     <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: #1d4ed8;">마진금액</th>
@@ -7649,6 +7657,9 @@ async function renderSettlement() {
                 <tbody>
                   ${inhouseSettlements.map(s => `
                     <tr style="border-bottom: 1px solid var(--gray-100);" class="hover-row">
+                      <td style="padding: 10px 6px; text-align: center;">
+                        <input type="checkbox" class="settlement-checkbox-inhouse" data-id="${s.id}" data-type="seller" style="width: 16px; height: 16px; cursor: pointer;">
+                      </td>
                       <td style="padding: 10px 8px;">
                         <div style="font-weight: 600; color: var(--gray-800);">${s.sellerName || '-'}</div>
                         <div style="font-size: 10px; color: var(--gray-400);">${s.dealPeriod || '-'}</div>
@@ -7693,9 +7704,17 @@ async function renderSettlement() {
                 타사 상품 정산서가 없습니다
               </div>
             ` : `
+              <div style="padding: 8px 12px; background: #fffbeb; border-bottom: 1px solid #fcd34d; display: flex; align-items: center; gap: 12px;">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                  <input type="checkbox" id="selectAllExternal" onchange="toggleSelectAllSettlements('external')" style="width: 16px; height: 16px;">
+                  <span style="font-size: 12px; color: var(--gray-600);">전체선택</span>
+                </label>
+                <button onclick="deleteSelectedSettlements('seller')" class="btn btn-sm" style="background: #fee2e2; color: #dc2626; font-size: 11px; padding: 4px 10px;">🗑 선택삭제</button>
+              </div>
               <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
                 <thead>
                   <tr style="background: #fffbeb; position: sticky; top: 0;">
+                    <th style="padding: 10px 6px; width: 40px;"></th>
                     <th style="padding: 10px 8px; text-align: left; font-weight: 600; color: var(--gray-600);">셀러/브랜드</th>
                     <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: var(--gray-600);">매출액</th>
                     <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: #059669;">셀러정산</th>
@@ -7716,6 +7735,9 @@ async function renderSettlement() {
 
                     return `
                     <tr style="border-bottom: 1px solid var(--gray-100);" class="hover-row">
+                      <td style="padding: 10px 6px; text-align: center;">
+                        <input type="checkbox" class="settlement-checkbox-external" data-id="${s.id}" data-type="seller" data-supplier-id="${matchedSupplier?.id || ''}" style="width: 16px; height: 16px; cursor: pointer;">
+                      </td>
                       <td style="padding: 10px 8px;">
                         <div style="font-weight: 600; color: var(--gray-800);">${s.sellerName || '-'}</div>
                         <div style="font-size: 10px; color: var(--gray-400);">${s.brandName || '-'} · ${s.dealPeriod || '-'}</div>
@@ -8327,6 +8349,66 @@ async function deleteSellerSettlement(settlementId) {
   } catch (e) {
     console.error(e);
     showToast('삭제에 실패했습니다');
+  }
+}
+
+// 정산서 전체선택 토글
+function toggleSelectAllSettlements(type) {
+  const checkbox = document.getElementById(type === 'inhouse' ? 'selectAllInhouse' : 'selectAllExternal');
+  const checkboxes = document.querySelectorAll('.settlement-checkbox-' + type);
+  checkboxes.forEach(cb => cb.checked = checkbox.checked);
+}
+
+// 선택된 정산서 삭제
+async function deleteSelectedSettlements(settlementType) {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  // 선택된 체크박스 수집
+  const checkedInhouse = document.querySelectorAll('.settlement-checkbox-inhouse:checked');
+  const checkedExternal = document.querySelectorAll('.settlement-checkbox-external:checked');
+
+  const sellerIds = [];
+  const supplierIds = [];
+
+  checkedInhouse.forEach(cb => {
+    if (cb.dataset.type === 'seller') sellerIds.push(cb.dataset.id);
+  });
+
+  checkedExternal.forEach(cb => {
+    if (cb.dataset.type === 'seller') sellerIds.push(cb.dataset.id);
+    if (cb.dataset.supplierId) supplierIds.push(cb.dataset.supplierId);
+  });
+
+  const totalCount = sellerIds.length + supplierIds.length;
+  if (totalCount === 0) {
+    showToast('삭제할 정산서를 선택해주세요', 'warning');
+    return;
+  }
+
+  const confirmMsg = supplierIds.length > 0
+    ? `셀러 정산서 ${sellerIds.length}건, 공급사 정산서 ${supplierIds.length}건을 삭제하시겠습니까?\n(타사 상품의 경우 연결된 공급사 정산서도 함께 삭제됩니다)`
+    : `선택한 ${sellerIds.length}건의 정산서를 삭제하시겠습니까?`;
+
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const batch = db.batch();
+
+    sellerIds.forEach(id => {
+      batch.delete(db.collection('sellerSettlements').doc(id));
+    });
+
+    supplierIds.forEach(id => {
+      batch.delete(db.collection('supplierSettlements').doc(id));
+    });
+
+    await batch.commit();
+
+    showToast(`${totalCount}건의 정산서가 삭제되었습니다`);
+    renderSettlement();
+  } catch (e) {
+    console.error('정산서 삭제 오류:', e);
+    showToast('삭제 중 오류가 발생했습니다');
   }
 }
 
@@ -14800,7 +14882,7 @@ async function refreshManagementReport() {
       let totalSalesSum = 0, totalMarginSum = 0, totalTaxSum = 0, totalQtySum = 0;
 
       inhouseSettlements.forEach(s => {
-        const products = s.products || [];
+        const products = s.salesItems || s.items || s.products || [];
         const productCount = products.length || 1;
 
         products.forEach((p, idx) => {
@@ -14957,7 +15039,7 @@ async function refreshManagementReport() {
         const sellerName = seller?.sellerName || supplier?.sellerName || '-';
         const brandName = seller?.brandName || supplier?.supplierName || '-';
         const dealPeriod = seller?.dealPeriod || supplier?.dealPeriod || '-';
-        const products = seller?.products || supplier?.products || [];
+        const products = seller?.salesItems || seller?.items || seller?.products || supplier?.salesItems || supplier?.items || supplier?.products || [];
         const productCount = products.length || 1;
 
         // 셀러 정산 (타사는 보통 마진 0원)
