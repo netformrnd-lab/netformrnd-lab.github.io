@@ -31984,8 +31984,11 @@ async function submitFeatureRequest() {
     return;
   }
 
+  const typeLabels = { feature: '기능 추가', bug: '버그 신고', improvement: '개선 제안' };
+
   try {
-    await db.collection('feature_requests').add({
+    // 기능 요청 저장
+    const docRef = await db.collection('feature_requests').add({
       type: type,
       content: content,
       author: author || '익명',
@@ -31993,9 +31996,24 @@ async function submitFeatureRequest() {
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     });
 
+    // 🔔 관리자 알람 추가 (admin 역할 사용자에게 알림)
+    await db.collection('admin_notifications').add({
+      type: 'feature_request',
+      title: '💡 새 ' + (typeLabels[type] || '기능 요청'),
+      message: content.substring(0, 50) + (content.length > 50 ? '...' : ''),
+      author: author || '익명',
+      relatedId: docRef.id,
+      isRead: false,
+      targetRole: 'admin', // 관리자 계정에게만 표시
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
     document.getElementById('feature-request-form').style.display = 'none';
     document.getElementById('feature-request-success').style.display = 'block';
     loadFeatureRequests();
+
+    // J.A.R.V.I.S. 알림 배지 업데이트
+    if (typeof updateQuickHubBadge === 'function') updateQuickHubBadge();
   } catch (e) {
     console.error('기능 요청 저장 오류:', e);
     alert('저장 중 오류가 발생했습니다. 다시 시도해주세요.');
@@ -39190,6 +39208,62 @@ function renderQuickHub() {
           '<div style="font-size: 9px; color: #cbd5e1;">알림</div>' +
         '</div>' +
       '</div>' +
+      // 📋 업무 관리 요약 (업무대기/진행중/마감임박)
+      (function() {
+        const pendingTasks = myTasks.filter(t => t.status === 'pending' || !t.status);
+        const inProgressTasks = myTasks.filter(t => t.status === 'in_progress');
+        // 마감 임박: 3일 이내
+        const soonTasks = myTasks.filter(t => {
+          if (t.status === 'completed' || !t.dueDate) return false;
+          const dueDate = new Date(t.dueDate);
+          const diff = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+          return diff >= 0 && diff <= 3;
+        });
+        // 지연된 업무
+        const overdueTasks = myTasks.filter(t => {
+          if (t.status === 'completed' || !t.dueDate) return false;
+          const dueDate = new Date(t.dueDate);
+          return dueDate < today;
+        });
+
+        if (pendingTasks.length === 0 && inProgressTasks.length === 0) return '';
+
+        return '<div style="margin-bottom: 12px;">' +
+          '<div style="font-size: 10px; color: #94a3b8; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;"><span>📋</span> 업무 관리</div>' +
+          '<div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px;">' +
+            // 업무 요약 카운트
+            '<div style="display: flex; gap: 6px; margin-bottom: 8px;">' +
+              '<div style="flex: 1; text-align: center; padding: 6px; background: rgba(251, 191, 36, 0.1); border-radius: 6px;">' +
+                '<div style="font-size: 14px; font-weight: 700; color: #fbbf24;">' + pendingTasks.length + '</div>' +
+                '<div style="font-size: 8px; color: #cbd5e1;">대기</div>' +
+              '</div>' +
+              '<div style="flex: 1; text-align: center; padding: 6px; background: rgba(56, 189, 248, 0.1); border-radius: 6px;">' +
+                '<div style="font-size: 14px; font-weight: 700; color: #38bdf8;">' + inProgressTasks.length + '</div>' +
+                '<div style="font-size: 8px; color: #cbd5e1;">진행중</div>' +
+              '</div>' +
+              '<div style="flex: 1; text-align: center; padding: 6px; background: ' + (overdueTasks.length > 0 ? 'rgba(248, 113, 113, 0.15)' : soonTasks.length > 0 ? 'rgba(251, 146, 60, 0.1)' : 'rgba(74, 222, 128, 0.1)') + '; border-radius: 6px;">' +
+                '<div style="font-size: 14px; font-weight: 700; color: ' + (overdueTasks.length > 0 ? '#f87171' : soonTasks.length > 0 ? '#fb923c' : '#4ade80') + ';">' + (overdueTasks.length + soonTasks.length) + '</div>' +
+                '<div style="font-size: 8px; color: #cbd5e1;">' + (overdueTasks.length > 0 ? '지연!' : '임박') + '</div>' +
+              '</div>' +
+            '</div>' +
+            // 마감 임박/지연 업무 목록 (최대 2개)
+            (overdueTasks.length > 0 || soonTasks.length > 0 ? (
+              '<div style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px; font-size: 10px;">' +
+                [...overdueTasks, ...soonTasks].slice(0, 2).map(function(t) {
+                  const dueDate = new Date(t.dueDate);
+                  const diff = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+                  const isOverdue = diff < 0;
+                  const label = isOverdue ? 'D+' + Math.abs(diff) : diff === 0 ? 'D-Day' : 'D-' + diff;
+                  return '<div style="display: flex; align-items: center; gap: 6px; padding: 4px 0;">' +
+                    '<span style="font-size: 8px; padding: 2px 5px; border-radius: 4px; font-weight: 600; background: ' + (isOverdue ? 'rgba(248, 113, 113, 0.2)' : 'rgba(251, 146, 60, 0.15)') + '; color: ' + (isOverdue ? '#f87171' : '#fb923c') + ';">' + label + '</span>' +
+                    '<span style="flex: 1; color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (t.title || '업무') + '</span>' +
+                  '</div>';
+                }).join('') +
+              '</div>'
+            ) : '') +
+          '</div>' +
+        '</div>';
+      })() +
       // AI 인사이트
       '<div style="background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), rgba(168, 85, 247, 0.08)); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 12px; padding: 14px;">' +
         '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">' +
