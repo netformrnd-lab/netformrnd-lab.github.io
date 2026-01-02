@@ -23965,21 +23965,21 @@ function renderSalesDashboardContent() {
   const topMonthSuppliers = Object.values(monthSupplierSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
   const topMonthSellers = Object.values(monthSellerSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 3);
 
-  // 📦 상품별 판매량/매출액 TOP 계산 (cafe24 주문 데이터 기반)
-  const cafe24Orders = state.cafe24Orders || [];
+  // 📦 상품별 판매량/매출액 TOP 계산 (정산 데이터 기반)
   const productSalesMap = {};
-  cafe24Orders.forEach(order => {
-    const productName = order.product_name || order.product_option || '기타';
-    const orderDate = order.order_date || order.createdAt || '';
-    if (!orderDate.startsWith(thisYearStr)) return;
-    if (!productSalesMap[productName]) {
-      productSalesMap[productName] = { name: productName, quantity: 0, sales: 0 };
-    }
-    productSalesMap[productName].quantity += Number(order.quantity) || 1;
-    productSalesMap[productName].sales += Number(order.total_amount) || 0;
+  (state.sellerSettlements || []).forEach(settlement => {
+    const items = settlement.salesItems || settlement.items || settlement.products || [];
+    items.forEach(item => {
+      const productName = item.productName || item.name || '기타';
+      if (!productSalesMap[productName]) {
+        productSalesMap[productName] = { name: productName, quantity: 0, sales: 0 };
+      }
+      productSalesMap[productName].quantity += Number(item.quantity) || 0;
+      productSalesMap[productName].sales += Number(item.salesAmount) || Number(item.amount) || 0;
+    });
   });
-  const topProductsByQty = Object.values(productSalesMap).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
-  const topProductsBySales = Object.values(productSalesMap).sort((a, b) => b.sales - a.sales).slice(0, 5);
+  const topProductsByQty = Object.values(productSalesMap).filter(p => p.quantity > 0).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
+  const topProductsBySales = Object.values(productSalesMap).filter(p => p.sales > 0).sort((a, b) => b.sales - a.sales).slice(0, 5);
 
   // 팀원별 실적 계산 (파이프라인 포함 - sellerList/productList 기반)
   const allSellerList = state.sellerList || [];
@@ -24335,10 +24335,10 @@ function renderSalesDashboardContent() {
         <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div style="font-size: 15px; font-weight: 700; color: ${C.black};">📦 판매량 TOP</div>
-            <a href="#" onclick="event.preventDefault(); switchTab('cafe24Orders');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+            <a href="#" onclick="event.preventDefault(); switchTab('settlement');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
           </div>
           ${topProductsByQty.length === 0 ? `
-            <div style="text-align: center; padding: 24px; color: ${C.gray400}; font-size: 13px;">주문 데이터 없음</div>
+            <div style="text-align: center; padding: 24px; color: ${C.gray400}; font-size: 13px;">정산 데이터 없음</div>
           ` : topProductsByQty.map((p, i) => `
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; ${i < topProductsByQty.length - 1 ? `border-bottom: 1px solid ${C.gray100};` : ''}">
               <div style="display: flex; align-items: center; gap: 10px;">
@@ -24354,10 +24354,10 @@ function renderSalesDashboardContent() {
         <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div style="font-size: 15px; font-weight: 700; color: ${C.black};">💰 매출액 TOP</div>
-            <a href="#" onclick="event.preventDefault(); switchTab('cafe24Orders');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
+            <a href="#" onclick="event.preventDefault(); switchTab('settlement');" style="font-size: 12px; color: ${C.primary}; text-decoration: none;">전체보기 →</a>
           </div>
           ${topProductsBySales.length === 0 ? `
-            <div style="text-align: center; padding: 24px; color: ${C.gray400}; font-size: 13px;">주문 데이터 없음</div>
+            <div style="text-align: center; padding: 24px; color: ${C.gray400}; font-size: 13px;">정산 데이터 없음</div>
           ` : topProductsBySales.map((p, i) => `
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; ${i < topProductsBySales.length - 1 ? `border-bottom: 1px solid ${C.gray100};` : ''}">
               <div style="display: flex; align-items: center; gap: 10px;">
@@ -27476,163 +27476,141 @@ async function renderOrderStatus() {
     const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
     const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-    // 오늘 날짜 계산
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-
-    // 주문 상태별 분류
-    const statusGroups = {
-      '입금전': orders.filter(o => o.order_status === 'N00'),
-      '결제완료': orders.filter(o => o.order_status === 'N10'),
-      '상품준비중': orders.filter(o => o.order_status === 'N20'),
-      '배송대기': orders.filter(o => o.order_status === 'N21'),
-      '배송중': orders.filter(o => o.order_status === 'N22'),
-      '배송완료': orders.filter(o => o.order_status === 'N30'),
-      '취소': orders.filter(o => ['C00', 'C10', 'C20'].includes(o.order_status)),
-      '교환/반품': orders.filter(o => ['E00', 'E10', 'E20', 'R00', 'R10', 'R20'].includes(o.order_status)),
-    };
-
-    // 오늘의 주문
-    const todayOrders = orders.filter(o => o.order_date && o.order_date.startsWith(todayStr));
-    const todaySales = todayOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
-
-    // 최근 24시간 이내 주문
-    const last24Hours = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-    const last24HoursOrders = orders.filter(o => {
-      if (!o.order_date) return false;
-      const orderDate = new Date(o.order_date);
-      return orderDate >= last24Hours;
-    });
-
-    // 최신 주문 20개
-    const recentOrders = orders.slice(0, 20);
-
     // 현재 시간
     const now = new Date();
-    const currentTime = now.toLocaleString('ko-KR', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
+    const currentTime = now.toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+    // 상품별 주문건수 집계
+    const productOrderMap = {};
+    orders.forEach(o => {
+      const productName = o.product_name || o.product_option || '기타';
+      const sellerName = o.seller_name || '미지정';
+      const supplierName = o.supplier_name || o.brand_name || '미지정';
+      const qty = Number(o.quantity) || 1;
+
+      if (!productOrderMap[productName]) {
+        productOrderMap[productName] = { name: productName, orderCount: 0, quantity: 0, seller: sellerName, supplier: supplierName };
+      }
+      productOrderMap[productName].orderCount += 1;
+      productOrderMap[productName].quantity += qty;
     });
+    const productOrders = Object.values(productOrderMap).sort((a, b) => b.orderCount - a.orderCount);
+
+    // 셀러별 주문건수 집계
+    const sellerOrderMap = {};
+    orders.forEach(o => {
+      const sellerName = o.seller_name || '미지정';
+      if (!sellerOrderMap[sellerName]) {
+        sellerOrderMap[sellerName] = { name: sellerName, orderCount: 0, quantity: 0, products: new Set() };
+      }
+      sellerOrderMap[sellerName].orderCount += 1;
+      sellerOrderMap[sellerName].quantity += Number(o.quantity) || 1;
+      if (o.product_name) sellerOrderMap[sellerName].products.add(o.product_name);
+    });
+    const sellerOrders = Object.values(sellerOrderMap).map(s => ({ ...s, productCount: s.products.size })).sort((a, b) => b.orderCount - a.orderCount);
+
+    // 공급사별 주문건수 집계
+    const supplierOrderMap = {};
+    orders.forEach(o => {
+      const supplierName = o.supplier_name || o.brand_name || '미지정';
+      if (!supplierOrderMap[supplierName]) {
+        supplierOrderMap[supplierName] = { name: supplierName, orderCount: 0, quantity: 0, products: new Set() };
+      }
+      supplierOrderMap[supplierName].orderCount += 1;
+      supplierOrderMap[supplierName].quantity += Number(o.quantity) || 1;
+      if (o.product_name) supplierOrderMap[supplierName].products.add(o.product_name);
+    });
+    const supplierOrders = Object.values(supplierOrderMap).map(s => ({ ...s, productCount: s.products.size })).sort((a, b) => b.orderCount - a.orderCount);
 
     app.innerHTML = `
       <div class="page-header">
-        <h1 class="page-title">📋 주문현황 대시보드 <span style="background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; padding: 4px 10px; border-radius: 8px; font-size: 13px; font-weight: 600;">파트너 공유용</span></h1>
-        <p style="color: var(--gray-500); margin-top: 4px;">실시간 주문 상태 모니터링 (자동 수집: 10분 간격)</p>
-        <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 3px solid #f59e0b; padding: 10px 12px; border-radius: 8px; margin-top: 8px; display: inline-block;">
-          <p style="font-size: 12px; color: #92400e; font-weight: 500;">ℹ️ 이 데이터는 파트너 포털 공유용이며, 실제 정산은 정산관리 메뉴의 수동 엑셀 업로드 데이터를 사용합니다.</p>
-        </div>
-        <p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">⏰ 마지막 업데이트: ${currentTime}</p>
+        <h1 class="page-title">📋 주문현황 공유 <span style="background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; padding: 4px 10px; border-radius: 8px; font-size: 13px; font-weight: 600;">파트너용</span></h1>
+        <p style="color: var(--gray-500); margin-top: 4px;">상품별 주문건수 현황 (셀러/공급사 공유용)</p>
+        <p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">⏰ 업데이트: ${currentTime} | 총 ${orders.length}건</p>
       </div>
 
-      <!-- 오늘의 주문 통계 -->
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
-        <div class="card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">오늘의 주문</div>
-          <div style="font-size: 32px; font-weight: 700;">${todayOrders.length}건</div>
-          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${formatNumber(todaySales)}원</div>
-        </div>
-        <div class="card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
-          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">24시간 주문</div>
-          <div style="font-size: 32px; font-weight: 700;">${last24HoursOrders.length}건</div>
-          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${formatNumber(last24HoursOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원</div>
-        </div>
-        <div class="card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white;">
-          <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">전체 주문</div>
-          <div style="font-size: 32px; font-weight: 700;">${orders.length}건</div>
-          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">${formatNumber(orders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원</div>
-        </div>
-      </div>
-
-      <!-- 주문 상태별 현황 -->
-      <div class="card" style="margin-bottom: 24px;">
-        <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 16px;">📊 주문 상태별 현황</h3>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
-          ${Object.entries(statusGroups).map(([status, items]) => {
-            const colors = {
-              '입금전': '#6b7684',
-              '결제완료': '#3182f6',
-              '상품준비중': '#fc9600',
-              '배송대기': '#ff9f43',
-              '배송중': '#00c073',
-              '배송완료': '#00b894',
-              '취소': '#f04452',
-              '교환/반품': '#a55eea'
-            };
-            const color = colors[status] || '#8b95a1';
-            return `
-              <div style="background: ${color}15; border: 1px solid ${color}40; border-radius: 8px; padding: 12px; text-align: center;">
-                <div style="font-size: 12px; color: ${color}; margin-bottom: 6px; font-weight: 600;">${status}</div>
-                <div style="font-size: 24px; font-weight: 700; color: ${color};">${items.length}</div>
-                <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">${formatNumber(items.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0))}원</div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-
-      <!-- 최근 주문 내역 -->
-      <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-          <h3 style="font-size: 16px; font-weight: 600;">🕐 최근 주문 (20건)</h3>
-          <button onclick="switchTab('cafe24Orders')" class="btn btn-sm btn-secondary">전체보기 →</button>
-        </div>
+      <!-- 상품별 주문현황 -->
+      <div class="card" style="margin-bottom: 20px;">
+        <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 16px; color: #1e40af;">📦 상품별 주문현황</h3>
         <div class="table-wrapper">
           <table class="data-table">
             <thead>
-              <tr>
-                <th>주문번호</th>
-                <th>주문일시</th>
-                <th>공구명</th>
+              <tr style="background: #eff6ff;">
+                <th style="width: 50px;">순위</th>
                 <th>상품명</th>
-                <th>수령인</th>
-                <th>금액</th>
-                <th>주문상태</th>
-                <th>결제상태</th>
-                <th>셀러</th>
+                <th style="width: 100px;">셀러</th>
+                <th style="width: 100px;">공급사</th>
+                <th style="width: 100px; text-align: center;">주문건수</th>
+                <th style="width: 100px; text-align: center;">총수량</th>
               </tr>
             </thead>
             <tbody>
-              ${recentOrders.length === 0 ?
-                '<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다.</td></tr>' :
-                recentOrders.map(order => `
+              ${productOrders.length === 0 ? '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--gray-400);">주문 데이터가 없습니다.</td></tr>' :
+                productOrders.slice(0, 30).map((p, i) => `
                   <tr>
-                    <td style="font-weight: 600; color: var(--info);">${order.order_id || '-'}</td>
-                    <td>${order.order_date ? order.order_date.replace('T', ' ').substring(0, 16) : '-'}</td>
-                    <td>${order.deal_title ? `<span style="display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; color: white; background: var(--primary);">${order.deal_title}</span>` : '<span style="color: var(--gray-400);">미매칭</span>'}</td>
-                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${order.product_name || '-'}</td>
-                    <td>${order.buyer_name || '-'}</td>
-                    <td style="font-weight: 600;">${formatNumber(order.total_amount)}원</td>
-                    <td>${getCafe24OrderStatusBadge(order.order_status)}</td>
-                    <td>${getCafe24PaymentStatusBadge(order.payment_status)}</td>
-                    <td>${order.seller_name || '-'}</td>
+                    <td style="text-align: center;"><span style="display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center; background: ${i < 3 ? '#3b82f6' : '#e5e7eb'}; color: ${i < 3 ? 'white' : '#6b7280'}; border-radius: 50%; font-size: 11px; font-weight: 700;">${i + 1}</span></td>
+                    <td style="font-weight: 500;">${p.name}</td>
+                    <td style="color: #059669;">${p.seller}</td>
+                    <td style="color: #92400e;">${p.supplier}</td>
+                    <td style="text-align: center; font-weight: 700; color: #1e40af;">${p.orderCount}건</td>
+                    <td style="text-align: center; font-weight: 600;">${p.quantity}개</td>
                   </tr>
-                `).join('')
-              }
+                `).join('')}
             </tbody>
           </table>
         </div>
       </div>
 
-      <!-- 자동 새로고침 안내 -->
-      <div style="text-align: center; margin-top: 24px; padding: 16px; background: var(--info-light); border-radius: 8px;">
-        <p style="color: var(--info); font-size: 14px; font-weight: 500;">
-          ℹ️ 이 페이지는 10분마다 자동으로 주문 데이터를 수집합니다.
-        </p>
-        <button onclick="renderOrderStatus()" class="btn btn-sm btn-primary" style="margin-top: 12px;">
-          🔄 수동 새로고침
-        </button>
+      <!-- 셀러/공급사별 현황 -->
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+        <!-- 셀러별 -->
+        <div class="card">
+          <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 14px; color: #059669;">👤 셀러별 주문현황</h3>
+          <div style="max-height: 300px; overflow-y: auto;">
+            ${sellerOrders.filter(s => s.name !== '미지정').map((s, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: ${i % 2 === 0 ? '#f0fdf4' : 'white'}; border-radius: 8px; margin-bottom: 6px;">
+                <div>
+                  <div style="font-weight: 600; color: #065f46;">${s.name}</div>
+                  <div style="font-size: 11px; color: #6b7280;">${s.productCount}개 상품</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="font-size: 18px; font-weight: 700; color: #059669;">${s.orderCount}건</div>
+                  <div style="font-size: 11px; color: #6b7280;">${s.quantity}개</div>
+                </div>
+              </div>
+            `).join('') || '<div style="text-align: center; padding: 20px; color: var(--gray-400);">데이터 없음</div>'}
+          </div>
+        </div>
+
+        <!-- 공급사별 -->
+        <div class="card">
+          <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 14px; color: #92400e;">🏭 공급사별 주문현황</h3>
+          <div style="max-height: 300px; overflow-y: auto;">
+            ${supplierOrders.filter(s => s.name !== '미지정').map((s, i) => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: ${i % 2 === 0 ? '#fffbeb' : 'white'}; border-radius: 8px; margin-bottom: 6px;">
+                <div>
+                  <div style="font-weight: 600; color: #92400e;">${s.name}</div>
+                  <div style="font-size: 11px; color: #6b7280;">${s.productCount}개 상품</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="font-size: 18px; font-weight: 700; color: #b45309;">${s.orderCount}건</div>
+                  <div style="font-size: 11px; color: #6b7280;">${s.quantity}개</div>
+                </div>
+              </div>
+            `).join('') || '<div style="text-align: center; padding: 20px; color: var(--gray-400);">데이터 없음</div>'}
+          </div>
+        </div>
+      </div>
+
+      <!-- 새로고침 -->
+      <div style="text-align: center; margin-top: 20px;">
+        <button onclick="renderOrderStatus()" class="btn btn-primary">🔄 새로고침</button>
       </div>
     `;
   } catch (err) {
-    console.error('주문현황 대시보드 로딩 실패:', err);
+    console.error('주문현황 로딩 실패:', err);
     app.innerHTML = `
-      <div class="page-header">
-        <h1 class="page-title">📋 주문현황 대시보드</h1>
-      </div>
+      <div class="page-header"><h1 class="page-title">📋 주문현황 공유</h1></div>
       <div class="card" style="text-align: center; padding: 60px;">
         <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
         <p style="color: var(--gray-500);">데이터를 불러오는데 실패했습니다.</p>
