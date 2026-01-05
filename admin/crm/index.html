@@ -1767,7 +1767,20 @@
           window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         }
 
-        pdfDoc = await window.pdfjsLib.getDocument(pdfUrl).promise;
+        // CORS 문제 해결: fetch로 먼저 데이터 가져온 후 ArrayBuffer로 로드
+        let pdfData;
+        try {
+          const response = await fetch(pdfUrl, { mode: 'cors' });
+          if (!response.ok) throw new Error('PDF fetch failed');
+          const arrayBuffer = await response.arrayBuffer();
+          pdfData = { data: arrayBuffer };
+        } catch (fetchError) {
+          // fetch 실패 시 URL 직접 로드 시도 (일부 URL은 이 방식이 작동)
+          console.log('Fetch failed, trying direct URL load:', fetchError);
+          pdfData = pdfUrl;
+        }
+
+        pdfDoc = await window.pdfjsLib.getDocument(pdfData).promise;
         totalPdfPages = pdfDoc.numPages;
         currentPdfPage = 1;
 
@@ -1777,8 +1790,13 @@
         previewArea.innerHTML = `
           <div style="text-align: center; padding: 40px; background: #FEF2F2; border-radius: 12px;">
             <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
-            <div style="color: #DC2626; font-weight: 600;">PDF를 불러올 수 없습니다</div>
-            <div style="color: #7F1D1D; font-size: 13px; margin-top: 8px;">URL을 확인하거나 CORS가 허용된 URL을 사용하세요</div>
+            <div style="color: #DC2626; font-weight: 600; margin-bottom: 12px;">PDF를 불러올 수 없습니다</div>
+            <div style="color: #7F1D1D; font-size: 13px; margin-bottom: 16px;">CORS 정책으로 인해 외부 PDF를 로드할 수 없습니다</div>
+            <div style="border: 2px dashed var(--primary); border-radius: 8px; padding: 16px; background: var(--primary-light); cursor: pointer;" onclick="document.getElementById('pdfFileInput')?.click()">
+              <div style="font-size: 24px; margin-bottom: 8px;">📄</div>
+              <div style="color: var(--primary); font-weight: 600;">PDF 파일을 다시 선택해주세요</div>
+              <div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">클릭하여 파일 선택</div>
+            </div>
           </div>
         `;
       }
@@ -1974,7 +1992,11 @@
       }
     }
 
-    // PDF 위에 오버레이 렌더링
+    // PDF 위에 오버레이 렌더링 (드래그 가능)
+    let draggingOverlay = null;
+    let dragStartX = 0, dragStartY = 0;
+    let overlayStartX = 0, overlayStartY = 0;
+
     function renderOverlaysOnPdf() {
       const layer = document.getElementById('overlayLayer');
       if (!layer) return;
@@ -1985,13 +2007,85 @@
         const globalIndex = builderOverlays.indexOf(o);
         const typeColors = { link: '#3B82F6', video: '#EF4444', image: '#10B981', cta: '#F59E0B' };
         const color = typeColors[o.type] || '#6B7280';
+        const typeIcons = { link: '🔗', video: '🎬', image: '🖼️', cta: '📝' };
+        const icon = typeIcons[o.type] || '📌';
 
         return `
-          <div style="position: absolute; left: ${o.x}%; top: ${o.y}%; width: ${o.width || 10}%; height: ${o.height || 5}%; background: ${color}33; border: 2px solid ${color}; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: move; pointer-events: auto;" onclick="event.stopPropagation(); editOverlay(${globalIndex})" title="${o.label || o.type}">
-            <span style="font-size: 11px; color: ${color}; font-weight: 600; text-shadow: 0 0 2px white;">${o.label || o.type}</span>
+          <div class="overlay-item" data-index="${globalIndex}" style="position: absolute; left: ${o.x}%; top: ${o.y}%; width: ${o.width || 10}%; height: ${o.height || 5}%; background: ${color}33; border: 2px dashed ${color}; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: grab; pointer-events: auto; user-select: none; transition: box-shadow 0.15s;" title="드래그하여 이동, 더블클릭하여 편집">
+            <span style="font-size: 11px; color: ${color}; font-weight: 600; text-shadow: 0 0 2px white; pointer-events: none;">${icon} ${o.label || o.type}</span>
           </div>
         `;
       }).join('');
+
+      // 드래그 이벤트 바인딩
+      layer.querySelectorAll('.overlay-item').forEach(el => {
+        el.addEventListener('mousedown', startDragOverlay);
+        el.addEventListener('dblclick', (e) => {
+          e.stopPropagation();
+          const idx = parseInt(el.dataset.index);
+          editOverlay(idx);
+        });
+      });
+    }
+
+    function startDragOverlay(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const el = e.currentTarget;
+      const idx = parseInt(el.dataset.index);
+      draggingOverlay = { el, idx };
+
+      const container = document.getElementById('pdfCanvasContainer');
+      const rect = container.getBoundingClientRect();
+
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      overlayStartX = builderOverlays[idx].x;
+      overlayStartY = builderOverlays[idx].y;
+
+      el.style.cursor = 'grabbing';
+      el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+      el.style.zIndex = '100';
+
+      document.addEventListener('mousemove', dragOverlay);
+      document.addEventListener('mouseup', stopDragOverlay);
+    }
+
+    function dragOverlay(e) {
+      if (!draggingOverlay) return;
+
+      const container = document.getElementById('pdfCanvasContainer');
+      const rect = container.getBoundingClientRect();
+
+      const deltaX = ((e.clientX - dragStartX) / rect.width) * 100;
+      const deltaY = ((e.clientY - dragStartY) / rect.height) * 100;
+
+      let newX = Math.max(0, Math.min(100 - (builderOverlays[draggingOverlay.idx].width || 10), overlayStartX + deltaX));
+      let newY = Math.max(0, Math.min(100 - (builderOverlays[draggingOverlay.idx].height || 5), overlayStartY + deltaY));
+
+      draggingOverlay.el.style.left = newX + '%';
+      draggingOverlay.el.style.top = newY + '%';
+
+      // 실시간으로 데이터 업데이트
+      builderOverlays[draggingOverlay.idx].x = newX;
+      builderOverlays[draggingOverlay.idx].y = newY;
+    }
+
+    function stopDragOverlay(e) {
+      if (!draggingOverlay) return;
+
+      draggingOverlay.el.style.cursor = 'grab';
+      draggingOverlay.el.style.boxShadow = '';
+      draggingOverlay.el.style.zIndex = '';
+
+      document.removeEventListener('mousemove', dragOverlay);
+      document.removeEventListener('mouseup', stopDragOverlay);
+
+      // 오버레이 목록 업데이트
+      renderOverlayList();
+
+      draggingOverlay = null;
     }
 
     // 오버레이 추가 모드 시작
@@ -2007,6 +2101,9 @@
       }
     }
 
+    // 오버레이 파일 데이터 임시 저장
+    let overlayFileData = null;
+
     // 오버레이 편집 모달
     function openOverlayEditor(index, x = 50, y = 50) {
       const isNew = index === null;
@@ -2021,6 +2118,8 @@
         label: ''
       } : builderOverlays[index];
 
+      overlayFileData = null; // 파일 데이터 초기화
+
       const modal = document.getElementById('analyticsModal');
       const content = document.getElementById('analyticsModalContent');
 
@@ -2032,9 +2131,9 @@
         <div style="padding: 24px;">
           <div style="margin-bottom: 16px;">
             <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">타입</label>
-            <select id="overlay-type" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
+            <select id="overlay-type" onchange="updateOverlayFields()" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
               <option value="link" ${overlay.type === 'link' ? 'selected' : ''}>🔗 링크 버튼</option>
-              <option value="video" ${overlay.type === 'video' ? 'selected' : ''}>🎬 영상 (YouTube/Vimeo)</option>
+              <option value="video" ${overlay.type === 'video' ? 'selected' : ''}>🎬 영상</option>
               <option value="image" ${overlay.type === 'image' ? 'selected' : ''}>🖼️ 이미지</option>
               <option value="cta" ${overlay.type === 'cta' ? 'selected' : ''}>📝 입점신청 CTA</option>
             </select>
@@ -2043,10 +2142,35 @@
             <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">라벨 (표시 텍스트)</label>
             <input type="text" id="overlay-label" value="${overlay.label || ''}" placeholder="버튼에 표시될 텍스트" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
           </div>
+
+          <!-- 링크/CTA용 URL 입력 -->
           <div style="margin-bottom: 16px;" id="overlay-url-container">
             <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">URL</label>
             <input type="text" id="overlay-url" value="${overlay.url || ''}" placeholder="https://..." style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
           </div>
+
+          <!-- 영상 파일 업로드 -->
+          <div style="margin-bottom: 16px; display: none;" id="overlay-video-container">
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">🎬 영상 파일</label>
+            <div style="border: 2px dashed var(--gray-300); border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; background: var(--gray-50);" onclick="document.getElementById('overlay-video-input').click()">
+              <input type="file" id="overlay-video-input" accept="video/*" style="display: none;" onchange="handleOverlayFileSelect(this, 'video')">
+              <div id="overlay-video-preview">
+                ${overlay.fileUrl ? `<video src="${overlay.fileUrl}" style="max-width: 200px; max-height: 120px; border-radius: 4px;" controls></video><br><span style="color: var(--success); font-size: 12px;">✅ 영상 첨부됨</span>` : `<div style="font-size: 24px; margin-bottom: 8px;">🎬</div><div style="font-size: 13px; color: var(--gray-500);">클릭하여 영상 선택</div><div style="font-size: 11px; color: var(--gray-400);">MP4, WebM 지원</div>`}
+              </div>
+            </div>
+          </div>
+
+          <!-- 이미지 파일 업로드 -->
+          <div style="margin-bottom: 16px; display: none;" id="overlay-image-container">
+            <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">🖼️ 이미지 파일</label>
+            <div style="border: 2px dashed var(--gray-300); border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; background: var(--gray-50);" onclick="document.getElementById('overlay-image-input').click()">
+              <input type="file" id="overlay-image-input" accept="image/*" style="display: none;" onchange="handleOverlayFileSelect(this, 'image')">
+              <div id="overlay-image-preview">
+                ${overlay.fileUrl ? `<img src="${overlay.fileUrl}" style="max-width: 200px; max-height: 120px; border-radius: 4px;"><br><span style="color: var(--success); font-size: 12px;">✅ 이미지 첨부됨</span>` : `<div style="font-size: 24px; margin-bottom: 8px;">🖼️</div><div style="font-size: 13px; color: var(--gray-500);">클릭하여 이미지 선택</div><div style="font-size: 11px; color: var(--gray-400);">JPG, PNG, GIF 지원</div>`}
+              </div>
+            </div>
+          </div>
+
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
             <div>
               <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px;">X 위치 (%)</label>
@@ -2079,13 +2203,60 @@
       `;
 
       modal.classList.add('show');
+
+      // 타입에 따라 필드 표시
+      updateOverlayFields();
+    }
+
+    // 오버레이 타입에 따라 입력 필드 표시/숨기기
+    function updateOverlayFields() {
+      const type = document.getElementById('overlay-type').value;
+      const urlContainer = document.getElementById('overlay-url-container');
+      const videoContainer = document.getElementById('overlay-video-container');
+      const imageContainer = document.getElementById('overlay-image-container');
+
+      urlContainer.style.display = (type === 'link' || type === 'cta') ? 'block' : 'none';
+      videoContainer.style.display = type === 'video' ? 'block' : 'none';
+      imageContainer.style.display = type === 'image' ? 'block' : 'none';
+    }
+
+    // 오버레이 파일 선택 핸들러
+    function handleOverlayFileSelect(input, fileType) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        overlayFileData = {
+          data: e.target.result,
+          type: file.type,
+          name: file.name
+        };
+
+        // 미리보기 업데이트
+        const previewId = fileType === 'video' ? 'overlay-video-preview' : 'overlay-image-preview';
+        const preview = document.getElementById(previewId);
+
+        if (fileType === 'video') {
+          preview.innerHTML = `
+            <video src="${e.target.result}" style="max-width: 200px; max-height: 120px; border-radius: 4px;" controls></video>
+            <br><span style="color: var(--success); font-size: 12px;">✅ ${file.name}</span>
+          `;
+        } else {
+          preview.innerHTML = `
+            <img src="${e.target.result}" style="max-width: 200px; max-height: 120px; border-radius: 4px;">
+            <br><span style="color: var(--success); font-size: 12px;">✅ ${file.name}</span>
+          `;
+        }
+      };
+      reader.readAsDataURL(file);
     }
 
     // 오버레이 저장
     function saveOverlay(index) {
       const type = document.getElementById('overlay-type').value;
       const label = document.getElementById('overlay-label').value.trim();
-      const url = document.getElementById('overlay-url').value.trim();
+      const url = document.getElementById('overlay-url')?.value?.trim() || '';
       const x = parseFloat(document.getElementById('overlay-x').value) || 50;
       const y = parseFloat(document.getElementById('overlay-y').value) || 50;
       const width = parseFloat(document.getElementById('overlay-width').value) || 15;
@@ -2094,6 +2265,18 @@
 
       const overlayData = { type, label, url, x, y, width, height, page };
 
+      // 영상/이미지 파일 데이터 저장
+      if ((type === 'video' || type === 'image') && overlayFileData) {
+        overlayData.fileUrl = overlayFileData.data; // base64 데이터
+        overlayData.fileName = overlayFileData.name;
+        overlayData.fileType = overlayFileData.type;
+      } else if (index !== null && builderOverlays[index]) {
+        // 기존 파일 데이터 유지
+        overlayData.fileUrl = builderOverlays[index].fileUrl;
+        overlayData.fileName = builderOverlays[index].fileName;
+        overlayData.fileType = builderOverlays[index].fileType;
+      }
+
       if (index === null) {
         builderOverlays.push(overlayData);
       } else {
@@ -2101,6 +2284,7 @@
       }
 
       addingOverlayType = null;
+      overlayFileData = null; // 파일 데이터 초기화
       closeAnalyticsModal();
       renderProposalBuilder();
       if (pdfDoc) {
@@ -2139,17 +2323,24 @@
         return;
       }
 
+      // Firebase Storage 동적 로드
+      if (!firebase.storage) {
+        try {
+          await loadScript('https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js');
+        } catch (e) {
+          console.error('Firebase Storage 로드 실패:', e);
+        }
+      }
+
+      const storage = firebase.storage ? firebase.storage() : null;
+
       // PDF 체크: 로컬 파일이 있으면 Firebase Storage에 업로드
       if (pdfFileData && !pdfUrl) {
         try {
           showToast('📤 PDF 업로드 중...');
 
-          // Firebase Storage 동적 로드
-          if (!firebase.storage) {
-            await loadScript('https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js');
-          }
+          if (!storage) throw new Error('Storage not available');
 
-          const storage = firebase.storage();
           const fileName = 'proposals/' + Date.now() + '_' + (document.getElementById('pdfFileName')?.textContent?.replace('📄 ', '') || 'proposal.pdf');
           const storageRef = storage.ref(fileName);
 
@@ -2174,13 +2365,45 @@
       }
 
       try {
+        // 오버레이 파일 업로드 (영상/이미지)
+        showToast('📤 오버레이 파일 업로드 중...');
+        const processedOverlays = [];
+
+        for (const overlay of builderOverlays) {
+          const processedOverlay = { ...overlay };
+
+          // base64 데이터가 있고 Firebase Storage URL이 아닌 경우 업로드
+          if (overlay.fileUrl && overlay.fileUrl.startsWith('data:') && storage) {
+            try {
+              const ext = overlay.fileType?.split('/')[1] || (overlay.type === 'video' ? 'mp4' : 'jpg');
+              const fileName = `proposals/overlays/${Date.now()}_${Math.random().toString(36).substr(2, 9)}.${ext}`;
+              const storageRef = storage.ref(fileName);
+
+              // base64 to blob
+              const response = await fetch(overlay.fileUrl);
+              const blob = await response.blob();
+
+              const snapshot = await storageRef.put(blob);
+              processedOverlay.fileUrl = await snapshot.ref.getDownloadURL();
+              delete processedOverlay.fileName;
+              delete processedOverlay.fileType;
+            } catch (uploadErr) {
+              console.error('오버레이 파일 업로드 실패:', uploadErr);
+              // 업로드 실패 시 base64 데이터 제거 (용량 문제 방지)
+              delete processedOverlay.fileUrl;
+            }
+          }
+
+          processedOverlays.push(processedOverlay);
+        }
+
         const proposalData = {
           title,
           category,
           targetSupplier: targetSupplier || null,
           description,
           pdfUrl,
-          overlays: builderOverlays,
+          overlays: processedOverlays,
           totalPages: totalPdfPages,
           updatedAt: new Date().toISOString()
         };
