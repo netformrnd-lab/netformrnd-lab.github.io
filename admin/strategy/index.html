@@ -3848,8 +3848,8 @@
               <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">목표 설정 및 전략 방향 관리 · 버전별 히스토리 보관</p>
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button onclick="openStrategySettingsModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: #10B981; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                ⚙️ 전략 설정
+              <button onclick="openStrategySettingsModal()" style="padding: 12px 20px; font-size: 14px; font-weight: 700; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 10px; cursor: pointer; box-shadow: 0 4px 12px rgba(16,185,129,0.3); display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 18px;">⚙️</span> 전략 설정
               </button>
               <button onclick="openVersionHistoryModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.white}; color: ${C.gray700}; border: 1px solid ${C.gray200}; border-radius: 8px; cursor: pointer;">
                 📜 버전 히스토리
@@ -4807,6 +4807,7 @@
     function getCurrentMember() {
       return {
         id: state.currentUser?.odooId || state.currentUser?.id || 'unknown',
+        loginId: state.currentUser?.loginId || '',
         name: state.currentUser?.name || '미지정'
       };
     }
@@ -4904,6 +4905,24 @@
         const snapshot = await db.collection('tasks').get();
         const allTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
+        console.log('📋 [업무 로딩] 전체:', allTasks.length, '건');
+        console.log('📋 [현재 사용자] id:', currentMember.id, 'loginId:', currentMember.loginId, 'name:', currentMember.name);
+        console.log('📋 [필터] 월:', workLogMonth, '담당자 필터:', memberFilter);
+
+        // 내 업무 매칭 헬퍼 함수
+        const isMyTask = (task) => {
+          // 이름 매칭
+          if (task.assignee === currentMember.name) return true;
+          // ID 매칭 (여러 ID 형식 확인)
+          if (task.assigneeId === currentMember.id) return true;
+          if (task.assigneeId === currentMember.loginId) return true;
+          // loginId 필드 매칭
+          if (task.assigneeLoginId === currentMember.loginId) return true;
+          // 담당자 미지정 = 내 업무
+          if (!task.assignee && !task.assigneeId) return true;
+          return false;
+        };
+
         // 월별 + 담당자 필터
         workLogTasks = allTasks.filter(t => {
           // 날짜 필터: dueDate 또는 createdAt 기준 (날짜 없으면 통과)
@@ -4916,16 +4935,20 @@
           } else if (memberFilter === 'member' && selectedMemberId) {
             // 특정 팀원 선택
             const selectedMember = (state.teamMembers || []).find(m => m.id === selectedMemberId);
-            const isSelectedMember = t.assignee === selectedMember?.name || t.assigneeId === selectedMemberId;
+            const isSelectedMember = t.assignee === selectedMember?.name ||
+                                     t.assigneeId === selectedMemberId ||
+                                     t.assigneeLoginId === selectedMember?.loginId;
             return inMonth && isSelectedMember;
           } else {
-            // 내 업무: 내가 담당자이거나 담당자 미지정
-            const isMine = t.assignee === currentMember.name || t.assigneeId === currentMember.id || (!t.assignee && !t.assigneeId);
-            return inMonth && isMine;
+            // 내 업무
+            return inMonth && isMyTask(t);
           }
         });
 
-        console.log('업무일지 데이터:', allTasks.length, '건 중', workLogTasks.length, '건 표시');
+        console.log('📋 [결과] 필터링 후:', workLogTasks.length, '건');
+        if (allTasks.length > 0 && workLogTasks.length === 0) {
+          console.log('📋 [참고] 전체 업무 샘플:', allTasks.slice(0, 3));
+        }
 
         renderWorkLogStats();
         renderWorkLogContent();
