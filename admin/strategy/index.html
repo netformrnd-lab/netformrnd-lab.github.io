@@ -1324,6 +1324,8 @@
       deals: [],
       suppliers: [],
       sellers: [],
+      sellerList: [],
+      productList: [],
       projects: [],
       references: [],
       refCategories: [],
@@ -1445,6 +1447,18 @@
       db.collection('sellers').orderBy('name').onSnapshot(snapshot => {
         state.sellers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         render();
+      });
+
+      // 셀러 리스트 데이터 (파이프라인/온보딩용)
+      db.collection('sellerList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.sellerList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'dashboard') renderSalesDashboard();
+      });
+
+      // 상품 리스트 데이터 (파이프라인/온보딩용)
+      db.collection('productList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'dashboard') renderSalesDashboard();
       });
 
       // 셀러 정산 데이터 (영업현황용)
@@ -2540,10 +2554,61 @@
       const weeklyProgress = Math.min(100, Math.round((thisWeekDeals.length / weeklyTargetDeals) * 100));
       const monthlyProgress = Math.min(100, Math.round((monthDeals.length / monthlyTargetDeals) * 100));
 
+      // 셀러/상품 리스트 데이터
+      const allSellerList = state.sellerList || [];
+      const allProductList = state.productList || [];
+
+      // 📋 온보딩 진척도 계산 (셀러리스트)
+      const sellerOnboardingItems = allSellerList.filter(s => s.onboarding || s.contacted);
+      const sellerOnboardingStats = {
+        total: sellerOnboardingItems.length,
+        obContact: sellerOnboardingItems.filter(s => s.obContact).length,
+        obGuide: sellerOnboardingItems.filter(s => s.obGuide).length,
+        obForm: sellerOnboardingItems.filter(s => s.obForm).length,
+        obBank: sellerOnboardingItems.filter(s => s.obBank).length,
+        obIdCard: sellerOnboardingItems.filter(s => s.obIdCard).length
+      };
+      const sellerOnboardingProgress = sellerOnboardingStats.total > 0
+        ? Math.round(((sellerOnboardingStats.obContact + sellerOnboardingStats.obGuide + sellerOnboardingStats.obForm + sellerOnboardingStats.obBank + sellerOnboardingStats.obIdCard) / (sellerOnboardingStats.total * 5)) * 100)
+        : 0;
+
+      // 📋 온보딩 진척도 계산 (상품리스트/공급사)
+      const supplierOnboardingItems = allProductList.filter(p => p.onboarding || p.contacted);
+      const supplierOnboardingStats = {
+        total: supplierOnboardingItems.length,
+        obContact: supplierOnboardingItems.filter(p => p.obContact).length,
+        obGuide: supplierOnboardingItems.filter(p => p.obGuide).length,
+        obProductInfo: supplierOnboardingItems.filter(p => p.obProductInfo).length,
+        obBizLicense: supplierOnboardingItems.filter(p => p.obBizLicense).length,
+        obBank: supplierOnboardingItems.filter(p => p.obBank).length
+      };
+      const supplierOnboardingProgress = supplierOnboardingStats.total > 0
+        ? Math.round(((supplierOnboardingStats.obContact + supplierOnboardingStats.obGuide + supplierOnboardingStats.obProductInfo + supplierOnboardingStats.obBizLicense + supplierOnboardingStats.obBank) / (supplierOnboardingStats.total * 5)) * 100)
+        : 0;
+
       // 팀원별 실적
       const memberStats = members.filter(m => m.role !== 'ceo').map(member => {
         const mSuppliers = (state.suppliers || []).filter(s => s.registeredBy === member.id);
         const mSellers = (state.sellers || []).filter(s => s.registeredBy === member.id);
+
+        // 셀러 파이프라인 (sellerList 기반)
+        const mSellerList = allSellerList.filter(s => s.createdBy === member.loginId || s.createdBy === member.id);
+        const sellerPipeline = {
+          total: mSellerList.length,
+          proposed: mSellerList.filter(s => s.proposed).length,
+          onboarding: mSellerList.filter(s => s.onboarding || s.contacted).length,
+          contracted: mSellerList.filter(s => s.contracted).length
+        };
+
+        // 상품 파이프라인 (productList 기반)
+        const mProductList = allProductList.filter(s => s.createdBy === member.loginId || s.createdBy === member.id);
+        const supplierPipeline = {
+          total: mProductList.length,
+          proposed: mProductList.filter(s => s.proposed).length,
+          onboarding: mProductList.filter(s => s.onboarding || s.contacted).length,
+          contracted: mProductList.filter(s => s.contracted).length
+        };
+
         const mDeals = allDeals.filter(d => d.registeredBy === member.id);
         const mYearDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
         const mMonthDeals = mDeals.filter(d => (d.endDate || '').startsWith(thisMonth));
@@ -2572,7 +2637,9 @@
           successDeals: mSuccessDeals.length,
           successRate: mSuccessRate,
           sales: totalSales,
-          profit: totalProfit
+          profit: totalProfit,
+          sellerPipeline,
+          supplierPipeline
         };
       });
 
@@ -2804,6 +2871,159 @@
                 </div>
               `).join('')}
             </div>
+          </div>
+
+          <!-- 📋 온보딩 진척도 -->
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 20px;">
+            <!-- 셀러 온보딩 진척도 -->
+            <div style="background: ${C.white}; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="font-size: 15px; font-weight: 700; color: #B45309;">🤝 셀러 온보딩 진척도</div>
+                <span style="font-size: 20px; font-weight: 800; color: ${sellerOnboardingProgress >= 70 ? C.green : sellerOnboardingProgress >= 40 ? C.yellow : C.red};">${sellerOnboardingProgress}%</span>
+              </div>
+              <div style="background: ${C.gray100}; border-radius: 8px; height: 8px; margin-bottom: 16px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #F59E0B, #D97706); height: 100%; width: ${sellerOnboardingProgress}%; border-radius: 8px; transition: width 0.5s;"></div>
+              </div>
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 12px;">온보딩 진행 중: <strong style="color: #B45309;">${sellerOnboardingStats.total}건</strong></div>
+              <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; font-size: 11px;">
+                <div style="text-align: center; padding: 8px 4px; background: ${sellerOnboardingStats.obContact > 0 ? '#FEF3C7' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">📞</div>
+                  <div style="color: ${C.gray600};">컨택</div>
+                  <div style="font-weight: 700; color: #B45309;">${sellerOnboardingStats.obContact}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${sellerOnboardingStats.obGuide > 0 ? '#FEF3C7' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">📘</div>
+                  <div style="color: ${C.gray600};">가이드</div>
+                  <div style="font-weight: 700; color: #B45309;">${sellerOnboardingStats.obGuide}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${sellerOnboardingStats.obForm > 0 ? '#FEF3C7' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">📄</div>
+                  <div style="color: ${C.gray600};">신청서</div>
+                  <div style="font-weight: 700; color: #B45309;">${sellerOnboardingStats.obForm}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${sellerOnboardingStats.obBank > 0 ? '#FEF3C7' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">🏦</div>
+                  <div style="color: ${C.gray600};">계좌</div>
+                  <div style="font-weight: 700; color: #B45309;">${sellerOnboardingStats.obBank}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${sellerOnboardingStats.obIdCard > 0 ? '#FEF3C7' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">🪪</div>
+                  <div style="color: ${C.gray600};">신분증</div>
+                  <div style="font-weight: 700; color: #B45309;">${sellerOnboardingStats.obIdCard}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 공급사 온보딩 진척도 -->
+            <div style="background: ${C.white}; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="font-size: 15px; font-weight: 700; color: #4338CA;">🤝 공급사 온보딩 진척도</div>
+                <span style="font-size: 20px; font-weight: 800; color: ${supplierOnboardingProgress >= 70 ? C.green : supplierOnboardingProgress >= 40 ? C.yellow : C.red};">${supplierOnboardingProgress}%</span>
+              </div>
+              <div style="background: ${C.gray100}; border-radius: 8px; height: 8px; margin-bottom: 16px; overflow: hidden;">
+                <div style="background: linear-gradient(90deg, #6366F1, #4338CA); height: 100%; width: ${supplierOnboardingProgress}%; border-radius: 8px; transition: width 0.5s;"></div>
+              </div>
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 12px;">온보딩 진행 중: <strong style="color: #4338CA;">${supplierOnboardingStats.total}건</strong></div>
+              <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; font-size: 11px;">
+                <div style="text-align: center; padding: 8px 4px; background: ${supplierOnboardingStats.obContact > 0 ? '#EEF2FF' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">📞</div>
+                  <div style="color: ${C.gray600};">컨택</div>
+                  <div style="font-weight: 700; color: #4338CA;">${supplierOnboardingStats.obContact}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${supplierOnboardingStats.obGuide > 0 ? '#EEF2FF' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">📘</div>
+                  <div style="color: ${C.gray600};">가이드</div>
+                  <div style="font-weight: 700; color: #4338CA;">${supplierOnboardingStats.obGuide}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${supplierOnboardingStats.obProductInfo > 0 ? '#EEF2FF' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">📦</div>
+                  <div style="color: ${C.gray600};">상품정보</div>
+                  <div style="font-weight: 700; color: #4338CA;">${supplierOnboardingStats.obProductInfo}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${supplierOnboardingStats.obBizLicense > 0 ? '#EEF2FF' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">🏢</div>
+                  <div style="color: ${C.gray600};">사업자</div>
+                  <div style="font-weight: 700; color: #4338CA;">${supplierOnboardingStats.obBizLicense}</div>
+                </div>
+                <div style="text-align: center; padding: 8px 4px; background: ${supplierOnboardingStats.obBank > 0 ? '#EEF2FF' : C.gray50}; border-radius: 8px;">
+                  <div style="font-size: 16px; margin-bottom: 4px;">🏦</div>
+                  <div style="color: ${C.gray600};">통장</div>
+                  <div style="font-weight: 700; color: #4338CA;">${supplierOnboardingStats.obBank}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 📊 팀원별 파이프라인 성과 -->
+          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 16px; font-weight: 700; color: ${C.black};">📊 팀원별 파이프라인 성과</div>
+            </div>
+
+            ${memberStats.length === 0 ? `
+              <div style="text-align: center; padding: 40px; color: ${C.gray500};">등록된 팀원이 없습니다.</div>
+            ` : `
+              <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                  <thead>
+                    <tr style="background: linear-gradient(135deg, #EEF2FF, #FEF3C7);">
+                      <th rowspan="2" style="padding: 10px 8px; text-align: left; font-weight: 600; color: ${C.gray700}; border-bottom: 2px solid ${C.gray200};">팀원</th>
+                      <th colspan="4" style="padding: 8px; text-align: center; font-weight: 700; color: #B45309; border-bottom: 1px solid #FCD34D; background: #FEF3C7;">
+                        👤 셀러 파이프라인
+                      </th>
+                      <th colspan="4" style="padding: 8px; text-align: center; font-weight: 700; color: #4338CA; border-bottom: 1px solid #C7D2FE; background: #EEF2FF;">
+                        📦 상품 파이프라인
+                      </th>
+                    </tr>
+                    <tr style="background: ${C.gray50};">
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">리스트업</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">제안</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">온보딩</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: #B45309; border-bottom: 2px solid ${C.gray200};">계약</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">리스트업</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">제안</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">온보딩</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: #4338CA; border-bottom: 2px solid ${C.gray200};">계약</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${memberStats.map(m => `
+                      <tr style="border-bottom: 1px solid ${C.gray100};">
+                        <td style="padding: 12px 8px;">
+                          <div style="display: flex; align-items: center; gap: 8px;">
+                            <div style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, ${C.primary}, #3B82F6); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 11px;">
+                              ${(m.name || m.id || '?').charAt(0)}
+                            </div>
+                            <span style="font-weight: 600; color: ${C.black};">${m.name || m.id}</span>
+                          </div>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center; font-weight: 600;">${m.sellerPipeline.total}</td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${m.sellerPipeline.proposed > 0 ? C.green : C.gray400};">${m.sellerPipeline.proposed}</td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${m.sellerPipeline.onboarding > 0 ? C.blue : C.gray400};">${m.sellerPipeline.onboarding}</td>
+                        <td style="padding: 8px 6px; text-align: center;"><span style="background: ${m.sellerPipeline.contracted > 0 ? '#FEF3C7' : C.gray100}; color: ${m.sellerPipeline.contracted > 0 ? '#B45309' : C.gray400}; padding: 2px 8px; border-radius: 10px; font-weight: 700;">${m.sellerPipeline.contracted}</span></td>
+                        <td style="padding: 8px 6px; text-align: center; font-weight: 600;">${m.supplierPipeline.total}</td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${m.supplierPipeline.proposed > 0 ? C.green : C.gray400};">${m.supplierPipeline.proposed}</td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${m.supplierPipeline.onboarding > 0 ? C.blue : C.gray400};">${m.supplierPipeline.onboarding}</td>
+                        <td style="padding: 8px 6px; text-align: center;"><span style="background: ${m.supplierPipeline.contracted > 0 ? '#EEF2FF' : C.gray100}; color: ${m.supplierPipeline.contracted > 0 ? '#4338CA' : C.gray400}; padding: 2px 8px; border-radius: 10px; font-weight: 700;">${m.supplierPipeline.contracted}</span></td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                  <tfoot>
+                    <tr style="background: ${C.gray50}; border-top: 2px solid ${C.gray200};">
+                      <td style="padding: 12px 8px; font-weight: 700;">합계</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700;">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.total, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: ${C.green};">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.proposed, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: ${C.blue};">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.onboarding, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #B45309;">${memberStats.reduce((sum, m) => sum + m.sellerPipeline.contracted, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700;">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.total, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: ${C.green};">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.proposed, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: ${C.blue};">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.onboarding, 0)}</td>
+                      <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #4338CA;">${memberStats.reduce((sum, m) => sum + m.supplierPipeline.contracted, 0)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            `}
           </div>
         </div>
       `;
