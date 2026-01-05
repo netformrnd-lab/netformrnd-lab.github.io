@@ -699,6 +699,10 @@
             <span class="icon">🚀</span>
             <span>그로스보드</span>
           </div>
+          <div class="nav-item" onclick="switchTab('worklog')">
+            <span class="icon">📓</span>
+            <span>업무일지</span>
+          </div>
           <div class="nav-item" onclick="switchTab('guide')">
             <span class="icon">📚</span>
             <span>업무가이드</span>
@@ -1155,6 +1159,13 @@
         </div>
       </div>
 
+      <!-- 업무일지 -->
+      <div id="tab-worklog" class="tab-content">
+        <div id="worklogContent">
+          <!-- 동적으로 렌더링 -->
+        </div>
+      </div>
+
       <!-- 업무가이드 -->
       <div id="tab-guide" class="tab-content">
         <div id="guideContent">
@@ -1484,6 +1495,11 @@
       // 영업현황 탭 렌더링
       if (tabId === 'dashboard') {
         renderSalesDashboard();
+      }
+
+      // 업무일지 탭 렌더링
+      if (tabId === 'worklog') {
+        renderWorkLog();
       }
     }
 
@@ -3235,6 +3251,379 @@
           </div>
         </div>
       `;
+    }
+
+    // ========================================
+    // 업무일지 시스템
+    // ========================================
+    const TASK_COLUMNS = [
+      { id: 'waiting', label: '대기', color: '#f59e0b', bg: '#fef3c7', icon: '⏳' },
+      { id: 'progress', label: '진행중', color: '#3b82f6', bg: '#dbeafe', icon: '🔄' },
+      { id: 'complete', label: '완료', color: '#10b981', bg: '#d1fae5', icon: '✅' },
+      { id: 'hold', label: '보류', color: '#6b7280', bg: '#f3f4f6', icon: '⏸️' }
+    ];
+
+    let workLogView = 'kanban';
+    let memberFilter = 'my';
+    let workLogTasks = [];
+    let workLogMonth = '';
+
+    function getCurrentMember() {
+      return {
+        id: state.currentUser?.odooId || state.currentUser?.id || 'unknown',
+        name: state.currentUser?.name || '미지정'
+      };
+    }
+
+    function renderWorkLog() {
+      const container = document.getElementById('worklogContent');
+      if (!container) return;
+
+      const now = new Date();
+      workLogMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+      const currentMember = getCurrentMember();
+      const isAdmin = state.currentUser?.role === 'admin';
+
+      container.innerHTML = `
+        <div style="max-width: 1400px; margin: 0 auto;">
+          <!-- 헤더 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <div>
+              <h1 style="font-size: 26px; font-weight: 700; color: #191F28; margin: 0;">📓 업무일지</h1>
+              <p style="color: #6B7684; margin-top: 8px; font-size: 15px;">팀원별 업무 관리 및 자동 기록</p>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="openQuickTaskModal()" style="padding: 12px 20px; font-size: 14px; font-weight: 600; background: #0064FF; color: white; border: none; border-radius: 12px; cursor: pointer;">
+                ➕ 새 업무
+              </button>
+            </div>
+          </div>
+
+          <!-- 컨트롤 바 -->
+          <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+              <!-- 월 선택 -->
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <button onclick="changeWorkLogMonth(-1)" style="background: #E5E8EB; border: none; width: 40px; height: 40px; border-radius: 10px; cursor: pointer; font-size: 18px;">←</button>
+                <input type="month" id="worklog-month" value="${workLogMonth}" onchange="loadWorkLogData()" style="padding: 10px 16px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px; font-weight: 600;" />
+                <button onclick="changeWorkLogMonth(1)" style="background: #E5E8EB; border: none; width: 40px; height: 40px; border-radius: 10px; cursor: pointer; font-size: 18px;">→</button>
+              </div>
+
+              <!-- 뷰 전환 -->
+              <div style="display: flex; gap: 8px; background: #F2F4F6; padding: 4px; border-radius: 10px;">
+                <button id="view-kanban" onclick="setWorkLogView('kanban')" style="background: #0064FF; color: white; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">📋 칸반</button>
+                <button id="view-timeline" onclick="setWorkLogView('timeline')" style="background: transparent; color: #6B7684; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">📝 타임라인</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 사용자 카드 -->
+          <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; align-items: center; gap: 14px;">
+              <div style="width: 48px; height: 48px; background: #E8F3FF; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #0064FF;">👤</div>
+              <div>
+                <div style="font-size: 18px; font-weight: 700; color: #191F28;">${currentMember.name}</div>
+                <div style="font-size: 13px; color: #6B7684;" id="today-summary">업무 현황 로딩중...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 통계 카드 -->
+          <div id="worklog-stats" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;"></div>
+
+          <!-- 메인 컨텐츠 -->
+          <div id="worklog-main-content">
+            <div style="text-align: center; padding: 60px;"><div class="loading-spinner"></div></div>
+          </div>
+        </div>
+      `;
+
+      loadWorkLogData();
+    }
+
+    async function loadWorkLogData() {
+      const monthInput = document.getElementById('worklog-month');
+      if (!monthInput) return;
+
+      workLogMonth = monthInput.value;
+      const [year, month] = workLogMonth.split('-').map(Number);
+      const startDate = new Date(year, month - 1, 1).toISOString().split('T')[0];
+      const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+      const currentMember = getCurrentMember();
+
+      try {
+        const snapshot = await db.collection('tasks').get();
+        const allTasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 월별 + 담당자 필터
+        workLogTasks = allTasks.filter(t => {
+          const inMonth = t.dueDate && t.dueDate >= startDate && t.dueDate <= endDate;
+          const isMine = t.assignee === currentMember.name || t.assigneeId === currentMember.id || (!t.assignee && !t.assigneeId);
+          return inMonth && (memberFilter === 'all' || isMine);
+        });
+
+        renderWorkLogStats();
+        renderWorkLogContent();
+      } catch (e) {
+        console.error('업무일지 로드 오류:', e);
+      }
+    }
+
+    function renderWorkLogStats() {
+      const statsEl = document.getElementById('worklog-stats');
+      const summaryEl = document.getElementById('today-summary');
+      if (!statsEl) return;
+
+      const counts = { waiting: 0, progress: 0, complete: 0, hold: 0 };
+      workLogTasks.forEach(t => {
+        const status = t.status || 'waiting';
+        if (counts[status] !== undefined) counts[status]++;
+      });
+
+      statsEl.innerHTML = TASK_COLUMNS.map(col => `
+        <div style="background: ${col.bg}; border-radius: 12px; padding: 16px; text-align: center;">
+          <div style="font-size: 24px; margin-bottom: 8px;">${col.icon}</div>
+          <div style="font-size: 28px; font-weight: 700; color: ${col.color};">${counts[col.id]}</div>
+          <div style="font-size: 13px; color: #6B7684;">${col.label}</div>
+        </div>
+      `).join('');
+
+      if (summaryEl) {
+        const today = new Date().toISOString().split('T')[0];
+        const todayComplete = workLogTasks.filter(t => t.status === 'complete' && t.completedAt?.startsWith(today)).length;
+        summaryEl.textContent = `오늘 완료: ${todayComplete}건 | 진행중: ${counts.progress}건`;
+      }
+    }
+
+    function renderWorkLogContent() {
+      const container = document.getElementById('worklog-main-content');
+      if (!container) return;
+
+      if (workLogView === 'kanban') {
+        renderKanbanView(container);
+      } else {
+        renderTimelineView(container);
+      }
+    }
+
+    function renderKanbanView(container) {
+      container.innerHTML = `
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          ${TASK_COLUMNS.map(col => {
+            const tasks = workLogTasks.filter(t => (t.status || 'waiting') === col.id);
+            return `
+              <div style="background: ${col.bg}; border-radius: 16px; padding: 16px; min-height: 400px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                  <div style="font-weight: 700; color: ${col.color};">${col.icon} ${col.label}</div>
+                  <span style="background: ${col.color}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px;">${tasks.length}</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  ${tasks.length === 0 ? `
+                    <div style="text-align: center; padding: 40px 20px; color: #8B95A1; font-size: 13px;">업무가 없습니다</div>
+                  ` : tasks.map(task => `
+                    <div onclick="openTaskDetailModal('${task.id}')" style="background: white; border-radius: 12px; padding: 14px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
+                      <div style="font-weight: 600; color: #191F28; margin-bottom: 8px; font-size: 14px;">${task.title || '제목 없음'}</div>
+                      ${task.dueDate ? `<div style="font-size: 12px; color: #8B95A1;">📅 ${task.dueDate}</div>` : ''}
+                      ${task.category ? `<span style="display: inline-block; margin-top: 8px; font-size: 11px; padding: 2px 8px; background: #F2F4F6; border-radius: 4px; color: #6B7684;">${task.category}</span>` : ''}
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function renderTimelineView(container) {
+      const sortedTasks = [...workLogTasks].sort((a, b) => (b.dueDate || '').localeCompare(a.dueDate || ''));
+
+      container.innerHTML = `
+        <div style="background: white; border-radius: 16px; padding: 24px;">
+          ${sortedTasks.length === 0 ? `
+            <div style="text-align: center; padding: 60px; color: #8B95A1;">이번 달 업무가 없습니다</div>
+          ` : sortedTasks.map(task => {
+            const col = TASK_COLUMNS.find(c => c.id === (task.status || 'waiting')) || TASK_COLUMNS[0];
+            return `
+              <div onclick="openTaskDetailModal('${task.id}')" style="display: flex; gap: 16px; padding: 16px; border-bottom: 1px solid #E5E8EB; cursor: pointer;">
+                <div style="font-size: 20px;">${col.icon}</div>
+                <div style="flex: 1;">
+                  <div style="font-weight: 600; color: #191F28;">${task.title || '제목 없음'}</div>
+                  <div style="font-size: 13px; color: #8B95A1; margin-top: 4px;">
+                    ${task.dueDate || '날짜 미정'} ${task.category ? `· ${task.category}` : ''}
+                  </div>
+                </div>
+                <span style="background: ${col.bg}; color: ${col.color}; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; height: fit-content;">${col.label}</span>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function setWorkLogView(view) {
+      workLogView = view;
+      ['kanban', 'timeline'].forEach(v => {
+        const btn = document.getElementById('view-' + v);
+        if (btn) {
+          btn.style.background = view === v ? '#0064FF' : 'transparent';
+          btn.style.color = view === v ? 'white' : '#6B7684';
+        }
+      });
+      renderWorkLogContent();
+    }
+
+    function changeWorkLogMonth(delta) {
+      const input = document.getElementById('worklog-month');
+      if (!input) return;
+
+      let [year, month] = input.value.split('-').map(Number);
+      month += delta;
+      if (month > 12) { month = 1; year++; }
+      if (month < 1) { month = 12; year--; }
+      input.value = year + '-' + String(month).padStart(2, '0');
+      loadWorkLogData();
+    }
+
+    function openQuickTaskModal() {
+      const today = new Date().toISOString().split('T')[0];
+      const currentMember = getCurrentMember();
+
+      const m = document.getElementById('modal');
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header" style="background: #0064FF; color: white;">
+            <h2 class="modal-title" style="color: white;">➕ 새 업무 추가</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">업무 제목 *</label>
+              <input type="text" id="taskTitle" placeholder="업무 내용을 입력하세요" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">마감일</label>
+              <input type="date" id="taskDueDate" value="${today}" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">상태</label>
+              <select id="taskStatus" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+                <option value="waiting">⏳ 대기</option>
+                <option value="progress">🔄 진행중</option>
+                <option value="complete">✅ 완료</option>
+                <option value="hold">⏸️ 보류</option>
+              </select>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">구분</label>
+              <input type="text" id="taskCategory" placeholder="예: 영업, 개발, 마케팅" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+            </div>
+          </div>
+          <div class="modal-footer" style="border-top: 1px solid #E5E8EB; padding: 16px 24px;">
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveQuickTask()">저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function saveQuickTask() {
+      const title = document.getElementById('taskTitle').value.trim();
+      const dueDate = document.getElementById('taskDueDate').value;
+      const status = document.getElementById('taskStatus').value;
+      const category = document.getElementById('taskCategory').value.trim();
+
+      if (!title) { showToast('업무 제목을 입력하세요'); return; }
+
+      const currentMember = getCurrentMember();
+
+      try {
+        await db.collection('tasks').add({
+          title,
+          dueDate,
+          status,
+          category,
+          assignee: currentMember.name,
+          assigneeId: currentMember.id,
+          createdAt: new Date().toISOString(),
+          source: 'strategy-worklog'
+        });
+        showToast('업무가 추가되었습니다');
+        closeModal();
+        loadWorkLogData();
+      } catch (e) {
+        console.error(e);
+        showToast('저장 실패');
+      }
+    }
+
+    function openTaskDetailModal(taskId) {
+      const task = workLogTasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const col = TASK_COLUMNS.find(c => c.id === (task.status || 'waiting')) || TASK_COLUMNS[0];
+
+      const m = document.getElementById('modal');
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header" style="background: ${col.color}; color: white;">
+            <h2 class="modal-title" style="color: white;">${col.icon} ${task.title || '업무 상세'}</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">상태 변경</label>
+              <select id="editTaskStatus" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+                ${TASK_COLUMNS.map(c => `<option value="${c.id}" ${task.status === c.id ? 'selected' : ''}>${c.icon} ${c.label}</option>`).join('')}
+              </select>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #6B7684;">마감일: ${task.dueDate || '미정'}</div>
+              ${task.category ? `<div style="font-size: 13px; color: #6B7684;">구분: ${task.category}</div>` : ''}
+              ${task.assignee ? `<div style="font-size: 13px; color: #6B7684;">담당자: ${task.assignee}</div>` : ''}
+            </div>
+          </div>
+          <div class="modal-footer" style="border-top: 1px solid #E5E8EB; padding: 16px 24px; display: flex; justify-content: space-between;">
+            <button onclick="deleteTask('${taskId}')" style="background: #FEE2E4; color: #F04452; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">삭제</button>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
+              <button class="btn btn-primary" onclick="updateTaskStatus('${taskId}')">저장</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function updateTaskStatus(taskId) {
+      const status = document.getElementById('editTaskStatus').value;
+      try {
+        const updateData = { status };
+        if (status === 'complete') {
+          updateData.completedAt = new Date().toISOString();
+        }
+        await db.collection('tasks').doc(taskId).update(updateData);
+        showToast('업무 상태가 변경되었습니다');
+        closeModal();
+        loadWorkLogData();
+      } catch (e) {
+        console.error(e);
+        showToast('저장 실패');
+      }
+    }
+
+    async function deleteTask(taskId) {
+      if (!confirm('이 업무를 삭제하시겠습니까?')) return;
+      try {
+        await db.collection('tasks').doc(taskId).delete();
+        showToast('업무가 삭제되었습니다');
+        closeModal();
+        loadWorkLogData();
+      } catch (e) {
+        console.error(e);
+        showToast('삭제 실패');
+      }
     }
 
     // 초기화
