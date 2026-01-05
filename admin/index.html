@@ -8127,11 +8127,16 @@ async function renderSettlement() {
   const inhousePendingAmount = inhouseSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
   const externalPendingAmount = externalSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
   const supplierPendingAmount = allSupplierSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.totalSupplyAmount) || Number(s.supplyAmount) || 0) + (Number(s.totalVatAmount) || Number(s.vatAmount) || 0), 0);
-  const totalPendingAmount = inhousePendingAmount + externalPendingAmount + supplierPendingAmount;
 
-  // 정산 진행률 계산 (정산서 기준)
-  const totalSettlementCount = inhouseSettlements.length + externalSettlements.length + allSupplierSettlements.length;
-  const completedSettlementCount = inhouseSettlements.filter(s => s.isCompleted).length + externalSettlements.filter(s => s.isCompleted).length + allSupplierSettlements.filter(s => s.isCompleted).length;
+  // 콘텐츠 제작료 정산 (pendingAmount 계산용)
+  const allContentFees = state.contentFeeSettlements || [];
+  const contentFeePendingAmount = allContentFees.filter(f => !f.isCompleted).reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
+
+  const totalPendingAmount = inhousePendingAmount + externalPendingAmount + supplierPendingAmount + contentFeePendingAmount;
+
+  // 정산 진행률 계산 (콘텐츠 제작료 포함)
+  const totalSettlementCount = inhouseSettlements.length + externalSettlements.length + allSupplierSettlements.length + allContentFees.length;
+  const completedSettlementCount = inhouseSettlements.filter(s => s.isCompleted).length + externalSettlements.filter(s => s.isCompleted).length + allSupplierSettlements.filter(s => s.isCompleted).length + allContentFees.filter(f => f.isCompleted).length;
 
   // 순이익 계산
   const totalSellerPayout = inhouseActualPayment + externalActualPayment;
@@ -16749,7 +16754,13 @@ function renderSalesReport() {
   // 정산대기 금액 (타사 상품은 공급사정산금액도 포함)
   const pendingSellerAmount = [...sellerInhousePending, ...sellerExternalPending].reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
   const pendingSupplierAmount = sellerExternalPending.reduce((sum, s) => sum + (Number(s.supplierTotalAmount) || 0), 0);
-  const pendingTotalAmount = pendingSellerAmount + pendingSupplierAmount;
+
+  // 콘텐츠 제작료 대기/완료 분리
+  const contentFeePending = (state.contentFeeSettlements || []).filter(f => !f.isCompleted);
+  const contentFeeCompleted = (state.contentFeeSettlements || []).filter(f => f.isCompleted);
+  const pendingContentFeeAmount = contentFeePending.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
+
+  const pendingTotalAmount = pendingSellerAmount + pendingSupplierAmount + pendingContentFeeAmount;
   
   // 공구 건수 (sellerSettlements 기준)
   const totalDealCount = state.sellerSettlements.length;
@@ -16789,9 +16800,10 @@ function renderSalesReport() {
   
   const monthGrowth = lastMonthRevenue > 0 ? (((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100).toFixed(1) : (thisMonthRevenue > 0 ? 100 : 0);
   
-  // 정산대기 건수 (supplierPending은 sellerExternalPending과 중복되므로 제외)
-  const pendingCount = sellerInhousePending.length + sellerExternalPending.length;
-  const completedCount = sellerInhouseCompleted.length + sellerExternalCompleted.length;
+  // 정산대기 건수 (콘텐츠 제작료 포함)
+  const pendingCount = sellerInhousePending.length + sellerExternalPending.length + contentFeePending.length;
+  const completedCount = sellerInhouseCompleted.length + sellerExternalCompleted.length + contentFeeCompleted.length;
+  const totalSettlementCount = pendingCount + completedCount;
 
   // 현재 날짜
   const today = new Date();
