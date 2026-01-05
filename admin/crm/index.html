@@ -1582,14 +1582,16 @@
       if (editingProposal) {
         builderOverlays = JSON.parse(JSON.stringify(editingProposal.overlays || []));
         builderPdfUrl = editingProposal.pdfUrl || '';
+        // 기존 제안서의 페이지 수 사용 (CORS 문제 우회)
+        totalPdfPages = editingProposal.totalPages || 1;
       } else {
         builderOverlays = [];
         builderPdfUrl = '';
+        totalPdfPages = 0;
       }
 
       pdfDoc = null;
       currentPdfPage = 1;
-      totalPdfPages = 0;
       addingOverlayType = null;
 
       pdfFileData = null; // 파일 데이터 초기화
@@ -1600,7 +1602,7 @@
       // 드래그 앤 드롭 설정
       setTimeout(() => {
         setupPdfDropZone();
-        // 기존 PDF가 있으면 로드
+        // 기존 PDF가 있으면 로드 시도 (실패해도 오버레이 편집 가능)
         if (builderPdfUrl) {
           loadBuilderPdf(builderPdfUrl);
         }
@@ -1787,18 +1789,88 @@
         renderPdfPreview();
       } catch (e) {
         console.error('PDF 로드 오류:', e);
-        previewArea.innerHTML = `
-          <div style="text-align: center; padding: 40px; background: #FEF2F2; border-radius: 12px;">
-            <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
-            <div style="color: #DC2626; font-weight: 600; margin-bottom: 12px;">PDF를 불러올 수 없습니다</div>
-            <div style="color: #7F1D1D; font-size: 13px; margin-bottom: 16px;">CORS 정책으로 인해 외부 PDF를 로드할 수 없습니다</div>
-            <div style="border: 2px dashed var(--primary); border-radius: 8px; padding: 16px; background: var(--primary-light); cursor: pointer;" onclick="document.getElementById('pdfFileInput')?.click()">
-              <div style="font-size: 24px; margin-bottom: 8px;">📄</div>
-              <div style="color: var(--primary); font-weight: 600;">PDF 파일을 다시 선택해주세요</div>
-              <div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">클릭하여 파일 선택</div>
+        // 기존 제안서의 경우 페이지 수가 있으면 오버레이 편집 모드로 전환
+        if (editingProposal && totalPdfPages > 0) {
+          previewArea.innerHTML = `
+            <div style="text-align: center; padding: 40px; background: #FEF3C7; border-radius: 12px; margin-bottom: 16px;">
+              <div style="font-size: 32px; margin-bottom: 12px;">📋</div>
+              <div style="color: #92400E; font-weight: 600; margin-bottom: 8px;">PDF 미리보기를 사용할 수 없습니다</div>
+              <div style="color: #78350F; font-size: 13px; margin-bottom: 16px;">오버레이 편집은 가능합니다 (${totalPdfPages}페이지)</div>
+              <div style="display: flex; gap: 8px; justify-content: center; margin-bottom: 16px;">
+                ${Array.from({ length: Math.min(totalPdfPages, 10) }, (_, i) => `
+                  <button onclick="currentPdfPage = ${i + 1}; renderOverlayEditMode();" style="padding: 8px 12px; background: ${currentPdfPage === i + 1 ? 'var(--primary)' : 'white'}; color: ${currentPdfPage === i + 1 ? 'white' : 'var(--gray-700)'}; border: 1px solid ${currentPdfPage === i + 1 ? 'var(--primary)' : 'var(--gray-300)'}; border-radius: 6px; cursor: pointer; font-size: 12px;">${i + 1}</button>
+                `).join('')}
+                ${totalPdfPages > 10 ? `<span style="padding: 8px; color: var(--gray-500);">... +${totalPdfPages - 10}</span>` : ''}
+              </div>
+              <div style="border: 2px dashed var(--primary); border-radius: 8px; padding: 12px; background: var(--primary-light); cursor: pointer; display: inline-block;" onclick="document.getElementById('pdfFileInput')?.click()">
+                <span style="color: var(--primary); font-weight: 600; font-size: 13px;">📄 새 PDF 업로드</span>
+              </div>
             </div>
-          </div>
-        `;
+            <div id="overlayEditContainer" style="background: var(--gray-100); border-radius: 12px; padding: 20px; min-height: 300px;">
+              <div style="font-weight: 600; color: var(--gray-700); margin-bottom: 16px;">페이지 ${currentPdfPage} 오버레이 (${builderOverlays.filter(o => o.page === currentPdfPage - 1).length}개)</div>
+              <div id="overlayEditList"></div>
+            </div>
+          `;
+          renderOverlayEditMode();
+        } else {
+          previewArea.innerHTML = `
+            <div style="text-align: center; padding: 40px; background: #FEF2F2; border-radius: 12px;">
+              <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
+              <div style="color: #DC2626; font-weight: 600; margin-bottom: 12px;">PDF를 불러올 수 없습니다</div>
+              <div style="color: #7F1D1D; font-size: 13px; margin-bottom: 16px;">CORS 정책으로 인해 외부 PDF를 로드할 수 없습니다</div>
+              <div style="border: 2px dashed var(--primary); border-radius: 8px; padding: 16px; background: var(--primary-light); cursor: pointer;" onclick="document.getElementById('pdfFileInput')?.click()">
+                <div style="font-size: 24px; margin-bottom: 8px;">📄</div>
+                <div style="color: var(--primary); font-weight: 600;">PDF 파일을 선택해주세요</div>
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">클릭하여 파일 선택</div>
+              </div>
+            </div>
+          `;
+        }
+      }
+    }
+
+    // 오버레이 편집 모드 (PDF 미리보기 없이)
+    function renderOverlayEditMode() {
+      const editList = document.getElementById('overlayEditList');
+      if (!editList) return;
+
+      const pageOverlays = builderOverlays.filter(o => o.page === currentPdfPage - 1);
+
+      if (pageOverlays.length === 0) {
+        editList.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--gray-400);">이 페이지에 오버레이가 없습니다</div>`;
+      } else {
+        editList.innerHTML = pageOverlays.map(o => {
+          const globalIndex = builderOverlays.indexOf(o);
+          const typeIcons = { link: '🔗', video: '🎬', image: '🖼️', cta: '📝' };
+          const typeColors = { link: '#3B82F6', video: '#EF4444', image: '#10B981', cta: '#F59E0B' };
+
+          return `
+            <div style="background: white; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; border-left: 4px solid ${typeColors[o.type]};">
+              <div>
+                <span style="font-size: 16px;">${typeIcons[o.type]}</span>
+                <span style="font-weight: 600; margin-left: 8px;">${o.label || o.type}</span>
+                <span style="font-size: 11px; color: var(--gray-400); margin-left: 8px;">위치: ${Math.round(o.x)}%, ${Math.round(o.y)}%</span>
+              </div>
+              <div style="display: flex; gap: 4px;">
+                <button onclick="editOverlay(${globalIndex})" style="padding: 4px 8px; background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 4px; cursor: pointer; font-size: 11px;">✏️ 수정</button>
+                <button onclick="deleteOverlay(${globalIndex})" style="padding: 4px 8px; background: #FEE2E2; border: 1px solid #FCA5A5; border-radius: 4px; cursor: pointer; font-size: 11px; color: #DC2626;">🗑️</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      // 페이지 버튼 상태 업데이트
+      const previewArea = document.getElementById('pdfPreviewArea');
+      if (previewArea) {
+        const buttons = previewArea.querySelectorAll('button');
+        buttons.forEach((btn, i) => {
+          if (i < totalPdfPages) {
+            btn.style.background = (i + 1 === currentPdfPage) ? 'var(--primary)' : 'white';
+            btn.style.color = (i + 1 === currentPdfPage) ? 'white' : 'var(--gray-700)';
+            btn.style.borderColor = (i + 1 === currentPdfPage) ? 'var(--primary)' : 'var(--gray-300)';
+          }
+        });
       }
     }
 
