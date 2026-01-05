@@ -1592,13 +1592,19 @@
       totalPdfPages = 0;
       addingOverlayType = null;
 
+      pdfFileData = null; // 파일 데이터 초기화
+
       renderProposalBuilder();
       document.getElementById('proposalBuilderModal').classList.add('show');
 
-      // 기존 PDF가 있으면 로드
-      if (builderPdfUrl) {
-        setTimeout(() => loadBuilderPdf(builderPdfUrl), 100);
-      }
+      // 드래그 앤 드롭 설정
+      setTimeout(() => {
+        setupPdfDropZone();
+        // 기존 PDF가 있으면 로드
+        if (builderPdfUrl) {
+          loadBuilderPdf(builderPdfUrl);
+        }
+      }, 100);
     }
 
     // 제안서 빌더 렌더링
@@ -1640,11 +1646,32 @@
 
             <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--gray-200);">
 
-            <!-- PDF 업로드 -->
+            <!-- PDF 업로드 (드래그 앤 드롭 + 파일 선택) -->
             <div style="margin-bottom: 16px;">
-              <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-500); margin-bottom: 6px;">📄 PDF URL *</label>
-              <input type="text" id="builder-pdfUrl" value="${builderPdfUrl}" placeholder="https://example.com/file.pdf" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; margin-bottom: 8px;">
-              <button onclick="loadBuilderPdf()" class="btn btn-secondary" style="width: 100%; padding: 10px;">PDF 불러오기</button>
+              <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-500); margin-bottom: 6px;">📄 PDF 파일 *</label>
+
+              <!-- 드래그 앤 드롭 영역 -->
+              <div id="pdfDropZone" style="border: 2px dashed var(--gray-300); border-radius: 12px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.2s; margin-bottom: 8px;" onclick="document.getElementById('pdfFileInput').click()">
+                <div style="font-size: 32px; margin-bottom: 8px;">📄</div>
+                <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 4px;">PDF 파일을 드래그하거나 클릭</div>
+                <div style="font-size: 11px; color: var(--gray-400);">또는 아래에 URL 직접 입력</div>
+              </div>
+              <input type="file" id="pdfFileInput" accept=".pdf,application/pdf" style="display: none;" onchange="handlePdfFileSelect(event)">
+
+              <!-- 선택된 파일명 표시 -->
+              <div id="selectedPdfName" style="display: none; padding: 8px 12px; background: var(--primary-light); border-radius: 8px; font-size: 12px; color: var(--primary); margin-bottom: 8px;">
+                <span id="pdfFileName"></span>
+                <button onclick="clearPdfFile()" style="float: right; background: none; border: none; cursor: pointer; color: var(--primary);">✕</button>
+              </div>
+
+              <!-- URL 직접 입력 (옵션) -->
+              <details style="margin-top: 8px;">
+                <summary style="font-size: 11px; color: var(--gray-500); cursor: pointer;">URL 직접 입력</summary>
+                <div style="margin-top: 8px;">
+                  <input type="text" id="builder-pdfUrl" value="${builderPdfUrl}" placeholder="https://example.com/file.pdf" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; margin-bottom: 8px; font-size: 12px;">
+                  <button onclick="loadBuilderPdf()" class="btn btn-secondary" style="width: 100%; padding: 8px; font-size: 12px;">URL로 불러오기</button>
+                </div>
+              </details>
             </div>
 
             <hr style="margin: 20px 0; border: none; border-top: 1px solid var(--gray-200);">
@@ -1770,6 +1797,127 @@
         script.onerror = reject;
         document.head.appendChild(script);
       });
+    }
+
+    // PDF 파일 선택 처리
+    let pdfFileData = null;
+
+    function handlePdfFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        loadPdfFromFile(file);
+      }
+    }
+
+    // 드래그 앤 드롭 설정
+    function setupPdfDropZone() {
+      const dropZone = document.getElementById('pdfDropZone');
+      if (!dropZone) return;
+
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--primary)';
+        dropZone.style.background = 'var(--primary-light)';
+      });
+
+      dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--gray-300)';
+        dropZone.style.background = 'transparent';
+      });
+
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--gray-300)';
+        dropZone.style.background = 'transparent';
+
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          const file = files[0];
+          if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+            loadPdfFromFile(file);
+          } else {
+            showToast('PDF 파일만 업로드할 수 있습니다');
+          }
+        }
+      });
+    }
+
+    // 로컬 PDF 파일 로드
+    async function loadPdfFromFile(file) {
+      const previewArea = document.getElementById('pdfPreviewArea');
+
+      // 파일명 표시
+      const nameDisplay = document.getElementById('selectedPdfName');
+      const fileNameSpan = document.getElementById('pdfFileName');
+      if (nameDisplay && fileNameSpan) {
+        fileNameSpan.textContent = '📄 ' + file.name;
+        nameDisplay.style.display = 'block';
+      }
+
+      // 드롭존 숨기기
+      const dropZone = document.getElementById('pdfDropZone');
+      if (dropZone) {
+        dropZone.style.display = 'none';
+      }
+
+      previewArea.innerHTML = `
+        <div style="text-align: center; padding: 40px;">
+          <div class="loading-spinner"></div>
+          <p style="margin-top: 16px; color: var(--gray-500);">PDF 로딩 중...</p>
+        </div>
+      `;
+
+      try {
+        // PDF.js 동적 로드
+        if (!window.pdfjsLib) {
+          await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+
+        // FileReader로 ArrayBuffer 읽기
+        const arrayBuffer = await file.arrayBuffer();
+        pdfFileData = arrayBuffer;
+
+        // PDF.js로 로드
+        pdfDoc = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        totalPdfPages = pdfDoc.numPages;
+        currentPdfPage = 1;
+
+        // pdfUrl은 빈 상태로 (나중에 저장 시 처리)
+        builderPdfUrl = '';
+
+        renderPdfPreview();
+        showToast('✅ PDF 파일이 로드되었습니다');
+
+      } catch (e) {
+        console.error('PDF 파일 로드 오류:', e);
+        previewArea.innerHTML = `
+          <div style="text-align: center; padding: 40px; background: #FEF2F2; border-radius: 12px;">
+            <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
+            <div style="color: #DC2626; font-weight: 600;">PDF 파일을 열 수 없습니다</div>
+            <div style="color: #7F1D1D; font-size: 13px; margin-top: 8px;">파일이 손상되었거나 암호화되어 있을 수 있습니다</div>
+          </div>
+        `;
+      }
+    }
+
+    // PDF 파일 선택 해제
+    function clearPdfFile() {
+      pdfFileData = null;
+      builderPdfUrl = '';
+      pdfDoc = null;
+
+      const nameDisplay = document.getElementById('selectedPdfName');
+      if (nameDisplay) nameDisplay.style.display = 'none';
+
+      const dropZone = document.getElementById('pdfDropZone');
+      if (dropZone) dropZone.style.display = 'block';
+
+      const fileInput = document.getElementById('pdfFileInput');
+      if (fileInput) fileInput.value = '';
+
+      renderProposalBuilder();
     }
 
     // PDF 미리보기 렌더링
@@ -1984,15 +2132,44 @@
       const category = document.getElementById('builder-category')?.value || 'supplier';
       const targetSupplier = document.getElementById('builder-supplier')?.value || '';
       const description = document.getElementById('builder-desc')?.value?.trim() || '';
-      const pdfUrl = document.getElementById('builder-pdfUrl')?.value?.trim() || builderPdfUrl;
+      let pdfUrl = document.getElementById('builder-pdfUrl')?.value?.trim() || builderPdfUrl;
 
       if (!title) {
         showToast('제안서 제목을 입력하세요');
         return;
       }
 
-      if (!pdfUrl) {
-        showToast('PDF URL을 입력하세요');
+      // PDF 체크: 로컬 파일이 있으면 Firebase Storage에 업로드
+      if (pdfFileData && !pdfUrl) {
+        try {
+          showToast('📤 PDF 업로드 중...');
+
+          // Firebase Storage 동적 로드
+          if (!firebase.storage) {
+            await loadScript('https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js');
+          }
+
+          const storage = firebase.storage();
+          const fileName = 'proposals/' + Date.now() + '_' + (document.getElementById('pdfFileName')?.textContent?.replace('📄 ', '') || 'proposal.pdf');
+          const storageRef = storage.ref(fileName);
+
+          // ArrayBuffer를 Blob으로 변환
+          const blob = new Blob([pdfFileData], { type: 'application/pdf' });
+
+          // 업로드
+          const snapshot = await storageRef.put(blob);
+          pdfUrl = await snapshot.ref.getDownloadURL();
+
+          showToast('✅ PDF 업로드 완료');
+        } catch (e) {
+          console.error('PDF 업로드 오류:', e);
+          showToast('⚠️ PDF 업로드 실패. URL을 직접 입력해주세요.');
+          return;
+        }
+      }
+
+      if (!pdfUrl && !pdfDoc) {
+        showToast('PDF 파일을 선택하거나 URL을 입력하세요');
         return;
       }
 
