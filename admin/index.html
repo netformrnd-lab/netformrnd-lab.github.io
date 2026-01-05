@@ -3321,6 +3321,32 @@ const showToast = (msg) => {
   setTimeout(() => toast.style.display = 'none', 2500);
 };
 
+// 운영센터 활동 -> 업무일지 자동 로깅
+async function logActivityToWorkLog(activity) {
+  try {
+    const currentUser = sessionStorage.getItem('moyeora_admin_user');
+    const userData = currentUser ? JSON.parse(currentUser) : null;
+    const today = formatDate(new Date());
+
+    await db.collection('tasks').add({
+      title: activity.title,
+      dueDate: today,
+      status: 'complete',
+      category: activity.category || '운영',
+      assignee: userData?.name || '관리자',
+      assigneeId: userData?.id || null,
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      source: 'operations-auto',
+      activityType: activity.type,
+      relatedId: activity.relatedId || null,
+      note: activity.note || ''
+    });
+  } catch (e) {
+    console.error('업무일지 자동 로깅 실패:', e);
+  }
+}
+
 // Firebase 리스너
 function setupListeners() {
   db.collection('deals').orderBy('startDate', 'desc').onSnapshot(snapshot => {
@@ -3509,16 +3535,27 @@ function updateUnreadBadge() {
 async function saveDeal(data) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
-  
+
   try {
+    const isNew = !data.id;
     if (data.id) {
       await db.collection('deals').doc(data.id).update(data);
     } else {
       delete data.id;
-      await db.collection('deals').add(data);
+      const docRef = await db.collection('deals').add(data);
+      data.id = docRef.id;
     }
     showToast('저장되었습니다');
     closeModal();
+
+    // 업무일지 자동 로깅
+    logActivityToWorkLog({
+      title: isNew ? `[공구 생성] ${data.title || '새 공구'}` : `[공구 수정] ${data.title || ''}`,
+      type: isNew ? 'deal_create' : 'deal_update',
+      category: '공구관리',
+      relatedId: data.id,
+      note: data.supplier || ''
+    });
   } catch(e) {
     console.error(e);
     showToast('저장에 실패했습니다');
@@ -3542,16 +3579,27 @@ async function deleteDeal(id) {
 async function saveSupplier(data) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
-  
+
   try {
+    const isNew = !data.id;
     if (data.id) {
       await db.collection('suppliers').doc(data.id).update(data);
     } else {
       delete data.id;
-      await db.collection('suppliers').add(data);
+      const docRef = await db.collection('suppliers').add(data);
+      data.id = docRef.id;
     }
     showToast('저장되었습니다');
     closeModal();
+
+    // 업무일지 자동 로깅
+    logActivityToWorkLog({
+      title: isNew ? `[공급사 등록] ${data.name || '새 공급사'}` : `[공급사 수정] ${data.name || ''}`,
+      type: isNew ? 'supplier_create' : 'supplier_update',
+      category: '파트너관리',
+      relatedId: data.id,
+      note: data.contactPerson || ''
+    });
   } catch(e) {
     showToast('저장에 실패했습니다');
   }
@@ -3574,16 +3622,27 @@ async function deleteSupplier(id) {
 async function saveSeller(data) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
-  
+
   try {
+    const isNew = !data.id;
     if (data.id) {
       await db.collection('sellers').doc(data.id).update(data);
     } else {
       delete data.id;
-      await db.collection('sellers').add(data);
+      const docRef = await db.collection('sellers').add(data);
+      data.id = docRef.id;
     }
     showToast('저장되었습니다');
     closeModal();
+
+    // 업무일지 자동 로깅
+    logActivityToWorkLog({
+      title: isNew ? `[셀러 등록] ${data.name || '새 셀러'}` : `[셀러 수정] ${data.name || ''}`,
+      type: isNew ? 'seller_create' : 'seller_update',
+      category: '파트너관리',
+      relatedId: data.id,
+      note: data.accountName || ''
+    });
   } catch(e) {
     showToast('저장에 실패했습니다');
   }
@@ -11074,6 +11133,14 @@ async function applyCafe24Mapping() {
 
     // 정산관리 페이지 새로고침
     renderSettlement();
+
+    // 업무일지 자동 로깅
+    logActivityToWorkLog({
+      title: `[정산서 생성] ${updateCount}개 공구 정산서 자동 생성`,
+      type: 'settlement_create',
+      category: '정산관리',
+      note: `셀러/공급사 정산서 ${updateCount}건`
+    });
 
   } catch (e) {
     console.error('Mapping error:', e);
