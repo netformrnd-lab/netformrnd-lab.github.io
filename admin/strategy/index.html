@@ -3806,7 +3806,8 @@
     ];
 
     let workLogView = 'kanban';
-    let memberFilter = 'all';
+    let memberFilter = 'my';
+    let selectedMemberId = null;
     // ========================================
     // 전략기획 시스템 (버전 관리)
     // ========================================
@@ -4845,9 +4846,15 @@
               </div>
 
               <!-- 멤버 필터 -->
-              <div style="display: flex; gap: 8px; background: #F2F4F6; padding: 4px; border-radius: 10px;">
-                <button id="filter-all" onclick="setMemberFilter('all')" style="background: ${memberFilter === 'all' ? '#0064FF' : 'transparent'}; color: ${memberFilter === 'all' ? 'white' : '#6B7684'}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">전체</button>
-                <button id="filter-my" onclick="setMemberFilter('my')" style="background: ${memberFilter === 'my' ? '#0064FF' : 'transparent'}; color: ${memberFilter === 'my' ? 'white' : '#6B7684'}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">내 업무</button>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="display: flex; gap: 4px; background: #F2F4F6; padding: 4px; border-radius: 10px;">
+                  <button id="filter-my" onclick="setMemberFilter('my')" style="background: ${memberFilter === 'my' ? '#0064FF' : 'transparent'}; color: ${memberFilter === 'my' ? 'white' : '#6B7684'}; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">👤 내 업무</button>
+                  <button id="filter-all" onclick="setMemberFilter('all')" style="background: ${memberFilter === 'all' ? '#0064FF' : 'transparent'}; color: ${memberFilter === 'all' ? 'white' : '#6B7684'}; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">👥 전체 팀</button>
+                </div>
+                <select id="member-select" onchange="setMemberFilter('member', this.value)" style="padding: 10px 14px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 13px; font-weight: 600; background: ${memberFilter === 'member' ? '#E8F3FF' : 'white'}; color: #191F28; cursor: pointer;">
+                  <option value="">팀원 선택</option>
+                  ${(state.teamMembers || []).filter(m => m.role !== 'ceo' && m.id !== currentMember.id).map(m => `<option value="${m.id}" ${selectedMemberId === m.id ? 'selected' : ''}>${m.name}</option>`).join('')}
+                </select>
               </div>
 
               <!-- 뷰 전환 -->
@@ -4861,12 +4868,13 @@
           <!-- 사용자 카드 -->
           <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
             <div style="display: flex; align-items: center; gap: 14px;">
-              <div style="width: 48px; height: 48px; background: #E8F3FF; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #0064FF;">👤</div>
+              <div style="width: 48px; height: 48px; background: ${memberFilter === 'all' ? '#FEF3C7' : memberFilter === 'member' ? '#E0E7FF' : '#E8F3FF'}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22px; color: ${memberFilter === 'all' ? '#F59E0B' : memberFilter === 'member' ? '#6366F1' : '#0064FF'};">${memberFilter === 'all' ? '👥' : '👤'}</div>
               <div>
-                <div style="font-size: 18px; font-weight: 700; color: #191F28;">${currentMember.name}</div>
+                <div style="font-size: 18px; font-weight: 700; color: #191F28;" id="worklog-title">${memberFilter === 'all' ? '전체 팀 업무' : memberFilter === 'member' ? getSelectedMemberName() + ' 업무' : currentMember.name + ' (나)'}</div>
                 <div style="font-size: 13px; color: #6B7684;" id="today-summary">업무 현황 로딩중...</div>
               </div>
             </div>
+            ${memberFilter !== 'my' ? `<span style="font-size: 12px; padding: 6px 12px; background: #F2F4F6; border-radius: 20px; color: #6B7684;">${memberFilter === 'all' ? '전체 팀원 업무 조회 중' : '다른 팀원 업무 조회 중'}</span>` : ''}
           </div>
 
           <!-- 통계 카드 -->
@@ -4898,13 +4906,26 @@
 
         // 월별 + 담당자 필터
         workLogTasks = allTasks.filter(t => {
-          // 날짜 필터: dueDate 또는 createdAt 기준
+          // 날짜 필터: dueDate 또는 createdAt 기준 (날짜 없으면 통과)
           const taskDate = t.dueDate || (t.createdAt ? t.createdAt.split('T')[0] : null);
-          const inMonth = taskDate && taskDate >= startDate && taskDate <= endDate;
+          const inMonth = !taskDate || (taskDate >= startDate && taskDate <= endDate);
+
           // 담당자 필터
-          const isMine = t.assignee === currentMember.name || t.assigneeId === currentMember.id || (!t.assignee && !t.assigneeId);
-          return inMonth && (memberFilter === 'all' || isMine);
+          if (memberFilter === 'all') {
+            return inMonth; // 전체 팀: 날짜만 필터
+          } else if (memberFilter === 'member' && selectedMemberId) {
+            // 특정 팀원 선택
+            const selectedMember = (state.teamMembers || []).find(m => m.id === selectedMemberId);
+            const isSelectedMember = t.assignee === selectedMember?.name || t.assigneeId === selectedMemberId;
+            return inMonth && isSelectedMember;
+          } else {
+            // 내 업무: 내가 담당자이거나 담당자 미지정
+            const isMine = t.assignee === currentMember.name || t.assigneeId === currentMember.id || (!t.assignee && !t.assigneeId);
+            return inMonth && isMine;
+          }
         });
+
+        console.log('업무일지 데이터:', allTasks.length, '건 중', workLogTasks.length, '건 표시');
 
         renderWorkLogStats();
         renderWorkLogContent();
@@ -5017,16 +5038,38 @@
       renderWorkLogContent();
     }
 
-    function setMemberFilter(filter) {
+    function setMemberFilter(filter, memberId = null) {
       memberFilter = filter;
+      selectedMemberId = memberId;
+
+      // 팀원 선택 드롭다운 리셋
+      const memberSelect = document.getElementById('member-select');
+      if (memberSelect) {
+        if (filter === 'member' && memberId) {
+          memberSelect.style.background = '#E8F3FF';
+        } else {
+          memberSelect.value = '';
+          memberSelect.style.background = 'white';
+        }
+      }
+
+      // 버튼 스타일 업데이트
       ['all', 'my'].forEach(f => {
         const btn = document.getElementById('filter-' + f);
         if (btn) {
-          btn.style.background = filter === f ? '#0064FF' : 'transparent';
-          btn.style.color = filter === f ? 'white' : '#6B7684';
+          const isActive = filter === f;
+          btn.style.background = isActive ? '#0064FF' : 'transparent';
+          btn.style.color = isActive ? 'white' : '#6B7684';
         }
       });
-      loadWorkLogData();
+
+      renderWorkLog(); // 전체 재렌더링 (카드 타이틀 업데이트 위해)
+    }
+
+    function getSelectedMemberName() {
+      if (!selectedMemberId) return '';
+      const member = (state.teamMembers || []).find(m => m.id === selectedMemberId);
+      return member?.name || '팀원';
     }
 
     function changeWorkLogMonth(delta) {
