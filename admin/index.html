@@ -25515,15 +25515,25 @@ function renderSalesDashboard() {
 
 async function loadSalesDashboardData() {
   try {
-    // cafe24Orders가 없으면 로드
+    // cafe24Orders가 없으면 로드 (인덱스 오류 대응)
     if (!state.cafe24Orders || state.cafe24Orders.length === 0) {
-      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
-      state.cafe24Orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      try {
+        const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
+        state.cafe24Orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log(`✅ 영업현황 주문 로드 완료: ${state.cafe24Orders.length}건`);
+      } catch (indexError) {
+        console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+        const ordersSnapshot = await db.collection('cafe24_orders').limit(500).get();
+        state.cafe24Orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+          .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+        console.log(`✅ 영업현황 주문 로드 완료 (정렬됨): ${state.cafe24Orders.length}건`);
+      }
     }
     renderSalesDashboardContent();
   } catch (error) {
-    console.error('영업현황 로드 오류:', error);
-    document.getElementById('app').innerHTML = '<div style="text-align: center; padding: 60px; color: #F04452;">데이터 로드 오류</div>';
+    console.error('❌ 영업현황 로드 오류:', error);
+    console.error('에러 상세:', error.message, error.code);
+    document.getElementById('app').innerHTML = '<div style="text-align: center; padding: 60px; color: #F04452;">데이터 로드 오류<br><span style="font-size: 13px; color: #999;">'+error.message+'</span></div>';
   }
 }
 
@@ -27996,9 +28006,19 @@ async function renderCafe24Rankings() {
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">데이터 로딩 중...</p></div>';
 
   try {
-    // cafe24_orders 컬렉션에서 데이터 로드 (엑셀 업로드된 정산용 데이터)
-    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
-    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // cafe24_orders 컬렉션에서 데이터 로드 (엑셀 업로드된 정산용 데이터, 인덱스 오류 대응)
+    let orders = [];
+    try {
+      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`✅ 카페24 랭킹 데이터 로드 완료: ${orders.length}건`);
+    } catch (indexError) {
+      console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+      const ordersSnapshot = await db.collection('cafe24_orders').limit(2000).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+      console.log(`✅ 카페24 랭킹 데이터 로드 완료 (정렬됨): ${orders.length}건`);
+    }
 
     // 셀러별 집계
     const sellerStats = {};
@@ -28874,10 +28894,21 @@ function viewCafe24Logs() {
 async function renderCafe24Dashboard() {
   const app = document.getElementById('app');
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">카페24 데이터 로딩 중...</p></div>';
-  
+
   try {
-    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(1000).get();
-    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 인덱스 오류 대응
+    let orders = [];
+    try {
+      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(1000).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`✅ 카페24 대시보드 주문 로드 완료: ${orders.length}건`);
+    } catch (indexError) {
+      console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+      const ordersSnapshot = await db.collection('cafe24_orders').limit(1000).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+      console.log(`✅ 카페24 대시보드 주문 로드 완료 (정렬됨): ${orders.length}건`);
+    }
     
     // 정산 내역 로드
     const settlementsSnapshot = await db.collection('cafe24_settlements').orderBy('period', 'desc').get();
@@ -29215,9 +29246,20 @@ async function renderOrderStatus() {
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">주문 데이터 로딩 중...</p></div>';
 
   try {
-    // 주문 데이터 로드
-    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
-    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 주문 데이터 로드 (인덱스 오류 대응)
+    let orders = [];
+    try {
+      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(2000).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`✅ 주문 데이터 로드 완료: ${orders.length}건`);
+    } catch (indexError) {
+      console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+      // 인덱스가 없을 경우 orderBy 없이 가져오기
+      const ordersSnapshot = await db.collection('cafe24_orders').limit(2000).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+      console.log(`✅ 주문 데이터 로드 완료 (정렬됨): ${orders.length}건`);
+    }
 
     // 현재 시간
     const now = new Date();
@@ -29351,13 +29393,16 @@ async function renderOrderStatus() {
       </div>
     `;
   } catch (err) {
-    console.error('주문현황 로딩 실패:', err);
+    console.error('❌ 주문현황 로딩 실패:', err);
+    console.error('에러 상세:', err.message, err.code);
     app.innerHTML = `
       <div class="page-header"><h1 class="page-title">📋 주문현황 공유</h1></div>
       <div class="card" style="text-align: center; padding: 60px;">
         <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
         <p style="color: var(--gray-500);">데이터를 불러오는데 실패했습니다.</p>
-        <button onclick="renderOrderStatus()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button>
+        <p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">에러: ${err.message || '알 수 없는 오류'}</p>
+        <p style="color: var(--gray-400); font-size: 12px; margin-top: 4px;">개발자 도구(F12) 콘솔에서 자세한 정보를 확인하세요.</p>
+        <button onclick="renderOrderStatus()" class="btn btn-primary" style="margin-top: 16px;">🔄 다시 시도</button>
       </div>
     `;
   }
@@ -30536,15 +30581,29 @@ async function renderCafe24Orders() {
   const app = document.getElementById('app');
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">주문 데이터 로딩 중...</p></div>';
   try {
-    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
-    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 인덱스 오류 대응
+    let orders = [];
+    try {
+      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`✅ 카페24 주문 로드 완료: ${orders.length}건`);
+    } catch (indexError) {
+      console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+      const ordersSnapshot = await db.collection('cafe24_orders').limit(500).get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+      console.log(`✅ 카페24 주문 로드 완료 (정렬됨): ${orders.length}건`);
+    }
+
     state.cafe24Orders = orders;
     state.cafe24FilteredOrders = orders;
     state.cafe24OrdersPage = 1;
     state.cafe24SelectedOrders = []; // 선택 초기화
     renderCafe24OrdersUI();
   } catch (err) {
-    app.innerHTML = `<div class="page-header"><h1 class="page-title">📦 카페24 주문 관리</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Orders()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+    console.error('❌ 카페24 주문 로딩 실패:', err);
+    console.error('에러 상세:', err.message, err.code);
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">📦 카페24 주문 관리</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">에러: ${err.message || '알 수 없는 오류'}</p><p style="color: var(--gray-400); font-size: 12px; margin-top: 4px;">개발자 도구(F12) 콘솔에서 자세한 정보를 확인하세요.</p><button onclick="renderCafe24Orders()" class="btn btn-primary" style="margin-top: 16px;">🔄 다시 시도</button></div>`;
   }
 }
 
@@ -31051,11 +31110,23 @@ async function renderCafe24Shipping() {
   const app = document.getElementById('app');
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">배송 데이터 로딩 중...</p></div>';
   try {
-    const ordersSnapshot = await db.collection('cafe24_orders').where('order_status', 'in', ['N10', 'N20']).orderBy('order_date', 'desc').limit(200).get();
-    state.cafe24ShippingOrders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 인덱스 오류 대응
+    try {
+      const ordersSnapshot = await db.collection('cafe24_orders').where('order_status', 'in', ['N10', 'N20']).orderBy('order_date', 'desc').limit(200).get();
+      state.cafe24ShippingOrders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`✅ 배송 대기 주문 로드 완료: ${state.cafe24ShippingOrders.length}건`);
+    } catch (indexError) {
+      console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+      const ordersSnapshot = await db.collection('cafe24_orders').where('order_status', 'in', ['N10', 'N20']).limit(200).get();
+      state.cafe24ShippingOrders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+      console.log(`✅ 배송 대기 주문 로드 완료 (정렬됨): ${state.cafe24ShippingOrders.length}건`);
+    }
     renderCafe24ShippingUI();
   } catch (err) {
-    app.innerHTML = `<div class="page-header"><h1 class="page-title">🚚 송장번호 등록</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Shipping()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+    console.error('❌ 배송 데이터 로딩 실패:', err);
+    console.error('에러 상세:', err.message, err.code);
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">🚚 송장번호 등록</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">에러: ${err.message || '알 수 없는 오류'}</p><button onclick="renderCafe24Shipping()" class="btn btn-primary" style="margin-top: 16px;">🔄 다시 시도</button></div>`;
   }
 }
 
@@ -31160,11 +31231,24 @@ async function renderCafe24Stats() {
   const app = document.getElementById('app');
   app.innerHTML = '<div style="text-align: center; padding: 60px;"><div class="loading"></div><p style="margin-top: 16px; color: var(--gray-500);">통계 데이터 계산 중...</p></div>';
   try {
-    const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').get();
-    const orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // 인덱스 오류 대응
+    let orders = [];
+    try {
+      const ordersSnapshot = await db.collection('cafe24_orders').orderBy('order_date', 'desc').get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      console.log(`✅ 통계용 주문 데이터 로드 완료: ${orders.length}건`);
+    } catch (indexError) {
+      console.warn('⚠️ orderBy 인덱스 오류 - 인덱스 없이 재시도:', indexError.message);
+      const ordersSnapshot = await db.collection('cafe24_orders').get();
+      orders = ordersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a, b) => (b.order_date || '').localeCompare(a.order_date || ''));
+      console.log(`✅ 통계용 주문 데이터 로드 완료 (정렬됨): ${orders.length}건`);
+    }
     renderCafe24StatsUI(orders);
   } catch (err) {
-    app.innerHTML = `<div class="page-header"><h1 class="page-title">📈 카페24 매출 통계</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><button onclick="renderCafe24Stats()" class="btn btn-primary" style="margin-top: 16px;">다시 시도</button></div>`;
+    console.error('❌ 통계 데이터 로딩 실패:', err);
+    console.error('에러 상세:', err.message, err.code);
+    app.innerHTML = `<div class="page-header"><h1 class="page-title">📈 카페24 매출 통계</h1></div><div class="card" style="text-align: center; padding: 60px;"><div style="font-size: 48px; margin-bottom: 16px;">❌</div><p>데이터를 불러오는데 실패했습니다.</p><p style="color: var(--gray-400); font-size: 13px; margin-top: 8px;">에러: ${err.message || '알 수 없는 오류'}</p><button onclick="renderCafe24Stats()" class="btn btn-primary" style="margin-top: 16px;">🔄 다시 시도</button></div>`;
   }
 }
 
