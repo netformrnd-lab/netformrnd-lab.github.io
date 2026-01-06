@@ -2788,70 +2788,285 @@
     }
 
     function openGoalCalculator() {
-      const T = getStrategyTarget();
+      const currentYear = new Date().getFullYear();
+      const goals = state.yearlyGoals || [];
+      const currentGoal = goals.find(g => g.year === currentYear) || { revenueTarget: 1000000000 };
+      const annualTarget = currentGoal.revenueTarget || 1000000000;
+
+      // 저장된 계산기 설정 불러오기
+      const saved = state.strategyData || {};
+      const defaultAvgDeal = saved.avgDealRevenue || 4630000;
+      const defaultSuccessRate = saved.successRate || 30;
+      const defaultAvgProfit = saved.avgDealProfit || 200000;
+
+      // 현재 진행 상황
+      const thisYearStr = String(currentYear);
+      const yearDeals = (state.deals || []).filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
+      const successDeals = yearDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
+      const yearSettlements = (state.sellerSettlements || []).filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisYearStr));
+      const currentRevenue = yearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+
       const m = document.getElementById('modal');
       if (!m) { showToast('모달 요소를 찾을 수 없습니다'); return; }
       m.className = 'modal show';
       m.innerHTML = `
-        <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-content" style="max-width: 900px;">
           <div class="modal-header" style="background: linear-gradient(135deg, var(--primary), #1b64da); color: white;">
             <h2 class="modal-title" style="color: white;">🧮 공구설계 계산기</h2>
             <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
           </div>
-          <div style="padding: 20px;">
+          <div style="padding: 24px; max-height: 75vh; overflow-y: auto;">
+
+            <!-- 연도별 목표 연동 표시 -->
+            <div style="background: linear-gradient(135deg, #1e3a5f, #0f2744); border-radius: 12px; padding: 16px; margin-bottom: 20px; color: white;">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <div>
+                  <div style="font-size: 12px; opacity: 0.8;">📅 ${currentYear}년 목표 (연도별 목표에서 연동)</div>
+                  <div style="font-size: 28px; font-weight: 700;">${(annualTarget / 100000000).toFixed(0)}억원</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="font-size: 12px; opacity: 0.8;">현재 달성</div>
+                  <div style="font-size: 20px; font-weight: 600;">${(currentRevenue / 100000000).toFixed(2)}억 <span style="font-size: 14px; opacity: 0.8;">(${Math.round(currentRevenue / annualTarget * 100)}%)</span></div>
+                </div>
+              </div>
+              <div style="background: rgba(255,255,255,0.2); height: 8px; border-radius: 4px; margin-top: 12px; overflow: hidden;">
+                <div style="background: ${currentRevenue >= annualTarget ? '#00C471' : '#F59E0B'}; height: 100%; width: ${Math.min(100, currentRevenue / annualTarget * 100)}%;"></div>
+              </div>
+            </div>
+
+            <!-- 시뮬레이션 입력 -->
             <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
-              <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 16px; font-size: 16px;">📝 현재 전략 목표</div>
+              <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 16px; font-size: 15px;">⚙️ 시뮬레이션 설정</div>
               <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">
-                <div style="background: white; border-radius: 10px; padding: 14px; border: 1px solid var(--gray-200);">
-                  <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">연간 매출 목표</div>
-                  <div style="font-size: 20px; font-weight: 700; color: var(--primary);">${(T.annualRevenue / 100000000).toFixed(1)}억원</div>
+                <div>
+                  <label style="display: block; font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">공구당 평균 판매액</label>
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <input type="number" id="calcAvgDeal" value="${defaultAvgDeal / 10000}"
+                      oninput="updateGoalCalculation()"
+                      style="flex: 1; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 16px; font-weight: 600; text-align: center;">
+                    <span style="font-size: 14px; color: var(--gray-600);">만원</span>
+                  </div>
                 </div>
-                <div style="background: white; border-radius: 10px; padding: 14px; border: 1px solid var(--gray-200);">
-                  <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">목표 성공률</div>
-                  <div style="font-size: 20px; font-weight: 700; color: #F59E0B;">${T.successRate}%</div>
+                <div>
+                  <label style="display: block; font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">목표 성공률</label>
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <input type="number" id="calcSuccessRate" value="${defaultSuccessRate}" min="1" max="100"
+                      oninput="updateGoalCalculation()"
+                      style="flex: 1; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 16px; font-weight: 600; text-align: center;">
+                    <span style="font-size: 14px; color: var(--gray-600);">%</span>
+                  </div>
                 </div>
-                <div style="background: white; border-radius: 10px; padding: 14px; border: 1px solid var(--gray-200);">
-                  <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">연간 순익 목표</div>
-                  <div style="font-size: 20px; font-weight: 700; color: #00C471;">${(T.annualProfit / 10000).toFixed(0)}만원</div>
+                <div>
+                  <label style="display: block; font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">공구당 평균 순익</label>
+                  <div style="display: flex; align-items: center; gap: 4px;">
+                    <input type="number" id="calcAvgProfit" value="${defaultAvgProfit / 10000}"
+                      oninput="updateGoalCalculation()"
+                      style="flex: 1; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 16px; font-weight: 600; text-align: center;">
+                    <span style="font-size: 14px; color: var(--gray-600);">만원</span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div style="background: linear-gradient(135deg, var(--primary), #1b64da); border-radius: 16px; padding: 24px; color: white;">
-              <div style="font-weight: 700; margin-bottom: 20px; font-size: 16px;">📊 목표 달성 가이드</div>
+            <!-- 계산 결과 -->
+            <div id="calcResultArea">
+              <!-- updateGoalCalculation()에서 동적 렌더링 -->
+            </div>
+
+            <!-- 현재 진행 상황 비교 -->
+            <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; margin-top: 20px;">
+              <div style="font-weight: 700; color: var(--gray-800); margin-bottom: 16px; font-size: 15px;">📊 현재 진행 상황</div>
               <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
-                <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 14px; text-align: center;">
-                  <div style="font-size: 22px; font-weight: 700;">${T.requiredTotalDeals}</div>
-                  <div style="font-size: 11px; opacity: 0.8;">연 필요 공구</div>
+                <div style="background: white; border-radius: 10px; padding: 14px; text-align: center; border: 1px solid var(--gray-200);">
+                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">진행 공구</div>
+                  <div style="font-size: 24px; font-weight: 700; color: var(--primary);">${yearDeals.length}</div>
                 </div>
-                <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 14px; text-align: center;">
-                  <div style="font-size: 22px; font-weight: 700;">${T.monthlyRequiredDeals}</div>
-                  <div style="font-size: 11px; opacity: 0.8;">월 필요 공구</div>
+                <div style="background: white; border-radius: 10px; padding: 14px; text-align: center; border: 1px solid var(--gray-200);">
+                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">성공 공구</div>
+                  <div style="font-size: 24px; font-weight: 700; color: #00C471;">${successDeals.length}</div>
                 </div>
-                <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 14px; text-align: center;">
-                  <div style="font-size: 22px; font-weight: 700;">${T.weeklyRequiredDeals}</div>
-                  <div style="font-size: 11px; opacity: 0.8;">주 필요 공구</div>
+                <div style="background: white; border-radius: 10px; padding: 14px; text-align: center; border: 1px solid var(--gray-200);">
+                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">현재 성공률</div>
+                  <div style="font-size: 24px; font-weight: 700; color: #F59E0B;">${yearDeals.length > 0 ? Math.round(successDeals.length / yearDeals.length * 100) : 0}%</div>
                 </div>
-                <div style="background: rgba(255,255,255,0.2); border-radius: 10px; padding: 14px; text-align: center;">
-                  <div style="font-size: 22px; font-weight: 700;">${T.targetSuccessDeals}</div>
-                  <div style="font-size: 11px; opacity: 0.8;">연 성공 목표</div>
+                <div style="background: white; border-radius: 10px; padding: 14px; text-align: center; border: 1px solid var(--gray-200);">
+                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">달성 매출</div>
+                  <div style="font-size: 24px; font-weight: 700; color: var(--gray-900);">${(currentRevenue / 100000000).toFixed(1)}억</div>
                 </div>
               </div>
             </div>
 
-            <div style="background: #E8F5E9; border: 2px solid #4CAF50; border-radius: 12px; padding: 16px; margin-top: 20px;">
-              <div style="font-weight: 700; color: #2E7D32; margin-bottom: 8px;">✅ 성공 공식</div>
-              <div style="font-size: 13px; color: #388E3C; line-height: 1.6;">
-                <strong>목표:</strong> 월 ${T.monthlyRequiredDeals}건 공구 × 성공률 ${T.successRate}% = 월 ${T.monthlySuccessDeals}건 성공<br>
-                <strong>핵심:</strong> 30% 이상 수수료 공구 비중 ${T.commission30Ratio}% 확보로 마진 극대화
-              </div>
-            </div>
           </div>
-          <div class="modal-footer" style="border-top: 1px solid var(--gray-200); padding: 16px 20px;">
+          <div class="modal-footer" style="border-top: 1px solid var(--gray-200); padding: 16px 20px; display: flex; justify-content: space-between;">
             <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
+            <button class="btn btn-primary" onclick="saveCalculatorSettings()">💾 설정 저장</button>
           </div>
         </div>
       `;
+
+      // 초기 계산 실행
+      updateGoalCalculation();
+    }
+
+    function updateGoalCalculation() {
+      const currentYear = new Date().getFullYear();
+      const goals = state.yearlyGoals || [];
+      const currentGoal = goals.find(g => g.year === currentYear) || { revenueTarget: 1000000000 };
+      const annualTarget = currentGoal.revenueTarget || 1000000000;
+
+      const avgDeal = (parseFloat(document.getElementById('calcAvgDeal')?.value) || 463) * 10000;
+      const successRate = parseFloat(document.getElementById('calcSuccessRate')?.value) || 30;
+      const avgProfit = (parseFloat(document.getElementById('calcAvgProfit')?.value) || 20) * 10000;
+
+      // 계산
+      const requiredSuccessDeals = Math.ceil(annualTarget / avgDeal);
+      const requiredTotalDeals = Math.ceil(requiredSuccessDeals / (successRate / 100));
+      const monthlyDeals = Math.ceil(requiredTotalDeals / 12);
+      const weeklyDeals = Math.ceil(requiredTotalDeals / 52);
+      const monthlySuccess = Math.ceil(requiredSuccessDeals / 12);
+      const expectedProfit = requiredSuccessDeals * avgProfit;
+
+      // 남은 기간 계산
+      const now = new Date();
+      const yearEnd = new Date(currentYear, 11, 31);
+      const remainingDays = Math.ceil((yearEnd - now) / (1000 * 60 * 60 * 24));
+      const remainingWeeks = Math.ceil(remainingDays / 7);
+      const remainingMonths = 12 - now.getMonth();
+
+      // 현재 진행 상황
+      const thisYearStr = String(currentYear);
+      const yearDeals = (state.deals || []).filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
+      const successDeals = yearDeals.filter(d => d.isSuccess === true || d.달성여부 === '성공');
+      const yearSettlements = (state.sellerSettlements || []).filter(s => (s.settlementDate || s.createdAt || '').startsWith(thisYearStr));
+      const currentRevenue = yearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+
+      // 남은 목표 계산
+      const remainingRevenue = Math.max(0, annualTarget - currentRevenue);
+      const remainingSuccessDeals = Math.max(0, requiredSuccessDeals - successDeals.length);
+      const remainingTotalDeals = Math.ceil(remainingSuccessDeals / (successRate / 100));
+      const neededWeeklyDeals = Math.ceil(remainingTotalDeals / Math.max(remainingWeeks, 1));
+      const neededMonthlyDeals = Math.ceil(remainingTotalDeals / Math.max(remainingMonths, 1));
+
+      // 달성 가능성 판단
+      const isOnTrack = neededWeeklyDeals <= weeklyDeals * 1.5;
+      const statusColor = isOnTrack ? '#00C471' : '#F04452';
+      const statusBg = isOnTrack ? '#E8F8F0' : '#FEE2E4';
+      const statusText = isOnTrack ? '달성 가능' : '⚠️ 주의 필요';
+
+      const container = document.getElementById('calcResultArea');
+      if (!container) return;
+
+      container.innerHTML = `
+        <!-- 목표 달성 가이드 -->
+        <div style="background: linear-gradient(135deg, var(--primary), #1b64da); border-radius: 16px; padding: 24px; color: white; margin-bottom: 20px;">
+          <div style="font-weight: 700; margin-bottom: 16px; font-size: 15px;">📊 목표 달성 가이드</div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+            <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 16px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700;">${requiredTotalDeals}</div>
+              <div style="font-size: 11px; opacity: 0.8;">연 필요 공구</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 16px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700;">${monthlyDeals}</div>
+              <div style="font-size: 11px; opacity: 0.8;">월 필요 공구</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 16px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700;">${weeklyDeals}</div>
+              <div style="font-size: 11px; opacity: 0.8;">주 필요 공구</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.2); border-radius: 10px; padding: 16px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 700;">${requiredSuccessDeals}</div>
+              <div style="font-size: 11px; opacity: 0.8;">연 성공 목표</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 성공 공식 -->
+        <div style="background: #E8F5E9; border: 2px solid #4CAF50; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+          <div style="font-weight: 700; color: #2E7D32; margin-bottom: 8px;">✅ 성공 공식</div>
+          <div style="font-size: 13px; color: #388E3C; line-height: 1.8;">
+            <strong>계산:</strong> ${(annualTarget/100000000).toFixed(0)}억 ÷ ${(avgDeal/10000).toFixed(0)}만원 = <strong>${requiredSuccessDeals}건</strong> 성공 필요<br>
+            <strong>실패율 고려:</strong> ${requiredSuccessDeals}건 ÷ ${successRate}% = <strong>${requiredTotalDeals}건</strong> 총 진행 필요<br>
+            <strong>월별:</strong> ${monthlyDeals}건 진행 × ${successRate}% = 월 ${monthlySuccess}건 성공<br>
+            <strong>예상 순익:</strong> ${requiredSuccessDeals}건 × ${(avgProfit/10000).toFixed(0)}만원 = <strong>${(expectedProfit/100000000).toFixed(1)}억원</strong>
+          </div>
+        </div>
+
+        <!-- 남은 목표 & 경고 -->
+        <div style="background: ${statusBg}; border: 2px solid ${statusColor}; border-radius: 12px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="font-weight: 700; color: ${statusColor};">📅 남은 목표 (${remainingMonths}개월 ${remainingDays % 30}일)</div>
+            <div style="background: ${statusColor}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">${statusText}</div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+            <div style="background: white; border-radius: 8px; padding: 12px; text-align: center;">
+              <div style="font-size: 11px; color: var(--gray-500);">남은 매출</div>
+              <div style="font-size: 18px; font-weight: 700; color: ${statusColor};">${(remainingRevenue/100000000).toFixed(1)}억</div>
+            </div>
+            <div style="background: white; border-radius: 8px; padding: 12px; text-align: center;">
+              <div style="font-size: 11px; color: var(--gray-500);">남은 성공</div>
+              <div style="font-size: 18px; font-weight: 700; color: ${statusColor};">${remainingSuccessDeals}건</div>
+            </div>
+            <div style="background: white; border-radius: 8px; padding: 12px; text-align: center;">
+              <div style="font-size: 11px; color: var(--gray-500);">주당 필요</div>
+              <div style="font-size: 18px; font-weight: 700; color: ${statusColor};">${neededWeeklyDeals}건</div>
+            </div>
+            <div style="background: white; border-radius: 8px; padding: 12px; text-align: center;">
+              <div style="font-size: 11px; color: var(--gray-500);">월당 필요</div>
+              <div style="font-size: 18px; font-weight: 700; color: ${statusColor};">${neededMonthlyDeals}건</div>
+            </div>
+          </div>
+          ${!isOnTrack ? `
+            <div style="background: #F04452; color: white; border-radius: 8px; padding: 12px; margin-top: 12px; font-size: 13px;">
+              <strong>⚠️ 경고:</strong> 현재 속도로는 목표 달성이 어렵습니다.
+              주당 ${neededWeeklyDeals}건 필요 (기존 목표 ${weeklyDeals}건 대비 ${Math.round((neededWeeklyDeals/weeklyDeals - 1) * 100)}% 증가 필요)
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    async function saveCalculatorSettings() {
+      try {
+        const avgDeal = (parseFloat(document.getElementById('calcAvgDeal')?.value) || 463) * 10000;
+        const successRate = parseFloat(document.getElementById('calcSuccessRate')?.value) || 30;
+        const avgProfit = (parseFloat(document.getElementById('calcAvgProfit')?.value) || 20) * 10000;
+
+        const currentYear = new Date().getFullYear();
+        const goals = state.yearlyGoals || [];
+        const currentGoal = goals.find(g => g.year === currentYear) || { revenueTarget: 1000000000 };
+        const annualTarget = currentGoal.revenueTarget || 1000000000;
+
+        const requiredSuccessDeals = Math.ceil(annualTarget / avgDeal);
+        const requiredTotalDeals = Math.ceil(requiredSuccessDeals / (successRate / 100));
+
+        const settings = {
+          avgDealRevenue: avgDeal,
+          avgDealProfit: avgProfit,
+          successRate: successRate,
+          annualRevenue: annualTarget,
+          annualProfit: requiredSuccessDeals * avgProfit,
+          targetSuccessDeals: requiredSuccessDeals,
+          monthlySuccessDeals: Math.ceil(requiredSuccessDeals / 12),
+          requiredTotalDeals: requiredTotalDeals,
+          monthlyRequiredDeals: Math.ceil(requiredTotalDeals / 12),
+          weeklyRequiredDeals: Math.ceil(requiredTotalDeals / 52),
+          updatedAt: new Date().toISOString()
+        };
+
+        await db.collection('settings').doc('strategy').set(settings, { merge: true });
+        state.strategyData = { ...state.strategyData, ...settings };
+
+        showToast('계산기 설정이 저장되었습니다');
+        closeModal();
+
+        // 대시보드 새로고침
+        if (state.currentTab === 'dashboard') {
+          renderSalesDashboard();
+        }
+      } catch (e) {
+        console.error('설정 저장 오류:', e);
+        showToast('저장 중 오류가 발생했습니다');
+      }
     }
 
     // ========================================
