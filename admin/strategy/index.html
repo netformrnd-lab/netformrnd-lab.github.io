@@ -4603,6 +4603,7 @@
                                         <span style="font-size: 12px; color: ${C.primary}; font-weight: 500;">👤 ${mk.memberName}</span>
                                         <span style="font-size: 12px; font-weight: 600; color: ${mkProgress >= 100 ? C.green : C.gray700};">${mk.current}/${mk.target}</span>
                                         <button onclick="quickUpdateMemberKPI('${mk.id}', ${mk.current + 1})" style="background: ${C.primary}; color: white; border: none; width: 20px; height: 20px; border-radius: 4px; cursor: pointer; font-size: 12px;">+</button>
+                                        <button onclick="deleteMemberKPI('${mk.id}', '${mk.name}')" style="background: ${C.redLight}; color: ${C.red}; border: none; width: 20px; height: 20px; border-radius: 4px; cursor: pointer; font-size: 10px;" title="개인 KPI 삭제">✕</button>
                                       </div>
                                     `;
                                   }).join('')}
@@ -6732,18 +6733,108 @@
     }
 
     async function deleteTeamKPI(id) {
-      if (!confirm('이 팀 KPI를 삭제하시겠습니까?\n연결된 개인 KPI도 삭제됩니다.')) return;
-
       try {
-        // 연결된 개인 KPI 삭제
-        const memberKPIs = await db.collection('memberKPIs').where('teamKpiId', '==', id).get();
+        // 영향 분석: 연결된 개인 KPI 조회
+        const memberKPIsSnapshot = await db.collection('memberKPIs').where('teamKpiId', '==', id).get();
+        const memberKpiIds = memberKPIsSnapshot.docs.map(doc => doc.id);
+
+        // 영향 분석: 연결된 업무 조회
+        let linkedTasksCount = 0;
+        const linkedTasks = [];
+
+        // 팀 KPI에 연결된 업무
+        const teamKpiTasks = await db.collection('tasks').where('teamKpiId', '==', id).get();
+        linkedTasksCount += teamKpiTasks.size;
+        teamKpiTasks.docs.forEach(doc => linkedTasks.push({ id: doc.id, ...doc.data() }));
+
+        // 개인 KPI에 연결된 업무
+        for (const mkId of memberKpiIds) {
+          const mkTasks = await db.collection('tasks').where('kpiId', '==', mkId).get();
+          linkedTasksCount += mkTasks.size;
+          mkTasks.docs.forEach(doc => linkedTasks.push({ id: doc.id, ...doc.data() }));
+        }
+
+        // 영향 안내 및 확인
+        let confirmMsg = `이 팀 KPI를 삭제하시겠습니까?\n\n`;
+        confirmMsg += `📊 영향 분석:\n`;
+        confirmMsg += `• 연결된 개인 KPI: ${memberKpiIds.length}개\n`;
+        confirmMsg += `• 연결된 업무: ${linkedTasksCount}건\n\n`;
+
+        if (linkedTasksCount > 0) {
+          confirmMsg += `⚠️ 연결된 업무의 KPI 연결이 해제됩니다.\n`;
+          confirmMsg += `(업무 자체는 삭제되지 않습니다)`;
+        }
+
+        if (!confirm(confirmMsg)) return;
+
         const batch = db.batch();
-        memberKPIs.docs.forEach(doc => batch.delete(doc.ref));
+
+        // 1. 연결된 업무의 KPI 연결 해제
+        linkedTasks.forEach(task => {
+          batch.update(db.collection('tasks').doc(task.id), {
+            kpiId: null,
+            kpiName: null,
+            teamKpiId: null,
+            projectId: null,
+            kpiDisconnectedAt: new Date().toISOString(),
+            kpiDisconnectReason: '팀 KPI 삭제'
+          });
+        });
+
+        // 2. 개인 KPI 삭제
+        memberKPIsSnapshot.docs.forEach(doc => batch.delete(doc.ref));
+
+        // 3. 팀 KPI 삭제
         batch.delete(db.collection('teamKPIs').doc(id));
+
         await batch.commit();
 
-        showToast('삭제되었습니다');
+        showToast(`삭제 완료 (업무 ${linkedTasksCount}건 연결 해제)`);
         closeModal();
+        renderKPIManagement();
+      } catch (e) {
+        console.error(e);
+        showToast('삭제 실패');
+      }
+    }
+
+    // 개인 KPI 삭제 (영향 분석 포함)
+    async function deleteMemberKPI(id, memberKpiName) {
+      try {
+        // 영향 분석: 연결된 업무 조회
+        const linkedTasksSnapshot = await db.collection('tasks').where('kpiId', '==', id).get();
+        const linkedTasksCount = linkedTasksSnapshot.size;
+
+        // 영향 안내 및 확인
+        let confirmMsg = `개인 KPI "${memberKpiName || 'KPI'}"를 삭제하시겠습니까?\n\n`;
+        confirmMsg += `📊 영향 분석:\n`;
+        confirmMsg += `• 연결된 업무: ${linkedTasksCount}건\n\n`;
+
+        if (linkedTasksCount > 0) {
+          confirmMsg += `⚠️ 연결된 업무의 KPI 연결이 해제됩니다.\n`;
+          confirmMsg += `(업무 자체는 삭제되지 않습니다)`;
+        }
+
+        if (!confirm(confirmMsg)) return;
+
+        const batch = db.batch();
+
+        // 1. 연결된 업무의 KPI 연결 해제
+        linkedTasksSnapshot.docs.forEach(doc => {
+          batch.update(doc.ref, {
+            kpiId: null,
+            kpiName: null,
+            kpiDisconnectedAt: new Date().toISOString(),
+            kpiDisconnectReason: '개인 KPI 삭제'
+          });
+        });
+
+        // 2. 개인 KPI 삭제
+        batch.delete(db.collection('memberKPIs').doc(id));
+
+        await batch.commit();
+
+        showToast(`삭제 완료 (업무 ${linkedTasksCount}건 연결 해제)`);
         renderKPIManagement();
       } catch (e) {
         console.error(e);
