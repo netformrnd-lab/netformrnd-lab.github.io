@@ -5626,6 +5626,8 @@
       const col = TASK_COLUMNS.find(c => c.id === (task.status || 'waiting')) || TASK_COLUMNS[0];
       const currentMember = getCurrentMember();
       const memberKPIs = (state.memberKPIs || []).filter(k => k.memberId === currentMember.id);
+      const isAdmin = state.currentUser?.role === 'admin';
+      const allMembers = state.teamMembers || [];
 
       // 마감까지 남은 시간 계산
       const deadline = task.deadline || task.dueDate;
@@ -5645,6 +5647,32 @@
         }
       }
 
+      // 변경 히스토리 렌더링
+      const history = task.history || [];
+      const historyHtml = history.length > 0 ? `
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #E5E8EB;">
+          <div style="font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+            <span>📋</span> 변경 히스토리 (${history.length})
+          </div>
+          <div style="max-height: 150px; overflow-y: auto; font-size: 12px;">
+            ${history.slice().reverse().map(h => `
+              <div style="padding: 8px 10px; background: #F9FAFB; border-radius: 6px; margin-bottom: 6px; border-left: 3px solid ${h.type === 'assignee' ? '#8B5CF6' : '#F59E0B'};">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="color: #6B7684;">${h.type === 'assignee' ? '👤 담당자 변경' : '📅 기한 변경'}</span>
+                  <span style="color: #8B95A1; font-size: 11px;">${new Date(h.changedAt).toLocaleString('ko-KR')}</span>
+                </div>
+                <div style="margin-top: 4px; color: #333D4B;">
+                  <span style="text-decoration: line-through; color: #8B95A1;">${h.from || '없음'}</span>
+                  <span style="color: #8B95A1;"> → </span>
+                  <span style="font-weight: 600;">${h.to || '없음'}</span>
+                </div>
+                <div style="font-size: 11px; color: #8B95A1; margin-top: 2px;">변경자: ${h.changedBy || '시스템'}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : '';
+
       const m = document.getElementById('modal');
       if (!m) { showToast('모달 요소를 찾을 수 없습니다'); return; }
       m.className = 'modal show';
@@ -5654,7 +5682,7 @@
             <h2 class="modal-title" style="color: white;">${col.icon} ${task.title || '업무 상세'}</h2>
             <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
           </div>
-          <div style="padding: 24px;">
+          <div style="padding: 24px; max-height: 70vh; overflow-y: auto;">
             <!-- 기본 정보 -->
             <div style="background: #F2F4F6; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
@@ -5666,6 +5694,29 @@
                 ${task.isSuccess !== undefined ? `<div><span style="color: #6B7684;">📊 결과:</span> ${task.isSuccess ? '<span style="color: #00C471; font-weight: 600;">성공 ✓</span>' : '<span style="color: #F04452; font-weight: 600;">기한 초과</span>'}</div>` : ''}
               </div>
             </div>
+
+            <!-- 관리자 전용: 담당자 배정 -->
+            ${isAdmin ? `
+              <div style="background: linear-gradient(135deg, #8B5CF6, #A78BFA); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+                <div style="font-size: 12px; color: rgba(255,255,255,0.8); margin-bottom: 8px;">👑 관리자 전용</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                  <div>
+                    <label style="display: block; font-size: 12px; color: white; margin-bottom: 4px;">👤 담당자 배정</label>
+                    <select id="editTaskAssignee" style="width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 14px;">
+                      <option value="">미배정</option>
+                      ${allMembers.filter(m => m.role !== 'ceo').map(m => `
+                        <option value="${m.id}" ${task.assigneeId === m.id ? 'selected' : ''}>${m.name || m.id}</option>
+                      `).join('')}
+                    </select>
+                  </div>
+                  <div>
+                    <label style="display: block; font-size: 12px; color: white; margin-bottom: 4px;">📅 완료기한 수정</label>
+                    <input type="date" id="editTaskDeadline" value="${deadline || ''}"
+                      style="width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 14px;">
+                  </div>
+                </div>
+              </div>
+            ` : ''}
 
             <!-- KPI 연결 정보 -->
             ${task.kpiId ? `
@@ -5707,6 +5758,9 @@
               <textarea id="editTaskNotes" rows="3" placeholder="업무 진행 중 배운 점, 시행착오 등"
                 style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 14px;">${task.notes || ''}</textarea>
             </div>
+
+            <!-- 변경 히스토리 -->
+            ${historyHtml}
           </div>
           <div class="modal-footer" style="border-top: 1px solid #E5E8EB; padding: 16px 24px; display: flex; justify-content: space-between;">
             <button onclick="deleteTask('${taskId}')" style="background: #FEE2E4; color: #F04452; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">삭제</button>
@@ -5740,8 +5794,16 @@
       const notes = document.getElementById('editTaskNotes')?.value || '';
       const startDate = document.getElementById('editTaskStartDate')?.value || '';
 
+      // 관리자 전용 필드
+      const newAssigneeId = document.getElementById('editTaskAssignee')?.value || '';
+      const newDeadline = document.getElementById('editTaskDeadline')?.value || '';
+
       const task = workLogTasks.find(t => t.id === taskId);
       if (!task) return;
+
+      const isAdmin = state.currentUser?.role === 'admin';
+      const currentUser = state.currentUser;
+      const allMembers = state.teamMembers || [];
 
       try {
         const updateData = {
@@ -5749,6 +5811,62 @@
           notes,
           updatedAt: new Date().toISOString()
         };
+
+        // 변경 히스토리 배열 초기화
+        const history = task.history || [];
+
+        // 관리자 전용: 담당자 변경 처리
+        if (isAdmin && newAssigneeId !== undefined) {
+          const oldAssigneeId = task.assigneeId || '';
+          if (newAssigneeId !== oldAssigneeId) {
+            const oldMember = allMembers.find(m => m.id === oldAssigneeId);
+            const newMember = allMembers.find(m => m.id === newAssigneeId);
+
+            // 히스토리 기록
+            history.push({
+              type: 'assignee',
+              from: oldMember?.name || task.assignee || '미배정',
+              to: newMember?.name || '미배정',
+              changedBy: currentUser?.name || currentUser?.loginId || '관리자',
+              changedAt: new Date().toISOString()
+            });
+
+            // 담당자 정보 업데이트
+            if (newAssigneeId) {
+              updateData.assigneeId = newAssigneeId;
+              updateData.assignee = newMember?.name || '';
+              updateData.assigneeLoginId = newMember?.loginId || '';
+            } else {
+              updateData.assigneeId = null;
+              updateData.assignee = null;
+              updateData.assigneeLoginId = null;
+            }
+          }
+        }
+
+        // 관리자 전용: 완료기한 변경 처리
+        if (isAdmin && newDeadline !== undefined) {
+          const oldDeadline = task.deadline || task.dueDate || '';
+          if (newDeadline !== oldDeadline) {
+            // 히스토리 기록
+            history.push({
+              type: 'deadline',
+              from: oldDeadline || '미정',
+              to: newDeadline || '미정',
+              changedBy: currentUser?.name || currentUser?.loginId || '관리자',
+              changedAt: new Date().toISOString()
+            });
+
+            // 기한 업데이트
+            updateData.deadline = newDeadline || null;
+            updateData.dueDate = newDeadline || null;
+          }
+        }
+
+        // 히스토리가 변경되었으면 저장
+        if (history.length > (task.history?.length || 0)) {
+          updateData.history = history;
+        }
 
         // KPI 연결 업데이트
         if (kpiId) {
