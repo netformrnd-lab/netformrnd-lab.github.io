@@ -1355,8 +1355,17 @@
       sellerList: [],
       productList: [],
       projects: [],
+      megaProjects: [],      // 대형프로젝트
+      yearlyGoals: [],       // 연도별 목표
+      teamKPIs: [],          // 팀 KPI (독립)
+      memberKPIs: [],        // 개인 KPI (독립)
+      tasks: [],             // 업무 (KPI 연결)
       references: [],
       refCategories: [],
+      teamMembers: [],
+      strategyData: {},
+      strategyVersions: [],
+      currentUser: null,
       isLoggedIn: false
     };
 
@@ -1512,6 +1521,64 @@
           state.strategyData = doc.data();
         }
       });
+
+      // 연도별 목표 데이터
+      db.collection('yearlyGoals').orderBy('year', 'asc').onSnapshot(snapshot => {
+        state.yearlyGoals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'dashboard') renderSalesDashboard();
+      });
+
+      // 대형프로젝트 데이터
+      db.collection('megaProjects').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.megaProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'kpi') renderKPIManagement();
+      });
+
+      // 팀 KPI 데이터 (독립 컬렉션)
+      db.collection('teamKPIs').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.teamKPIs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'kpi') renderKPIManagement();
+      });
+
+      // 개인 KPI 데이터 (독립 컬렉션)
+      db.collection('memberKPIs').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.memberKPIs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'kpi') renderKPIManagement();
+      });
+
+      // 업무 데이터 (KPI 연결)
+      db.collection('tasks').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'worklog') renderWorkLog();
+      });
+
+      // 전략 버전 히스토리
+      db.collection('strategyVersions').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.strategyVersions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      });
+
+      // 현재 사용자 정보 로드
+      loadCurrentUser();
+    }
+
+    // 현재 로그인 사용자 정보 로드
+    async function loadCurrentUser() {
+      try {
+        const loginId = sessionStorage.getItem('moyeora_login_id');
+        if (loginId) {
+          const snapshot = await db.collection('teamMembers').where('loginId', '==', loginId).get();
+          if (!snapshot.empty) {
+            state.currentUser = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+          }
+        }
+        // 기본값 설정 (관리자로 가정)
+        if (!state.currentUser) {
+          state.currentUser = { id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' };
+        }
+      } catch (e) {
+        console.error('사용자 정보 로드 실패:', e);
+        state.currentUser = { id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' };
+      }
     }
 
     // 탭 전환
@@ -2735,6 +2802,9 @@
               ${isAdmin ? `<button onclick="openGoalCalculator()" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: ${C.white}; color: ${C.primary}; border: 1px solid ${C.gray200}; border-radius: 8px; cursor: pointer;">🧮 계산기</button>` : ''}
             </div>
           </div>
+
+          <!-- 연도별 목표 대시보드 -->
+          ${renderYearlyGoalsDashboard()}
 
           <!-- 핵심 현황 배너 -->
           <div style="background: linear-gradient(135deg, ${C.primary}, #1b64da); border-radius: 14px; padding: 16px 20px; margin-bottom: 16px; color: white;">
@@ -4458,17 +4528,24 @@
     }
 
     // ========================================
-    // KPI관리 시스템
+    // KPI관리 시스템 (새 구조: 대형프로젝트 → 프로젝트 → 팀KPI → 개인KPI)
     // ========================================
+    let kpiViewMode = 'hierarchy'; // hierarchy, team, member
+    let kpiMemberFilter = 'all';
+
     function renderKPIManagement() {
       const container = document.getElementById('kpiContent');
       if (!container) return;
 
-      const members = state.teamMembers || [];
+      const megaProjects = state.megaProjects || [];
       const projects = state.projects || [];
+      const teamKPIs = state.teamKPIs || [];
+      const memberKPIs = state.memberKPIs || [];
+      const members = (state.teamMembers || []).filter(m => m.role === 'admin' || m.role === 'manager');
 
       const C = {
         primary: '#3182f6',
+        purple: '#6366F1',
         green: '#00C471',
         yellow: '#F59E0B',
         red: '#F04452',
@@ -4481,89 +4558,230 @@
         white: '#FFFFFF'
       };
 
-      // 팀 KPI와 개인 KPI 집계
-      let teamKPIs = [];
-      let memberKPIs = [];
-      projects.forEach(p => {
-        (p.teamKPIs || []).forEach(k => teamKPIs.push({ ...k, projectName: p.name }));
-        (p.memberKPIs || []).forEach(k => memberKPIs.push({ ...k, projectName: p.name }));
-      });
+      // 달성률 계산
+      const totalKPIs = teamKPIs.length + memberKPIs.length;
+      const achievedKPIs = [...teamKPIs, ...memberKPIs].filter(k => k.current >= k.target).length;
+      const achievementRate = totalKPIs > 0 ? Math.round((achievedKPIs / totalKPIs) * 100) : 0;
 
       container.innerHTML = `
-        <div style="max-width: 1200px; margin: 0 auto;">
+        <div style="max-width: 1400px; margin: 0 auto;">
           <!-- 헤더 -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
             <div>
               <h1 style="font-size: 24px; font-weight: 700; color: ${C.gray900}; margin: 0;">📊 KPI관리</h1>
-              <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">전략기획에 맞는 팀/개인 KPI 설정 및 진척도 관리</p>
+              <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">대형프로젝트 → 프로젝트 → 팀KPI → 개인KPI 계층 구조</p>
             </div>
             <div style="display: flex; gap: 8px;">
-              <button onclick="suggestKPIs()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.white}; color: ${C.primary}; border: 1px solid ${C.primary}; border-radius: 8px; cursor: pointer;">
-                🤖 AI KPI 추천
+              <button onclick="openMegaProjectModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.purple}; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                🏢 대형프로젝트 추가
               </button>
-              <button onclick="openKPIModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.primary}; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                + KPI 추가
+              <button onclick="openTeamKPIModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.green}; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                + 팀 KPI 추가
               </button>
             </div>
           </div>
 
           <!-- KPI 요약 카드 -->
-          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
-            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">전체 KPI</div>
-              <div style="font-size: 28px; font-weight: 700; color: ${C.gray900};">${teamKPIs.length + memberKPIs.length}</div>
+          <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px;">
+            <div style="background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 12px; padding: 20px; color: white;">
+              <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">🏢 대형프로젝트</div>
+              <div style="font-size: 28px; font-weight: 700;">${megaProjects.length}</div>
             </div>
             <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">팀 KPI</div>
-              <div style="font-size: 28px; font-weight: 700; color: ${C.primary};">${teamKPIs.length}</div>
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📁 프로젝트</div>
+              <div style="font-size: 28px; font-weight: 700; color: ${C.primary};">${projects.length}</div>
             </div>
             <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">개인 KPI</div>
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">👥 팀 KPI</div>
+              <div style="font-size: 28px; font-weight: 700; color: ${C.green};">${teamKPIs.length}</div>
+            </div>
+            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">👤 개인 KPI</div>
               <div style="font-size: 28px; font-weight: 700; color: ${C.yellow};">${memberKPIs.length}</div>
             </div>
             <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">달성률</div>
-              <div style="font-size: 28px; font-weight: 700; color: ${C.green};">${calculateKPIAchievementRate(teamKPIs, memberKPIs)}%</div>
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📈 달성률</div>
+              <div style="font-size: 28px; font-weight: 700; color: ${achievementRate >= 70 ? C.green : achievementRate >= 40 ? C.yellow : C.red};">${achievementRate}%</div>
             </div>
           </div>
 
-          <!-- 팀 KPI 섹션 -->
-          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-              <div style="font-size: 16px; font-weight: 700; color: ${C.gray900};">👥 팀 KPI</div>
-            </div>
-            ${teamKPIs.length === 0 ? `
-              <div style="text-align: center; padding: 40px; color: ${C.gray500};">
-                설정된 팀 KPI가 없습니다. AI 추천을 받아보세요!
-              </div>
-            ` : `
-              <div style="display: grid; gap: 12px;">
-                ${teamKPIs.map(kpi => renderKPICard(kpi, 'team')).join('')}
-              </div>
-            `}
+          <!-- 뷰 모드 전환 -->
+          <div style="display: flex; gap: 8px; margin-bottom: 20px; background: ${C.gray50}; padding: 4px; border-radius: 10px; width: fit-content;">
+            <button onclick="setKPIViewMode('hierarchy')" style="background: ${kpiViewMode === 'hierarchy' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'hierarchy' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+              🏗️ 계층 구조
+            </button>
+            <button onclick="setKPIViewMode('team')" style="background: ${kpiViewMode === 'team' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'team' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+              👥 팀 KPI
+            </button>
+            <button onclick="setKPIViewMode('member')" style="background: ${kpiViewMode === 'member' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'member' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+              👤 내 KPI
+            </button>
           </div>
 
-          <!-- 개인 KPI 섹션 -->
-          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-              <div style="font-size: 16px; font-weight: 700; color: ${C.gray900};">👤 개인 KPI</div>
-              <select onchange="filterKPIByMember(this.value)" style="padding: 8px 12px; border: 1px solid ${C.gray200}; border-radius: 8px; font-size: 13px;">
-                <option value="all">전체 팀원</option>
-                ${members.filter(m => m.role !== 'ceo').map(m => `<option value="${m.id}">${m.name}</option>`).join('')}
-              </select>
-            </div>
-            ${memberKPIs.length === 0 ? `
-              <div style="text-align: center; padding: 40px; color: ${C.gray500};">
-                설정된 개인 KPI가 없습니다.
-              </div>
-            ` : `
-              <div style="display: grid; gap: 12px;">
-                ${memberKPIs.map(kpi => renderKPICard(kpi, 'member')).join('')}
-              </div>
-            `}
+          <!-- 메인 컨텐츠 -->
+          <div id="kpi-main-content">
+            ${renderKPIHierarchyView(megaProjects, projects, teamKPIs, memberKPIs, C)}
           </div>
         </div>
       `;
+    }
+
+    function setKPIViewMode(mode) {
+      kpiViewMode = mode;
+      renderKPIManagement();
+    }
+
+    function renderKPIHierarchyView(megaProjects, projects, teamKPIs, memberKPIs, C) {
+      if (megaProjects.length === 0) {
+        return `
+          <div style="text-align: center; padding: 60px; background: ${C.white}; border-radius: 16px; border: 2px dashed ${C.gray200};">
+            <div style="font-size: 48px; margin-bottom: 16px;">🏢</div>
+            <div style="font-size: 18px; font-weight: 600; color: ${C.gray900}; margin-bottom: 8px;">대형프로젝트를 먼저 만들어주세요</div>
+            <div style="font-size: 14px; color: ${C.gray500}; margin-bottom: 20px;">예: 해외 수출 (K-브랜드 확장), 국내 확장 등</div>
+            <button onclick="openMegaProjectModal()" style="padding: 12px 24px; background: ${C.purple}; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+              🏢 첫 대형프로젝트 만들기
+            </button>
+          </div>
+        `;
+      }
+
+      return megaProjects.map(mega => {
+        const childProjects = projects.filter(p => p.megaProjectId === mega.id);
+        const megaProgress = calculateMegaProjectProgress(mega, childProjects, teamKPIs, memberKPIs);
+
+        return `
+          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); border-left: 4px solid ${C.purple};">
+            <!-- 대형프로젝트 헤더 -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;">🏢</div>
+                <div>
+                  <div style="font-size: 20px; font-weight: 700; color: ${C.gray900};">${mega.name}</div>
+                  <div style="font-size: 13px; color: ${C.gray500};">${mega.description || ''}</div>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 16px;">
+                ${mega.revenueTarget ? `<div style="text-align: right;"><div style="font-size: 11px; color: ${C.gray500};">목표 매출</div><div style="font-size: 18px; font-weight: 700; color: ${C.purple};">${(mega.revenueTarget / 100000000).toFixed(1)}억</div></div>` : ''}
+                <div style="text-align: right;">
+                  <div style="font-size: 11px; color: ${C.gray500};">진행률</div>
+                  <div style="font-size: 18px; font-weight: 700; color: ${megaProgress >= 70 ? C.green : megaProgress >= 40 ? C.yellow : C.red};">${megaProgress}%</div>
+                </div>
+                <button onclick="openMegaProjectModal(state.megaProjects.find(m=>m.id==='${mega.id}'))" style="padding: 8px 12px; background: ${C.gray50}; border: 1px solid ${C.gray200}; border-radius: 6px; cursor: pointer; font-size: 12px;">편집</button>
+              </div>
+            </div>
+
+            <!-- 하위 프로젝트 목록 -->
+            <div style="margin-left: 30px; border-left: 2px solid ${C.gray200}; padding-left: 20px;">
+              ${childProjects.length === 0 ? `
+                <div style="padding: 20px; background: ${C.gray50}; border-radius: 12px; text-align: center;">
+                  <div style="color: ${C.gray500}; margin-bottom: 12px;">하위 프로젝트가 없습니다</div>
+                  <button onclick="openProjectModalV2(null, '${mega.id}')" style="padding: 8px 16px; background: ${C.primary}; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px;">+ 프로젝트 추가</button>
+                </div>
+              ` : childProjects.map(project => {
+                const projectTeamKPIs = teamKPIs.filter(k => k.projectId === project.id);
+                const projectMemberKPIs = memberKPIs.filter(k => k.projectId === project.id);
+                const projectProgress = calculateProjectProgress(projectTeamKPIs, projectMemberKPIs);
+
+                return `
+                  <div style="background: ${C.gray50}; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+                    <!-- 프로젝트 헤더 -->
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="font-size: 18px;">📁</div>
+                        <div>
+                          <div style="font-size: 16px; font-weight: 600; color: ${C.gray900};">${project.name}</div>
+                          ${project.revenueGoal ? `<div style="font-size: 12px; color: ${C.gray500};">목표 ${(project.revenueGoal / 100000000).toFixed(1)}억</div>` : ''}
+                        </div>
+                      </div>
+                      <div style="display: flex; align-items: center; gap: 12px;">
+                        <div style="background: ${projectProgress >= 70 ? C.green : projectProgress >= 40 ? C.yellow : C.red}20; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; color: ${projectProgress >= 70 ? C.green : projectProgress >= 40 ? C.yellow : C.red};">
+                          ${projectProgress}%
+                        </div>
+                        <button onclick="openProjectModalV2(state.projects.find(p=>p.id==='${project.id}'))" style="padding: 6px 10px; background: ${C.white}; border: 1px solid ${C.gray200}; border-radius: 4px; cursor: pointer; font-size: 11px;">편집</button>
+                        <button onclick="openTeamKPIModal(null, '${project.id}')" style="padding: 6px 10px; background: ${C.green}; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">+ 팀KPI</button>
+                      </div>
+                    </div>
+
+                    <!-- 팀 KPI 목록 -->
+                    ${projectTeamKPIs.length > 0 ? `
+                      <div style="margin-left: 28px;">
+                        ${projectTeamKPIs.map(kpi => {
+                          const progress = kpi.target > 0 ? Math.min(100, Math.round((kpi.current / kpi.target) * 100)) : 0;
+                          const kpiMemberKPIs = memberKPIs.filter(mk => mk.teamKpiId === kpi.id);
+
+                          return `
+                            <div style="background: ${C.white}; border-radius: 10px; padding: 14px; margin-bottom: 10px; border-left: 3px solid ${C.green};">
+                              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                  <span style="font-size: 14px;">👥</span>
+                                  <span style="font-weight: 600; color: ${C.gray900};">${kpi.name}</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                  <span style="font-size: 14px; font-weight: 700; color: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red};">${kpi.current}/${kpi.target} ${kpi.unit || ''}</span>
+                                  <button onclick="openTeamKPIModal(state.teamKPIs.find(k=>k.id==='${kpi.id}'))" style="padding: 4px 8px; background: ${C.gray50}; border: none; border-radius: 4px; cursor: pointer; font-size: 10px;">편집</button>
+                                </div>
+                              </div>
+                              <div style="background: ${C.gray100}; height: 6px; border-radius: 3px; margin-bottom: 8px;">
+                                <div style="background: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red}; height: 100%; width: ${progress}%; border-radius: 3px;"></div>
+                              </div>
+
+                              <!-- 개인 KPI -->
+                              ${kpiMemberKPIs.length > 0 ? `
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+                                  ${kpiMemberKPIs.map(mk => {
+                                    const mkProgress = mk.target > 0 ? Math.min(100, Math.round((mk.current / mk.target) * 100)) : 0;
+                                    return `
+                                      <div style="background: ${C.gray50}; padding: 8px 12px; border-radius: 8px; display: flex; align-items: center; gap: 8px;">
+                                        <span style="font-size: 12px; color: ${C.primary}; font-weight: 500;">👤 ${mk.memberName}</span>
+                                        <span style="font-size: 12px; font-weight: 600; color: ${mkProgress >= 100 ? C.green : C.gray700};">${mk.current}/${mk.target}</span>
+                                        <button onclick="quickUpdateMemberKPI('${mk.id}', ${mk.current + 1})" style="background: ${C.primary}; color: white; border: none; width: 20px; height: 20px; border-radius: 4px; cursor: pointer; font-size: 12px;">+</button>
+                                      </div>
+                                    `;
+                                  }).join('')}
+                                </div>
+                              ` : ''}
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              }).join('')}
+              <button onclick="openProjectModalV2(null, '${mega.id}')" style="width: 100%; padding: 12px; background: transparent; border: 2px dashed ${C.gray300}; border-radius: 10px; color: ${C.gray500}; cursor: pointer; font-size: 13px; margin-top: 8px;">
+                + 프로젝트 추가
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function calculateMegaProjectProgress(mega, childProjects, teamKPIs, memberKPIs) {
+      const allKPIs = [];
+      childProjects.forEach(p => {
+        teamKPIs.filter(k => k.projectId === p.id).forEach(k => allKPIs.push(k));
+        memberKPIs.filter(k => k.projectId === p.id).forEach(k => allKPIs.push(k));
+      });
+      if (allKPIs.length === 0) return 0;
+      const totalProgress = allKPIs.reduce((sum, k) => sum + Math.min(100, (k.current / k.target) * 100), 0);
+      return Math.round(totalProgress / allKPIs.length);
+    }
+
+    function calculateProjectProgress(projectTeamKPIs, projectMemberKPIs) {
+      const allKPIs = [...projectTeamKPIs, ...projectMemberKPIs];
+      if (allKPIs.length === 0) return 0;
+      const totalProgress = allKPIs.reduce((sum, k) => sum + Math.min(100, (k.current / k.target) * 100), 0);
+      return Math.round(totalProgress / allKPIs.length);
+    }
+
+    async function quickUpdateMemberKPI(kpiId, newValue) {
+      try {
+        await db.collection('memberKPIs').doc(kpiId).update({ current: newValue, updatedAt: new Date().toISOString() });
+        showToast('업데이트 완료');
+      } catch (e) {
+        showToast('업데이트 실패');
+      }
     }
 
     function renderKPICard(kpi, type) {
@@ -4575,8 +4793,7 @@
           <div style="flex: 1;">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
               <span style="font-weight: 600; color: var(--gray-900);">${kpi.name}</span>
-              ${kpi.member ? `<span style="font-size: 11px; background: var(--primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px;">${kpi.member}</span>` : ''}
-              <span style="font-size: 11px; color: var(--gray-500);">${kpi.projectName || ''}</span>
+              ${kpi.memberName ? `<span style="font-size: 11px; background: var(--primary-light); color: var(--primary); padding: 2px 8px; border-radius: 10px;">${kpi.memberName}</span>` : ''}
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
               <div style="flex: 1; background: var(--gray-200); border-radius: 4px; height: 8px;">
@@ -4585,9 +4802,6 @@
               <span style="font-size: 13px; font-weight: 600; color: ${color};">${kpi.current}/${kpi.target} ${kpi.unit || ''}</span>
             </div>
           </div>
-          <button onclick="openKPIEditModal('${type}', '${kpi.name}')" style="padding: 8px 12px; background: var(--gray-100); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">
-            편집
-          </button>
         </div>
       `;
     }
@@ -5029,13 +5243,42 @@
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                   ${tasks.length === 0 ? `
                     <div style="text-align: center; padding: 40px 20px; color: #8B95A1; font-size: 13px;">업무가 없습니다</div>
-                  ` : tasks.map(task => `
-                    <div onclick="openTaskDetailModal('${task.id}')" style="background: white; border-radius: 12px; padding: 14px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.06);">
-                      <div style="font-weight: 600; color: #191F28; margin-bottom: 8px; font-size: 14px;">${task.title || '제목 없음'}</div>
-                      ${task.dueDate ? `<div style="font-size: 12px; color: #8B95A1;">📅 ${task.dueDate}</div>` : ''}
-                      ${task.category ? `<span style="display: inline-block; margin-top: 8px; font-size: 11px; padding: 2px 8px; background: #F2F4F6; border-radius: 4px; color: #6B7684;">${task.category}</span>` : ''}
-                    </div>
-                  `).join('')}
+                  ` : tasks.map(task => {
+                    const deadline = task.deadline || task.dueDate;
+                    let deadlineBadge = '';
+                    let cardBorder = '';
+                    if (deadline && task.status !== 'complete') {
+                      const now = new Date();
+                      const deadlineDate = new Date(deadline);
+                      const diffDays = Math.ceil((deadlineDate - now) / (1000 * 60 * 60 * 24));
+                      if (diffDays < 0) {
+                        deadlineBadge = '<span style="background: #F04452; color: white; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">초과</span>';
+                        cardBorder = 'border-left: 3px solid #F04452;';
+                      } else if (diffDays === 0) {
+                        deadlineBadge = '<span style="background: #F59E0B; color: white; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">오늘</span>';
+                        cardBorder = 'border-left: 3px solid #F59E0B;';
+                      } else if (diffDays <= 3) {
+                        deadlineBadge = `<span style="background: #F59E0B20; color: #F59E0B; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">D-${diffDays}</span>`;
+                        cardBorder = 'border-left: 3px solid #F59E0B;';
+                      }
+                    }
+                    if (task.isSuccess === true) {
+                      deadlineBadge = '<span style="background: #00C47120; color: #00C471; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">✓ 성공</span>';
+                    } else if (task.isSuccess === false) {
+                      deadlineBadge = '<span style="background: #F0445220; color: #F04452; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">기한초과</span>';
+                    }
+
+                    return `
+                      <div onclick="openTaskDetailModal('${task.id}')" style="background: white; border-radius: 12px; padding: 14px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.06); ${cardBorder}">
+                        <div style="font-weight: 600; color: #191F28; margin-bottom: 8px; font-size: 14px;">${task.title || '제목 없음'}</div>
+                        ${deadline ? `<div style="font-size: 12px; color: #8B95A1; display: flex; align-items: center;">📅 ${deadline} ${deadlineBadge}</div>` : ''}
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+                          ${task.kpiId ? `<span style="font-size: 10px; padding: 2px 8px; background: #E8F3FF; border-radius: 4px; color: #0064FF;">📊 KPI 연결</span>` : ''}
+                          ${task.category ? `<span style="font-size: 10px; padding: 2px 8px; background: #F2F4F6; border-radius: 4px; color: #6B7684;">${task.category}</span>` : ''}
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
                 </div>
               </div>
             `;
@@ -5131,12 +5374,13 @@
     function openQuickTaskModal() {
       const today = new Date().toISOString().split('T')[0];
       const currentMember = getCurrentMember();
+      const memberKPIs = (state.memberKPIs || []).filter(k => k.memberId === currentMember.id);
 
       const m = document.getElementById('modal');
       if (!m) { showToast('모달 요소를 찾을 수 없습니다'); return; }
       m.className = 'modal show';
       m.innerHTML = `
-        <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-content" style="max-width: 550px;">
           <div class="modal-header" style="background: #0064FF; color: white;">
             <h2 class="modal-title" style="color: white;">➕ 새 업무 추가</h2>
             <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
@@ -5146,22 +5390,47 @@
               <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">업무 제목 *</label>
               <input type="text" id="taskTitle" placeholder="업무 내용을 입력하세요" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
             </div>
+
+            <!-- KPI 연결 -->
             <div style="margin-bottom: 16px;">
-              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">마감일</label>
-              <input type="date" id="taskDueDate" value="${today}" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-            </div>
-            <div style="margin-bottom: 16px;">
-              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">상태</label>
-              <select id="taskStatus" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-                <option value="waiting">⏳ 대기</option>
-                <option value="progress">🔄 진행중</option>
-                <option value="complete">✅ 완료</option>
-                <option value="hold">⏸️ 보류</option>
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📊 KPI 연결</label>
+              <select id="taskKpiId" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+                <option value="">연결 안함</option>
+                ${memberKPIs.map(k => `<option value="${k.id}">${k.name} (${k.current}/${k.target} ${k.unit || ''})</option>`).join('')}
               </select>
+              <div style="font-size: 11px; color: #8B95A1; margin-top: 4px;">💡 KPI를 연결하면 업무 완료 시 자동으로 진척도가 업데이트됩니다</div>
             </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📅 완료 목표 기한 *</label>
+                <input type="date" id="taskDeadline" value="${today}" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;" required>
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">상태</label>
+                <select id="taskStatus" onchange="handleStatusChange()" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+                  <option value="waiting">⏳ 대기</option>
+                  <option value="progress">🔄 진행중</option>
+                  <option value="complete">✅ 완료</option>
+                  <option value="hold">⏸️ 보류</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="startDateContainer" style="margin-bottom: 16px; display: none;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">🚀 시작일 (자동 설정)</label>
+              <input type="date" id="taskStartDate" value="${today}" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px; background: #F2F4F6;" readonly>
+            </div>
+
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">구분</label>
               <input type="text" id="taskCategory" placeholder="예: 영업, 개발, 마케팅" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📝 시행착오 / A·B 테스트 메모</label>
+              <textarea id="taskNotes" rows="3" placeholder="업무 진행 중 배운 점, 시행착오, A/B 테스트 결과 등을 기록하세요"
+                style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 14px;"></textarea>
             </div>
           </div>
           <div class="modal-footer" style="border-top: 1px solid #E5E8EB; padding: 16px 24px;">
@@ -5172,27 +5441,72 @@
       `;
     }
 
+    function handleStatusChange() {
+      const status = document.getElementById('taskStatus').value;
+      const startDateContainer = document.getElementById('startDateContainer');
+      const startDateInput = document.getElementById('taskStartDate');
+
+      if (status === 'progress') {
+        startDateContainer.style.display = 'block';
+        startDateInput.value = new Date().toISOString().split('T')[0];
+      } else {
+        startDateContainer.style.display = 'none';
+      }
+    }
+
     async function saveQuickTask() {
       const title = document.getElementById('taskTitle').value.trim();
-      const dueDate = document.getElementById('taskDueDate').value;
+      const deadline = document.getElementById('taskDeadline').value;
       const status = document.getElementById('taskStatus').value;
       const category = document.getElementById('taskCategory').value.trim();
+      const kpiId = document.getElementById('taskKpiId').value;
+      const notes = document.getElementById('taskNotes').value.trim();
+      const startDate = document.getElementById('taskStartDate')?.value || '';
 
       if (!title) { showToast('업무 제목을 입력하세요'); return; }
+      if (!deadline) { showToast('완료 목표 기한을 설정하세요'); return; }
 
       const currentMember = getCurrentMember();
 
       try {
-        await db.collection('tasks').add({
+        const taskData = {
           title,
-          dueDate,
+          deadline,
+          dueDate: deadline,
           status,
           category,
+          notes,
           assignee: currentMember.name,
           assigneeId: currentMember.id,
           createdAt: new Date().toISOString(),
           source: 'strategy-worklog'
-        });
+        };
+
+        // KPI 연결
+        if (kpiId) {
+          const kpi = (state.memberKPIs || []).find(k => k.id === kpiId);
+          if (kpi) {
+            taskData.kpiId = kpiId;
+            taskData.kpiName = kpi.name;
+            taskData.teamKpiId = kpi.teamKpiId;
+            taskData.projectId = kpi.projectId;
+          }
+        }
+
+        // 진행중 상태면 시작일 자동 설정
+        if (status === 'progress') {
+          taskData.startDate = startDate || new Date().toISOString().split('T')[0];
+        }
+
+        // 완료 상태면 완료일, 성공/실패 판정
+        if (status === 'complete') {
+          const now = new Date();
+          const deadlineDate = new Date(deadline);
+          taskData.completedAt = now.toISOString();
+          taskData.isSuccess = now <= deadlineDate; // 기한 내 완료 = 성공
+        }
+
+        await db.collection('tasks').add(taskData);
         showToast('업무가 추가되었습니다');
         closeModal();
         loadWorkLogData();
@@ -5207,27 +5521,88 @@
       if (!task) return;
 
       const col = TASK_COLUMNS.find(c => c.id === (task.status || 'waiting')) || TASK_COLUMNS[0];
+      const currentMember = getCurrentMember();
+      const memberKPIs = (state.memberKPIs || []).filter(k => k.memberId === currentMember.id);
+
+      // 마감까지 남은 시간 계산
+      const deadline = task.deadline || task.dueDate;
+      let deadlineInfo = '';
+      if (deadline) {
+        const now = new Date();
+        const deadlineDate = new Date(deadline);
+        const diffDays = Math.ceil((deadlineDate - now) / (1000 * 60 * 60 * 24));
+        if (diffDays < 0) {
+          deadlineInfo = `<span style="color: #F04452; font-weight: 600;">${Math.abs(diffDays)}일 초과</span>`;
+        } else if (diffDays === 0) {
+          deadlineInfo = `<span style="color: #F59E0B; font-weight: 600;">오늘 마감!</span>`;
+        } else if (diffDays <= 3) {
+          deadlineInfo = `<span style="color: #F59E0B;">D-${diffDays}</span>`;
+        } else {
+          deadlineInfo = `<span style="color: #00C471;">D-${diffDays}</span>`;
+        }
+      }
 
       const m = document.getElementById('modal');
       if (!m) { showToast('모달 요소를 찾을 수 없습니다'); return; }
       m.className = 'modal show';
       m.innerHTML = `
-        <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-content" style="max-width: 550px;">
           <div class="modal-header" style="background: ${col.color}; color: white;">
             <h2 class="modal-title" style="color: white;">${col.icon} ${task.title || '업무 상세'}</h2>
             <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
           </div>
           <div style="padding: 24px;">
+            <!-- 기본 정보 -->
+            <div style="background: #F2F4F6; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+                <div><span style="color: #6B7684;">📅 완료 기한:</span> <strong>${deadline || '미정'}</strong> ${deadlineInfo}</div>
+                <div><span style="color: #6B7684;">👤 담당자:</span> <strong>${task.assignee || '미정'}</strong></div>
+                ${task.startDate ? `<div><span style="color: #6B7684;">🚀 시작일:</span> ${task.startDate}</div>` : ''}
+                ${task.completedAt ? `<div><span style="color: #6B7684;">✅ 완료일:</span> ${task.completedAt.split('T')[0]}</div>` : ''}
+                ${task.category ? `<div><span style="color: #6B7684;">🏷️ 구분:</span> ${task.category}</div>` : ''}
+                ${task.isSuccess !== undefined ? `<div><span style="color: #6B7684;">📊 결과:</span> ${task.isSuccess ? '<span style="color: #00C471; font-weight: 600;">성공 ✓</span>' : '<span style="color: #F04452; font-weight: 600;">기한 초과</span>'}</div>` : ''}
+              </div>
+            </div>
+
+            <!-- KPI 연결 정보 -->
+            ${task.kpiId ? `
+              <div style="background: #E8F3FF; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 16px;">📊</span>
+                <div>
+                  <div style="font-size: 12px; color: #0064FF;">연결된 KPI</div>
+                  <div style="font-weight: 600; color: #191F28;">${task.kpiName || 'KPI 연결됨'}</div>
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- 상태 변경 -->
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">상태 변경</label>
-              <select id="editTaskStatus" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+              <select id="editTaskStatus" onchange="handleDetailStatusChange('${taskId}')" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
                 ${TASK_COLUMNS.map(c => `<option value="${c.id}" ${task.status === c.id ? 'selected' : ''}>${c.icon} ${c.label}</option>`).join('')}
               </select>
             </div>
+
+            <!-- 진행중으로 변경 시 시작일 표시 -->
+            <div id="detailStartDateContainer" style="display: ${task.status === 'progress' ? 'block' : 'none'}; margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">🚀 시작일</label>
+              <input type="date" id="editTaskStartDate" value="${task.startDate || new Date().toISOString().split('T')[0]}" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px; background: #F2F4F6;">
+            </div>
+
+            <!-- KPI 변경 -->
             <div style="margin-bottom: 16px;">
-              <div style="font-size: 13px; color: #6B7684;">마감일: ${task.dueDate || '미정'}</div>
-              ${task.category ? `<div style="font-size: 13px; color: #6B7684;">구분: ${task.category}</div>` : ''}
-              ${task.assignee ? `<div style="font-size: 13px; color: #6B7684;">담당자: ${task.assignee}</div>` : ''}
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📊 KPI 연결</label>
+              <select id="editTaskKpiId" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+                <option value="">연결 안함</option>
+                ${memberKPIs.map(k => `<option value="${k.id}" ${task.kpiId === k.id ? 'selected' : ''}>${k.name} (${k.current}/${k.target})</option>`).join('')}
+              </select>
+            </div>
+
+            <!-- 시행착오/메모 -->
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📝 시행착오 / 메모</label>
+              <textarea id="editTaskNotes" rows="3" placeholder="업무 진행 중 배운 점, 시행착오 등"
+                style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 14px;">${task.notes || ''}</textarea>
             </div>
           </div>
           <div class="modal-footer" style="border-top: 1px solid #E5E8EB; padding: 16px 24px; display: flex; justify-content: space-between;">
@@ -5241,15 +5616,87 @@
       `;
     }
 
+    function handleDetailStatusChange(taskId) {
+      const status = document.getElementById('editTaskStatus').value;
+      const startDateContainer = document.getElementById('detailStartDateContainer');
+      const startDateInput = document.getElementById('editTaskStartDate');
+
+      if (status === 'progress') {
+        startDateContainer.style.display = 'block';
+        if (!startDateInput.value) {
+          startDateInput.value = new Date().toISOString().split('T')[0];
+        }
+      } else {
+        startDateContainer.style.display = 'none';
+      }
+    }
+
     async function updateTaskStatus(taskId) {
       const status = document.getElementById('editTaskStatus').value;
+      const kpiId = document.getElementById('editTaskKpiId')?.value || '';
+      const notes = document.getElementById('editTaskNotes')?.value || '';
+      const startDate = document.getElementById('editTaskStartDate')?.value || '';
+
+      const task = workLogTasks.find(t => t.id === taskId);
+      if (!task) return;
+
       try {
-        const updateData = { status };
-        if (status === 'complete') {
-          updateData.completedAt = new Date().toISOString();
+        const updateData = {
+          status,
+          notes,
+          updatedAt: new Date().toISOString()
+        };
+
+        // KPI 연결 업데이트
+        if (kpiId) {
+          const kpi = (state.memberKPIs || []).find(k => k.id === kpiId);
+          if (kpi) {
+            updateData.kpiId = kpiId;
+            updateData.kpiName = kpi.name;
+            updateData.teamKpiId = kpi.teamKpiId;
+            updateData.projectId = kpi.projectId;
+          }
+        } else {
+          updateData.kpiId = null;
+          updateData.kpiName = null;
         }
+
+        // 진행중으로 변경 시 시작일 자동 설정
+        if (status === 'progress' && task.status !== 'progress') {
+          updateData.startDate = startDate || new Date().toISOString().split('T')[0];
+        }
+
+        // 완료 시 완료일 및 성공/실패 판정
+        if (status === 'complete' && task.status !== 'complete') {
+          const now = new Date();
+          const deadline = task.deadline || task.dueDate;
+          updateData.completedAt = now.toISOString();
+
+          if (deadline) {
+            const deadlineDate = new Date(deadline);
+            updateData.isSuccess = now <= deadlineDate;
+          } else {
+            updateData.isSuccess = true; // 마감일 없으면 성공으로
+          }
+
+          // KPI 자동 업데이트 (연결된 경우)
+          if (kpiId && updateData.isSuccess) {
+            const kpi = (state.memberKPIs || []).find(k => k.id === kpiId);
+            if (kpi) {
+              await db.collection('memberKPIs').doc(kpiId).update({
+                current: (kpi.current || 0) + 1,
+                updatedAt: new Date().toISOString()
+              });
+            }
+          }
+        }
+
         await db.collection('tasks').doc(taskId).update(updateData);
-        showToast('업무 상태가 변경되었습니다');
+
+        const statusMsg = status === 'complete'
+          ? (updateData.isSuccess ? '업무 완료! 🎉 (기한 내 성공)' : '업무 완료 (기한 초과)')
+          : '업무가 업데이트되었습니다';
+        showToast(statusMsg);
         closeModal();
         loadWorkLogData();
       } catch (e) {
@@ -5429,6 +5876,641 @@
           </div>
         </div>
       `;
+    }
+
+    // ========================================
+    // 연도별 목표 관리 시스템
+    // ========================================
+    function renderYearlyGoalsDashboard() {
+      const goals = state.yearlyGoals || [];
+      const currentYear = new Date().getFullYear();
+      const isAdmin = state.currentUser?.role === 'admin';
+
+      // 연도별 목표가 없으면 기본값 생성 안내
+      const displayYears = [2026, 2027, 2028];
+
+      // 각 연도별 데이터 준비
+      const yearData = displayYears.map(year => {
+        const goal = goals.find(g => g.year === year) || {
+          year,
+          revenueTarget: year === 2026 ? 1000000000 : year === 2027 ? 3000000000 : 6000000000,
+          salesRatio: 70,
+          growthRatio: 30,
+          achieved: 0
+        };
+
+        // 해당 연도 달성액 계산 (정산 데이터 기반)
+        const yearStr = String(year);
+        const yearSettlements = (state.sellerSettlements || []).filter(s =>
+          (s.settlementDate || s.createdAt || '').startsWith(yearStr)
+        );
+        const achieved = yearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+        goal.achieved = achieved;
+
+        return goal;
+      });
+
+      // 최종 목표 (2028년 100억)
+      const finalGoal = 10000000000;
+      const totalAchieved = yearData.reduce((sum, y) => sum + (y.achieved || 0), 0);
+      const totalTarget = yearData.reduce((sum, y) => sum + (y.revenueTarget || 0), 0);
+
+      return `
+        <div style="background: linear-gradient(135deg, #1e3a5f, #0f2744); border-radius: 16px; padding: 24px; margin-bottom: 20px; color: white;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 14px; opacity: 0.8; margin-bottom: 4px;">🎯 본질의 목표</div>
+              <div style="font-size: 22px; font-weight: 700;">2028년까지 100억 달성</div>
+            </div>
+            ${isAdmin ? `<button onclick="openYearlyGoalModal()" style="padding: 10px 18px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 8px; cursor: pointer; font-weight: 600;">⚙️ 목표 설정</button>` : ''}
+          </div>
+
+          <!-- 연도별 목표 카드 -->
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px;">
+            ${yearData.map(goal => {
+              const progress = goal.revenueTarget > 0 ? Math.min(100, Math.round((goal.achieved / goal.revenueTarget) * 100)) : 0;
+              const isCurrentYear = goal.year === currentYear;
+              return `
+                <div style="background: ${isCurrentYear ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)'}; border-radius: 12px; padding: 16px; ${isCurrentYear ? 'border: 2px solid rgba(255,255,255,0.4);' : ''}">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <div style="font-size: 18px; font-weight: 700;">${goal.year}년</div>
+                    ${isCurrentYear ? '<span style="font-size: 10px; background: #00C471; padding: 2px 8px; border-radius: 10px;">현재</span>' : ''}
+                  </div>
+                  <div style="font-size: 24px; font-weight: 700; margin-bottom: 4px;">${(goal.revenueTarget / 100000000).toFixed(0)}억</div>
+                  <div style="font-size: 11px; opacity: 0.7; margin-bottom: 12px;">
+                    영업 ${goal.salesRatio || 70}% · 성장 ${goal.growthRatio || 30}%
+                  </div>
+                  <div style="background: rgba(255,255,255,0.2); height: 8px; border-radius: 4px; overflow: hidden;">
+                    <div style="background: ${progress >= 70 ? '#00C471' : progress >= 40 ? '#F59E0B' : '#F04452'}; height: 100%; width: ${progress}%; transition: width 0.3s;"></div>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px;">
+                    <span>달성 ${(goal.achieved / 100000000).toFixed(1)}억</span>
+                    <span style="font-weight: 600;">${progress}%</span>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <!-- 최종 목표 진행률 -->
+          <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 14px;">🏆 최종 목표 진행률</span>
+              <span style="font-size: 14px; font-weight: 700;">${(totalAchieved / 100000000).toFixed(1)}억 / 100억</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.2); height: 12px; border-radius: 6px; overflow: hidden;">
+              <div style="background: linear-gradient(90deg, #00C471, #10B981); height: 100%; width: ${Math.min(100, (totalAchieved / finalGoal) * 100)}%; border-radius: 6px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function openYearlyGoalModal() {
+      const goals = state.yearlyGoals || [];
+      const displayYears = [2025, 2026, 2027, 2028, 2029, 2030];
+
+      const m = document.getElementById('modal');
+      if (!m) return;
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 700px;">
+          <div class="modal-header" style="background: linear-gradient(135deg, #1e3a5f, #0f2744); color: white;">
+            <h2 class="modal-title" style="color: white;">🎯 연도별 목표 설정</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px; max-height: 70vh; overflow-y: auto;">
+            <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+              <div style="font-size: 14px; font-weight: 600; color: var(--gray-900); margin-bottom: 8px;">📌 본질 목표</div>
+              <div style="font-size: 13px; color: var(--gray-600);">2028년까지 100억 달성 · 이후 150억 목표 검토</div>
+            </div>
+
+            <div style="font-size: 14px; font-weight: 700; color: var(--gray-900); margin-bottom: 16px;">연도별 목표액 및 비율 설정</div>
+            <div style="display: grid; gap: 16px;">
+              ${displayYears.map(year => {
+                const existing = goals.find(g => g.year === year) || {};
+                const defaultTarget = year === 2026 ? 10 : year === 2027 ? 30 : year === 2028 ? 60 : 0;
+                return `
+                  <div style="background: var(--gray-50); border-radius: 12px; padding: 16px;">
+                    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px;">
+                      <div style="font-size: 16px; font-weight: 700; color: var(--gray-900); min-width: 60px;">${year}년</div>
+                      <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                        <input type="number" id="goal-${year}-revenue" value="${existing.revenueTarget ? existing.revenueTarget / 100000000 : defaultTarget}"
+                          style="width: 80px; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 16px; font-weight: 600; text-align: center;">
+                        <span style="font-size: 14px; color: var(--gray-600);">억원</span>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 16px;">
+                      <div style="flex: 1;">
+                        <label style="display: block; font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">💰 영업 비율 (%)</label>
+                        <input type="number" id="goal-${year}-sales" value="${existing.salesRatio || 70}" min="0" max="100"
+                          style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px;"
+                          onchange="document.getElementById('goal-${year}-growth').value = 100 - this.value">
+                      </div>
+                      <div style="flex: 1;">
+                        <label style="display: block; font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">🌱 성장 비율 (%)</label>
+                        <input type="number" id="goal-${year}-growth" value="${existing.growthRatio || 30}" min="0" max="100"
+                          style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px;"
+                          onchange="document.getElementById('goal-${year}-sales').value = 100 - this.value">
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveYearlyGoals()">💾 저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function saveYearlyGoals() {
+      const displayYears = [2025, 2026, 2027, 2028, 2029, 2030];
+
+      try {
+        for (const year of displayYears) {
+          const revenueEl = document.getElementById(`goal-${year}-revenue`);
+          const salesEl = document.getElementById(`goal-${year}-sales`);
+          const growthEl = document.getElementById(`goal-${year}-growth`);
+
+          if (!revenueEl) continue;
+
+          const revenue = parseFloat(revenueEl.value) || 0;
+          if (revenue <= 0) continue;
+
+          const goalData = {
+            year,
+            revenueTarget: revenue * 100000000,
+            salesRatio: parseInt(salesEl?.value) || 70,
+            growthRatio: parseInt(growthEl?.value) || 30,
+            updatedAt: new Date().toISOString()
+          };
+
+          // 기존 문서 찾아서 업데이트 또는 새로 생성
+          const existing = (state.yearlyGoals || []).find(g => g.year === year);
+          if (existing?.id) {
+            await db.collection('yearlyGoals').doc(existing.id).update(goalData);
+          } else {
+            goalData.createdAt = new Date().toISOString();
+            await db.collection('yearlyGoals').add(goalData);
+          }
+        }
+
+        showToast('연도별 목표가 저장되었습니다');
+        closeModal();
+      } catch (e) {
+        console.error('연도별 목표 저장 오류:', e);
+        showToast('저장 중 오류가 발생했습니다');
+      }
+    }
+
+    // ========================================
+    // 대형프로젝트 → 프로젝트 계층 구조
+    // ========================================
+    function openMegaProjectModal(megaProject = null) {
+      const isEdit = !!megaProject;
+      const m = document.getElementById('modal');
+      if (!m) return;
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 600px;">
+          <div class="modal-header" style="background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white;">
+            <h2 class="modal-title" style="color: white;">${isEdit ? '🏢 대형프로젝트 수정' : '🏢 대형프로젝트 추가'}</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <input type="hidden" id="megaProjectId" value="${megaProject?.id || ''}">
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">프로젝트명 *</label>
+              <input type="text" id="megaProjectName" value="${megaProject?.name || ''}" placeholder="예: 해외 수출 (K-브랜드 확장)"
+                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">설명</label>
+              <textarea id="megaProjectDesc" rows="2" placeholder="프로젝트 설명"
+                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">${megaProject?.description || ''}</textarea>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표 매출액 (억)</label>
+                <input type="number" id="megaProjectRevenue" value="${megaProject?.revenueTarget ? megaProject.revenueTarget / 100000000 : ''}" placeholder="5"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연결 연도</label>
+                <select id="megaProjectYear" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+                  <option value="">선택</option>
+                  ${[2025, 2026, 2027, 2028, 2029, 2030].map(y => `<option value="${y}" ${megaProject?.year === y ? 'selected' : ''}>${y}년</option>`).join('')}
+                </select>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">시작일</label>
+                <input type="date" id="megaProjectStart" value="${megaProject?.startDate || ''}"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">종료일</label>
+                <input type="date" id="megaProjectEnd" value="${megaProject?.endDate || ''}"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            ${isEdit ? `<button class="btn" style="background: var(--danger-light); color: var(--danger);" onclick="deleteMegaProject('${megaProject.id}')">삭제</button>` : ''}
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveMegaProject()">저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function saveMegaProject() {
+      const id = document.getElementById('megaProjectId').value;
+      const name = document.getElementById('megaProjectName').value.trim();
+
+      if (!name) {
+        showToast('프로젝트명을 입력하세요');
+        return;
+      }
+
+      const data = {
+        name,
+        description: document.getElementById('megaProjectDesc').value.trim(),
+        revenueTarget: (parseFloat(document.getElementById('megaProjectRevenue').value) || 0) * 100000000,
+        year: parseInt(document.getElementById('megaProjectYear').value) || null,
+        startDate: document.getElementById('megaProjectStart').value,
+        endDate: document.getElementById('megaProjectEnd').value,
+        updatedAt: new Date().toISOString()
+      };
+
+      try {
+        if (id) {
+          await db.collection('megaProjects').doc(id).update(data);
+        } else {
+          data.createdAt = new Date().toISOString();
+          data.status = 'active';
+          await db.collection('megaProjects').add(data);
+        }
+        showToast('저장되었습니다');
+        closeModal();
+      } catch (e) {
+        console.error(e);
+        showToast('저장 실패');
+      }
+    }
+
+    async function deleteMegaProject(id) {
+      if (!confirm('이 대형프로젝트를 삭제하시겠습니까?\n하위 프로젝트와 KPI도 연결이 해제됩니다.')) return;
+
+      try {
+        await db.collection('megaProjects').doc(id).delete();
+        showToast('삭제되었습니다');
+        closeModal();
+      } catch (e) {
+        console.error(e);
+        showToast('삭제 실패');
+      }
+    }
+
+    // 프로젝트 모달 (대형프로젝트 연결)
+    function openProjectModalV2(project = null, megaProjectId = null) {
+      const isEdit = !!project;
+      const megaProjects = state.megaProjects || [];
+
+      const m = document.getElementById('modal');
+      if (!m) return;
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 600px;">
+          <div class="modal-header" style="background: var(--primary); color: white;">
+            <h2 class="modal-title" style="color: white;">${isEdit ? '📁 프로젝트 수정' : '📁 프로젝트 추가'}</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <input type="hidden" id="projectIdV2" value="${project?.id || ''}">
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">상위 대형프로젝트 *</label>
+              <select id="projectMegaId" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+                <option value="">선택하세요</option>
+                ${megaProjects.map(mp => `<option value="${mp.id}" ${(project?.megaProjectId === mp.id || megaProjectId === mp.id) ? 'selected' : ''}>${mp.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">프로젝트명 *</label>
+              <input type="text" id="projectNameV2" value="${project?.name || ''}" placeholder="예: 일본 수출 진행"
+                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">설명</label>
+              <textarea id="projectDescV2" rows="2" placeholder="프로젝트 설명"
+                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">${project?.description || ''}</textarea>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표 매출 (억)</label>
+                <input type="number" id="projectRevenueV2" value="${project?.revenueGoal ? project.revenueGoal / 100000000 : ''}" placeholder="2"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">시작일</label>
+                <input type="date" id="projectStartV2" value="${project?.startDate || ''}"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">종료일</label>
+                <input type="date" id="projectEndV2" value="${project?.endDate || ''}"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            ${isEdit ? `<button class="btn" style="background: var(--danger-light); color: var(--danger);" onclick="deleteProjectV2('${project.id}')">삭제</button>` : ''}
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveProjectV2()">저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    async function saveProjectV2() {
+      const id = document.getElementById('projectIdV2').value;
+      const megaProjectId = document.getElementById('projectMegaId').value;
+      const name = document.getElementById('projectNameV2').value.trim();
+
+      if (!megaProjectId) {
+        showToast('상위 대형프로젝트를 선택하세요');
+        return;
+      }
+      if (!name) {
+        showToast('프로젝트명을 입력하세요');
+        return;
+      }
+
+      const data = {
+        megaProjectId,
+        name,
+        description: document.getElementById('projectDescV2').value.trim(),
+        revenueGoal: (parseFloat(document.getElementById('projectRevenueV2').value) || 0) * 100000000,
+        startDate: document.getElementById('projectStartV2').value,
+        endDate: document.getElementById('projectEndV2').value,
+        updatedAt: new Date().toISOString()
+      };
+
+      try {
+        if (id) {
+          await db.collection('projects').doc(id).update(data);
+        } else {
+          data.createdAt = new Date().toISOString();
+          data.status = 'active';
+          await db.collection('projects').add(data);
+        }
+        showToast('저장되었습니다');
+        closeModal();
+      } catch (e) {
+        console.error(e);
+        showToast('저장 실패');
+      }
+    }
+
+    async function deleteProjectV2(id) {
+      if (!confirm('이 프로젝트를 삭제하시겠습니까?')) return;
+
+      try {
+        await db.collection('projects').doc(id).delete();
+        showToast('삭제되었습니다');
+        closeModal();
+      } catch (e) {
+        showToast('삭제 실패');
+      }
+    }
+
+    // ========================================
+    // 팀 KPI → 개인 KPI 연결 시스템
+    // ========================================
+    function openTeamKPIModal(kpi = null, projectId = null) {
+      const isEdit = !!kpi;
+      const projects = state.projects || [];
+      const members = (state.teamMembers || []).filter(m => m.role === 'admin' || m.role === 'manager');
+
+      // 기존 배정된 멤버
+      const assignedMembers = kpi?.assignedMembers || [];
+
+      const m = document.getElementById('modal');
+      if (!m) return;
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 650px;">
+          <div class="modal-header" style="background: #10B981; color: white;">
+            <h2 class="modal-title" style="color: white;">${isEdit ? '👥 팀 KPI 수정' : '👥 팀 KPI 추가'}</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <input type="hidden" id="teamKpiId" value="${kpi?.id || ''}">
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연결 프로젝트 *</label>
+              <select id="teamKpiProjectId" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+                <option value="">선택하세요</option>
+                ${projects.map(p => `<option value="${p.id}" ${(kpi?.projectId === p.id || projectId === p.id) ? 'selected' : ''}>${p.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">KPI 이름 *</label>
+              <input type="text" id="teamKpiName" value="${kpi?.name || ''}" placeholder="예: 일본 인플루언서 20명 확보"
+                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표값 *</label>
+                <input type="number" id="teamKpiTarget" value="${kpi?.target || ''}" placeholder="20"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">현재값</label>
+                <input type="number" id="teamKpiCurrent" value="${kpi?.current || 0}"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">단위</label>
+                <input type="text" id="teamKpiUnit" value="${kpi?.unit || '건'}" placeholder="명, 건, 개"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+            </div>
+
+            <!-- 팀원 배정 -->
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">👤 담당 팀원 배정 (개인 KPI로 분배)</label>
+              <div style="background: var(--gray-50); border-radius: 12px; padding: 16px;">
+                ${members.map(member => {
+                  const assigned = assignedMembers.find(a => a.memberId === member.id);
+                  return `
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px;">
+                      <input type="checkbox" id="assign-${member.id}" ${assigned ? 'checked' : ''} onchange="toggleMemberAssignment('${member.id}')"
+                        style="width: 18px; height: 18px;">
+                      <span style="flex: 1; font-weight: 500;">${member.name}</span>
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="number" id="assign-target-${member.id}" value="${assigned?.target || ''}" placeholder="목표"
+                          style="width: 70px; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; ${!assigned ? 'opacity: 0.5;' : ''}"
+                          ${!assigned ? 'disabled' : ''}>
+                        <span style="font-size: 12px; color: var(--gray-500);">${kpi?.unit || '건'}</span>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+              <div style="font-size: 12px; color: var(--gray-500); margin-top: 8px;">
+                💡 체크한 팀원에게 개인 KPI가 자동 생성됩니다. 개인 목표 합계가 팀 KPI 목표가 됩니다.
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            ${isEdit ? `<button class="btn" style="background: var(--danger-light); color: var(--danger);" onclick="deleteTeamKPI('${kpi.id}')">삭제</button>` : ''}
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveTeamKPI()">저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleMemberAssignment(memberId) {
+      const checkbox = document.getElementById(`assign-${memberId}`);
+      const targetInput = document.getElementById(`assign-target-${memberId}`);
+
+      if (checkbox.checked) {
+        targetInput.disabled = false;
+        targetInput.style.opacity = '1';
+      } else {
+        targetInput.disabled = true;
+        targetInput.style.opacity = '0.5';
+        targetInput.value = '';
+      }
+    }
+
+    async function saveTeamKPI() {
+      const id = document.getElementById('teamKpiId').value;
+      const projectId = document.getElementById('teamKpiProjectId').value;
+      const name = document.getElementById('teamKpiName').value.trim();
+      const target = parseInt(document.getElementById('teamKpiTarget').value) || 0;
+      const current = parseInt(document.getElementById('teamKpiCurrent').value) || 0;
+      const unit = document.getElementById('teamKpiUnit').value.trim() || '건';
+
+      if (!projectId) {
+        showToast('프로젝트를 선택하세요');
+        return;
+      }
+      if (!name) {
+        showToast('KPI 이름을 입력하세요');
+        return;
+      }
+
+      // 배정된 멤버 수집
+      const members = (state.teamMembers || []).filter(m => m.role === 'admin' || m.role === 'manager');
+      const assignedMembers = [];
+
+      members.forEach(member => {
+        const checkbox = document.getElementById(`assign-${member.id}`);
+        const targetInput = document.getElementById(`assign-target-${member.id}`);
+
+        if (checkbox?.checked) {
+          assignedMembers.push({
+            memberId: member.id,
+            memberName: member.name,
+            target: parseInt(targetInput?.value) || 0
+          });
+        }
+      });
+
+      const teamKpiData = {
+        projectId,
+        name,
+        target,
+        current,
+        unit,
+        assignedMembers,
+        updatedAt: new Date().toISOString()
+      };
+
+      try {
+        let teamKpiId = id;
+
+        if (id) {
+          await db.collection('teamKPIs').doc(id).update(teamKpiData);
+        } else {
+          teamKpiData.createdAt = new Date().toISOString();
+          const docRef = await db.collection('teamKPIs').add(teamKpiData);
+          teamKpiId = docRef.id;
+        }
+
+        // 개인 KPI 자동 생성/업데이트
+        for (const assigned of assignedMembers) {
+          const memberKpiData = {
+            teamKpiId,
+            projectId,
+            memberId: assigned.memberId,
+            memberName: assigned.memberName,
+            name: `${name} (${assigned.memberName})`,
+            target: assigned.target,
+            current: 0,
+            unit,
+            updatedAt: new Date().toISOString()
+          };
+
+          // 기존 개인 KPI 찾기
+          const existingQuery = await db.collection('memberKPIs')
+            .where('teamKpiId', '==', teamKpiId)
+            .where('memberId', '==', assigned.memberId)
+            .get();
+
+          if (!existingQuery.empty) {
+            await db.collection('memberKPIs').doc(existingQuery.docs[0].id).update(memberKpiData);
+          } else {
+            memberKpiData.createdAt = new Date().toISOString();
+            await db.collection('memberKPIs').add(memberKpiData);
+          }
+        }
+
+        showToast('저장되었습니다');
+        closeModal();
+        renderKPIManagement();
+      } catch (e) {
+        console.error(e);
+        showToast('저장 실패');
+      }
+    }
+
+    async function deleteTeamKPI(id) {
+      if (!confirm('이 팀 KPI를 삭제하시겠습니까?\n연결된 개인 KPI도 삭제됩니다.')) return;
+
+      try {
+        // 연결된 개인 KPI 삭제
+        const memberKPIs = await db.collection('memberKPIs').where('teamKpiId', '==', id).get();
+        const batch = db.batch();
+        memberKPIs.docs.forEach(doc => batch.delete(doc.ref));
+        batch.delete(db.collection('teamKPIs').doc(id));
+        await batch.commit();
+
+        showToast('삭제되었습니다');
+        closeModal();
+        renderKPIManagement();
+      } catch (e) {
+        console.error(e);
+        showToast('삭제 실패');
+      }
     }
 
     // 초기화
