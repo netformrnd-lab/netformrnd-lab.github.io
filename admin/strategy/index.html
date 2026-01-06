@@ -4890,14 +4890,17 @@
     }
 
     // ========================================
-    // 전략리뷰 시스템
+    // 전략리뷰 시스템 (역순 데이터 확인 + 개인별 성공률)
     // ========================================
+    let reviewViewMode = 'summary'; // summary, reverse, member
+
     function renderStrategicReview() {
       const container = document.getElementById('reviewContent');
       if (!container) return;
 
       const C = {
         primary: '#3182f6',
+        purple: '#6366F1',
         green: '#00C471',
         yellow: '#F59E0B',
         red: '#F04452',
@@ -4911,126 +4914,358 @@
       };
 
       // 데이터 집계
-      const strategy = state.strategyData || {};
-      const tasks = state.tasks || [];
+      const currentYear = new Date().getFullYear();
+      const yearGoal = (state.yearlyGoals || []).find(g => g.year === currentYear) || {};
+      const megaProjects = state.megaProjects || [];
       const projects = state.projects || [];
+      const teamKPIs = state.teamKPIs || [];
+      const memberKPIs = state.memberKPIs || [];
+      const tasks = state.tasks || [];
+      const members = (state.teamMembers || []).filter(m => m.role === 'admin' || m.role === 'manager');
+
+      // 연도별 목표 달성률
+      const yearTarget = yearGoal.revenueTarget || 1000000000;
+      const yearSettlements = (state.sellerSettlements || []).filter(s =>
+        (s.settlementDate || s.createdAt || '').startsWith(String(currentYear))
+      );
+      const yearAchieved = yearSettlements.reduce((sum, s) => sum + (Number(s.salesAmount) || 0), 0);
+      const revenueProgress = Math.round((yearAchieved / yearTarget) * 100);
+
+      // KPI 달성률
+      const allKPIs = [...teamKPIs, ...memberKPIs];
+      const kpiAchieved = allKPIs.filter(k => k.current >= k.target).length;
+      const kpiProgress = allKPIs.length > 0 ? Math.round((kpiAchieved / allKPIs.length) * 100) : 0;
+
+      // 업무 성공률 (기한 내 완료)
+      const completedTasks = tasks.filter(t => t.status === 'complete');
+      const successTasks = completedTasks.filter(t => t.isSuccess === true);
+      const taskSuccessRate = completedTasks.length > 0 ? Math.round((successTasks.length / completedTasks.length) * 100) : 0;
+
+      // 팀원별 성공률 계산
+      const memberStats = members.map(member => {
+        const memberTasks = tasks.filter(t => t.assigneeId === member.id || t.assignee === member.name);
+        const memberCompleted = memberTasks.filter(t => t.status === 'complete');
+        const memberSuccess = memberCompleted.filter(t => t.isSuccess === true);
+        const successRate = memberCompleted.length > 0 ? Math.round((memberSuccess.length / memberCompleted.length) * 100) : 0;
+
+        const myKPIs = memberKPIs.filter(k => k.memberId === member.id);
+        const kpiAchievedCount = myKPIs.filter(k => k.current >= k.target).length;
+
+        return {
+          ...member,
+          totalTasks: memberTasks.length,
+          completedTasks: memberCompleted.length,
+          successTasks: memberSuccess.length,
+          successRate,
+          totalKPIs: myKPIs.length,
+          kpiAchieved: kpiAchievedCount
+        };
+      });
 
       container.innerHTML = `
-        <div style="max-width: 1200px; margin: 0 auto;">
+        <div style="max-width: 1400px; margin: 0 auto;">
           <!-- 헤더 -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
             <div>
               <h1 style="font-size: 24px; font-weight: 700; color: ${C.gray900}; margin: 0;">🔍 전략리뷰</h1>
-              <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">목표 vs 결과 분석 · A/B 테스트 · 개인 성과 PPT</p>
+              <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">역순 데이터 확인 · 개인별 성공률 · 보고서 자동 생성</p>
             </div>
             <div style="display: flex; gap: 8px;">
-              <button onclick="openABTestModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.white}; color: ${C.gray700}; border: 1px solid ${C.gray200}; border-radius: 8px; cursor: pointer;">
-                🧪 A/B 테스트
+              <button onclick="generateMemberReport()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.white}; color: ${C.primary}; border: 1px solid ${C.primary}; border-radius: 8px; cursor: pointer;">
+                📄 개인 보고서
               </button>
-              <button onclick="generatePersonalPPT()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.primary}; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                📊 개인 PPT 생성
+              <button onclick="generateAdminReport()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.purple}; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                📊 관리자 보고서
               </button>
             </div>
           </div>
 
-          <!-- 목표 vs 결과 요약 -->
-          <div style="background: linear-gradient(135deg, ${C.primary}, #1b64da); border-radius: 16px; padding: 24px; margin-bottom: 24px; color: white;">
-            <div style="font-size: 16px; font-weight: 600; margin-bottom: 20px; opacity: 0.9;">📌 전략 목표 달성 현황</div>
+          <!-- 뷰 모드 전환 -->
+          <div style="display: flex; gap: 8px; margin-bottom: 20px; background: ${C.gray50}; padding: 4px; border-radius: 10px; width: fit-content;">
+            <button onclick="setReviewViewMode('summary')" style="background: ${reviewViewMode === 'summary' ? C.primary : 'transparent'}; color: ${reviewViewMode === 'summary' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+              📈 목표 달성 현황
+            </button>
+            <button onclick="setReviewViewMode('reverse')" style="background: ${reviewViewMode === 'reverse' ? C.primary : 'transparent'}; color: ${reviewViewMode === 'reverse' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+              🔄 역순 데이터
+            </button>
+            <button onclick="setReviewViewMode('member')" style="background: ${reviewViewMode === 'member' ? C.primary : 'transparent'}; color: ${reviewViewMode === 'member' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+              👤 개인별 성공률
+            </button>
+          </div>
+
+          <!-- 목표 달성 요약 -->
+          <div style="background: linear-gradient(135deg, #1e3a5f, #0f2744); border-radius: 16px; padding: 24px; margin-bottom: 24px; color: white;">
+            <div style="font-size: 16px; font-weight: 600; margin-bottom: 20px; opacity: 0.9;">🎯 ${currentYear}년 목표 달성 현황 → 최종 100억 달성</div>
             <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
-              <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; text-align: center;">
+              <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; text-align: center;">
                 <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">매출 달성률</div>
-                <div style="font-size: 28px; font-weight: 700;">67%</div>
-                <div style="font-size: 11px; opacity: 0.8;">3.35억 / 5억</div>
+                <div style="font-size: 28px; font-weight: 700; color: ${revenueProgress >= 70 ? C.green : revenueProgress >= 40 ? C.yellow : C.red};">${revenueProgress}%</div>
+                <div style="font-size: 11px; opacity: 0.8;">${(yearAchieved / 100000000).toFixed(1)}억 / ${(yearTarget / 100000000).toFixed(0)}억</div>
               </div>
-              <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; text-align: center;">
-                <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">순익 달성률</div>
-                <div style="font-size: 28px; font-weight: 700;">45%</div>
-                <div style="font-size: 11px; opacity: 0.8;">2,250만 / 5,000만</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; text-align: center;">
+              <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; text-align: center;">
                 <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">KPI 달성률</div>
-                <div style="font-size: 28px; font-weight: 700;">72%</div>
-                <div style="font-size: 11px; opacity: 0.8;">18 / 25개</div>
+                <div style="font-size: 28px; font-weight: 700; color: ${kpiProgress >= 70 ? C.green : kpiProgress >= 40 ? C.yellow : C.red};">${kpiProgress}%</div>
+                <div style="font-size: 11px; opacity: 0.8;">${kpiAchieved} / ${allKPIs.length}개</div>
               </div>
-              <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; text-align: center;">
-                <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">업무 실행률</div>
-                <div style="font-size: 28px; font-weight: 700;">89%</div>
-                <div style="font-size: 11px; opacity: 0.8;">156 / 175건</div>
+              <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; text-align: center;">
+                <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">업무 성공률</div>
+                <div style="font-size: 28px; font-weight: 700; color: ${taskSuccessRate >= 70 ? C.green : taskSuccessRate >= 40 ? C.yellow : C.red};">${taskSuccessRate}%</div>
+                <div style="font-size: 11px; opacity: 0.8;">${successTasks.length} / ${completedTasks.length}건 (기한 내 완료)</div>
               </div>
-            </div>
-          </div>
-
-          <!-- 전략 사이클 플로우 -->
-          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-            <div style="font-size: 16px; font-weight: 700; color: ${C.gray900}; margin-bottom: 20px;">🔄 전략 사이클 리뷰</div>
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-              <div style="flex: 1; min-width: 200px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
-                <div style="font-size: 32px; margin-bottom: 8px;">🎯</div>
-                <div style="font-weight: 600; color: ${C.gray900};">전략기획</div>
-                <div style="font-size: 12px; color: ${C.gray500}; margin-top: 4px;">본질 목표 설정</div>
-                <div style="font-size: 20px; font-weight: 700; color: ${C.primary}; margin-top: 8px;">v1.0</div>
-              </div>
-              <div style="font-size: 24px; color: ${C.gray300};">→</div>
-              <div style="flex: 1; min-width: 200px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
-                <div style="font-size: 32px; margin-bottom: 8px;">📊</div>
-                <div style="font-weight: 600; color: ${C.gray900};">KPI관리</div>
-                <div style="font-size: 12px; color: ${C.gray500}; margin-top: 4px;">팀/개인 목표</div>
-                <div style="font-size: 20px; font-weight: 700; color: ${C.yellow}; margin-top: 8px;">25개</div>
-              </div>
-              <div style="font-size: 24px; color: ${C.gray300};">→</div>
-              <div style="flex: 1; min-width: 200px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
-                <div style="font-size: 32px; margin-bottom: 8px;">📝</div>
-                <div style="font-weight: 600; color: ${C.gray900};">업무관리</div>
-                <div style="font-size: 12px; color: ${C.gray500}; margin-top: 4px;">실행 업무</div>
-                <div style="font-size: 20px; font-weight: 700; color: ${C.green}; margin-top: 8px;">175건</div>
-              </div>
-              <div style="font-size: 24px; color: ${C.gray300};">→</div>
-              <div style="flex: 1; min-width: 200px; text-align: center; padding: 20px; background: linear-gradient(135deg, ${C.primary}15, ${C.green}15); border: 2px solid ${C.primary}; border-radius: 12px;">
-                <div style="font-size: 32px; margin-bottom: 8px;">🔍</div>
-                <div style="font-weight: 600; color: ${C.gray900};">전략리뷰</div>
-                <div style="font-size: 12px; color: ${C.gray500}; margin-top: 4px;">성과 분석</div>
-                <div style="font-size: 20px; font-weight: 700; color: ${C.primary}; margin-top: 8px;">진행중</div>
+              <div style="background: rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; text-align: center;">
+                <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">프로젝트 진행</div>
+                <div style="font-size: 28px; font-weight: 700;">${projects.length}</div>
+                <div style="font-size: 11px; opacity: 0.8;">대형프로젝트 ${megaProjects.length}개</div>
               </div>
             </div>
           </div>
 
-          <!-- A/B 테스트 섹션 -->
-          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-              <div style="font-size: 16px; font-weight: 700; color: ${C.gray900};">🧪 A/B 테스트 기록</div>
-              <button onclick="openABTestModal()" style="padding: 8px 14px; font-size: 12px; background: ${C.gray50}; border: 1px solid ${C.gray200}; border-radius: 6px; cursor: pointer;">
-                + 테스트 추가
-              </button>
-            </div>
-            <div style="text-align: center; padding: 40px; color: ${C.gray500}; background: ${C.gray50}; border-radius: 12px;">
-              <div style="font-size: 32px; margin-bottom: 12px;">🧪</div>
-              <div>아직 기록된 A/B 테스트가 없습니다.</div>
-              <div style="font-size: 13px; margin-top: 8px;">전략적 실험을 기록하고 결과를 비교해보세요.</div>
-            </div>
+          <!-- 메인 컨텐츠 -->
+          <div id="review-main-content">
+            ${reviewViewMode === 'summary' ? renderReviewSummary(megaProjects, projects, teamKPIs, memberKPIs, tasks, C) :
+              reviewViewMode === 'reverse' ? renderReverseDataView(yearGoal, megaProjects, projects, teamKPIs, memberKPIs, tasks, C) :
+              renderMemberSuccessRates(memberStats, C)}
           </div>
 
-          <!-- 개인 성과 PPT 안내 -->
-          <div style="background: linear-gradient(135deg, #6366F1, #8B5CF6); border-radius: 16px; padding: 24px; color: white;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">📊 개인 성과 PPT 자동 생성</div>
-                <div style="font-size: 13px; opacity: 0.9;">전략목표 → KPI → 실행업무 → 결과를 한눈에 정리한 발표 자료</div>
+          <!-- 보고서 생성 안내 -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 24px;">
+            <div style="background: linear-gradient(135deg, ${C.primary}, #1b64da); border-radius: 16px; padding: 24px; color: white;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">📄 개인별 전략리뷰 PPT</div>
+                  <div style="font-size: 13px; opacity: 0.9;">내 KPI → 업무 → 성공률을 정리한 발표 자료</div>
+                </div>
+                <button onclick="generateMemberReport()" style="padding: 12px 20px; background: white; color: ${C.primary}; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  생성하기
+                </button>
               </div>
-              <button onclick="generatePersonalPPT()" style="padding: 12px 24px; background: white; color: #6366F1; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
-                PPT 생성하기
-              </button>
+            </div>
+            <div style="background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 16px; padding: 24px; color: white;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">📊 관리자 현황 보고서</div>
+                  <div style="font-size: 13px; opacity: 0.9;">전체 전략 현황 및 팀원별 분석 보고서</div>
+                </div>
+                <button onclick="generateAdminReport()" style="padding: 12px 20px; background: white; color: ${C.purple}; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  생성하기
+                </button>
+              </div>
             </div>
           </div>
         </div>
       `;
     }
 
+    function setReviewViewMode(mode) {
+      reviewViewMode = mode;
+      renderStrategicReview();
+    }
+
+    function renderReviewSummary(megaProjects, projects, teamKPIs, memberKPIs, tasks, C) {
+      return `
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 16px; font-weight: 700; color: ${C.gray900}; margin-bottom: 20px;">🔄 전략 → 결과 흐름</div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 150px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
+              <div style="font-size: 28px; margin-bottom: 8px;">🏢</div>
+              <div style="font-weight: 600; color: ${C.gray900};">대형프로젝트</div>
+              <div style="font-size: 24px; font-weight: 700; color: ${C.purple}; margin-top: 8px;">${megaProjects.length}</div>
+            </div>
+            <div style="font-size: 20px; color: ${C.gray300};">→</div>
+            <div style="flex: 1; min-width: 150px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
+              <div style="font-size: 28px; margin-bottom: 8px;">📁</div>
+              <div style="font-weight: 600; color: ${C.gray900};">프로젝트</div>
+              <div style="font-size: 24px; font-weight: 700; color: ${C.primary}; margin-top: 8px;">${projects.length}</div>
+            </div>
+            <div style="font-size: 20px; color: ${C.gray300};">→</div>
+            <div style="flex: 1; min-width: 150px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
+              <div style="font-size: 28px; margin-bottom: 8px;">👥</div>
+              <div style="font-weight: 600; color: ${C.gray900};">팀 KPI</div>
+              <div style="font-size: 24px; font-weight: 700; color: ${C.green}; margin-top: 8px;">${teamKPIs.length}</div>
+            </div>
+            <div style="font-size: 20px; color: ${C.gray300};">→</div>
+            <div style="flex: 1; min-width: 150px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
+              <div style="font-size: 28px; margin-bottom: 8px;">👤</div>
+              <div style="font-weight: 600; color: ${C.gray900};">개인 KPI</div>
+              <div style="font-size: 24px; font-weight: 700; color: ${C.yellow}; margin-top: 8px;">${memberKPIs.length}</div>
+            </div>
+            <div style="font-size: 20px; color: ${C.gray300};">→</div>
+            <div style="flex: 1; min-width: 150px; text-align: center; padding: 20px; background: ${C.gray50}; border-radius: 12px;">
+              <div style="font-size: 28px; margin-bottom: 8px;">📝</div>
+              <div style="font-weight: 600; color: ${C.gray900};">업무</div>
+              <div style="font-size: 24px; font-weight: 700; color: ${C.primary}; margin-top: 8px;">${tasks.length}</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderReverseDataView(yearGoal, megaProjects, projects, teamKPIs, memberKPIs, tasks, C) {
+      // 역순: 최종목표 ← 대형프로젝트 ← 프로젝트 ← KPI ← 업무
+      const yearTarget = yearGoal.revenueTarget || 1000000000;
+
+      // 미흡 영역 분석
+      const lowPerformingKPIs = [...teamKPIs, ...memberKPIs].filter(k => {
+        const progress = k.target > 0 ? (k.current / k.target) * 100 : 0;
+        return progress < 50;
+      });
+
+      const overdueTasks = tasks.filter(t => {
+        if (t.status === 'complete') return false;
+        const deadline = t.deadline || t.dueDate;
+        if (!deadline) return false;
+        return new Date(deadline) < new Date();
+      });
+
+      return `
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 16px; font-weight: 700; color: ${C.gray900}; margin-bottom: 20px;">🔄 역순 데이터 분석 (결과 → 원인)</div>
+
+          <!-- 최종 목표 -->
+          <div style="background: linear-gradient(135deg, #1e3a5f, #0f2744); border-radius: 12px; padding: 20px; color: white; margin-bottom: 16px;">
+            <div style="font-size: 14px; opacity: 0.8;">🎯 최종 목표</div>
+            <div style="font-size: 24px; font-weight: 700; margin-top: 8px;">${(yearTarget / 100000000).toFixed(0)}억 달성</div>
+            <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">어떤 부분이 미흡한지 확인하고 빠르게 수정, 보완</div>
+          </div>
+
+          <!-- 미흡 영역 -->
+          <div style="background: ${C.red}10; border: 1px solid ${C.red}30; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+            <div style="font-size: 14px; font-weight: 700; color: ${C.red}; margin-bottom: 12px;">⚠️ 미흡 영역 (긴급 조치 필요)</div>
+
+            ${lowPerformingKPIs.length > 0 ? `
+              <div style="margin-bottom: 16px;">
+                <div style="font-size: 13px; font-weight: 600; color: ${C.gray700}; margin-bottom: 8px;">📊 진행률 50% 미만 KPI (${lowPerformingKPIs.length}건)</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  ${lowPerformingKPIs.slice(0, 5).map(k => {
+                    const progress = k.target > 0 ? Math.round((k.current / k.target) * 100) : 0;
+                    return `
+                      <div style="display: flex; justify-content: space-between; align-items: center; background: white; padding: 10px 14px; border-radius: 8px;">
+                        <span style="font-size: 13px; color: ${C.gray900};">${k.name}</span>
+                        <span style="font-size: 13px; font-weight: 600; color: ${C.red};">${k.current}/${k.target} (${progress}%)</span>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            ${overdueTasks.length > 0 ? `
+              <div>
+                <div style="font-size: 13px; font-weight: 600; color: ${C.gray700}; margin-bottom: 8px;">⏰ 기한 초과 업무 (${overdueTasks.length}건)</div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                  ${overdueTasks.slice(0, 5).map(t => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; background: white; padding: 10px 14px; border-radius: 8px;">
+                      <span style="font-size: 13px; color: ${C.gray900};">${t.title}</span>
+                      <span style="font-size: 12px; color: ${C.red};">기한: ${t.deadline || t.dueDate}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+
+            ${lowPerformingKPIs.length === 0 && overdueTasks.length === 0 ? `
+              <div style="text-align: center; padding: 20px; color: ${C.green};">
+                <div style="font-size: 24px; margin-bottom: 8px;">✅</div>
+                <div>현재 긴급 조치가 필요한 미흡 영역이 없습니다!</div>
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- 역순 흐름 -->
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px;">
+            <div style="background: ${C.gray50}; padding: 12px 16px; border-radius: 8px; text-align: center;">
+              <div style="font-size: 12px; color: ${C.gray500};">최종목표</div>
+              <div style="font-weight: 600; color: ${C.gray900};">${(yearTarget / 100000000).toFixed(0)}억</div>
+            </div>
+            <div style="color: ${C.gray300};">←</div>
+            <div style="background: ${C.gray50}; padding: 12px 16px; border-radius: 8px; text-align: center;">
+              <div style="font-size: 12px; color: ${C.gray500};">대형프로젝트</div>
+              <div style="font-weight: 600; color: ${C.purple};">${megaProjects.length}개</div>
+            </div>
+            <div style="color: ${C.gray300};">←</div>
+            <div style="background: ${C.gray50}; padding: 12px 16px; border-radius: 8px; text-align: center;">
+              <div style="font-size: 12px; color: ${C.gray500};">프로젝트</div>
+              <div style="font-weight: 600; color: ${C.primary};">${projects.length}개</div>
+            </div>
+            <div style="color: ${C.gray300};">←</div>
+            <div style="background: ${C.gray50}; padding: 12px 16px; border-radius: 8px; text-align: center;">
+              <div style="font-size: 12px; color: ${C.gray500};">팀KPI</div>
+              <div style="font-weight: 600; color: ${C.green};">${teamKPIs.length}개</div>
+            </div>
+            <div style="color: ${C.gray300};">←</div>
+            <div style="background: ${C.gray50}; padding: 12px 16px; border-radius: 8px; text-align: center;">
+              <div style="font-size: 12px; color: ${C.gray500};">개인KPI</div>
+              <div style="font-weight: 600; color: ${C.yellow};">${memberKPIs.length}개</div>
+            </div>
+            <div style="color: ${C.gray300};">←</div>
+            <div style="background: ${C.gray50}; padding: 12px 16px; border-radius: 8px; text-align: center;">
+              <div style="font-size: 12px; color: ${C.gray500};">업무</div>
+              <div style="font-weight: 600; color: ${C.primary};">${tasks.length}건</div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderMemberSuccessRates(memberStats, C) {
+      return `
+        <div style="background: ${C.white}; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 16px; font-weight: 700; color: ${C.gray900}; margin-bottom: 20px;">👤 개인별 업무 성공률</div>
+
+          <div style="display: grid; gap: 16px;">
+            ${memberStats.map(m => {
+              const rateColor = m.successRate >= 80 ? C.green : m.successRate >= 50 ? C.yellow : C.red;
+              return `
+                <div style="background: ${C.gray50}; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 20px;">
+                  <div style="width: 60px; height: 60px; background: linear-gradient(135deg, ${C.primary}, #1b64da); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; color: white;">
+                    ${m.name?.charAt(0) || '?'}
+                  </div>
+                  <div style="flex: 1;">
+                    <div style="font-size: 18px; font-weight: 700; color: ${C.gray900}; margin-bottom: 8px;">${m.name}</div>
+                    <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+                      <div>
+                        <div style="font-size: 11px; color: ${C.gray500};">업무 성공률</div>
+                        <div style="font-size: 16px; font-weight: 700; color: ${rateColor};">${m.successRate}%</div>
+                      </div>
+                      <div>
+                        <div style="font-size: 11px; color: ${C.gray500};">완료 업무</div>
+                        <div style="font-size: 16px; font-weight: 600; color: ${C.gray900};">${m.completedTasks}건</div>
+                      </div>
+                      <div>
+                        <div style="font-size: 11px; color: ${C.gray500};">기한 내 완료</div>
+                        <div style="font-size: 16px; font-weight: 600; color: ${C.green};">${m.successTasks}건</div>
+                      </div>
+                      <div>
+                        <div style="font-size: 11px; color: ${C.gray500};">KPI 달성</div>
+                        <div style="font-size: 16px; font-weight: 600; color: ${C.primary};">${m.kpiAchieved}/${m.totalKPIs}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div style="text-align: center;">
+                    <div style="font-size: 36px; font-weight: 700; color: ${rateColor};">${m.successRate}%</div>
+                    <div style="font-size: 11px; color: ${C.gray500};">성공률</div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          ${memberStats.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: ${C.gray500};">
+              <div style="font-size: 32px; margin-bottom: 12px;">👤</div>
+              <div>팀원 데이터가 없습니다.</div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
     function openABTestModal() {
-      showToast('A/B 테스트 모달 준비 중...');
+      showToast('A/B 테스트 기록은 업무 등록 시 메모에 작성해주세요');
     }
 
     function generatePersonalPPT() {
-      showToast('개인 PPT 생성 기능 준비 중...');
+      generateMemberReport();
     }
 
     // ========================================
@@ -6513,11 +6748,797 @@
       }
     }
 
+    // ========================================
+    // 보고서 자동 생성 시스템
+    // ========================================
+    function generateMemberReport() {
+      const member = state.currentUser;
+      const memberName = member?.name || '사용자';
+      const today = new Date();
+      const dateStr = today.toISOString().split('T')[0];
+
+      // 개인 KPI 데이터
+      const myKPIs = (state.memberKPIs || []).filter(k =>
+        k.memberId === member?.id || k.memberName === memberName
+      );
+
+      // 내 업무 데이터
+      const myTasks = (state.tasks || []).filter(t =>
+        t.assignee === member?.id || t.assigneeName === memberName
+      );
+
+      const completedTasks = myTasks.filter(t => t.status === 'done');
+      const inProgressTasks = myTasks.filter(t => t.status === 'progress');
+      const pendingTasks = myTasks.filter(t => t.status === 'todo');
+
+      // 성공률 계산
+      const tasksWithDeadline = myTasks.filter(t => t.deadline && t.status === 'done');
+      const successTasks = tasksWithDeadline.filter(t => {
+        const completed = t.completedAt || t.updatedAt;
+        return completed && completed <= t.deadline;
+      });
+      const successRate = tasksWithDeadline.length > 0
+        ? Math.round((successTasks.length / tasksWithDeadline.length) * 100)
+        : 0;
+
+      // HTML 보고서 생성
+      const reportHTML = `
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>개인 성과 보고서 - ${memberName} (${dateStr})</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Pretendard', -apple-system, sans-serif; background: #f5f7fa; padding: 40px; color: #1e293b; }
+    .container { max-width: 800px; margin: 0 auto; background: white; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); overflow: hidden; }
+    .header { background: linear-gradient(135deg, #1e3a5f, #0f2744); color: white; padding: 32px; }
+    .header h1 { font-size: 24px; margin-bottom: 8px; }
+    .header .subtitle { opacity: 0.8; font-size: 14px; }
+    .content { padding: 32px; }
+    .section { margin-bottom: 32px; }
+    .section-title { font-size: 16px; font-weight: 700; color: #1e3a5f; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .stat-card { background: #f8fafc; border-radius: 12px; padding: 20px; text-align: center; }
+    .stat-value { font-size: 28px; font-weight: 700; color: #1e3a5f; }
+    .stat-label { font-size: 12px; color: #64748b; margin-top: 4px; }
+    .kpi-list, .task-list { background: #f8fafc; border-radius: 12px; overflow: hidden; }
+    .kpi-item, .task-item { padding: 16px 20px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+    .kpi-item:last-child, .task-item:last-child { border-bottom: none; }
+    .kpi-name, .task-name { font-weight: 600; }
+    .kpi-progress { font-size: 14px; color: #64748b; }
+    .progress-bar { width: 100px; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-left: 12px; }
+    .progress-fill { height: 100%; background: #00C471; }
+    .badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .badge-success { background: #dcfce7; color: #16a34a; }
+    .badge-warning { background: #fef3c7; color: #d97706; }
+    .badge-danger { background: #fee2e2; color: #dc2626; }
+    .footer { background: #f8fafc; padding: 20px 32px; text-align: center; font-size: 12px; color: #64748b; }
+    @media print { body { padding: 0; background: white; } .container { box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📊 개인 성과 보고서</h1>
+      <div class="subtitle">${memberName} | 생성일: ${today.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+    </div>
+    <div class="content">
+      <div class="section">
+        <div class="section-title">📈 성과 요약</div>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-value">${myKPIs.length}</div>
+            <div class="stat-label">할당된 KPI</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${completedTasks.length}</div>
+            <div class="stat-label">완료 업무</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${inProgressTasks.length}</div>
+            <div class="stat-label">진행 중</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: ${successRate >= 80 ? '#16a34a' : successRate >= 50 ? '#d97706' : '#dc2626'};">${successRate}%</div>
+            <div class="stat-label">업무 성공률</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🎯 KPI 달성 현황</div>
+        <div class="kpi-list">
+          ${myKPIs.length === 0 ? '<div class="kpi-item" style="color: #94a3b8;">할당된 KPI가 없습니다</div>' : myKPIs.map(kpi => {
+            const progress = kpi.target > 0 ? Math.round((kpi.current / kpi.target) * 100) : 0;
+            return `
+              <div class="kpi-item">
+                <div class="kpi-name">${kpi.name || '이름없음'}</div>
+                <div style="display: flex; align-items: center;">
+                  <span class="kpi-progress">${kpi.current || 0}/${kpi.target || 0} ${kpi.unit || ''}</span>
+                  <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${Math.min(100, progress)}%; background: ${progress >= 100 ? '#16a34a' : progress >= 70 ? '#00C471' : progress >= 40 ? '#f59e0b' : '#ef4444'};"></div>
+                  </div>
+                  <span style="margin-left: 8px; font-weight: 600; font-size: 14px;">${progress}%</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">✅ 최근 완료 업무</div>
+        <div class="task-list">
+          ${completedTasks.slice(0, 10).length === 0 ? '<div class="task-item" style="color: #94a3b8;">완료된 업무가 없습니다</div>' : completedTasks.slice(0, 10).map(task => `
+            <div class="task-item">
+              <div class="task-name">${task.title || task.name || '제목없음'}</div>
+              <span class="badge ${task.success ? 'badge-success' : 'badge-danger'}">${task.success ? '성공' : '지연'}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">⏳ 진행 중 업무</div>
+        <div class="task-list">
+          ${inProgressTasks.length === 0 ? '<div class="task-item" style="color: #94a3b8;">진행 중인 업무가 없습니다</div>' : inProgressTasks.map(task => {
+            const deadline = task.deadline;
+            const daysLeft = deadline ? Math.ceil((new Date(deadline) - today) / (1000 * 60 * 60 * 24)) : null;
+            return `
+              <div class="task-item">
+                <div class="task-name">${task.title || task.name || '제목없음'}</div>
+                ${daysLeft !== null ? `<span class="badge ${daysLeft < 0 ? 'badge-danger' : daysLeft <= 3 ? 'badge-warning' : 'badge-success'}">${daysLeft < 0 ? 'D+' + Math.abs(daysLeft) : daysLeft === 0 ? 'D-Day' : 'D-' + daysLeft}</span>` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="footer">
+      NetformRND 전략센터 | 자동 생성된 보고서 | ${today.toISOString()}
+    </div>
+  </div>
+</body>
+</html>`;
+
+      // 새 창에서 보고서 열기
+      const reportWindow = window.open('', '_blank');
+      reportWindow.document.write(reportHTML);
+      reportWindow.document.close();
+
+      showToast('개인 보고서가 생성되었습니다');
+    }
+
+    function generateAdminReport() {
+      const today = new Date();
+      const dateStr = today.toISOString().split('T')[0];
+
+      // 팀 전체 데이터
+      const teamMembers = [
+        { id: 'chaeeun', name: '이채은', role: 'manager' },
+        { id: 'songhee', name: '김송희', role: 'admin' }
+      ];
+
+      // 연도별 목표
+      const yearlyGoals = state.yearlyGoals || [];
+      const currentYearGoal = yearlyGoals.find(g => g.year === today.getFullYear());
+
+      // 대형프로젝트
+      const megaProjects = state.megaProjects || [];
+
+      // 팀 KPI
+      const teamKPIs = state.teamKPIs || [];
+
+      // 개인 KPI
+      const memberKPIs = state.memberKPIs || [];
+
+      // 전체 업무
+      const allTasks = state.tasks || [];
+      const completedTasks = allTasks.filter(t => t.status === 'done');
+      const inProgressTasks = allTasks.filter(t => t.status === 'progress');
+      const overdueTasks = allTasks.filter(t => {
+        if (!t.deadline || t.status === 'done') return false;
+        return new Date(t.deadline) < today;
+      });
+
+      // 팀원별 성과 계산
+      const memberStats = teamMembers.map(member => {
+        const kpis = memberKPIs.filter(k => k.memberId === member.id || k.memberName === member.name);
+        const tasks = allTasks.filter(t => t.assignee === member.id || t.assigneeName === member.name);
+        const completed = tasks.filter(t => t.status === 'done');
+        const successTasks = completed.filter(t => t.success === true);
+        const successRate = completed.length > 0 ? Math.round((successTasks.length / completed.length) * 100) : 0;
+
+        const kpiProgress = kpis.length > 0
+          ? Math.round(kpis.reduce((sum, k) => sum + (k.target > 0 ? (k.current / k.target) * 100 : 0), 0) / kpis.length)
+          : 0;
+
+        return {
+          ...member,
+          kpiCount: kpis.length,
+          kpiProgress,
+          taskCount: tasks.length,
+          completedCount: completed.length,
+          successRate
+        };
+      });
+
+      // 대형프로젝트별 진행률
+      const projectStats = megaProjects.map(mp => {
+        const projects = (state.projects || []).filter(p => p.megaProjectId === mp.id);
+        const kpis = teamKPIs.filter(k => projects.some(p => p.id === k.projectId));
+        const totalProgress = kpis.length > 0
+          ? Math.round(kpis.reduce((sum, k) => sum + (k.target > 0 ? (k.current / k.target) * 100 : 0), 0) / kpis.length)
+          : 0;
+        return {
+          name: mp.name,
+          projectCount: projects.length,
+          kpiCount: kpis.length,
+          progress: totalProgress
+        };
+      });
+
+      // HTML 보고서 생성
+      const reportHTML = `
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>관리자 종합 보고서 (${dateStr})</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Pretendard', -apple-system, sans-serif; background: #f5f7fa; padding: 40px; color: #1e293b; }
+    .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); overflow: hidden; }
+    .header { background: linear-gradient(135deg, #8B5CF6, #6366F1); color: white; padding: 32px; }
+    .header h1 { font-size: 24px; margin-bottom: 8px; }
+    .header .subtitle { opacity: 0.8; font-size: 14px; }
+    .content { padding: 32px; }
+    .section { margin-bottom: 32px; }
+    .section-title { font-size: 16px; font-weight: 700; color: #1e3a5f; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; display: flex; align-items: center; gap: 8px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .stat-card { background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-radius: 12px; padding: 20px; text-align: center; border: 1px solid #e2e8f0; }
+    .stat-value { font-size: 28px; font-weight: 700; color: #1e3a5f; }
+    .stat-label { font-size: 12px; color: #64748b; margin-top: 4px; }
+    .table { width: 100%; border-collapse: collapse; background: #f8fafc; border-radius: 12px; overflow: hidden; }
+    .table th { background: #1e3a5f; color: white; padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; }
+    .table td { padding: 14px 16px; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+    .table tr:last-child td { border-bottom: none; }
+    .table tr:hover { background: #f1f5f9; }
+    .progress-bar { width: 100px; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
+    .progress-fill { height: 100%; }
+    .badge { padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .badge-success { background: #dcfce7; color: #16a34a; }
+    .badge-warning { background: #fef3c7; color: #d97706; }
+    .badge-danger { background: #fee2e2; color: #dc2626; }
+    .badge-info { background: #dbeafe; color: #2563eb; }
+    .alert { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 12px; padding: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; }
+    .alert-danger { background: #fee2e2; border-color: #ef4444; }
+    .alert-icon { font-size: 24px; }
+    .goal-card { background: linear-gradient(135deg, #1e3a5f, #0f2744); color: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; }
+    .goal-title { font-size: 14px; opacity: 0.8; margin-bottom: 8px; }
+    .goal-value { font-size: 32px; font-weight: 700; }
+    .footer { background: #f8fafc; padding: 20px 32px; text-align: center; font-size: 12px; color: #64748b; }
+    @media print { body { padding: 0; background: white; } .container { box-shadow: none; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📊 관리자 종합 보고서</h1>
+      <div class="subtitle">NetformRND 전략센터 | ${today.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+    </div>
+    <div class="content">
+      ${overdueTasks.length > 0 ? `
+      <div class="alert alert-danger">
+        <span class="alert-icon">⚠️</span>
+        <div>
+          <strong>주의: 마감 초과 업무 ${overdueTasks.length}건</strong>
+          <div style="font-size: 13px; opacity: 0.8; margin-top: 4px;">즉시 확인이 필요합니다</div>
+        </div>
+      </div>
+      ` : ''}
+
+      <div class="section">
+        <div class="section-title">🎯 연간 목표 현황</div>
+        ${currentYearGoal ? `
+        <div class="goal-card">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div class="goal-title">${today.getFullYear()}년 목표</div>
+              <div class="goal-value">${((currentYearGoal.revenueTarget || 0) / 100000000).toFixed(0)}억</div>
+            </div>
+            <div style="text-align: right;">
+              <div class="goal-title">영업 / 성장 비율</div>
+              <div style="font-size: 20px; font-weight: 600;">${currentYearGoal.salesRatio || 70}% : ${currentYearGoal.growthRatio || 30}%</div>
+            </div>
+          </div>
+        </div>
+        ` : '<div style="color: #94a3b8; padding: 20px; text-align: center;">연간 목표가 설정되지 않았습니다</div>'}
+      </div>
+
+      <div class="section">
+        <div class="section-title">📈 전체 현황</div>
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-value">${megaProjects.length}</div>
+            <div class="stat-label">대형 프로젝트</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${teamKPIs.length}</div>
+            <div class="stat-label">팀 KPI</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${completedTasks.length}/${allTasks.length}</div>
+            <div class="stat-label">업무 완료율</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: ${overdueTasks.length === 0 ? '#16a34a' : '#dc2626'};">${overdueTasks.length}</div>
+            <div class="stat-label">마감 초과</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">👥 팀원별 성과</div>
+        <table class="table">
+          <tr>
+            <th>이름</th>
+            <th>역할</th>
+            <th>KPI 수</th>
+            <th>KPI 달성률</th>
+            <th>완료 업무</th>
+            <th>성공률</th>
+          </tr>
+          ${memberStats.map(m => `
+            <tr>
+              <td><strong>${m.name}</strong></td>
+              <td><span class="badge ${m.role === 'admin' ? 'badge-info' : 'badge-warning'}">${m.role === 'admin' ? '관리자' : '매니저'}</span></td>
+              <td>${m.kpiCount}</td>
+              <td>
+                <div class="progress-bar">
+                  <div class="progress-fill" style="width: ${Math.min(100, m.kpiProgress)}%; background: ${m.kpiProgress >= 80 ? '#16a34a' : m.kpiProgress >= 50 ? '#f59e0b' : '#ef4444'};"></div>
+                </div>
+                <span style="margin-left: 8px;">${m.kpiProgress}%</span>
+              </td>
+              <td>${m.completedCount}/${m.taskCount}</td>
+              <td><span class="badge ${m.successRate >= 80 ? 'badge-success' : m.successRate >= 50 ? 'badge-warning' : 'badge-danger'}">${m.successRate}%</span></td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+
+      ${megaProjects.length > 0 ? `
+      <div class="section">
+        <div class="section-title">🏢 대형 프로젝트별 현황</div>
+        <table class="table">
+          <tr>
+            <th>프로젝트명</th>
+            <th>하위 프로젝트</th>
+            <th>KPI 수</th>
+            <th>진행률</th>
+          </tr>
+          ${projectStats.map(p => `
+            <tr>
+              <td><strong>${p.name}</strong></td>
+              <td>${p.projectCount}개</td>
+              <td>${p.kpiCount}개</td>
+              <td>
+                <div class="progress-bar">
+                  <div class="progress-fill" style="width: ${Math.min(100, p.progress)}%; background: ${p.progress >= 80 ? '#16a34a' : p.progress >= 50 ? '#f59e0b' : '#ef4444'};"></div>
+                </div>
+                <span style="margin-left: 8px;">${p.progress}%</span>
+              </td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+      ` : ''}
+
+      ${overdueTasks.length > 0 ? `
+      <div class="section">
+        <div class="section-title" style="color: #dc2626;">⚠️ 마감 초과 업무 목록</div>
+        <table class="table">
+          <tr>
+            <th>업무명</th>
+            <th>담당자</th>
+            <th>마감일</th>
+            <th>초과 일수</th>
+          </tr>
+          ${overdueTasks.slice(0, 10).map(t => {
+            const daysOver = Math.ceil((today - new Date(t.deadline)) / (1000 * 60 * 60 * 24));
+            return `
+              <tr>
+                <td><strong>${t.title || t.name || '제목없음'}</strong></td>
+                <td>${t.assigneeName || '-'}</td>
+                <td>${t.deadline}</td>
+                <td><span class="badge badge-danger">+${daysOver}일</span></td>
+              </tr>
+            `;
+          }).join('')}
+        </table>
+      </div>
+      ` : ''}
+    </div>
+    <div class="footer">
+      NetformRND 전략센터 | 관리자용 자동 생성 보고서 | ${today.toISOString()}
+    </div>
+  </div>
+</body>
+</html>`;
+
+      // 새 창에서 보고서 열기
+      const reportWindow = window.open('', '_blank');
+      reportWindow.document.write(reportHTML);
+      reportWindow.document.close();
+
+      showToast('관리자 보고서가 생성되었습니다');
+    }
+
+    // ========================================
+    // 공통 UI: 모디 챗봇 시스템
+    // ========================================
+    function toggleChatbot() {
+      const chatbot = document.getElementById('chatbot-window');
+      if (chatbot.style.display === 'none' || chatbot.style.display === '') {
+        chatbot.style.display = 'flex';
+        initChatbot();
+      } else {
+        chatbot.style.display = 'none';
+      }
+    }
+
+    function initChatbot() {
+      const messages = document.getElementById('chatbot-messages');
+      if (!messages) return;
+
+      // 마감 임박 업무 확인
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const upcomingTasks = (state.tasks || []).filter(t => {
+        if (!t.deadline || t.status === 'done') return false;
+        const deadline = new Date(t.deadline);
+        const daysLeft = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
+        return daysLeft <= 3 && daysLeft >= 0;
+      });
+
+      const overdueTasks = (state.tasks || []).filter(t => {
+        if (!t.deadline || t.status === 'done') return false;
+        return new Date(t.deadline) < today;
+      });
+
+      let alertHTML = '';
+      if (overdueTasks.length > 0) {
+        alertHTML += `
+          <div style="background: #fee2e2; border: 1px solid #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+            <div style="font-weight: 700; color: #dc2626; margin-bottom: 4px;">⚠️ 마감 초과 업무 ${overdueTasks.length}건</div>
+            <div style="font-size: 11px; color: #991b1b;">즉시 확인이 필요합니다!</div>
+          </div>
+        `;
+      }
+      if (upcomingTasks.length > 0) {
+        alertHTML += `
+          <div style="background: #fef3c7; border: 1px solid #fcd34d; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+            <div style="font-weight: 700; color: #d97706; margin-bottom: 4px;">📅 오늘 마감 업무 ${upcomingTasks.filter(t => t.deadline === todayStr).length}건</div>
+            <div style="font-size: 11px; color: #92400e;">3일 내 마감: ${upcomingTasks.length}건</div>
+          </div>
+        `;
+      }
+
+      messages.innerHTML = `
+        <div style="margin-bottom: 16px;">
+          ${alertHTML}
+          <div style="background: white; padding: 12px 16px; border-radius: 12px 12px 12px 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 12px; max-width: 85%;">
+            <div style="font-size: 13px; color: var(--gray-800); line-height: 1.6;">
+              안녕하세요! 👋<br>
+              전략센터 도우미 <strong>모디</strong>입니다.<br>
+              무엇을 도와드릴까요?
+            </div>
+          </div>
+          <div style="font-size: 11px; color: var(--gray-400); margin-bottom: 12px;">빠른 메뉴</div>
+          <div style="display: grid; gap: 6px;">
+            <button onclick="askQuestion('KPI 관리 방법')" style="background: linear-gradient(135deg, #fff8f0, #ffe8cc); border: 1px solid var(--primary); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--primary); font-weight: 600; transition: all 0.2s;">
+              🎯 KPI 관리는 어떻게 하나요?
+            </button>
+            <button onclick="askQuestion('프로젝트 등록 방법')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;">
+              📋 프로젝트 등록 방법
+            </button>
+            <button onclick="askQuestion('업무 관리 팁')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;">
+              ✅ 업무 관리 팁
+            </button>
+            <button onclick="askQuestion('전략리뷰 활용법')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;">
+              📊 전략리뷰 활용법
+            </button>
+            <button onclick="window.open('../', '_self')" style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border: 1px solid #3b82f6; padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: #1d4ed8; font-weight: 600; transition: all 0.2s;">
+              🏠 운영센터로 이동
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    function askQuestion(question) {
+      addUserMessage(question);
+      setTimeout(() => {
+        const answer = getChatbotAnswer(question);
+        addBotMessage(answer);
+      }, 300);
+    }
+
+    function addUserMessage(message) {
+      const messages = document.getElementById('chatbot-messages');
+      if (!messages) return;
+      const userMsg = document.createElement('div');
+      userMsg.style.cssText = 'display: flex; justify-content: flex-end; margin-bottom: 12px;';
+      userMsg.innerHTML = `
+        <div style="background: var(--primary); color: white; padding: 10px 14px; border-radius: 12px 12px 4px 12px; max-width: 75%; font-size: 13px;">
+          ${message}
+        </div>
+      `;
+      messages.appendChild(userMsg);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function addBotMessage(message) {
+      const messages = document.getElementById('chatbot-messages');
+      if (!messages) return;
+      const botMsg = document.createElement('div');
+      botMsg.style.cssText = 'margin-bottom: 12px;';
+      botMsg.innerHTML = `
+        <div style="background: white; padding: 12px 16px; border-radius: 12px 12px 12px 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); max-width: 85%; font-size: 13px; color: var(--gray-800); line-height: 1.7;">
+          ${message}
+        </div>
+      `;
+      messages.appendChild(botMsg);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function sendChatMessage() {
+      const input = document.getElementById('chatbot-input');
+      if (!input) return;
+      const message = input.value.trim();
+      if (!message) return;
+      askQuestion(message);
+      input.value = '';
+    }
+
+    function getChatbotAnswer(question) {
+      const q = question.toLowerCase();
+
+      if (q.includes('kpi') || q.includes('관리')) {
+        return `<strong>🎯 KPI 관리 방법</strong><br><br>
+          1️⃣ <strong>KPI관리</strong> 메뉴로 이동<br>
+          2️⃣ 계층 뷰에서 전체 KPI 현황 확인<br>
+          3️⃣ 팀 KPI 클릭 → 목표/현재값 수정<br>
+          4️⃣ 개인 KPI의 +1 버튼으로 빠른 업데이트<br><br>
+          💡 <strong>팁:</strong> 업무 완료 시 연결된 KPI가 자동 업데이트됩니다!`;
+      }
+
+      if (q.includes('프로젝트') || q.includes('등록')) {
+        return `<strong>📋 프로젝트 등록 방법</strong><br><br>
+          1️⃣ <strong>대시보드</strong>에서 "🏢 대형프로젝트 추가" 클릭<br>
+          2️⃣ 프로젝트명, 목표 매출, 기간 입력<br>
+          3️⃣ 하위 프로젝트 추가<br>
+          4️⃣ 팀 KPI 연결<br><br>
+          💡 <strong>구조:</strong> 대형프로젝트 → 프로젝트 → 팀KPI → 개인KPI → 업무`;
+      }
+
+      if (q.includes('업무') || q.includes('관리') || q.includes('팁')) {
+        return `<strong>✅ 업무 관리 팁</strong><br><br>
+          <strong>1. 칸반 뷰 활용</strong><br>
+          • 드래그로 상태 변경<br>
+          • "진행중"으로 이동 시 자동 시작일 기록<br><br>
+          <strong>2. 마감일 필수 설정</strong><br>
+          • D-day 배지로 마감 확인<br>
+          • 마감 준수 시 성공으로 기록<br><br>
+          <strong>3. KPI 연결</strong><br>
+          • 업무 완료 시 KPI 자동 +1<br><br>
+          💡 빨간 테두리 = 마감 임박!`;
+      }
+
+      if (q.includes('전략') || q.includes('리뷰') || q.includes('활용')) {
+        return `<strong>📊 전략리뷰 활용법</strong><br><br>
+          <strong>1. 요약 뷰</strong><br>
+          목표 달성 현황 한눈에 확인<br><br>
+          <strong>2. 역순 데이터</strong><br>
+          업무 → 개인KPI → 팀KPI → 프로젝트<br>
+          ⚠️ 경고 영역에서 취약점 파악<br><br>
+          <strong>3. 개인별 성공률</strong><br>
+          팀원별 업무 완수율 확인<br><br>
+          💡 <strong>보고서 자동 생성</strong> 버튼으로 PDF 출력!`;
+      }
+
+      return `죄송합니다, 해당 질문에 대한 답변을 찾지 못했어요. 😅<br><br>
+        다음 메뉴를 확인해보세요:<br>
+        • <strong>업무가이드</strong> - 상세 가이드<br>
+        • <strong>대시보드</strong> - 전체 현황<br><br>
+        또는 운영센터의 모디 챗봇을 이용해보세요!`;
+    }
+
+    // 모디 알림 배지 업데이트
+    function updateChatbotBadge() {
+      const badge = document.getElementById('chatbot-notification-badge');
+      if (!badge) return;
+
+      const today = new Date();
+      const overdueTasks = (state.tasks || []).filter(t => {
+        if (!t.deadline || t.status === 'done') return false;
+        return new Date(t.deadline) < today;
+      });
+
+      if (overdueTasks.length > 0) {
+        badge.style.display = 'flex';
+        badge.textContent = overdueTasks.length > 9 ? '9+' : overdueTasks.length;
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    // ========================================
+    // 공통 UI: 간편 마진계산기
+    // ========================================
+    function openSimpleMarginCalculator() {
+      const m = document.getElementById('modal');
+      if (!m) return;
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header" style="background: linear-gradient(135deg, #8B5CF6, #A855F7); color: white;">
+            <h2 class="modal-title" style="color: white;">🧮 간편 마진 계산기</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <div style="background: #fef3c7; border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; font-size: 12px; color: #92400e;">
+              💡 <strong>목표:</strong> 건당 순마진 2,000원 이상 | 판매수량 200~300개
+            </div>
+
+            <div style="display: grid; gap: 16px; margin-bottom: 20px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">공급단가 (원)</label>
+                <input type="number" id="calcSupplyPrice" value="10000" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;" oninput="calculateMargin()">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">판매가 (원)</label>
+                <input type="number" id="calcSalePrice" value="15000" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;" oninput="calculateMargin()">
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div>
+                  <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">셀러 마진율 (%)</label>
+                  <input type="number" id="calcSellerRate" value="20" min="0" max="50" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;" oninput="calculateMargin()">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">예상 판매수량</label>
+                  <input type="number" id="calcQty" value="250" min="1" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;" oninput="calculateMargin()">
+                </div>
+              </div>
+            </div>
+
+            <div id="marginResult" style="background: var(--gray-50); border-radius: 12px; padding: 20px;">
+              <!-- 계산 결과가 여기 표시됨 -->
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
+            <a href="../" class="btn btn-primary" style="text-decoration: none;">🧮 상세 계산기 (운영센터)</a>
+          </div>
+        </div>
+      `;
+      calculateMargin();
+    }
+
+    function calculateMargin() {
+      const supplyPrice = Number(document.getElementById('calcSupplyPrice')?.value) || 0;
+      const salePrice = Number(document.getElementById('calcSalePrice')?.value) || 0;
+      const sellerRate = Number(document.getElementById('calcSellerRate')?.value) || 20;
+      const qty = Number(document.getElementById('calcQty')?.value) || 1;
+
+      const totalMargin = salePrice - supplyPrice;
+      const sellerMargin = Math.round(salePrice * (sellerRate / 100));
+      const pgFee = Math.round(salePrice * 0.04); // 4% PG수수료
+      const ourMargin = totalMargin - sellerMargin - pgFee;
+
+      const totalSales = salePrice * qty;
+      const totalOurMargin = ourMargin * qty;
+
+      const isGood = ourMargin >= 2000;
+      const marginColor = isGood ? '#16a34a' : '#dc2626';
+
+      const resultEl = document.getElementById('marginResult');
+      if (!resultEl) return;
+
+      resultEl.innerHTML = `
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">
+          <div style="text-align: center; background: white; padding: 16px; border-radius: 10px;">
+            <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">총 마진</div>
+            <div style="font-size: 20px; font-weight: 700; color: var(--primary);">${totalMargin.toLocaleString()}원</div>
+          </div>
+          <div style="text-align: center; background: white; padding: 16px; border-radius: 10px;">
+            <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">셀러 마진</div>
+            <div style="font-size: 20px; font-weight: 700; color: #3b82f6;">${sellerMargin.toLocaleString()}원</div>
+          </div>
+          <div style="text-align: center; background: white; padding: 16px; border-radius: 10px;">
+            <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">PG 수수료 (4%)</div>
+            <div style="font-size: 20px; font-weight: 700; color: #f59e0b;">${pgFee.toLocaleString()}원</div>
+          </div>
+          <div style="text-align: center; background: ${isGood ? '#dcfce7' : '#fee2e2'}; padding: 16px; border-radius: 10px; border: 2px solid ${marginColor};">
+            <div style="font-size: 12px; color: ${marginColor}; margin-bottom: 4px;">🎯 우리 순마진</div>
+            <div style="font-size: 24px; font-weight: 700; color: ${marginColor};">${ourMargin.toLocaleString()}원</div>
+          </div>
+        </div>
+        <div style="margin-top: 16px; padding: 16px; background: ${isGood ? '#dcfce7' : '#fee2e2'}; border-radius: 10px; text-align: center;">
+          <div style="font-size: 14px; font-weight: 700; color: ${marginColor};">
+            ${isGood ? '✅ 수익성 충분' : '⚠️ 마진 부족 - 조정 필요'}
+          </div>
+          <div style="font-size: 13px; color: var(--gray-600); margin-top: 8px;">
+            예상 매출: <strong>${totalSales.toLocaleString()}원</strong> |
+            예상 순익: <strong style="color: ${marginColor};">${totalOurMargin.toLocaleString()}원</strong>
+          </div>
+        </div>
+      `;
+    }
+
     // 초기화
     document.addEventListener('DOMContentLoaded', () => {
       loadAdminPassword();
       checkLoginStatus();
+
+      // 마감 업무 알림 배지 업데이트
+      setTimeout(() => {
+        updateChatbotBadge();
+      }, 2000);
     });
   </script>
+
+<!-- 모디 챗봇 FAB -->
+<style>
+  @keyframes chatbot-glow {
+    0%, 100% { box-shadow: 0 0 20px rgba(252, 150, 0, 0.4), 0 0 40px rgba(252, 150, 0, 0.2), 0 4px 16px rgba(0,0,0,0.3); }
+    50% { box-shadow: 0 0 25px rgba(252, 150, 0, 0.6), 0 0 50px rgba(252, 150, 0, 0.3), 0 4px 16px rgba(0,0,0,0.3); }
+  }
+  #chatbot-fab:hover { animation: chatbot-glow 2s ease-in-out infinite; }
+  @keyframes margin-glow {
+    0%, 100% { box-shadow: 0 0 20px rgba(168, 85, 247, 0.4), 0 0 40px rgba(168, 85, 247, 0.2), 0 4px 16px rgba(0,0,0,0.3); }
+    50% { box-shadow: 0 0 25px rgba(168, 85, 247, 0.6), 0 0 50px rgba(168, 85, 247, 0.3), 0 4px 16px rgba(0,0,0,0.3); }
+  }
+  #margin-calc-fab:hover { animation: margin-glow 2s ease-in-out infinite; }
+</style>
+
+<div id="chatbot-fab" onclick="toggleChatbot()" style="position: fixed; bottom: 90px; right: 24px; width: 60px; height: 60px; background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid rgba(252, 150, 0, 0.5); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; box-shadow: 0 0 20px rgba(252, 150, 0, 0.3), 0 4px 16px rgba(0,0,0,0.3); z-index: 999; transition: all 0.3s ease;" onmouseover="this.style.transform='scale(1.1)'; this.style.borderColor='rgba(252, 150, 0, 0.8)'" onmouseout="this.style.transform='scale(1)'; this.style.borderColor='rgba(252, 150, 0, 0.5)'">
+  <div style="width: 40px; height: 40px; border-radius: 50%; background: radial-gradient(circle, rgba(252, 150, 0, 0.3) 0%, transparent 70%); display: flex; align-items: center; justify-content: center;">
+    <span style="filter: drop-shadow(0 0 8px rgba(252, 150, 0, 0.6));">💬</span>
+  </div>
+  <div id="chatbot-notification-badge" style="position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; background: #ef4444; color: white; border-radius: 10px; display: none; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; padding: 0 6px; border: 2px solid #0f172a; box-shadow: 0 2px 8px rgba(239,68,68,0.6);"></div>
+</div>
+
+<!-- 모디 챗봇 창 -->
+<div id="chatbot-window" style="position: fixed; bottom: 160px; right: 24px; width: min(380px, calc(100vw - 48px)); max-height: min(500px, calc(100vh - 200px)); background: white; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.12); z-index: 998; display: none; flex-direction: column; overflow: hidden;">
+  <div style="background: linear-gradient(135deg, #fc9600, #e08600); color: white; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+      <div style="font-size: 24px;">🤖</div>
+      <div>
+        <div style="font-size: 16px; font-weight: 700;">모디 (MODi)</div>
+        <div style="font-size: 11px; opacity: 0.9;">전략센터 도우미</div>
+      </div>
+    </div>
+    <button onclick="toggleChatbot()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;">×</button>
+  </div>
+  <div id="chatbot-messages" style="flex: 1; overflow-y: auto; padding: 16px; max-height: 350px; background: #f9fafb;"></div>
+  <div style="padding: 12px; border-top: 1px solid var(--gray-200); background: white;">
+    <div style="display: flex; gap: 8px;">
+      <input id="chatbot-input" type="text" placeholder="질문을 입력하세요..." style="flex: 1; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 20px; font-size: 13px; font-family: inherit;" onkeypress="if(event.key==='Enter') sendChatMessage()">
+      <button onclick="sendChatMessage()" style="background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; font-weight: 600; font-size: 13px;">전송</button>
+    </div>
+  </div>
+</div>
+
+<!-- 마진계산기 FAB -->
+<div id="margin-calc-fab" onclick="openSimpleMarginCalculator()" style="position: fixed; bottom: 24px; right: 24px; width: 60px; height: 60px; background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid rgba(168, 85, 247, 0.5); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; box-shadow: 0 0 20px rgba(168, 85, 247, 0.3), 0 4px 16px rgba(0,0,0,0.3); z-index: 999; transition: all 0.3s ease;" onmouseover="this.style.transform='scale(1.1)'; this.style.borderColor='rgba(168, 85, 247, 0.8)'" onmouseout="this.style.transform='scale(1)'; this.style.borderColor='rgba(168, 85, 247, 0.5)'">
+  <div style="width: 40px; height: 40px; border-radius: 50%; background: radial-gradient(circle, rgba(168, 85, 247, 0.3) 0%, transparent 70%); display: flex; align-items: center; justify-content: center;">
+    <span style="filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.6));">🧮</span>
+  </div>
+</div>
+
 </body>
 </html>
