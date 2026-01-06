@@ -3,8 +3,11 @@ const cors = require('cors')({ origin: true });
 const fetch = require('node-fetch');
 
 /**
- * 카페24 OAuth 토큰 프록시
+ * 카페24 OAuth 토큰 및 API 프록시
  * 브라우저 CORS 문제를 우회하기 위한 서버 프록시
+ *
+ * 1. OAuth 토큰 발급/갱신: grantType 파라미터 사용
+ * 2. API 호출: apiEndpoint + accessToken 파라미터 사용
  */
 exports.cafe24OAuthToken = functions.https.onRequest((req, res) => {
   cors(req, res, async () => {
@@ -14,8 +17,42 @@ exports.cafe24OAuthToken = functions.https.onRequest((req, res) => {
     }
 
     try {
-      const { mallId, code, redirectUri, clientId, clientSecret, grantType, refreshToken } = req.body;
+      const { mallId, code, redirectUri, clientId, clientSecret, grantType, refreshToken, apiEndpoint, accessToken } = req.body;
 
+      // ==================== API 프록시 모드 ====================
+      // apiEndpoint가 있으면 카페24 API 호출 (주문 조회 등)
+      if (apiEndpoint && accessToken) {
+        if (!mallId) {
+          return res.status(400).json({
+            error: 'invalid_request',
+            error_description: 'mallId is required for API calls'
+          });
+        }
+
+        const apiUrl = `https://${mallId}.cafe24api.com${apiEndpoint}`;
+        console.log('Calling Cafe24 API:', apiUrl);
+
+        const apiResponse = await fetch(apiUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Cafe24-Api-Version': '2024-06-01'
+          }
+        });
+
+        const apiData = await apiResponse.json();
+
+        if (!apiResponse.ok) {
+          console.error('Cafe24 API error:', apiData);
+          return res.status(apiResponse.status).json(apiData);
+        }
+
+        console.log('API call successful, orders count:', apiData.orders?.length || 0);
+        return res.status(200).json(apiData);
+      }
+
+      // ==================== OAuth 토큰 모드 ====================
       // 필수 파라미터 검증
       if (!mallId || !clientId || !clientSecret) {
         return res.status(400).json({
