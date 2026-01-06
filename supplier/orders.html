@@ -72,9 +72,12 @@
 
         .tracking-input { padding: 6px 10px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; width: 150px; }
         .tracking-input:focus { outline: none; border-color: #f59e0b; }
+        .carrier-select { padding: 6px 10px; border: 1px solid #e0e0e0; border-radius: 6px; font-size: 13px; width: 140px; background: white; }
+        .carrier-select:focus { outline: none; border-color: #f59e0b; }
         .btn-sm { padding: 6px 12px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
         .btn-primary { background: #f59e0b; color: #fff; }
         .btn-primary:hover { background: #d97706; }
+        .shipping-cell { display: flex; gap: 6px; align-items: center; justify-content: center; }
 
         .empty-state { text-align: center; padding: 60px 20px; color: #999; }
 
@@ -293,6 +296,7 @@
                                             <th>수령인</th>
                                             <th>연락처</th>
                                             <th>배송지</th>
+                                            <th>택배사</th>
                                             <th>송장번호</th>
                                         </tr>
                                     </thead>
@@ -310,7 +314,38 @@
                                                 <td>${order.buyer_phone || '-'}</td>
                                                 <td style="text-align: left; font-size: 12px;">${order.shipping_address || '-'}</td>
                                                 <td>
-                                                    <input type="text" class="tracking-input" placeholder="송장번호" value="${order.tracking_number || ''}" onchange="updateTrackingNumber('${order.id}', this.value)">
+                                                    <select class="carrier-select" id="carrier_${order.id}" onchange="updateShippingInfo('${order.id}')">
+                                                        <option value="">택배사 선택</option>
+                                                        <optgroup label="대형 택배사">
+                                                            <option value="CJ대한통운" ${order.shipping_carrier === 'CJ대한통운' ? 'selected' : ''}>CJ대한통운</option>
+                                                            <option value="롯데택배" ${order.shipping_carrier === '롯데택배' ? 'selected' : ''}>롯데택배</option>
+                                                            <option value="한진택배" ${order.shipping_carrier === '한진택배' ? 'selected' : ''}>한진택배</option>
+                                                            <option value="로젠택배" ${order.shipping_carrier === '로젠택배' ? 'selected' : ''}>로젠택배</option>
+                                                            <option value="우체국택배" ${order.shipping_carrier === '우체국택배' ? 'selected' : ''}>우체국택배</option>
+                                                        </optgroup>
+                                                        <optgroup label="중·소형 택배사">
+                                                            <option value="경동택배" ${order.shipping_carrier === '경동택배' ? 'selected' : ''}>경동택배</option>
+                                                            <option value="대신택배" ${order.shipping_carrier === '대신택배' ? 'selected' : ''}>대신택배</option>
+                                                            <option value="합동택배" ${order.shipping_carrier === '합동택배' ? 'selected' : ''}>합동택배</option>
+                                                            <option value="일양로지스" ${order.shipping_carrier === '일양로지스' ? 'selected' : ''}>일양로지스</option>
+                                                            <option value="건영택배" ${order.shipping_carrier === '건영택배' ? 'selected' : ''}>건영택배</option>
+                                                        </optgroup>
+                                                        <optgroup label="퀵·당일/특수 배송">
+                                                            <option value="한의사랑택배" ${order.shipping_carrier === '한의사랑택배' ? 'selected' : ''}>한의사랑택배</option>
+                                                            <option value="SLX택배" ${order.shipping_carrier === 'SLX택배' ? 'selected' : ''}>SLX택배</option>
+                                                            <option value="천일택배" ${order.shipping_carrier === '천일택배' ? 'selected' : ''}>천일택배</option>
+                                                            <option value="퀵서비스" ${order.shipping_carrier === '퀵서비스' ? 'selected' : ''}>퀵서비스(기타)</option>
+                                                        </optgroup>
+                                                        <optgroup label="해외/특송">
+                                                            <option value="EMS" ${order.shipping_carrier === 'EMS' ? 'selected' : ''}>EMS(우체국)</option>
+                                                            <option value="DHL" ${order.shipping_carrier === 'DHL' ? 'selected' : ''}>DHL</option>
+                                                            <option value="FedEx" ${order.shipping_carrier === 'FedEx' ? 'selected' : ''}>FedEx</option>
+                                                            <option value="UPS" ${order.shipping_carrier === 'UPS' ? 'selected' : ''}>UPS</option>
+                                                        </optgroup>
+                                                    </select>
+                                                </td>
+                                                <td>
+                                                    <input type="text" class="tracking-input" id="tracking_${order.id}" placeholder="송장번호" value="${order.tracking_number || ''}" onchange="updateShippingInfo('${order.id}')">
                                                 </td>
                                             </tr>
                                         `).join('')}
@@ -328,16 +363,37 @@
             }
         }
 
-        async function updateTrackingNumber(orderId, trackingNumber) {
+        async function updateShippingInfo(orderId) {
             try {
-                await db.collection('cafe24_orders').doc(orderId).update({
-                    tracking_number: trackingNumber,
-                    tracking_updated_at: new Date().toISOString()
-                });
-                alert('송장번호가 저장되었습니다.');
+                const carrier = document.getElementById(`carrier_${orderId}`)?.value || '';
+                const trackingNumber = document.getElementById(`tracking_${orderId}`)?.value || '';
+
+                if (!carrier && !trackingNumber) {
+                    return; // 둘 다 비어있으면 저장 안 함
+                }
+
+                const updateData = {
+                    shipping_updated_at: new Date().toISOString()
+                };
+
+                if (carrier) updateData.shipping_carrier = carrier;
+                if (trackingNumber) updateData.tracking_number = trackingNumber;
+
+                await db.collection('cafe24_orders').doc(orderId).update(updateData);
+
+                let message = '';
+                if (carrier && trackingNumber) {
+                    message = `택배사: ${carrier}\n송장번호: ${trackingNumber}\n\n저장되었습니다.`;
+                } else if (carrier) {
+                    message = `택배사: ${carrier}\n저장되었습니다.`;
+                } else {
+                    message = `송장번호: ${trackingNumber}\n저장되었습니다.`;
+                }
+
+                alert(message);
             } catch (err) {
-                console.error('송장번호 저장 오류:', err);
-                alert('송장번호 저장에 실패했습니다.');
+                console.error('배송 정보 저장 오류:', err);
+                alert('배송 정보 저장에 실패했습니다.');
             }
         }
 
