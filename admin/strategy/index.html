@@ -4765,9 +4765,9 @@
       return Object.keys(kpisByMember).map(memberName => {
         const kpis = kpisByMember[memberName];
         const totalProgress = kpis.length > 0
-          ? Math.round(kpis.reduce((sum, k) => sum + Math.min(100, (k.current / k.target) * 100), 0) / kpis.length)
+          ? Math.round(kpis.reduce((sum, k) => sum + (k.target > 0 ? Math.min(100, (k.current / k.target) * 100) : 0), 0) / kpis.length)
           : 0;
-        const achievedCount = kpis.filter(k => k.current >= k.target).length;
+        const achievedCount = kpis.filter(k => k.target > 0 && k.current >= k.target).length;
 
         return `
           <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
@@ -6948,6 +6948,161 @@
         batch.delete(db.collection('teamKPIs').doc(id));
         await batch.commit();
 
+        showToast('삭제되었습니다');
+        closeModal();
+        renderKPIManagement();
+      } catch (e) {
+        console.error(e);
+        showToast('삭제 실패');
+      }
+    }
+
+    // ========================================
+    // 개인 KPI 모달 시스템
+    // ========================================
+    function openMemberKPIModal(kpi = null, teamKpiId = null) {
+      const isEdit = !!kpi;
+      const projects = state.projects || [];
+      const teamKPIs = state.teamKPIs || [];
+      const members = (state.teamMembers || []).filter(m => m.role === 'admin' || m.role === 'manager');
+
+      const m = document.getElementById('modal');
+      if (!m) return;
+      m.className = 'modal show';
+      m.innerHTML = `
+        <div class="modal-content" style="max-width: 550px;">
+          <div class="modal-header" style="background: #F59E0B; color: white;">
+            <h2 class="modal-title" style="color: white;">${isEdit ? '👤 개인 KPI 수정' : '👤 개인 KPI 추가'}</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <input type="hidden" id="memberKpiId" value="${kpi?.id || ''}">
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">담당자 *</label>
+              <select id="memberKpiMemberId" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+                <option value="">선택하세요</option>
+                ${members.map(member => `<option value="${member.id}" data-name="${member.name}" ${kpi?.memberId === member.id ? 'selected' : ''}>${member.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연결 팀 KPI (선택)</label>
+              <select id="memberKpiTeamKpiId" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+                <option value="">없음 (독립 개인 KPI)</option>
+                ${teamKPIs.map(tk => `<option value="${tk.id}" data-project="${tk.projectId}" ${(kpi?.teamKpiId === tk.id || teamKpiId === tk.id) ? 'selected' : ''}>${tk.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연결 프로젝트 (선택)</label>
+              <select id="memberKpiProjectId" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+                <option value="">선택하세요</option>
+                ${projects.map(p => `<option value="${p.id}" ${kpi?.projectId === p.id ? 'selected' : ''}>${p.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">KPI 이름 *</label>
+              <input type="text" id="memberKpiName" value="${kpi?.name || ''}" placeholder="예: 인플루언서 5명 확보"
+                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표값 *</label>
+                <input type="number" id="memberKpiTarget" value="${kpi?.target || ''}" placeholder="10"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">현재값</label>
+                <input type="number" id="memberKpiCurrent" value="${kpi?.current || 0}"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">단위</label>
+                <input type="text" id="memberKpiUnit" value="${kpi?.unit || '건'}" placeholder="명, 건, 개"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            ${isEdit ? `<button class="btn" style="background: var(--danger-light); color: var(--danger);" onclick="deleteMemberKPI('${kpi.id}')">삭제</button>` : ''}
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveMemberKPI()">저장</button>
+          </div>
+        </div>
+      `;
+
+      // 팀 KPI 선택 시 프로젝트 자동 연결
+      document.getElementById('memberKpiTeamKpiId').addEventListener('change', function() {
+        const selectedOption = this.options[this.selectedIndex];
+        const projectId = selectedOption.dataset.project;
+        if (projectId) {
+          document.getElementById('memberKpiProjectId').value = projectId;
+        }
+      });
+    }
+
+    async function saveMemberKPI() {
+      const id = document.getElementById('memberKpiId').value;
+      const memberSelect = document.getElementById('memberKpiMemberId');
+      const memberId = memberSelect.value;
+      const memberName = memberSelect.options[memberSelect.selectedIndex]?.dataset?.name || '';
+      const teamKpiId = document.getElementById('memberKpiTeamKpiId').value || null;
+      const projectId = document.getElementById('memberKpiProjectId').value || null;
+      const name = document.getElementById('memberKpiName').value.trim();
+      const target = parseInt(document.getElementById('memberKpiTarget').value) || 0;
+      const current = parseInt(document.getElementById('memberKpiCurrent').value) || 0;
+      const unit = document.getElementById('memberKpiUnit').value.trim() || '건';
+
+      if (!memberId) {
+        showToast('담당자를 선택하세요');
+        return;
+      }
+      if (!name) {
+        showToast('KPI 이름을 입력하세요');
+        return;
+      }
+      if (target <= 0) {
+        showToast('목표값을 입력하세요');
+        return;
+      }
+
+      const memberKpiData = {
+        memberId,
+        memberName,
+        teamKpiId,
+        projectId,
+        name,
+        target,
+        current,
+        unit,
+        updatedAt: new Date().toISOString()
+      };
+
+      try {
+        if (id) {
+          await db.collection('memberKPIs').doc(id).update(memberKpiData);
+        } else {
+          memberKpiData.createdAt = new Date().toISOString();
+          await db.collection('memberKPIs').add(memberKpiData);
+        }
+
+        showToast('저장되었습니다');
+        closeModal();
+        renderKPIManagement();
+      } catch (e) {
+        console.error(e);
+        showToast('저장 실패');
+      }
+    }
+
+    async function deleteMemberKPI(id) {
+      if (!confirm('이 개인 KPI를 삭제하시겠습니까?')) return;
+
+      try {
+        await db.collection('memberKPIs').doc(id).delete();
         showToast('삭제되었습니다');
         closeModal();
         renderKPIManagement();
