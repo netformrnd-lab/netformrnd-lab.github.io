@@ -3239,7 +3239,9 @@ let state = {
   // 공급사 입점 신청
   supplierApplications: [],
   // 공구 제안 (신규 공구 제안서)
-  dealProposals: []
+  dealProposals: [],
+  // 온보딩 가이드 관리
+  onboardingGuides: []
 };
 
 // 상수
@@ -3394,7 +3396,13 @@ function setupListeners() {
     state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
-  
+
+  // 온보딩 가이드 목록
+  db.collection('onboardingGuides').orderBy('order').onSnapshot(snapshot => {
+    state.onboardingGuides = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
+
   db.collection('products').orderBy('order').onSnapshot(snapshot => {
     state.products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     state.loading = false;
@@ -14071,10 +14079,29 @@ function showProductListOnboardingModal(productId) {
               <input type="checkbox" id="pl-ob-contact" ${product.obContact ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
               <span style="font-size: 13px;">📞 첫 컨택/미팅 완료</span>
             </label>
-            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
-              <input type="checkbox" id="pl-ob-guide" ${product.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
-              <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
-            </label>
+            <div style="background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 10px 12px;">
+              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-guide" ${product.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+                <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
+              </label>
+              <!-- 가이드 선택 영역 -->
+              <div id="pl-guide-select-area" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e5e7eb; ${product.obGuide ? '' : 'display: none;'}">
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                  <select id="pl-selected-guide" class="form-select" style="flex: 1; font-size: 12px; padding: 8px;">
+                    <option value="">-- 전달할 가이드 선택 --</option>
+                    ${(state.onboardingGuides || []).map(g => `
+                      <option value="${g.id}" ${product.selectedGuideId === g.id ? 'selected' : ''}>${g.icon || '📄'} ${g.title}</option>
+                    `).join('')}
+                  </select>
+                  <button type="button" onclick="showOnboardingGuideManager()" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 11px; white-space: nowrap;">⚙️ 관리</button>
+                </div>
+                ${product.selectedGuideId && state.onboardingGuides?.find(g => g.id === product.selectedGuideId)?.link ? `
+                  <a href="${state.onboardingGuides.find(g => g.id === product.selectedGuideId).link}" target="_blank" style="display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #3b82f6; text-decoration: none;">
+                    🔗 가이드 링크 열기
+                  </a>
+                ` : ''}
+              </div>
+            </div>
             <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
               <input type="checkbox" id="pl-ob-product" ${product.obProductInfo ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
               <span style="font-size: 13px;">📦 상품정보 수령</span>
@@ -14104,6 +14131,12 @@ function showProductListOnboardingModal(productId) {
       </div>
     </div>
   `;
+
+  // 가이드 체크박스 변경 시 선택 영역 토글
+  document.getElementById('pl-ob-guide')?.addEventListener('change', function() {
+    const area = document.getElementById('pl-guide-select-area');
+    if (area) area.style.display = this.checked ? 'block' : 'none';
+  });
 }
 
 // 상품리스트 온보딩 저장
@@ -14111,11 +14144,14 @@ async function saveProductListOnboarding(productId) {
   try {
     const sourceChannel = document.querySelector('input[name="pl-source-channel"]:checked')?.value || '';
 
+    const selectedGuideId = document.getElementById('pl-selected-guide')?.value || '';
+
     const updateData = {
       onboarding: true,
       sourceChannel: sourceChannel,
       obContact: document.getElementById('pl-ob-contact')?.checked || false,
       obGuide: document.getElementById('pl-ob-guide')?.checked || false,
+      selectedGuideId: selectedGuideId,
       obProductInfo: document.getElementById('pl-ob-product')?.checked || false,
       obBizLicense: document.getElementById('pl-ob-biz')?.checked || false,
       obBank: document.getElementById('pl-ob-bank')?.checked || false,
@@ -14172,6 +14208,283 @@ async function clearProductOnboarding(productId) {
   } catch(e) {
     console.error(e);
     showToast('해제에 실패했습니다');
+  }
+}
+
+// ========== 온보딩 가이드 관리 기능 ==========
+
+// 온보딩 가이드 관리 모달 열기
+function showOnboardingGuideManager() {
+  const guides = state.onboardingGuides || [];
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white;">
+        <h3 style="color: white;">📘 온보딩 가이드 관리</h3>
+        <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 20px; overflow-y: auto; flex: 1;">
+        <!-- 가이드 추가 버튼 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div style="font-size: 14px; color: var(--gray-600);">등록된 가이드: <strong>${guides.length}개</strong></div>
+          <button class="btn btn-primary" onclick="showAddGuideModal()" style="background: linear-gradient(135deg, #22c55e, #16a34a); font-size: 13px; padding: 8px 16px;">
+            + 새 가이드 추가
+          </button>
+        </div>
+
+        <!-- 가이드 목록 -->
+        <div id="guide-list-container" style="display: flex; flex-direction: column; gap: 12px;">
+          ${guides.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-500);">
+              <div style="font-size: 48px; margin-bottom: 12px;">📋</div>
+              <div>등록된 가이드가 없습니다.</div>
+              <div style="font-size: 13px; margin-top: 8px;">새 가이드를 추가해주세요.</div>
+            </div>
+          ` : guides.map((guide, index) => `
+            <div class="guide-item" style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <button onclick="moveGuideOrder('${guide.id}', 'up')" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 14px;" ${index === 0 ? 'disabled style="opacity: 0.3;"' : ''}>▲</button>
+                <button onclick="moveGuideOrder('${guide.id}', 'down')" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 14px;" ${index === guides.length - 1 ? 'disabled style="opacity: 0.3;"' : ''}>▼</button>
+              </div>
+              <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <span style="font-size: 18px;">${guide.icon || '📄'}</span>
+                  <span style="font-weight: 600; font-size: 15px;">${guide.title}</span>
+                  ${guide.isDefault ? '<span style="background: #dbeafe; color: #1d4ed8; font-size: 11px; padding: 2px 8px; border-radius: 10px;">기본</span>' : ''}
+                </div>
+                ${guide.description ? `<div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">${guide.description}</div>` : ''}
+                ${guide.link ? `<a href="${guide.link}" target="_blank" style="font-size: 12px; color: #3b82f6; text-decoration: none;">🔗 ${guide.link.length > 50 ? guide.link.substring(0, 50) + '...' : guide.link}</a>` : ''}
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button onclick="showEditGuideModal('${guide.id}')" style="background: #f3f4f6; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 12px;">✏️ 수정</button>
+                <button onclick="deleteGuide('${guide.id}')" style="background: #fee2e2; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 12px; color: #dc2626;">🗑️ 삭제</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div style="padding: 16px 20px; border-top: 1px solid #e5e7eb; background: #f9fafb;">
+        <button class="btn btn-secondary" onclick="closeModal()" style="width: 100%;">닫기</button>
+      </div>
+    </div>
+  `;
+}
+
+// 새 가이드 추가 모달
+function showAddGuideModal() {
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #22c55e, #16a34a); color: white;">
+        <h3 style="color: white;">➕ 새 온보딩 가이드 추가</h3>
+        <button class="close-btn" onclick="showOnboardingGuideManager()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">아이콘 (이모지)</label>
+          <input type="text" id="guide-icon" class="form-input" placeholder="📘" value="📘" maxlength="4" style="width: 80px;">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">가이드 제목 <span style="color: #dc2626;">*</span></label>
+          <input type="text" id="guide-title" class="form-input" placeholder="예: 상품 등록 가이드">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">설명 (선택)</label>
+          <textarea id="guide-description" class="form-textarea" rows="2" placeholder="가이드에 대한 간단한 설명"></textarea>
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">링크 URL (선택)</label>
+          <input type="url" id="guide-link" class="form-input" placeholder="https://...">
+        </div>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="guide-default" style="width: 18px; height: 18px;">
+            <span style="font-size: 14px;">기본 가이드로 설정</span>
+          </label>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="showOnboardingGuideManager()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" onclick="saveNewGuide()" style="flex: 1; background: linear-gradient(135deg, #22c55e, #16a34a);">저장</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 새 가이드 저장
+async function saveNewGuide() {
+  const title = document.getElementById('guide-title').value.trim();
+  const icon = document.getElementById('guide-icon').value.trim() || '📄';
+  const description = document.getElementById('guide-description').value.trim();
+  const link = document.getElementById('guide-link').value.trim();
+  const isDefault = document.getElementById('guide-default').checked;
+
+  if (!title) {
+    showToast('가이드 제목을 입력해주세요');
+    return;
+  }
+
+  try {
+    // 기본 가이드로 설정 시 다른 가이드의 기본 설정 해제
+    if (isDefault) {
+      const batch = db.batch();
+      state.onboardingGuides.filter(g => g.isDefault).forEach(g => {
+        batch.update(db.collection('onboardingGuides').doc(g.id), { isDefault: false });
+      });
+      await batch.commit();
+    }
+
+    const maxOrder = state.onboardingGuides.length > 0
+      ? Math.max(...state.onboardingGuides.map(g => g.order || 0)) + 1
+      : 0;
+
+    await db.collection('onboardingGuides').add({
+      title,
+      icon,
+      description,
+      link,
+      isDefault,
+      order: maxOrder,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy: getCurrentUserId()
+    });
+
+    showToast('✅ 새 가이드가 추가되었습니다');
+    showOnboardingGuideManager();
+  } catch (e) {
+    console.error(e);
+    showToast('저장에 실패했습니다');
+  }
+}
+
+// 가이드 수정 모달
+function showEditGuideModal(guideId) {
+  const guide = state.onboardingGuides.find(g => g.id === guideId);
+  if (!guide) return;
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #f59e0b, #d97706); color: white;">
+        <h3 style="color: white;">✏️ 가이드 수정</h3>
+        <button class="close-btn" onclick="showOnboardingGuideManager()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">아이콘 (이모지)</label>
+          <input type="text" id="edit-guide-icon" class="form-input" value="${guide.icon || '📄'}" maxlength="4" style="width: 80px;">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">가이드 제목 <span style="color: #dc2626;">*</span></label>
+          <input type="text" id="edit-guide-title" class="form-input" value="${guide.title || ''}">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">설명 (선택)</label>
+          <textarea id="edit-guide-description" class="form-textarea" rows="2">${guide.description || ''}</textarea>
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">링크 URL (선택)</label>
+          <input type="url" id="edit-guide-link" class="form-input" value="${guide.link || ''}">
+        </div>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="edit-guide-default" ${guide.isDefault ? 'checked' : ''} style="width: 18px; height: 18px;">
+            <span style="font-size: 14px;">기본 가이드로 설정</span>
+          </label>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="showOnboardingGuideManager()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" onclick="updateGuide('${guideId}')" style="flex: 1; background: linear-gradient(135deg, #f59e0b, #d97706);">수정 완료</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 가이드 수정 저장
+async function updateGuide(guideId) {
+  const title = document.getElementById('edit-guide-title').value.trim();
+  const icon = document.getElementById('edit-guide-icon').value.trim() || '📄';
+  const description = document.getElementById('edit-guide-description').value.trim();
+  const link = document.getElementById('edit-guide-link').value.trim();
+  const isDefault = document.getElementById('edit-guide-default').checked;
+
+  if (!title) {
+    showToast('가이드 제목을 입력해주세요');
+    return;
+  }
+
+  try {
+    // 기본 가이드로 설정 시 다른 가이드의 기본 설정 해제
+    if (isDefault) {
+      const batch = db.batch();
+      state.onboardingGuides.filter(g => g.isDefault && g.id !== guideId).forEach(g => {
+        batch.update(db.collection('onboardingGuides').doc(g.id), { isDefault: false });
+      });
+      await batch.commit();
+    }
+
+    await db.collection('onboardingGuides').doc(guideId).update({
+      title,
+      icon,
+      description,
+      link,
+      isDefault,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: getCurrentUserId()
+    });
+
+    showToast('✅ 가이드가 수정되었습니다');
+    showOnboardingGuideManager();
+  } catch (e) {
+    console.error(e);
+    showToast('수정에 실패했습니다');
+  }
+}
+
+// 가이드 삭제
+async function deleteGuide(guideId) {
+  const guide = state.onboardingGuides.find(g => g.id === guideId);
+  if (!guide) return;
+
+  if (!confirm(`"${guide.title}" 가이드를 삭제하시겠습니까?`)) return;
+
+  try {
+    await db.collection('onboardingGuides').doc(guideId).delete();
+    showToast('가이드가 삭제되었습니다');
+    showOnboardingGuideManager();
+  } catch (e) {
+    console.error(e);
+    showToast('삭제에 실패했습니다');
+  }
+}
+
+// 가이드 순서 변경
+async function moveGuideOrder(guideId, direction) {
+  const guides = [...state.onboardingGuides].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const currentIndex = guides.findIndex(g => g.id === guideId);
+
+  if (currentIndex === -1) return;
+  if (direction === 'up' && currentIndex === 0) return;
+  if (direction === 'down' && currentIndex === guides.length - 1) return;
+
+  const swapIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+
+  try {
+    const batch = db.batch();
+    batch.update(db.collection('onboardingGuides').doc(guides[currentIndex].id), { order: swapIndex });
+    batch.update(db.collection('onboardingGuides').doc(guides[swapIndex].id), { order: currentIndex });
+    await batch.commit();
+
+    // 즉시 UI 업데이트를 위해 리렌더
+    setTimeout(() => showOnboardingGuideManager(), 100);
+  } catch (e) {
+    console.error(e);
+    showToast('순서 변경에 실패했습니다');
   }
 }
 
