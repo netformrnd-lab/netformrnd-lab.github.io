@@ -3239,7 +3239,9 @@ let state = {
   // 공급사 입점 신청
   supplierApplications: [],
   // 공구 제안 (신규 공구 제안서)
-  dealProposals: []
+  dealProposals: [],
+  // 온보딩 가이드 관리
+  onboardingGuides: []
 };
 
 // 상수
@@ -3394,7 +3396,13 @@ function setupListeners() {
     state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
-  
+
+  // 온보딩 가이드 목록
+  db.collection('onboardingGuides').orderBy('order').onSnapshot(snapshot => {
+    state.onboardingGuides = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
+
   db.collection('products').orderBy('order').onSnapshot(snapshot => {
     state.products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     state.loading = false;
@@ -11636,10 +11644,29 @@ function showSellerListOnboardingModal(sellerId) {
               <input type="checkbox" id="sl-ob-contact" ${seller.obContact ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
               <span style="font-size: 13px;">📞 첫 컨택/미팅 완료</span>
             </label>
-            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
-              <input type="checkbox" id="sl-ob-guide" ${seller.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
-              <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
-            </label>
+            <div style="background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 10px 12px;">
+              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                <input type="checkbox" id="sl-ob-guide" ${seller.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
+                <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
+              </label>
+              <!-- 가이드 선택 영역 -->
+              <div id="sl-guide-select-area" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e5e7eb; ${seller.obGuide ? '' : 'display: none;'}">
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                  <select id="sl-selected-guide" class="form-select" style="flex: 1; font-size: 12px; padding: 8px;">
+                    <option value="">-- 전달할 가이드 선택 --</option>
+                    ${(state.onboardingGuides || []).map(g => `
+                      <option value="${g.id}" ${seller.selectedGuideId === g.id ? 'selected' : ''}>${g.icon || '📄'} ${g.title}</option>
+                    `).join('')}
+                  </select>
+                  <button type="button" onclick="showOnboardingGuideManager()" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 11px; white-space: nowrap;">⚙️ 관리</button>
+                </div>
+                ${seller.selectedGuideId && state.onboardingGuides?.find(g => g.id === seller.selectedGuideId)?.link ? `
+                  <a href="${state.onboardingGuides.find(g => g.id === seller.selectedGuideId).link}" target="_blank" style="display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #3b82f6; text-decoration: none;">
+                    🔗 가이드 링크 열기
+                  </a>
+                ` : ''}
+              </div>
+            </div>
             <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
               <input type="checkbox" id="sl-ob-form" ${seller.obForm ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #3b82f6;">
               <span style="font-size: 13px;">📄 입점신청서 수령</span>
@@ -11669,18 +11696,26 @@ function showSellerListOnboardingModal(sellerId) {
       </div>
     </div>
   `;
+
+  // 가이드 체크박스 변경 시 선택 영역 토글
+  document.getElementById('sl-ob-guide')?.addEventListener('change', function() {
+    const area = document.getElementById('sl-guide-select-area');
+    if (area) area.style.display = this.checked ? 'block' : 'none';
+  });
 }
 
 // 셀러리스트 온보딩 저장
 async function saveSellerListOnboarding(sellerId) {
   try {
     const sourceChannel = document.querySelector('input[name="sl-source-channel"]:checked')?.value || '';
+    const selectedGuideId = document.getElementById('sl-selected-guide')?.value || '';
 
     const updateData = {
       onboarding: true,
       sourceChannel: sourceChannel,
       obContact: document.getElementById('sl-ob-contact')?.checked || false,
       obGuide: document.getElementById('sl-ob-guide')?.checked || false,
+      selectedGuideId: selectedGuideId,
       obForm: document.getElementById('sl-ob-form')?.checked || false,
       obBank: document.getElementById('sl-ob-bank')?.checked || false,
       obIdCard: document.getElementById('sl-ob-id')?.checked || false,
@@ -11778,6 +11813,144 @@ function showSellerContractConfirmModal(seller) {
       </div>
     </div>
   `;
+}
+
+// 셀러DB → 셀러리스트 연동 (기존 셀러 데이터를 셀러리스트로 가져오기)
+async function syncSellersToSellerList() {
+  // 셀러리스트에 이미 연동된 셀러 ID 목록
+  const linkedSellerIds = (state.sellerList || [])
+    .filter(s => s.linkedSellerId)
+    .map(s => s.linkedSellerId);
+
+  // 셀러리스트에서 생성된 셀러 ID 목록 (sourceSellerListId가 있는 것들)
+  const createdFromSellerList = (state.sellers || [])
+    .filter(s => s.sourceSellerListId)
+    .map(s => s.id);
+
+  // 연동 대상: sourceSellerListId가 없고, 아직 셀러리스트에 연동되지 않은 셀러
+  const sellersToSync = (state.sellers || []).filter(s =>
+    !s.sourceSellerListId && !linkedSellerIds.includes(s.id)
+  );
+
+  if (sellersToSync.length === 0) {
+    showToast('모든 셀러가 이미 연동되어 있습니다');
+    return;
+  }
+
+  // 연동 확인 모달
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: white;">
+        <h3 style="color: white;">🔗 셀러DB → 셀러리스트 연동</h3>
+        <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <div style="font-size: 48px; margin-bottom: 12px;">👤</div>
+          <div style="font-size: 18px; font-weight: 700; color: #6d28d9;">연동 대상: ${sellersToSync.length}명</div>
+          <p style="font-size: 13px; color: var(--gray-500); margin-top: 8px;">
+            셀러DB에 등록된 데이터를 셀러리스트로 가져옵니다.<br>
+            (이미 셀러리스트에서 생성된 셀러는 제외됩니다)
+          </p>
+        </div>
+
+        <div style="background: #f9fafb; border-radius: 12px; padding: 16px; margin-bottom: 20px; max-height: 200px; overflow-y: auto;">
+          <div style="font-size: 13px; font-weight: 600; color: var(--gray-600); margin-bottom: 12px;">연동될 셀러 목록:</div>
+          ${sellersToSync.map(s => `
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: white; border-radius: 8px; margin-bottom: 6px;">
+              <span style="font-size: 13px; font-weight: 500;">${s.name || '이름없음'}</span>
+              <span style="font-size: 11px; color: var(--gray-500);">${s.channel || ''}</span>
+              ${s.followers ? `<span style="font-size: 11px; color: #8b5cf6;">${(s.followers / 10000).toFixed(1)}만</span>` : ''}
+              ${s.status === '입점완료' || s.status === '계약완료' ? '<span style="background: #dcfce7; color: #15803d; font-size: 10px; padding: 2px 6px; border-radius: 10px;">입점완료</span>' : ''}
+            </div>
+          `).join('')}
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #8b5cf6, #6d28d9);" onclick="executeSyncSellersToSellerList()">
+            🔗 연동 실행
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 셀러DB → 셀러리스트 연동 실행
+async function executeSyncSellersToSellerList() {
+  const linkedSellerIds = (state.sellerList || [])
+    .filter(s => s.linkedSellerId)
+    .map(s => s.linkedSellerId);
+
+  const sellersToSync = (state.sellers || []).filter(s =>
+    !s.sourceSellerListId && !linkedSellerIds.includes(s.id)
+  );
+
+  if (sellersToSync.length === 0) {
+    showToast('연동할 셀러가 없습니다');
+    closeModal();
+    return;
+  }
+
+  try {
+    const batch = db.batch();
+    let count = 0;
+
+    for (const seller of sellersToSync) {
+      const newSellerListItem = {
+        // 기본 정보
+        category: seller.category || '',
+        accountName: seller.name || '',
+        channel: seller.channel || '',
+        followers: seller.followers ? seller.followers / 10000 : 0, // 실제 숫자 → 만 단위로 변환
+        accountLink: seller.channelId || '',
+        marginRate: 0,
+        eventSupport: [],
+        notes: seller.notes || '',
+
+        // 상태 (셀러DB에서 가져왔으므로 계약완료 상태)
+        proposed: true,
+        onboarding: true,
+        contacted: true,
+        contracted: true,
+
+        // 온보딩 체크리스트 연동 (sellers → sellerList)
+        obContact: seller.journeyFirstContact || true,
+        obGuide: seller.journeyOnboarding || false,
+        obForm: seller.journeyDocuments || false,
+        obBank: seller.journeyBankInfo || false,
+        obIdCard: seller.journeyIdCard || false,
+
+        // 유입경로
+        sourceType: seller.sourceType || '',
+        sourceDetail: seller.sourceDetail || '',
+
+        // 연동 정보
+        linkedSellerId: seller.id,
+        linkedFromDB: true,
+        registeredToSellerDB: true,
+
+        // 메타 정보
+        createdAt: new Date().toISOString(),
+        createdBy: getCurrentUserId(),
+        syncedAt: new Date().toISOString()
+      };
+
+      const docRef = db.collection('sellerList').doc();
+      batch.set(docRef, newSellerListItem);
+      count++;
+    }
+
+    await batch.commit();
+    showToast(`✅ ${count}명 셀러가 셀러리스트에 연동되었습니다`);
+    closeModal();
+  } catch (e) {
+    console.error(e);
+    showToast('연동에 실패했습니다');
+  }
 }
 
 // 셀러 리스트에서 셀러 DB로 등록
@@ -12384,7 +12557,14 @@ function renderSellerList() {
   const proposedCount = allSellers.filter(s => s.proposed).length;
   const onboardingCount = allSellers.filter(s => s.onboarding || s.contacted).length;
   const contractedCount = allSellers.filter(s => s.contracted).length;
-  
+
+  // 셀러DB 연동 현황 (셀러리스트에 없는 셀러 수)
+  const linkedSellerIds = allSellers.filter(s => s.linkedSellerId).map(s => s.linkedSellerId);
+  const notLinkedSellers = (state.sellers || []).filter(s =>
+    !s.sourceSellerListId && !linkedSellerIds.includes(s.id)
+  );
+  const notLinkedSellerCount = notLinkedSellers.length;
+
   // 카테고리 목록 추출
   const categories = [...new Set(allSellers.map(s => s.category).filter(c => c))];
   
@@ -12393,6 +12573,7 @@ function renderSellerList() {
       <h1 class="page-title">셀러 관리</h1>
       <p class="page-desc">총 ${totalCount}명의 탐색 셀러를 관리합니다</p>
       <div class="header-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="btn btn-secondary" onclick="syncSellersToSellerList()" style="background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd;">🔗 셀러DB 연동 ${notLinkedSellerCount > 0 ? `<span style="background: #dc2626; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; margin-left: 4px;">${notLinkedSellerCount}</span>` : ''}</button>
         <button class="btn btn-secondary" onclick="downloadSellerListTemplate()">📥 양식 다운로드</button>
         <button class="btn btn-secondary" onclick="openSellerListModal(null, true)">📋 일괄 등록</button>
         <button class="btn btn-primary" onclick="openSellerListModal()">+ 새 셀러</button>
@@ -13699,7 +13880,14 @@ function renderProductList() {
   const onboardingCount = allItems.filter(p => p.onboarding || p.contacted).length;
   const contractedCount = allItems.filter(p => p.contracted).length;
   const notProposedCount = allItems.filter(p => !p.proposed).length;
-  
+
+  // 공급사DB 연동 현황 (상품리스트에 없는 공급사 수)
+  const linkedProductListIds = allItems.filter(p => p.linkedSupplierId).map(p => p.linkedSupplierId);
+  const notLinkedSuppliers = (state.suppliers || []).filter(s =>
+    !s.sourceProductListId && !linkedProductListIds.includes(s.id)
+  );
+  const notLinkedSupplierCount = notLinkedSuppliers.length;
+
   // 카테고리 목록 추출
   const categories = [...new Set(allItems.map(p => p.category).filter(c => c))];
   
@@ -13708,6 +13896,7 @@ function renderProductList() {
       <h1 class="page-title">공급사 관리</h1>
       <p class="page-desc">총 ${totalCount}개의 탐색 상품을 관리합니다</p>
       <div class="header-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="btn btn-secondary" onclick="syncSuppliersToProductList()" style="background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd;">🔗 공급사DB 연동 ${notLinkedSupplierCount > 0 ? `<span style="background: #dc2626; color: white; border-radius: 10px; padding: 2px 6px; font-size: 11px; margin-left: 4px;">${notLinkedSupplierCount}</span>` : ''}</button>
         <button class="btn btn-secondary" onclick="downloadProductListTemplate()">📥 양식 다운로드</button>
         <button class="btn btn-secondary" onclick="openProductListBulkModal()">📋 일괄등록</button>
         <button class="btn btn-primary" onclick="openProductListModal()">+ 상품 추가</button>
@@ -14071,10 +14260,29 @@ function showProductListOnboardingModal(productId) {
               <input type="checkbox" id="pl-ob-contact" ${product.obContact ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
               <span style="font-size: 13px;">📞 첫 컨택/미팅 완료</span>
             </label>
-            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
-              <input type="checkbox" id="pl-ob-guide" ${product.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
-              <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
-            </label>
+            <div style="background: white; border-radius: 8px; border: 1px solid #e5e7eb; padding: 10px 12px;">
+              <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-guide" ${product.obGuide ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
+                <span style="font-size: 13px;">📘 온보딩 가이드 전달</span>
+              </label>
+              <!-- 가이드 선택 영역 -->
+              <div id="pl-guide-select-area" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #e5e7eb; ${product.obGuide ? '' : 'display: none;'}">
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                  <select id="pl-selected-guide" class="form-select" style="flex: 1; font-size: 12px; padding: 8px;">
+                    <option value="">-- 전달할 가이드 선택 --</option>
+                    ${(state.onboardingGuides || []).map(g => `
+                      <option value="${g.id}" ${product.selectedGuideId === g.id ? 'selected' : ''}>${g.icon || '📄'} ${g.title}</option>
+                    `).join('')}
+                  </select>
+                  <button type="button" onclick="showOnboardingGuideManager()" style="background: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 11px; white-space: nowrap;">⚙️ 관리</button>
+                </div>
+                ${product.selectedGuideId && state.onboardingGuides?.find(g => g.id === product.selectedGuideId)?.link ? `
+                  <a href="${state.onboardingGuides.find(g => g.id === product.selectedGuideId).link}" target="_blank" style="display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #3b82f6; text-decoration: none;">
+                    🔗 가이드 링크 열기
+                  </a>
+                ` : ''}
+              </div>
+            </div>
             <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid #e5e7eb;">
               <input type="checkbox" id="pl-ob-product" ${product.obProductInfo ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22c55e;">
               <span style="font-size: 13px;">📦 상품정보 수령</span>
@@ -14104,6 +14312,12 @@ function showProductListOnboardingModal(productId) {
       </div>
     </div>
   `;
+
+  // 가이드 체크박스 변경 시 선택 영역 토글
+  document.getElementById('pl-ob-guide')?.addEventListener('change', function() {
+    const area = document.getElementById('pl-guide-select-area');
+    if (area) area.style.display = this.checked ? 'block' : 'none';
+  });
 }
 
 // 상품리스트 온보딩 저장
@@ -14111,11 +14325,14 @@ async function saveProductListOnboarding(productId) {
   try {
     const sourceChannel = document.querySelector('input[name="pl-source-channel"]:checked')?.value || '';
 
+    const selectedGuideId = document.getElementById('pl-selected-guide')?.value || '';
+
     const updateData = {
       onboarding: true,
       sourceChannel: sourceChannel,
       obContact: document.getElementById('pl-ob-contact')?.checked || false,
       obGuide: document.getElementById('pl-ob-guide')?.checked || false,
+      selectedGuideId: selectedGuideId,
       obProductInfo: document.getElementById('pl-ob-product')?.checked || false,
       obBizLicense: document.getElementById('pl-ob-biz')?.checked || false,
       obBank: document.getElementById('pl-ob-bank')?.checked || false,
@@ -14175,6 +14392,283 @@ async function clearProductOnboarding(productId) {
   }
 }
 
+// ========== 온보딩 가이드 관리 기능 ==========
+
+// 온보딩 가이드 관리 모달 열기
+function showOnboardingGuideManager() {
+  const guides = state.onboardingGuides || [];
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white;">
+        <h3 style="color: white;">📘 온보딩 가이드 관리</h3>
+        <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 20px; overflow-y: auto; flex: 1;">
+        <!-- 가이드 추가 버튼 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div style="font-size: 14px; color: var(--gray-600);">등록된 가이드: <strong>${guides.length}개</strong></div>
+          <button class="btn btn-primary" onclick="showAddGuideModal()" style="background: linear-gradient(135deg, #22c55e, #16a34a); font-size: 13px; padding: 8px 16px;">
+            + 새 가이드 추가
+          </button>
+        </div>
+
+        <!-- 가이드 목록 -->
+        <div id="guide-list-container" style="display: flex; flex-direction: column; gap: 12px;">
+          ${guides.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-500);">
+              <div style="font-size: 48px; margin-bottom: 12px;">📋</div>
+              <div>등록된 가이드가 없습니다.</div>
+              <div style="font-size: 13px; margin-top: 8px;">새 가이드를 추가해주세요.</div>
+            </div>
+          ` : guides.map((guide, index) => `
+            <div class="guide-item" style="background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <button onclick="moveGuideOrder('${guide.id}', 'up')" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 14px;" ${index === 0 ? 'disabled style="opacity: 0.3;"' : ''}>▲</button>
+                <button onclick="moveGuideOrder('${guide.id}', 'down')" style="background: none; border: none; cursor: pointer; padding: 4px; font-size: 14px;" ${index === guides.length - 1 ? 'disabled style="opacity: 0.3;"' : ''}>▼</button>
+              </div>
+              <div style="flex: 1;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <span style="font-size: 18px;">${guide.icon || '📄'}</span>
+                  <span style="font-weight: 600; font-size: 15px;">${guide.title}</span>
+                  ${guide.isDefault ? '<span style="background: #dbeafe; color: #1d4ed8; font-size: 11px; padding: 2px 8px; border-radius: 10px;">기본</span>' : ''}
+                </div>
+                ${guide.description ? `<div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">${guide.description}</div>` : ''}
+                ${guide.link ? `<a href="${guide.link}" target="_blank" style="font-size: 12px; color: #3b82f6; text-decoration: none;">🔗 ${guide.link.length > 50 ? guide.link.substring(0, 50) + '...' : guide.link}</a>` : ''}
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button onclick="showEditGuideModal('${guide.id}')" style="background: #f3f4f6; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 12px;">✏️ 수정</button>
+                <button onclick="deleteGuide('${guide.id}')" style="background: #fee2e2; border: none; border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 12px; color: #dc2626;">🗑️ 삭제</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div style="padding: 16px 20px; border-top: 1px solid #e5e7eb; background: #f9fafb;">
+        <button class="btn btn-secondary" onclick="closeModal()" style="width: 100%;">닫기</button>
+      </div>
+    </div>
+  `;
+}
+
+// 새 가이드 추가 모달
+function showAddGuideModal() {
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #22c55e, #16a34a); color: white;">
+        <h3 style="color: white;">➕ 새 온보딩 가이드 추가</h3>
+        <button class="close-btn" onclick="showOnboardingGuideManager()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">아이콘 (이모지)</label>
+          <input type="text" id="guide-icon" class="form-input" placeholder="📘" value="📘" maxlength="4" style="width: 80px;">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">가이드 제목 <span style="color: #dc2626;">*</span></label>
+          <input type="text" id="guide-title" class="form-input" placeholder="예: 상품 등록 가이드">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">설명 (선택)</label>
+          <textarea id="guide-description" class="form-textarea" rows="2" placeholder="가이드에 대한 간단한 설명"></textarea>
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">링크 URL (선택)</label>
+          <input type="url" id="guide-link" class="form-input" placeholder="https://...">
+        </div>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="guide-default" style="width: 18px; height: 18px;">
+            <span style="font-size: 14px;">기본 가이드로 설정</span>
+          </label>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="showOnboardingGuideManager()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" onclick="saveNewGuide()" style="flex: 1; background: linear-gradient(135deg, #22c55e, #16a34a);">저장</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 새 가이드 저장
+async function saveNewGuide() {
+  const title = document.getElementById('guide-title').value.trim();
+  const icon = document.getElementById('guide-icon').value.trim() || '📄';
+  const description = document.getElementById('guide-description').value.trim();
+  const link = document.getElementById('guide-link').value.trim();
+  const isDefault = document.getElementById('guide-default').checked;
+
+  if (!title) {
+    showToast('가이드 제목을 입력해주세요');
+    return;
+  }
+
+  try {
+    // 기본 가이드로 설정 시 다른 가이드의 기본 설정 해제
+    if (isDefault) {
+      const batch = db.batch();
+      state.onboardingGuides.filter(g => g.isDefault).forEach(g => {
+        batch.update(db.collection('onboardingGuides').doc(g.id), { isDefault: false });
+      });
+      await batch.commit();
+    }
+
+    const maxOrder = state.onboardingGuides.length > 0
+      ? Math.max(...state.onboardingGuides.map(g => g.order || 0)) + 1
+      : 0;
+
+    await db.collection('onboardingGuides').add({
+      title,
+      icon,
+      description,
+      link,
+      isDefault,
+      order: maxOrder,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy: getCurrentUserId()
+    });
+
+    showToast('✅ 새 가이드가 추가되었습니다');
+    showOnboardingGuideManager();
+  } catch (e) {
+    console.error(e);
+    showToast('저장에 실패했습니다');
+  }
+}
+
+// 가이드 수정 모달
+function showEditGuideModal(guideId) {
+  const guide = state.onboardingGuides.find(g => g.id === guideId);
+  if (!guide) return;
+
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 500px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #f59e0b, #d97706); color: white;">
+        <h3 style="color: white;">✏️ 가이드 수정</h3>
+        <button class="close-btn" onclick="showOnboardingGuideManager()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">아이콘 (이모지)</label>
+          <input type="text" id="edit-guide-icon" class="form-input" value="${guide.icon || '📄'}" maxlength="4" style="width: 80px;">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">가이드 제목 <span style="color: #dc2626;">*</span></label>
+          <input type="text" id="edit-guide-title" class="form-input" value="${guide.title || ''}">
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">설명 (선택)</label>
+          <textarea id="edit-guide-description" class="form-textarea" rows="2">${guide.description || ''}</textarea>
+        </div>
+        <div class="form-group" style="margin-bottom: 16px;">
+          <label class="form-label">링크 URL (선택)</label>
+          <input type="url" id="edit-guide-link" class="form-input" value="${guide.link || ''}">
+        </div>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="edit-guide-default" ${guide.isDefault ? 'checked' : ''} style="width: 18px; height: 18px;">
+            <span style="font-size: 14px;">기본 가이드로 설정</span>
+          </label>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="showOnboardingGuideManager()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" onclick="updateGuide('${guideId}')" style="flex: 1; background: linear-gradient(135deg, #f59e0b, #d97706);">수정 완료</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 가이드 수정 저장
+async function updateGuide(guideId) {
+  const title = document.getElementById('edit-guide-title').value.trim();
+  const icon = document.getElementById('edit-guide-icon').value.trim() || '📄';
+  const description = document.getElementById('edit-guide-description').value.trim();
+  const link = document.getElementById('edit-guide-link').value.trim();
+  const isDefault = document.getElementById('edit-guide-default').checked;
+
+  if (!title) {
+    showToast('가이드 제목을 입력해주세요');
+    return;
+  }
+
+  try {
+    // 기본 가이드로 설정 시 다른 가이드의 기본 설정 해제
+    if (isDefault) {
+      const batch = db.batch();
+      state.onboardingGuides.filter(g => g.isDefault && g.id !== guideId).forEach(g => {
+        batch.update(db.collection('onboardingGuides').doc(g.id), { isDefault: false });
+      });
+      await batch.commit();
+    }
+
+    await db.collection('onboardingGuides').doc(guideId).update({
+      title,
+      icon,
+      description,
+      link,
+      isDefault,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: getCurrentUserId()
+    });
+
+    showToast('✅ 가이드가 수정되었습니다');
+    showOnboardingGuideManager();
+  } catch (e) {
+    console.error(e);
+    showToast('수정에 실패했습니다');
+  }
+}
+
+// 가이드 삭제
+async function deleteGuide(guideId) {
+  const guide = state.onboardingGuides.find(g => g.id === guideId);
+  if (!guide) return;
+
+  if (!confirm(`"${guide.title}" 가이드를 삭제하시겠습니까?`)) return;
+
+  try {
+    await db.collection('onboardingGuides').doc(guideId).delete();
+    showToast('가이드가 삭제되었습니다');
+    showOnboardingGuideManager();
+  } catch (e) {
+    console.error(e);
+    showToast('삭제에 실패했습니다');
+  }
+}
+
+// 가이드 순서 변경
+async function moveGuideOrder(guideId, direction) {
+  const guides = [...state.onboardingGuides].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const currentIndex = guides.findIndex(g => g.id === guideId);
+
+  if (currentIndex === -1) return;
+  if (direction === 'up' && currentIndex === 0) return;
+  if (direction === 'down' && currentIndex === guides.length - 1) return;
+
+  const swapIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+
+  try {
+    const batch = db.batch();
+    batch.update(db.collection('onboardingGuides').doc(guides[currentIndex].id), { order: swapIndex });
+    batch.update(db.collection('onboardingGuides').doc(guides[swapIndex].id), { order: currentIndex });
+    await batch.commit();
+
+    // 즉시 UI 업데이트를 위해 리렌더
+    setTimeout(() => showOnboardingGuideManager(), 100);
+  } catch (e) {
+    console.error(e);
+    showToast('순서 변경에 실패했습니다');
+  }
+}
+
 // 상품 계약 완료 시 공급사 DB 등록 확인 모달
 function showSupplierContractConfirmModal(product) {
   const m = document.getElementById('modal');
@@ -14214,6 +14708,142 @@ function showSupplierContractConfirmModal(product) {
       </div>
     </div>
   `;
+}
+
+// 공급사DB → 상품리스트 연동 (기존 공급사 데이터를 상품리스트로 가져오기)
+async function syncSuppliersToProductList() {
+  // 상품리스트에 이미 연동된 공급사 ID 목록
+  const linkedSupplierIds = (state.productList || [])
+    .filter(p => p.linkedSupplierId)
+    .map(p => p.linkedSupplierId);
+
+  // 상품리스트에서 생성된 공급사 ID 목록 (sourceProductListId가 있는 것들)
+  const createdFromProductList = (state.suppliers || [])
+    .filter(s => s.sourceProductListId)
+    .map(s => s.id);
+
+  // 연동 대상: sourceProductListId가 없고, 아직 상품리스트에 연동되지 않은 공급사
+  const suppliersToSync = (state.suppliers || []).filter(s =>
+    !s.sourceProductListId && !linkedSupplierIds.includes(s.id)
+  );
+
+  if (suppliersToSync.length === 0) {
+    showToast('모든 공급사가 이미 연동되어 있습니다');
+    return;
+  }
+
+  // 연동 확인 모달
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white;">
+        <h3 style="color: white;">🔗 공급사DB → 상품리스트 연동</h3>
+        <button class="close-btn" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div class="modal-body" style="padding: 24px;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <div style="font-size: 48px; margin-bottom: 12px;">📦</div>
+          <div style="font-size: 18px; font-weight: 700; color: #1d4ed8;">연동 대상: ${suppliersToSync.length}개</div>
+          <p style="font-size: 13px; color: var(--gray-500); margin-top: 8px;">
+            공급사DB에 등록된 데이터를 상품리스트로 가져옵니다.<br>
+            (이미 상품리스트에서 생성된 공급사는 제외됩니다)
+          </p>
+        </div>
+
+        <div style="background: #f9fafb; border-radius: 12px; padding: 16px; margin-bottom: 20px; max-height: 200px; overflow-y: auto;">
+          <div style="font-size: 13px; font-weight: 600; color: var(--gray-600); margin-bottom: 12px;">연동될 공급사 목록:</div>
+          ${suppliersToSync.map(s => `
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: white; border-radius: 8px; margin-bottom: 6px;">
+              <span style="font-size: 13px; font-weight: 500;">${s.name || '이름없음'}</span>
+              <span style="font-size: 11px; color: var(--gray-500);">${s.category || ''}</span>
+              ${s.contractStatus === 'completed' || s.status === '계약완료' ? '<span style="background: #dcfce7; color: #15803d; font-size: 10px; padding: 2px 6px; border-radius: 10px;">계약완료</span>' : ''}
+            </div>
+          `).join('')}
+        </div>
+
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" onclick="closeModal()" style="flex: 1;">취소</button>
+          <button class="btn btn-primary" style="flex: 1; background: linear-gradient(135deg, #3b82f6, #1d4ed8);" onclick="executeSyncSuppliersToProductList()">
+            🔗 연동 실행
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 공급사DB → 상품리스트 연동 실행
+async function executeSyncSuppliersToProductList() {
+  const linkedSupplierIds = (state.productList || [])
+    .filter(p => p.linkedSupplierId)
+    .map(p => p.linkedSupplierId);
+
+  const suppliersToSync = (state.suppliers || []).filter(s =>
+    !s.sourceProductListId && !linkedSupplierIds.includes(s.id)
+  );
+
+  if (suppliersToSync.length === 0) {
+    showToast('연동할 공급사가 없습니다');
+    closeModal();
+    return;
+  }
+
+  try {
+    const batch = db.batch();
+    let count = 0;
+
+    for (const supplier of suppliersToSync) {
+      const newProductListItem = {
+        // 기본 정보
+        category: supplier.category || '',
+        brandName: supplier.name || '',
+        productName: supplier.mainProducts || supplier.name || '',
+        expectedPrice: 0,
+        source: '공급사DB 연동',
+        sourceLink: supplier.website || '',
+        notes: supplier.notes || '',
+
+        // 상태 (공급사DB에서 가져왔으므로 계약완료 상태)
+        proposed: true,
+        onboarding: true,
+        contacted: true,
+        contracted: true,
+
+        // 온보딩 체크리스트 연동 (suppliers → productList)
+        obContact: true,
+        obGuide: supplier.hasOnboardingGuide || false,
+        obProductInfo: supplier.hasProductInfo || false,
+        obBizLicense: supplier.hasBusinessLicense || false,
+        obBank: supplier.hasBankAccount || false,
+
+        // 유입경로
+        sourceType: supplier.sourceType || '',
+        sourceDetail: supplier.sourceDetail || '',
+
+        // 연동 정보
+        linkedSupplierId: supplier.id,
+        linkedFromDB: true,
+        registeredToSupplierDB: true,
+
+        // 메타 정보
+        createdAt: new Date().toISOString(),
+        createdBy: getCurrentUserId(),
+        syncedAt: new Date().toISOString()
+      };
+
+      const docRef = db.collection('productList').doc();
+      batch.set(docRef, newProductListItem);
+      count++;
+    }
+
+    await batch.commit();
+    showToast(`✅ ${count}개 공급사가 상품리스트에 연동되었습니다`);
+    closeModal();
+  } catch (e) {
+    console.error(e);
+    showToast('연동에 실패했습니다');
+  }
 }
 
 // 상품 리스트에서 공급사 DB로 등록
