@@ -13339,6 +13339,15 @@ function renderProductDB() {
                     </td>
                     <td>
                       <span style="color: var(--info); font-size: 13px;">${p.representativeProduct || '-'}</span>
+                      ${(p.referenceLinks && p.referenceLinks.length > 0) ? `
+                        <span style="margin-left: 6px; cursor: pointer;" title="${p.referenceLinks.join('\n')}" onclick="openReferenceLinksPopup(event, ${JSON.stringify(p.referenceLinks).replace(/"/g, '&quot;')})">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                          </svg>
+                          <span style="font-size: 10px; color: var(--gray-500);">${p.referenceLinks.length}</span>
+                        </span>
+                      ` : ''}
                     </td>
                     <td><strong>${p.productName || '-'}</strong></td>
                     <td style="text-align: right;">${Number(p.originalPrice || p.retailPrice || 0).toLocaleString()}원</td>
@@ -14740,7 +14749,25 @@ function openProductDBModal(productId = null) {
           <input type="text" class="form-input" id="pdb-representative" value="${p.representativeProduct || ''}" required placeholder="예: 스킨케어 세트 (정산 시 묶음 기준)">
           <small style="color: var(--gray-500); font-size: 11px;">정산 시 같은 대표상품으로 묶어서 집계됩니다.</small>
         </div>
-        
+
+        <div class="form-group">
+          <label class="form-label">레퍼런스 링크</label>
+          <div id="pdb-reference-links-container">
+            ${(p.referenceLinks && p.referenceLinks.length > 0) ?
+              p.referenceLinks.map((link, idx) => `
+                <div class="reference-link-row" style="display: flex; gap: 8px; margin-bottom: 8px;">
+                  <input type="url" class="form-input pdb-ref-link" value="${link}" placeholder="https://example.com" style="flex: 1;">
+                  <button type="button" class="btn btn-secondary" onclick="removeReferenceLink(this)" style="padding: 8px 12px; color: var(--danger);">×</button>
+                </div>
+              `).join('') : ''
+            }
+          </div>
+          <button type="button" class="btn btn-secondary" onclick="addReferenceLink()" style="margin-top: 4px; font-size: 12px;">
+            <span style="margin-right: 4px;">+</span> 링크 추가
+          </button>
+          <small style="color: var(--gray-500); font-size: 11px; display: block; margin-top: 4px;">공식 사이트, 쇼핑몰 등 참고 링크를 추가하세요.</small>
+        </div>
+
         <div class="form-group">
           <label class="form-label">상품명(SKU) *</label>
           <input type="text" class="form-input" id="pdb-name" value="${p.productName || ''}" required placeholder="예: 스킨케어 세트 100ml SKU-001">
@@ -14799,6 +14826,79 @@ function calcProductDBSupply() {
   }
 }
 
+// 레퍼런스 링크 추가
+function addReferenceLink() {
+  const container = document.getElementById('pdb-reference-links-container');
+  const newRow = document.createElement('div');
+  newRow.className = 'reference-link-row';
+  newRow.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
+  newRow.innerHTML = `
+    <input type="url" class="form-input pdb-ref-link" placeholder="https://example.com" style="flex: 1;">
+    <button type="button" class="btn btn-secondary" onclick="removeReferenceLink(this)" style="padding: 8px 12px; color: var(--danger);">×</button>
+  `;
+  container.appendChild(newRow);
+}
+
+// 레퍼런스 링크 삭제
+function removeReferenceLink(btn) {
+  btn.parentElement.remove();
+}
+
+// 레퍼런스 링크 배열 가져오기
+function getReferenceLinks() {
+  const inputs = document.querySelectorAll('.pdb-ref-link');
+  const links = [];
+  inputs.forEach(input => {
+    const val = input.value.trim();
+    if (val) links.push(val);
+  });
+  return links;
+}
+
+// 레퍼런스 링크 팝업
+function openReferenceLinksPopup(event, links) {
+  event.stopPropagation();
+  // 기존 팝업 제거
+  const existingPopup = document.getElementById('ref-links-popup');
+  if (existingPopup) existingPopup.remove();
+
+  const popup = document.createElement('div');
+  popup.id = 'ref-links-popup';
+  popup.style.cssText = `
+    position: fixed; z-index: 10000; background: white; border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15); padding: 12px; min-width: 280px; max-width: 400px;
+    left: ${Math.min(event.clientX, window.innerWidth - 420)}px;
+    top: ${Math.min(event.clientY + 10, window.innerHeight - 200)}px;
+  `;
+
+  popup.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <strong style="font-size: 13px;">레퍼런스 링크 (${links.length})</strong>
+      <button onclick="this.parentElement.parentElement.remove()" style="border: none; background: none; cursor: pointer; font-size: 18px; color: var(--gray-500);">×</button>
+    </div>
+    <div style="max-height: 200px; overflow-y: auto;">
+      ${links.map((link, i) => `
+        <a href="${link}" target="_blank" style="display: block; padding: 8px; background: var(--gray-50); border-radius: 4px; margin-bottom: 4px; font-size: 12px; color: var(--info); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+           title="${link}" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='var(--gray-50)'">
+          ${i + 1}. ${link.length > 50 ? link.substring(0, 50) + '...' : link}
+        </a>
+      `).join('')}
+    </div>
+  `;
+
+  document.body.appendChild(popup);
+
+  // 외부 클릭 시 닫기
+  setTimeout(() => {
+    document.addEventListener('click', function closePopup(e) {
+      if (!popup.contains(e.target)) {
+        popup.remove();
+        document.removeEventListener('click', closePopup);
+      }
+    });
+  }, 0);
+}
+
 function updateProductDBSupplierInfo() {
   const select = document.getElementById('pdb-supplier');
   const option = select.options[select.selectedIndex];
@@ -14818,6 +14918,7 @@ async function submitProductDBForm(e, id) {
     brandName: supplier?.name || '',
     supplierType: document.getElementById('pdb-type').value,
     representativeProduct: document.getElementById('pdb-representative').value,
+    referenceLinks: getReferenceLinks(),
     productName: document.getElementById('pdb-name').value,
     originalPrice: Number(document.getElementById('pdb-original').value) || 0,
     salePrice: Number(document.getElementById('pdb-sale').value) || 0,
