@@ -4488,7 +4488,9 @@
 
           <!-- 메인 컨텐츠 -->
           <div id="kpi-main-content">
-            ${renderKPIHierarchyView(megaProjects, projects, teamKPIs, memberKPIs, C)}
+            ${kpiViewMode === 'hierarchy' ? renderKPIHierarchyView(megaProjects, projects, teamKPIs, memberKPIs, C) :
+              kpiViewMode === 'team' ? renderTeamKPIView(teamKPIs, projects, memberKPIs, C) :
+              renderMemberKPIView(memberKPIs, teamKPIs, projects, members, C)}
           </div>
         </div>
       `;
@@ -4619,6 +4621,210 @@
               <button onclick="openProjectModalV2(null, '${mega.id}')" style="width: 100%; padding: 12px; background: transparent; border: 2px dashed ${C.gray300}; border-radius: 10px; color: ${C.gray500}; cursor: pointer; font-size: 13px; margin-top: 8px;">
                 + 프로젝트 추가
               </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 팀 KPI 뷰 렌더링
+    function renderTeamKPIView(teamKPIs, projects, memberKPIs, C) {
+      if (teamKPIs.length === 0) {
+        return `
+          <div style="text-align: center; padding: 60px; background: ${C.white}; border-radius: 16px; border: 2px dashed ${C.gray200};">
+            <div style="font-size: 48px; margin-bottom: 16px;">👥</div>
+            <div style="font-size: 18px; font-weight: 600; color: ${C.gray900}; margin-bottom: 8px;">등록된 팀 KPI가 없습니다</div>
+            <div style="font-size: 14px; color: ${C.gray500}; margin-bottom: 20px;">팀 KPI를 추가하여 팀 목표를 관리하세요</div>
+            <button onclick="openTeamKPIModal()" style="padding: 12px 24px; background: ${C.green}; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+              + 첫 팀 KPI 만들기
+            </button>
+          </div>
+        `;
+      }
+
+      // 프로젝트별로 그룹핑
+      const kpisByProject = {};
+      teamKPIs.forEach(kpi => {
+        const projectId = kpi.projectId || 'unassigned';
+        if (!kpisByProject[projectId]) {
+          kpisByProject[projectId] = [];
+        }
+        kpisByProject[projectId].push(kpi);
+      });
+
+      return Object.keys(kpisByProject).map(projectId => {
+        const project = projects.find(p => p.id === projectId);
+        const kpis = kpisByProject[projectId];
+
+        return `
+          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid ${C.gray100};">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 40px; height: 40px; background: ${C.green}20; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📁</div>
+                <div>
+                  <div style="font-size: 18px; font-weight: 700; color: ${C.gray900};">${project ? project.name : '미배정 KPI'}</div>
+                  <div style="font-size: 13px; color: ${C.gray500};">팀 KPI ${kpis.length}개</div>
+                </div>
+              </div>
+              <button onclick="openTeamKPIModal(null, '${projectId}')" style="padding: 8px 16px; background: ${C.green}; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">+ 팀 KPI 추가</button>
+            </div>
+
+            <div style="display: grid; gap: 16px;">
+              ${kpis.map(kpi => {
+                const progress = kpi.target > 0 ? Math.min(100, Math.round((kpi.current / kpi.target) * 100)) : 0;
+                const kpiMemberKPIs = memberKPIs.filter(mk => mk.teamKpiId === kpi.id);
+                const memberProgress = kpiMemberKPIs.length > 0
+                  ? Math.round(kpiMemberKPIs.reduce((sum, mk) => sum + Math.min(100, (mk.current / mk.target) * 100), 0) / kpiMemberKPIs.length)
+                  : 0;
+
+                return `
+                  <div style="background: ${C.gray50}; border-radius: 12px; padding: 20px; border-left: 4px solid ${C.green};">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                      <div>
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                          <span style="font-size: 16px;">👥</span>
+                          <span style="font-size: 16px; font-weight: 700; color: ${C.gray900};">${kpi.name}</span>
+                        </div>
+                        ${kpi.description ? `<div style="font-size: 13px; color: ${C.gray500}; margin-top: 4px;">${kpi.description}</div>` : ''}
+                      </div>
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 18px; font-weight: 700; color: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red};">
+                          ${kpi.current}/${kpi.target} ${kpi.unit || ''}
+                        </span>
+                        <button onclick="openTeamKPIModal(state.teamKPIs.find(k=>k.id==='${kpi.id}'))" style="padding: 6px 12px; background: ${C.white}; border: 1px solid ${C.gray200}; border-radius: 6px; cursor: pointer; font-size: 12px;">편집</button>
+                      </div>
+                    </div>
+
+                    <div style="margin-bottom: 12px;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <span style="font-size: 12px; color: ${C.gray500};">팀 목표 진행률</span>
+                        <span style="font-size: 13px; font-weight: 600; color: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red};">${progress}%</span>
+                      </div>
+                      <div style="background: ${C.gray200}; height: 8px; border-radius: 4px;">
+                        <div style="background: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red}; height: 100%; width: ${progress}%; border-radius: 4px; transition: width 0.3s;"></div>
+                      </div>
+                    </div>
+
+                    ${kpiMemberKPIs.length > 0 ? `
+                      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed ${C.gray200};">
+                        <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 12px;">👤 연결된 개인 KPI (${kpiMemberKPIs.length}개)</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                          ${kpiMemberKPIs.map(mk => {
+                            const mkProgress = mk.target > 0 ? Math.min(100, Math.round((mk.current / mk.target) * 100)) : 0;
+                            return `
+                              <div style="background: ${C.white}; padding: 10px 14px; border-radius: 8px; display: flex; align-items: center; gap: 10px; border: 1px solid ${C.gray200};">
+                                <span style="font-size: 13px; color: ${C.primary}; font-weight: 600;">👤 ${mk.memberName}</span>
+                                <span style="font-size: 12px; color: ${C.gray500};">${mk.name}</span>
+                                <span style="font-size: 13px; font-weight: 600; color: ${mkProgress >= 100 ? C.green : mkProgress >= 70 ? C.yellow : C.red};">${mk.current}/${mk.target}</span>
+                                <button onclick="quickUpdateMemberKPI('${mk.id}', ${mk.current + 1})" style="background: ${C.primary}; color: white; border: none; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; font-size: 14px;">+</button>
+                              </div>
+                            `;
+                          }).join('')}
+                        </div>
+                      </div>
+                    ` : `
+                      <div style="margin-top: 12px; padding: 12px; background: ${C.white}; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">연결된 개인 KPI가 없습니다</div>
+                        <button onclick="openMemberKPIModal(null, '${kpi.id}')" style="padding: 6px 12px; background: ${C.yellow}; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">+ 개인 KPI 추가</button>
+                      </div>
+                    `}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 개인 KPI 뷰 렌더링
+    function renderMemberKPIView(memberKPIs, teamKPIs, projects, members, C) {
+      if (memberKPIs.length === 0) {
+        return `
+          <div style="text-align: center; padding: 60px; background: ${C.white}; border-radius: 16px; border: 2px dashed ${C.gray200};">
+            <div style="font-size: 48px; margin-bottom: 16px;">👤</div>
+            <div style="font-size: 18px; font-weight: 600; color: ${C.gray900}; margin-bottom: 8px;">등록된 개인 KPI가 없습니다</div>
+            <div style="font-size: 14px; color: ${C.gray500}; margin-bottom: 20px;">개인 KPI를 추가하여 개인 목표를 관리하세요</div>
+            <button onclick="openMemberKPIModal()" style="padding: 12px 24px; background: ${C.yellow}; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+              + 첫 개인 KPI 만들기
+            </button>
+          </div>
+        `;
+      }
+
+      // 담당자별로 그룹핑
+      const kpisByMember = {};
+      memberKPIs.forEach(kpi => {
+        const memberName = kpi.memberName || '미배정';
+        if (!kpisByMember[memberName]) {
+          kpisByMember[memberName] = [];
+        }
+        kpisByMember[memberName].push(kpi);
+      });
+
+      return Object.keys(kpisByMember).map(memberName => {
+        const kpis = kpisByMember[memberName];
+        const totalProgress = kpis.length > 0
+          ? Math.round(kpis.reduce((sum, k) => sum + Math.min(100, (k.current / k.target) * 100), 0) / kpis.length)
+          : 0;
+        const achievedCount = kpis.filter(k => k.current >= k.target).length;
+
+        return `
+          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid ${C.gray100};">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, ${C.yellow}, #FBBF24); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; color: white;">👤</div>
+                <div>
+                  <div style="font-size: 18px; font-weight: 700; color: ${C.gray900};">${memberName}</div>
+                  <div style="font-size: 13px; color: ${C.gray500};">개인 KPI ${kpis.length}개 · 달성 ${achievedCount}개</div>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="text-align: right;">
+                  <div style="font-size: 12px; color: ${C.gray500};">평균 달성률</div>
+                  <div style="font-size: 24px; font-weight: 700; color: ${totalProgress >= 100 ? C.green : totalProgress >= 70 ? C.yellow : C.red};">${totalProgress}%</div>
+                </div>
+                <button onclick="openMemberKPIModal()" style="padding: 8px 16px; background: ${C.yellow}; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">+ KPI 추가</button>
+              </div>
+            </div>
+
+            <div style="display: grid; gap: 12px;">
+              ${kpis.map(kpi => {
+                const progress = kpi.target > 0 ? Math.min(100, Math.round((kpi.current / kpi.target) * 100)) : 0;
+                const teamKPI = teamKPIs.find(tk => tk.id === kpi.teamKpiId);
+                const project = projects.find(p => p.id === kpi.projectId);
+
+                return `
+                  <div style="background: ${C.gray50}; border-radius: 12px; padding: 16px; border-left: 4px solid ${C.yellow};">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                      <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
+                          <span style="font-size: 15px; font-weight: 600; color: ${C.gray900};">${kpi.name}</span>
+                          ${teamKPI ? `<span style="font-size: 11px; background: ${C.green}20; color: ${C.green}; padding: 2px 8px; border-radius: 10px;">👥 ${teamKPI.name}</span>` : ''}
+                          ${project ? `<span style="font-size: 11px; background: ${C.primary}20; color: ${C.primary}; padding: 2px 8px; border-radius: 10px;">📁 ${project.name}</span>` : ''}
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                          <div style="flex: 1; max-width: 300px;">
+                            <div style="background: ${C.gray200}; height: 8px; border-radius: 4px;">
+                              <div style="background: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red}; height: 100%; width: ${progress}%; border-radius: 4px; transition: width 0.3s;"></div>
+                            </div>
+                          </div>
+                          <span style="font-size: 14px; font-weight: 700; color: ${progress >= 100 ? C.green : progress >= 70 ? C.yellow : C.red};">
+                            ${kpi.current}/${kpi.target} ${kpi.unit || ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style="display: flex; align-items: center; gap: 8px; margin-left: 16px;">
+                        <button onclick="quickUpdateMemberKPI('${kpi.id}', ${Math.max(0, kpi.current - 1)})" style="background: ${C.gray200}; color: ${C.gray700}; border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600;">-</button>
+                        <button onclick="quickUpdateMemberKPI('${kpi.id}', ${kpi.current + 1})" style="background: ${C.primary}; color: white; border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: 600;">+</button>
+                        <button onclick="openMemberKPIModal(state.memberKPIs.find(k=>k.id==='${kpi.id}'))" style="padding: 8px 12px; background: ${C.white}; border: 1px solid ${C.gray200}; border-radius: 6px; cursor: pointer; font-size: 12px;">편집</button>
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
         `;
