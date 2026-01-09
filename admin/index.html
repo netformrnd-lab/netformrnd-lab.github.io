@@ -2447,6 +2447,12 @@ function formatNumber(num) {
   return Number(num).toLocaleString('ko-KR');
 }
 
+// 셀러명에서 팔로워 수 제거 (예: "김애란/라리맘(1.3만)" → "김애란/라리맘")
+function cleanSellerName(name) {
+  if (!name) return '-';
+  return name.replace(/\s*\([0-9,.]+만?\)$/g, '').trim() || name;
+}
+
 // 💰 세금 관련 상수 (사업소득세 3% + 지방소득세 0.3% = 3.3%)
 const TAX_RATE = 0.033;
 const TAX_RATE_INCOME = 0.03;      // 사업소득세 3%
@@ -8519,7 +8525,8 @@ async function renderSettlement() {
                     <th style="padding: 10px 8px; text-align: right; font-weight: 600; color: #92400e;">공급사정산</th>
                     <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: #0369a1;">정산일</th>
                     <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: var(--gray-600);">정산서</th>
-                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: var(--gray-600);">관리</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: #059669;">셀러✓</th>
+                    <th style="padding: 10px 8px; text-align: center; font-weight: 600; color: #92400e;">공급사✓</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -8529,6 +8536,8 @@ async function renderSettlement() {
                       (sup.dealPeriod === s.dealPeriod && sup.supplierName === s.brandName)
                     );
                     const supplierAmount = matchedSupplier ? (Number(matchedSupplier.totalAmount) || 0) : 0;
+                    const isSellerDone = s.isSellerCompleted || false;
+                    const isSupplierDone = s.isSupplierCompleted || false;
 
                     return `
                     <tr style="border-bottom: 1px solid var(--gray-100);" class="hover-row">
@@ -8552,7 +8561,14 @@ async function renderSettlement() {
                         </div>
                       </td>
                       <td style="padding: 10px 8px; text-align: center;">
-                        <button onclick="event.stopPropagation(); toggleSellerSettlementComplete('${s.id}')" style="padding: 4px 8px; background: #3b82f6; border: none; border-radius: 4px; cursor: pointer; font-size: 10px; color: white;">완료</button>
+                        <label style="display: flex; align-items: center; justify-content: center; cursor: pointer;">
+                          <input type="checkbox" ${isSellerDone ? 'checked' : ''} onchange="toggleExternalCompletion('${s.id}', '${matchedSupplier?.id || ''}', 'seller')" style="width: 18px; height: 18px; cursor: pointer; accent-color: #059669;">
+                        </label>
+                      </td>
+                      <td style="padding: 10px 8px; text-align: center;">
+                        <label style="display: flex; align-items: center; justify-content: center; cursor: pointer;">
+                          <input type="checkbox" ${isSupplierDone ? 'checked' : ''} onchange="toggleExternalCompletion('${s.id}', '${matchedSupplier?.id || ''}', 'supplier')" style="width: 18px; height: 18px; cursor: pointer; accent-color: #d97706;">
+                        </label>
                       </td>
                     </tr>
                   `;}).join('')}
@@ -8855,7 +8871,7 @@ function viewSellerSettlementDetail(settlementId) {
       <div class="modal-body" style="padding: 24px;">
         <!-- 셀러 정보 -->
         <div style="text-align: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid var(--gray-200);">
-          <div style="font-size: 22px; font-weight: 700; color: #1e40af;">${settlement.sellerName || '-'}</div>
+          <div style="font-size: 22px; font-weight: 700; color: #1e40af;">${cleanSellerName(settlement.sellerName)}</div>
           <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">${settlement.dealPeriod || '-'}</div>
         </div>
 
@@ -9006,7 +9022,7 @@ function downloadSellerSettlementPDF(settlementId) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <title>셀러 정산서 - ${settlement.sellerName}</title>
+      <title>셀러 정산서 - ${cleanSellerName(settlement.sellerName)}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Malgun Gothic', sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
@@ -9044,7 +9060,7 @@ function downloadSellerSettlementPDF(settlementId) {
       <table class="info-table">
         <tr>
           <td class="label">셀러</td>
-          <td>${settlement.sellerName || '-'}</td>
+          <td>${cleanSellerName(settlement.sellerName)}</td>
         </tr>
         <tr>
           <td class="label">브랜드</td>
@@ -9197,7 +9213,7 @@ function downloadSupplierSettlementPDF(settlementId) {
         </tr>
         <tr>
           <td class="label">셀러</td>
-          <td>${settlement.sellerName || matchedSeller?.sellerName || '-'}</td>
+          <td>${cleanSellerName(settlement.sellerName || matchedSeller?.sellerName)}</td>
         </tr>
         <tr>
           <td class="label">공구기간</td>
@@ -9460,6 +9476,65 @@ async function toggleSupplierSettlementComplete(settlementId) {
     });
     showToast(settlement.isCompleted ? '정산 대기로 변경되었습니다' : '정산 완료 처리되었습니다');
     closeModal();
+  } catch (e) {
+    console.error(e);
+    showToast('상태 변경에 실패했습니다');
+  }
+}
+
+// 타사 상품 셀러/공급사 개별 완료 처리
+async function toggleExternalCompletion(sellerId, supplierId, type) {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const sellerSettlement = state.sellerSettlements?.find(s => s.id === sellerId);
+  if (!sellerSettlement) return;
+
+  try {
+    const now = new Date().toISOString();
+
+    // 현재 상태 가져오기
+    const isSellerDone = sellerSettlement.isSellerCompleted || false;
+    const isSupplierDone = sellerSettlement.isSupplierCompleted || false;
+
+    let newSellerDone = isSellerDone;
+    let newSupplierDone = isSupplierDone;
+
+    if (type === 'seller') {
+      newSellerDone = !isSellerDone;
+    } else if (type === 'supplier') {
+      newSupplierDone = !isSupplierDone;
+    }
+
+    // 둘 다 완료되면 isCompleted = true
+    const bothDone = newSellerDone && newSupplierDone;
+
+    // 셀러 정산서 업데이트
+    await db.collection('sellerSettlements').doc(sellerId).update({
+      isSellerCompleted: newSellerDone,
+      isSupplierCompleted: newSupplierDone,
+      isCompleted: bothDone,
+      completedAt: bothDone ? now : null,
+      updatedAt: now
+    });
+
+    // 매칭된 공급사 정산서도 함께 업데이트
+    if (supplierId) {
+      await db.collection('supplierSettlements').doc(supplierId).update({
+        isCompleted: bothDone,
+        completedAt: bothDone ? now : null,
+        updatedAt: now
+      });
+    }
+
+    if (type === 'seller') {
+      showToast(newSellerDone ? '✅ 셀러 정산 완료' : '⏳ 셀러 정산 대기');
+    } else {
+      showToast(newSupplierDone ? '✅ 공급사 정산 완료' : '⏳ 공급사 정산 대기');
+    }
+
+    // 화면 새로고침
+    await loadSettlementData();
+    renderSettlement();
   } catch (e) {
     console.error(e);
     showToast('상태 변경에 실패했습니다');
@@ -23285,7 +23360,7 @@ function generateSellerStatement(settlementId) {
       <table style="width: 100%; border-collapse: collapse; margin-bottom: 32px;">
         <tr style="background: #dcfce7;">
           <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; width: 25%;">셀러명</th>
-          <td style="padding: 12px; border: 1px solid #e5e7eb;"><strong>${settlement.sellerName}</strong></td>
+          <td style="padding: 12px; border: 1px solid #e5e7eb;"><strong>${cleanSellerName(settlement.sellerName)}</strong></td>
           <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left; width: 25%;">브랜드</th>
           <td style="padding: 12px; border: 1px solid #e5e7eb;">${settlement.brandName}</td>
         </tr>
@@ -23345,7 +23420,7 @@ function generateSellerStatement(settlementId) {
   `;
   
   const printWindow = window.open('', '_blank');
-  printWindow.document.write('<!DOCTYPE html><html><head><title>셀러 정산서 - ' + settlement.sellerName + '</title></head><body>' + content + '</body></html>');
+  printWindow.document.write('<!DOCTYPE html><html><head><title>셀러 정산서 - ' + cleanSellerName(settlement.sellerName) + '</title></head><body>' + content + '</body></html>');
   printWindow.document.close();
 }
 
