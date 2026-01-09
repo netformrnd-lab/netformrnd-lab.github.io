@@ -3264,7 +3264,9 @@ let state = {
   // 온보딩 가이드 관리
   onboardingGuides: [],
   // 공급사 문의
-  supplierInquiries: []
+  supplierInquiries: [],
+  // 셀러 문의
+  sellerInquiries: []
 };
 
 // 상수
@@ -3429,6 +3431,14 @@ function setupListeners() {
   // 공급사 문의 목록
   db.collection('supplierInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
     state.supplierInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+    // 문의 배지 업데이트
+    if (typeof updateInquiryBadge === 'function') updateInquiryBadge();
+  });
+
+  // 셀러 문의 목록
+  db.collection('sellerInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.sellerInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
     // 문의 배지 업데이트
     if (typeof updateInquiryBadge === 'function') updateInquiryBadge();
@@ -25927,10 +25937,19 @@ document.addEventListener('DOMContentLoaded', function() {
   setTimeout(updateInquiryBadge, 500);
 });
 
-// ==================== 공급사 문의 관리 (Firebase 연동) ====================
+// ==================== 문의 관리 (Firebase 연동) ====================
+// 현재 문의 탭 상태
+let currentInquiryTab = 'supplier';
+
 function renderSupplierInquiries() {
   const app = document.getElementById('app');
-  const inquiries = state.supplierInquiries || [];
+  const supplierInquiries = state.supplierInquiries || [];
+  const sellerInquiries = state.sellerInquiries || [];
+  const allInquiries = [...supplierInquiries, ...sellerInquiries];
+
+  const supplierPending = supplierInquiries.filter(i => i.status === 'pending' || !i.status).length;
+  const sellerPending = sellerInquiries.filter(i => i.status === 'pending' || !i.status).length;
+  const totalPending = supplierPending + sellerPending;
 
   const formatDateStr = (timestamp) => {
     if (!timestamp) return '-';
@@ -25954,95 +25973,146 @@ function renderSupplierInquiries() {
     }
   };
 
-  const pendingCount = inquiries.filter(i => i.status === 'pending' || !i.status).length;
-  const processingCount = inquiries.filter(i => i.status === 'processing').length;
-  const completedCount = inquiries.filter(i => i.status === 'completed').length;
+  const renderTable = (inquiries, type) => {
+    const nameLabel = type === 'supplier' ? '공급사명' : '성함';
+    const collection = type === 'supplier' ? 'supplierInquiries' : 'sellerInquiries';
 
-  app.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">📩 공급사 문의 관리</h1>
-      <p style="color: var(--gray-600); font-size: 14px; margin-top: 4px;">
-        공급사 페이지에서 접수된 문의 내역을 관리합니다
-      </p>
-    </div>
-
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px;">
-      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">전체 문의</div>
-        <div style="font-size: 28px; font-weight: 700; color: var(--gray-900);">${inquiries.length}</div>
-      </div>
-      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">대기</div>
-        <div style="font-size: 28px; font-weight: 700; color: var(--danger);">${pendingCount}</div>
-      </div>
-      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">처리중</div>
-        <div style="font-size: 28px; font-weight: 700; color: var(--warning);">${processingCount}</div>
-      </div>
-      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">완료</div>
-        <div style="font-size: 28px; font-weight: 700; color: var(--success);">${completedCount}</div>
-      </div>
-    </div>
-
-    <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-      <div style="padding: 20px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 18px;">🏢</span>
-        <h2 style="font-size: 16px; font-weight: 700;">공급사 문의 목록</h2>
-        <span style="background: var(--gray-100); padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--gray-600);">${inquiries.length}</span>
-      </div>
-      ${inquiries.length === 0 ? `
+    if (inquiries.length === 0) {
+      return `
         <div style="text-align: center; padding: 48px; color: var(--gray-500);">
           <div style="font-size: 48px; margin-bottom: 12px;">📭</div>
           <p>아직 문의 내역이 없습니다.</p>
         </div>
-      ` : `
-        <table style="width: 100%; border-collapse: collapse;">
-          <thead>
-            <tr style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
-              <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">상태</th>
-              <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">공급사명</th>
-              <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">연락처</th>
-              <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">접수일시</th>
-              <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">메모</th>
-              <th style="padding: 12px 16px; text-align: center; font-size: 13px; font-weight: 600; color: var(--gray-600);">액션</th>
+      `;
+    }
+
+    return `
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">상태</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">${nameLabel}</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">연락처</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">접수일시</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">메모</th>
+            <th style="padding: 12px 16px; text-align: center; font-size: 13px; font-weight: 600; color: var(--gray-600);">액션</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${inquiries.map(item => `
+            <tr style="border-bottom: 1px solid var(--gray-100);">
+              <td style="padding: 14px 16px;">${getStatusBadge(item.status)}</td>
+              <td style="padding: 14px 16px; font-weight: 500;">${item.name || '-'}</td>
+              <td style="padding: 14px 16px;">
+                <a href="tel:${(item.contact || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500;">${item.contact || '-'}</a>
+              </td>
+              <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600);">${formatDateStr(item.createdAt)}</td>
+              <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.note || '-'}</td>
+              <td style="padding: 14px 16px; text-align: center;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                  ${item.status !== 'processing' ? `
+                    <button onclick="updateInquiryStatus('${collection}', '${item.id}', 'processing')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
+                  ` : ''}
+                  ${item.status !== 'completed' ? `
+                    <button onclick="updateInquiryStatus('${collection}', '${item.id}', 'completed')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">완료</button>
+                  ` : ''}
+                  <button onclick="openInquiryNoteModal('${collection}', '${item.id}', '${(item.note || '').replace(/'/g, "\\'")}')" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">메모</button>
+                  <button onclick="deleteInquiry('${collection}', '${item.id}')" style="padding: 6px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">삭제</button>
+                </div>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            ${inquiries.map(item => `
-              <tr style="border-bottom: 1px solid var(--gray-100);">
-                <td style="padding: 14px 16px;">${getStatusBadge(item.status)}</td>
-                <td style="padding: 14px 16px; font-weight: 500;">${item.name || '-'}</td>
-                <td style="padding: 14px 16px;">
-                  <a href="tel:${(item.contact || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500;">${item.contact || '-'}</a>
-                </td>
-                <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600);">${formatDateStr(item.createdAt)}</td>
-                <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.note || '-'}</td>
-                <td style="padding: 14px 16px; text-align: center;">
-                  <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
-                    ${item.status !== 'processing' ? `
-                      <button onclick="updateSupplierInquiryStatus('${item.id}', 'processing')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
-                    ` : ''}
-                    ${item.status !== 'completed' ? `
-                      <button onclick="updateSupplierInquiryStatus('${item.id}', 'completed')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">완료</button>
-                    ` : ''}
-                    <button onclick="openInquiryNoteModal('${item.id}', '${(item.note || '').replace(/'/g, "\\'")}')" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">메모</button>
-                    <button onclick="deleteSupplierInquiry('${item.id}')" style="padding: 6px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">삭제</button>
-                  </div>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `}
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  };
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">📩 문의 관리</h1>
+      <p style="color: var(--gray-600); font-size: 14px; margin-top: 4px;">
+        공급사/셀러 페이지에서 접수된 문의 내역을 관리합니다
+      </p>
+    </div>
+
+    <!-- 요약 카드 -->
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">전체 문의</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--gray-900);">${allInquiries.length}</div>
+      </div>
+      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">대기 중</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--danger);">${totalPending}</div>
+      </div>
+      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">공급사 문의</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--primary);">${supplierInquiries.length}</div>
+      </div>
+      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">셀러 문의</div>
+        <div style="font-size: 28px; font-weight: 700; color: #10b981;">${sellerInquiries.length}</div>
+      </div>
+    </div>
+
+    <!-- 탭 -->
+    <div style="display: flex; gap: 4px; margin-bottom: 24px; background: var(--gray-100); padding: 4px; border-radius: 12px;">
+      <button id="inquiryTab-supplier" onclick="switchInquiryTab('supplier')" style="
+        flex: 1; padding: 14px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600;
+        ${currentInquiryTab === 'supplier' ? 'background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);' : 'background: transparent; color: var(--gray-500);'}
+        cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      ">
+        <span style="font-size: 16px;">🏢</span> 공급사 문의
+        <span style="background: ${currentInquiryTab === 'supplier' ? 'var(--primary)' : 'var(--gray-300)'}; color: white; padding: 2px 8px; border-radius: 8px; font-size: 12px;">${supplierInquiries.length}</span>
+        ${supplierPending > 0 ? `<span style="background: #dc2626; color: white; padding: 2px 6px; border-radius: 6px; font-size: 11px;">대기 ${supplierPending}</span>` : ''}
+      </button>
+      <button id="inquiryTab-seller" onclick="switchInquiryTab('seller')" style="
+        flex: 1; padding: 14px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600;
+        ${currentInquiryTab === 'seller' ? 'background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);' : 'background: transparent; color: var(--gray-500);'}
+        cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      ">
+        <span style="font-size: 16px;">👤</span> 셀러 문의
+        <span style="background: ${currentInquiryTab === 'seller' ? '#10b981' : 'var(--gray-300)'}; color: white; padding: 2px 8px; border-radius: 8px; font-size: 12px;">${sellerInquiries.length}</span>
+        ${sellerPending > 0 ? `<span style="background: #dc2626; color: white; padding: 2px 6px; border-radius: 6px; font-size: 11px;">대기 ${sellerPending}</span>` : ''}
+      </button>
+    </div>
+
+    <!-- 공급사 문의 탭 -->
+    <div id="inquiryContent-supplier" style="display: ${currentInquiryTab === 'supplier' ? 'block' : 'none'};">
+      <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="padding: 20px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 18px;">🏢</span>
+          <h2 style="font-size: 16px; font-weight: 700;">공급사 문의 목록</h2>
+          <span style="background: var(--gray-100); padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--gray-600);">${supplierInquiries.length}</span>
+        </div>
+        ${renderTable(supplierInquiries, 'supplier')}
+      </div>
+    </div>
+
+    <!-- 셀러 문의 탭 -->
+    <div id="inquiryContent-seller" style="display: ${currentInquiryTab === 'seller' ? 'block' : 'none'};">
+      <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="padding: 20px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 18px;">👤</span>
+          <h2 style="font-size: 16px; font-weight: 700;">셀러 문의 목록</h2>
+          <span style="background: var(--gray-100); padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--gray-600);">${sellerInquiries.length}</span>
+        </div>
+        ${renderTable(sellerInquiries, 'seller')}
+      </div>
     </div>
   `;
 }
 
-// 공급사 문의 상태 업데이트
-async function updateSupplierInquiryStatus(id, status) {
+// 문의 탭 전환
+function switchInquiryTab(tab) {
+  currentInquiryTab = tab;
+  renderSupplierInquiries();
+}
+
+// 문의 상태 업데이트 (공통)
+async function updateInquiryStatus(collection, id, status) {
   try {
-    await db.collection('supplierInquiries').doc(id).update({
+    await db.collection(collection).doc(id).update({
       status: status,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -26053,11 +26123,11 @@ async function updateSupplierInquiryStatus(id, status) {
   }
 }
 
-// 공급사 문의 삭제
-async function deleteSupplierInquiry(id) {
+// 문의 삭제 (공통)
+async function deleteInquiry(collection, id) {
   if (!confirm('이 문의를 삭제하시겠습니까?')) return;
   try {
-    await db.collection('supplierInquiries').doc(id).delete();
+    await db.collection(collection).doc(id).delete();
     showToast('문의가 삭제되었습니다.');
   } catch (e) {
     console.error('삭제 실패:', e);
@@ -26065,8 +26135,8 @@ async function deleteSupplierInquiry(id) {
   }
 }
 
-// 공급사 문의 메모 모달
-function openInquiryNoteModal(id, currentNote) {
+// 문의 메모 모달 (공통)
+function openInquiryNoteModal(collection, id, currentNote) {
   const m = document.getElementById('modal');
   m.className = 'modal show';
   m.innerHTML = `
@@ -26079,18 +26149,18 @@ function openInquiryNoteModal(id, currentNote) {
         <textarea id="inquiryNoteInput" style="width: 100%; height: 120px; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit;">${currentNote || ''}</textarea>
         <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
           <button onclick="closeModal()" style="padding: 10px 20px; background: var(--gray-200); border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">취소</button>
-          <button onclick="saveInquiryNote('${id}')" style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">저장</button>
+          <button onclick="saveInquiryNote('${collection}', '${id}')" style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">저장</button>
         </div>
       </div>
     </div>
   `;
 }
 
-// 공급사 문의 메모 저장
-async function saveInquiryNote(id) {
+// 문의 메모 저장 (공통)
+async function saveInquiryNote(collection, id) {
   const note = document.getElementById('inquiryNoteInput').value.trim();
   try {
-    await db.collection('supplierInquiries').doc(id).update({
+    await db.collection(collection).doc(id).update({
       note: note,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
@@ -26102,13 +26172,15 @@ async function saveInquiryNote(id) {
   }
 }
 
-// 공급사 문의 배지 업데이트
+// 문의 배지 업데이트 (공급사 + 셀러)
 function updateInquiryBadge() {
   const badge = document.getElementById('inquiry-badge');
   if (!badge) return;
-  const pendingCount = (state.supplierInquiries || []).filter(i => i.status === 'pending' || !i.status).length;
-  if (pendingCount > 0) {
-    badge.textContent = pendingCount;
+  const supplierPending = (state.supplierInquiries || []).filter(i => i.status === 'pending' || !i.status).length;
+  const sellerPending = (state.sellerInquiries || []).filter(i => i.status === 'pending' || !i.status).length;
+  const totalPending = supplierPending + sellerPending;
+  if (totalPending > 0) {
+    badge.textContent = totalPending;
     badge.style.display = 'inline-block';
   } else {
     badge.style.display = 'none';
