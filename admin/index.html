@@ -3257,6 +3257,8 @@ let state = {
   currentUser: null,
   // 셀러 입점 신청
   sellerApplications: [],
+  // 대기 중인 온보딩 서류
+  pendingOnboardings: [],
   // 공급사 입점 신청
   supplierApplications: [],
   // 공구 제안 (신규 공구 제안서)
@@ -3414,7 +3416,13 @@ function setupListeners() {
     state.sellerApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
-  
+
+  // 대기 중인 온보딩 서류
+  db.collection('pendingOnboardings').orderBy('submittedAt', 'desc').onSnapshot(snapshot => {
+    state.pendingOnboardings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
+
   db.collection('productList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
     state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
@@ -3847,7 +3855,7 @@ function switchSellerTab(tabName) {
   // 사이드바에서 셀러 관리 항목 활성화
   document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.remove('active');
-    if (item.dataset.tab === 'sellers' && ['sellers', 'sellerList', 'sellerApplications'].includes(tabName)) {
+    if (item.dataset.tab === 'sellers' && ['sellers', 'sellerList', 'sellerApplications', 'pendingOnboardings'].includes(tabName)) {
       item.classList.add('active');
     }
   });
@@ -3859,6 +3867,8 @@ function switchSellerTab(tabName) {
     renderSellerList();
   } else if (tabName === 'sellerApplications') {
     renderSellerApplications();
+  } else if (tabName === 'pendingOnboardings') {
+    renderPendingOnboardings();
   }
 }
 
@@ -8176,6 +8186,135 @@ function renderApplicationCard(app, showActions) {
       </div>
     </div>
   `;
+}
+
+// 대기 중인 온보딩 서류 렌더링
+function renderPendingOnboardings() {
+  const app = document.getElementById('app');
+  const pending = state.pendingOnboardings || [];
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">📋 대기 중인 온보딩 서류</h1>
+      <p class="page-desc">셀러 ID 없이 제출된 서류입니다. 셀러와 매칭해주세요.</p>
+    </div>
+
+    <!-- 탭 UI -->
+    <div style="display: flex; gap: 4px; margin-bottom: 16px; background: var(--gray-100); padding: 4px; border-radius: var(--btn-radius);">
+      <button onclick="switchSellerTab('sellers')" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
+        👤 셀러 DB
+      </button>
+      <button onclick="switchSellerTab('sellerList')" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
+        📋 셀러 리스트
+      </button>
+      <button onclick="switchSellerTab('sellerApplications')" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
+        📝 입점 신청
+      </button>
+      <button onclick="switchSellerTab('pendingOnboardings')" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        📄 대기 서류 ${pending.length > 0 ? '<span style="background: #ef4444; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px; margin-left: 6px;">' + pending.length + '</span>' : ''}
+      </button>
+    </div>
+
+    ${pending.length === 0 ? `
+      <div class="card">
+        <div class="empty-state">
+          <div class="icon">📭</div>
+          <div class="text">대기 중인 서류가 없습니다</div>
+        </div>
+      </div>
+    ` : `
+      <div class="card">
+        <div style="display: grid; gap: 16px;">
+          ${pending.map(doc => `
+            <div style="background: #fffbeb; border: 1px solid #fcd34d; border-radius: 12px; padding: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
+                <div>
+                  <div style="font-weight: 700; color: #92400e; margin-bottom: 4px;">📄 서류 ID: ${doc.id.slice(0,8)}...</div>
+                  <div style="font-size: 12px; color: #a16207;">제출일: ${doc.submittedAt ? new Date(doc.submittedAt).toLocaleString('ko-KR') : '알 수 없음'}</div>
+                </div>
+                <button onclick="deletePendingOnboarding('${doc.id}')" style="background: #fee2e2; color: #dc2626; border: none; padding: 6px 12px; border-radius: 6px; font-size: 11px; cursor: pointer;">삭제</button>
+              </div>
+
+              <!-- 제출된 서류 목록 -->
+              <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;">
+                ${doc.idCardUrl ? `<a href="${doc.idCardUrl}" target="_blank" style="background: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #374151; text-decoration: none; border: 1px solid #e5e7eb;">🪪 신분증</a>` : ''}
+                ${doc.bankInfo?.type === 'text' ? `<span style="background: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #374151; border: 1px solid #e5e7eb;">🏦 ${doc.bankInfo.bankName} ${doc.bankInfo.accountNumber}</span>` : ''}
+                ${doc.bankInfo?.type === 'image' ? `<a href="${doc.bankInfo.url}" target="_blank" style="background: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #374151; text-decoration: none; border: 1px solid #e5e7eb;">🏦 통장사본</a>` : ''}
+                ${doc.businessLicenseUrl ? `<a href="${doc.businessLicenseUrl}" target="_blank" style="background: white; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #374151; text-decoration: none; border: 1px solid #e5e7eb;">🏢 사업자등록증</a>` : ''}
+              </div>
+
+              <!-- 셀러 매칭 -->
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="match-seller-${doc.id}" style="flex: 1; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px;">
+                  <option value="">-- 셀러 선택 --</option>
+                  ${(state.sellers || []).map(s => `<option value="${s.id}">${s.name} ${s.contact ? '(' + s.contact + ')' : ''}</option>`).join('')}
+                </select>
+                <button onclick="matchOnboardingToSeller('${doc.id}')" style="background: #16a34a; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                  매칭하기
+                </button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `}
+  `;
+}
+
+// 대기 서류를 셀러에 매칭
+async function matchOnboardingToSeller(docId) {
+  const sellerId = document.getElementById('match-seller-' + docId)?.value;
+  if (!sellerId) {
+    showToast('셀러를 선택해주세요');
+    return;
+  }
+
+  const pendingDoc = state.pendingOnboardings.find(d => d.id === docId);
+  if (!pendingDoc) return;
+
+  const seller = state.sellers.find(s => s.id === sellerId);
+  if (!confirm(`"${seller?.name || sellerId}" 셀러에게 서류를 매칭하시겠습니까?`)) return;
+
+  try {
+    // 셀러 문서에 서류 정보 추가
+    await db.collection('sellers').doc(sellerId).update({
+      documentsSubmitted: true,
+      documentsApproved: false,
+      onboardingDocuments: {
+        idCardUrl: pendingDoc.idCardUrl || null,
+        idCardFileName: pendingDoc.idCardFileName || null,
+        bankInfo: pendingDoc.bankInfo || null,
+        businessLicenseUrl: pendingDoc.businessLicenseUrl || null,
+        submittedAt: pendingDoc.submittedAt || new Date().toISOString()
+      },
+      obIdCard: !!pendingDoc.idCardUrl,
+      obBank: !!pendingDoc.bankInfo,
+      journeyDocuments: true,
+      journeyBankInfo: !!pendingDoc.bankInfo,
+      journeyIdCard: !!pendingDoc.idCardUrl
+    });
+
+    // 대기 문서 삭제
+    await db.collection('pendingOnboardings').doc(docId).delete();
+
+    showToast('✓ 서류가 셀러에게 매칭되었습니다');
+  } catch (error) {
+    console.error('매칭 실패:', error);
+    showToast('매칭 실패: ' + error.message);
+  }
+}
+
+// 대기 서류 삭제
+async function deletePendingOnboarding(docId) {
+  if (!confirm('이 서류를 삭제하시겠습니까? 복구할 수 없습니다.')) return;
+
+  try {
+    await db.collection('pendingOnboardings').doc(docId).delete();
+    showToast('삭제되었습니다');
+  } catch (error) {
+    console.error('삭제 실패:', error);
+    showToast('삭제 실패');
+  }
 }
 
 // 신청 승인
