@@ -8215,9 +8215,9 @@ async function renderSettlement() {
 
   const totalPgFee = Math.round(totalSalesAmount * 0.04);
 
-  // 정산대기 금액 (정산서 isCompleted 기준)
-  const inhousePendingAmount = inhouseSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
-  const externalPendingAmount = externalSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  // 정산대기 금액 (정산서 isCompleted 기준) - 전체 목록 기준으로 계산
+  const inhousePendingAmount = allInhouseSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
+  const externalPendingAmount = allExternalSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.actualPayment) || 0), 0);
   const supplierPendingAmount = allSupplierSettlements.filter(s => !s.isCompleted).reduce((sum, s) => sum + (Number(s.totalSupplyAmount) || Number(s.supplyAmount) || 0) + (Number(s.totalVatAmount) || Number(s.vatAmount) || 0), 0);
 
   // 콘텐츠 제작료 정산 (pendingAmount 계산용)
@@ -8226,9 +8226,9 @@ async function renderSettlement() {
 
   const totalPendingAmount = inhousePendingAmount + externalPendingAmount + supplierPendingAmount + contentFeePendingAmount;
 
-  // 정산 진행률 계산 (콘텐츠 제작료 포함)
-  const totalSettlementCount = inhouseSettlements.length + externalSettlements.length + allSupplierSettlements.length + allContentFees.length;
-  const completedSettlementCount = inhouseSettlements.filter(s => s.isCompleted).length + externalSettlements.filter(s => s.isCompleted).length + allSupplierSettlements.filter(s => s.isCompleted).length + allContentFees.filter(f => f.isCompleted).length;
+  // 정산 진행률 계산 (콘텐츠 제작료 포함) - 전체 목록 기준으로 계산
+  const totalSettlementCount = allInhouseSettlements.length + allExternalSettlements.length + allSupplierSettlements.length + allContentFees.length;
+  const completedSettlementCount = allInhouseSettlements.filter(s => s.isCompleted).length + allExternalSettlements.filter(s => s.isCompleted).length + allSupplierSettlements.filter(s => s.isCompleted).length + allContentFees.filter(f => f.isCompleted).length;
 
   // 순이익 계산
   const totalSellerPayout = inhouseActualPayment + externalActualPayment;
@@ -17310,7 +17310,7 @@ async function refreshManagementReport() {
       }
 
       let rows = '';
-      let totalQty = 0, totalSales = 0, totalMargin = 0, totalTax = 0;
+      let totalQty = 0, totalSales = 0, totalMargin = 0, totalIncomeTax = 0, totalLocalTax = 0;
       let totalSupply = 0, totalVat = 0, totalSupplierTotal = 0;
 
       combinedData.forEach(item => {
@@ -17337,8 +17337,9 @@ async function refreshManagementReport() {
           const qty = Number(p.quantity) || 0;
           const salesAmt = Number(p.salesAmount) || 0;
           const marginAmt = Number(p.marginAmount) || 0;
-          const taxAmt = Number(p.withholdingTax) || 0;
-          const subtotal = marginAmt - taxAmt;
+          const incomeTax = Math.round(marginAmt * TAX_RATE_INCOME);
+          const localTax = Math.round(marginAmt * TAX_RATE_LOCAL);
+          const subtotal = marginAmt - incomeTax - localTax;
           const pSupply = Number(p.supplyPrice) || 0;
           const pVat = Math.round(pSupply * 0.1);
           const pTotal = pSupply + pVat;
@@ -17346,7 +17347,8 @@ async function refreshManagementReport() {
           totalQty += qty;
           totalSales += salesAmt;
           totalMargin += marginAmt;
-          totalTax += taxAmt;
+          totalIncomeTax += incomeTax;
+          totalLocalTax += localTax;
           totalSupply += pSupply * qty;
           totalVat += pVat * qty;
           totalSupplierTotal += pTotal * qty;
@@ -17363,7 +17365,8 @@ async function refreshManagementReport() {
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;">${formatNumber(salesAmt)}원</td>`;
           // 셀러 정산 (녹색 배경)
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#f0fdf4;">${formatNumber(marginAmt)}원</td>`;
-          rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#f0fdf4;">${formatNumber(taxAmt)}원</td>`;
+          rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef9c3;">${formatNumber(incomeTax)}원</td>`;
+          rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef9c3;">${formatNumber(localTax)}원</td>`;
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#f0fdf4;">${formatNumber(subtotal)}원</td>`;
           if (idx === 0) {
             rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;vertical-align:middle;background:#d1fae5;font-weight:700;color:#065f46;" rowspan="${productCount}">${formatNumber(sellerPayment)}원</td>`;
@@ -17383,14 +17386,16 @@ async function refreshManagementReport() {
         if (products.length === 0) {
           const salesAmt = Number(seller?.salesAmount) || 0;
           const marginAmt = Number(seller?.marginAmount) || 0;
-          const taxAmt = Number(seller?.withholdingTax) || 0;
-          const subtotal = marginAmt - taxAmt;
+          const incomeTax = Math.round(marginAmt * TAX_RATE_INCOME);
+          const localTax = Math.round(marginAmt * TAX_RATE_LOCAL);
+          const subtotal = marginAmt - incomeTax - localTax;
           const qty = Number(seller?.totalQuantity) || Number(supplier?.totalQuantity) || 0;
 
           totalQty += qty;
           totalSales += salesAmt;
           totalMargin += marginAmt;
-          totalTax += taxAmt;
+          totalIncomeTax += incomeTax;
+          totalLocalTax += localTax;
           totalSupply += supplyAmount;
           totalVat += vatAmount;
           totalSupplierTotal += supplierTotal;
@@ -17404,7 +17409,8 @@ async function refreshManagementReport() {
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;">${qty}</td>`;
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;">${formatNumber(salesAmt)}원</td>`;
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#f0fdf4;">${formatNumber(marginAmt)}원</td>`;
-          rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#f0fdf4;">${formatNumber(taxAmt)}원</td>`;
+          rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef9c3;">${formatNumber(incomeTax)}원</td>`;
+          rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef9c3;">${formatNumber(localTax)}원</td>`;
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#f0fdf4;">${formatNumber(subtotal)}원</td>`;
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#d1fae5;font-weight:700;color:#065f46;">${formatNumber(sellerPayment)}원</td>`;
           rows += `<td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fffbeb;">${formatNumber(supplyAmount)}원</td>`;
@@ -17422,7 +17428,8 @@ async function refreshManagementReport() {
         <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;">${totalQty}</td>
         <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;">${formatNumber(totalSales)}원</td>
         <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#d1fae5;">${formatNumber(totalMargin)}원</td>
-        <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#d1fae5;">${formatNumber(totalTax)}원</td>
+        <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef9c3;">${formatNumber(totalIncomeTax)}원</td>
+        <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef9c3;">${formatNumber(totalLocalTax)}원</td>
         <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#d1fae5;"></td>
         <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#a7f3d0;color:#065f46;">${formatNumber(externalTotalPayment)}원</td>
         <td style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;background:#fef3c7;">${formatNumber(supplierTotalSupply)}원</td>
@@ -17434,29 +17441,30 @@ async function refreshManagementReport() {
 
       return `
         <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:9px;min-width:1200px;">
+          <table style="width:100%;border-collapse:collapse;font-size:9px;min-width:1300px;">
             <thead>
               <tr style="background:linear-gradient(90deg,#ecfdf5 0%,#fef3c7 100%);">
                 <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:7%;white-space:nowrap;">셀러명</th>
                 <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:6%;white-space:nowrap;">브랜드(공급사)</th>
-                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:9%;white-space:nowrap;">공구기간</th>
-                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:11%;white-space:nowrap;">판매상품</th>
+                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:8%;white-space:nowrap;">공구기간</th>
+                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:10%;white-space:nowrap;">판매상품</th>
                 <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:5%;white-space:nowrap;">단가</th>
                 <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:3%;white-space:nowrap;">수량</th>
-                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:6%;white-space:nowrap;">판매금액</th>
+                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:5%;white-space:nowrap;">판매금액</th>
                 <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:5%;white-space:nowrap;background:#d1fae5;">마진금액</th>
-                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:4%;white-space:nowrap;background:#d1fae5;">원천세</th>
+                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:4%;white-space:nowrap;background:#fef9c3;">사업소득세</th>
+                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:4%;white-space:nowrap;background:#fef9c3;">지방소득세</th>
                 <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:5%;white-space:nowrap;background:#d1fae5;">소계</th>
-                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:6%;white-space:nowrap;background:#a7f3d0;font-weight:700;">총실지급액</th>
+                <th style="padding:4px 2px;border:1px solid #d1fae5;text-align:center;width:5%;white-space:nowrap;background:#a7f3d0;font-weight:700;">총실지급액</th>
                 <th style="padding:4px 2px;border:1px solid #fde68a;text-align:center;width:5%;white-space:nowrap;background:#fde68a;">공급가액</th>
                 <th style="padding:4px 2px;border:1px solid #fde68a;text-align:center;width:5%;white-space:nowrap;background:#fde68a;">부가세(10%)</th>
                 <th style="padding:4px 2px;border:1px solid #fde68a;text-align:center;width:5%;white-space:nowrap;background:#fde68a;">총합계</th>
-                <th style="padding:4px 2px;border:1px solid #fde68a;text-align:center;width:6%;white-space:nowrap;background:#fcd34d;font-weight:700;">정산금액(V+)</th>
-                <th style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;width:6%;white-space:nowrap;">정산일</th>
+                <th style="padding:4px 2px;border:1px solid #fde68a;text-align:center;width:5%;white-space:nowrap;background:#fcd34d;font-weight:700;">정산금액(V+)</th>
+                <th style="padding:4px 2px;border:1px solid #e5e7eb;text-align:center;width:5%;white-space:nowrap;">정산일</th>
               </tr>
               <tr style="background:#f9fafb;font-size:8px;color:#6b7280;">
                 <th colspan="7" style="border:1px solid #e5e7eb;"></th>
-                <th colspan="4" style="border:1px solid #d1fae5;background:#ecfdf5;color:#065f46;">← 셀러 정산 →</th>
+                <th colspan="5" style="border:1px solid #d1fae5;background:#ecfdf5;color:#065f46;">← 셀러 정산 →</th>
                 <th colspan="4" style="border:1px solid #fde68a;background:#fef9c3;color:#92400e;">← 공급사 정산 →</th>
                 <th style="border:1px solid #e5e7eb;"></th>
               </tr>
