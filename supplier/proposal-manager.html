@@ -277,6 +277,7 @@
                     <button class="btn-primary" onclick="openProposal(event, 'category/email-proposal-food.html')">제안서 열기 →</button>
                     <button class="btn-secondary btn-small" onclick="setAsStandard(event, 'food')">표준 설정</button>
                 </div>
+                <button id="editBaseBtn-food" class="btn-secondary" style="display: none; width: 100%; margin-top: 8px;" onclick="openHtmlEditorModal(event, 'food')">🔧 기본 제안서 편집</button>
                 <div id="derivatives-food" class="derivatives-section" style="display: none;"></div>
             </div>
 
@@ -425,12 +426,36 @@
                 <label class="modal-label">제안서 이름</label>
                 <input type="text" id="derivativeName" class="modal-input" placeholder="예: A사 맞춤 제안서, 2024년 상반기 버전">
                 <div style="margin-top: 12px; font-size: 13px; color: #6b7280;">
-                    💡 표준 제안서를 복사하여 수정할 수 있는 새로운 버전을 만듭니다.
+                    💡 표준 제안서의 HTML 전체를 복사하여 독립적으로 수정할 수 있습니다.
                 </div>
             </div>
             <div class="modal-footer">
                 <button class="btn-modal btn-modal-cancel" onclick="closeDerivativeModal()">취소</button>
                 <button class="btn-modal btn-modal-confirm" onclick="createDerivative()">생성하기</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 기본 제안서 HTML 편집 모달 -->
+    <div id="htmlEditorModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">🔧 기본 제안서 HTML 편집</div>
+            <div class="modal-body">
+                <div style="margin-bottom: 12px; padding: 12px; background: #fffbeb; border: 2px solid #f59e0b; border-radius: 8px;">
+                    <div style="font-size: 13px; color: #92400e; line-height: 1.6;">
+                        ⚠️ <strong>주의:</strong> 기본 제안서를 변경하면 <strong>새로 생성되는 파생본</strong>에만 적용됩니다.<br>
+                        기존 파생본은 영향받지 않습니다. 변경 후 반드시 "대표 설정"을 눌러 최종 확정하세요.
+                    </div>
+                </div>
+                <label class="modal-label">HTML 코드</label>
+                <textarea id="htmlEditor" style="width: 100%; height: 400px; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-family: monospace; font-size: 13px; resize: vertical;"></textarea>
+                <div style="margin-top: 12px; font-size: 13px; color: #6b7280;">
+                    💡 HTML 전체를 붙여넣으세요. 변경 후 반드시 "대표 설정" 버튼을 눌러야 적용됩니다.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-modal btn-modal-cancel" onclick="closeHtmlEditorModal()">취소</button>
+                <button class="btn-modal btn-modal-confirm" onclick="saveBaseHtml()">임시 저장</button>
             </div>
         </div>
     </div>
@@ -444,9 +469,19 @@
             window.open(url, '_blank');
         }
 
-        // 표준 제안서로 설정
+        // 표준 제안서로 설정 (락인 기능 포함)
         function setAsStandard(event, category) {
             event.stopPropagation();
+
+            // 기본 제안서 HTML이 있으면 락인 처리
+            const hasBaseHtml = localStorage.getItem(`base_proposal_${category}`);
+            if (hasBaseHtml) {
+                const isLocked = localStorage.getItem(`base_proposal_${category}_locked`) === 'true';
+                if (!isLocked) {
+                    localStorage.setItem(`base_proposal_${category}_locked`, 'true');
+                    alert('🔒 기본 제안서가 최종 확정되었습니다!\n이제 새로 생성되는 파생본에 이 HTML이 적용됩니다.');
+                }
+            }
 
             // 기존 표준 배지 제거
             document.querySelectorAll('.standard-badge').forEach(badge => badge.remove());
@@ -461,10 +496,66 @@
             badge.textContent = '⭐ 표준';
             card.insertBefore(badge, card.firstChild);
 
+            // 기본 제안서 편집 버튼 표시
+            const editBtn = document.getElementById(`editBaseBtn-${category}`);
+            if (editBtn) {
+                editBtn.style.display = 'block';
+            }
+
             // 파생본 섹션 표시
             showDerivativesSection(category);
 
-            alert('✅ 표준 제안서로 설정되었습니다!');
+            if (!hasBaseHtml) {
+                alert('✅ 표준 제안서로 설정되었습니다!');
+            }
+        }
+
+        // HTML 편집 모달 열기
+        async function openHtmlEditorModal(event, category) {
+            event.stopPropagation();
+            currentCategory = category;
+
+            // 기존에 저장된 HTML이 있으면 불러오기, 없으면 원본 HTML 불러오기
+            let html = localStorage.getItem(`base_proposal_${category}`);
+
+            if (!html) {
+                // 원본 HTML 파일 가져오기
+                const url = document.querySelector(`[data-category="${category}"]`).dataset.url;
+                try {
+                    const response = await fetch(url);
+                    html = await response.text();
+                } catch (error) {
+                    alert('❌ HTML 파일을 불러오는데 실패했습니다.');
+                    return;
+                }
+            }
+
+            // 에디터에 HTML 로드
+            document.getElementById('htmlEditor').value = html;
+            document.getElementById('htmlEditorModal').classList.add('active');
+        }
+
+        // HTML 편집 모달 닫기
+        function closeHtmlEditorModal() {
+            document.getElementById('htmlEditorModal').classList.remove('active');
+            currentCategory = null;
+        }
+
+        // 기본 제안서 HTML 임시 저장
+        function saveBaseHtml() {
+            const html = document.getElementById('htmlEditor').value;
+
+            if (!html.trim()) {
+                alert('❌ HTML 코드를 입력해주세요.');
+                return;
+            }
+
+            // 임시 저장 (락 해제 상태로)
+            localStorage.setItem(`base_proposal_${currentCategory}`, html);
+            localStorage.setItem(`base_proposal_${currentCategory}_locked`, 'false');
+
+            closeHtmlEditorModal();
+            alert('✅ 임시 저장되었습니다!\n\n반드시 "표준 설정" 버튼을 눌러 최종 확정하세요.\n확정 후 새로 생성되는 파생본에 이 HTML이 적용됩니다.');
         }
 
         // 파생본 섹션 표시
@@ -542,8 +633,8 @@
             currentCategory = null;
         }
 
-        // 파생본 생성
-        function createDerivative() {
+        // 파생본 생성 (전체 HTML 복사)
+        async function createDerivative() {
             const name = document.getElementById('derivativeName').value.trim();
 
             if (!name) {
@@ -551,13 +642,33 @@
                 return;
             }
 
+            // 기본 제안서 HTML 가져오기 (락인된 버전 또는 원본)
+            let baseHtml = localStorage.getItem(`base_proposal_${currentCategory}`);
+
+            if (!baseHtml) {
+                // 원본 HTML 파일에서 가져오기
+                const url = document.querySelector(`[data-category="${currentCategory}"]`).dataset.url;
+                try {
+                    const response = await fetch(url);
+                    baseHtml = await response.text();
+                } catch (error) {
+                    alert('❌ 기본 제안서 HTML을 불러오는데 실패했습니다.');
+                    return;
+                }
+            }
+
+            // 새 파생본 생성
+            const derivativeId = Date.now().toString();
             const derivatives = getDerivatives(currentCategory);
             const newDerivative = {
-                id: Date.now().toString(),
+                id: derivativeId,
                 name: name,
                 date: new Date().toLocaleDateString('ko-KR'),
                 url: document.querySelector(`[data-category="${currentCategory}"]`).dataset.url
             };
+
+            // 전체 HTML을 파생본에 저장
+            localStorage.setItem(`derivative_html_${currentCategory}_${derivativeId}`, baseHtml);
 
             derivatives.push(newDerivative);
             saveDerivatives(currentCategory, derivatives);
@@ -565,7 +676,7 @@
             closeDerivativeModal();
             updateDerivativesSection(currentCategory);
 
-            alert(`✅ "${name}" 파생 제안서가 생성되었습니다!`);
+            alert(`✅ "${name}" 파생 제안서가 생성되었습니다!\nHTML 전체가 독립적으로 복사되었습니다.`);
         }
 
         // 파생본 열기
@@ -574,8 +685,8 @@
             const derivative = derivatives.find(d => d.id === id);
 
             if (derivative) {
-                // URL에 파생본 ID를 파라미터로 추가
-                const url = `${derivative.url}?derivative=${id}&name=${encodeURIComponent(derivative.name)}`;
+                // URL에 파생본 ID와 카테고리를 파라미터로 추가
+                const url = `${derivative.url}?derivative=${id}&category=${category}&name=${encodeURIComponent(derivative.name)}`;
                 window.open(url, '_blank');
             }
         }
@@ -620,6 +731,12 @@
                     badge.textContent = '⭐ 표준';
                     card.insertBefore(badge, card.firstChild);
 
+                    // 기본 제안서 편집 버튼 표시
+                    const editBtn = document.getElementById(`editBaseBtn-${standardCategory}`);
+                    if (editBtn) {
+                        editBtn.style.display = 'block';
+                    }
+
                     showDerivativesSection(standardCategory);
                 }
             }
@@ -629,6 +746,12 @@
         document.getElementById('derivativeModal').addEventListener('click', function(e) {
             if (e.target === this) {
                 closeDerivativeModal();
+            }
+        });
+
+        document.getElementById('htmlEditorModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeHtmlEditorModal();
             }
         });
 
