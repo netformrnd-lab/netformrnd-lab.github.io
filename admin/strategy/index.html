@@ -703,7 +703,7 @@
           </div>
           <div class="nav-item" data-tab="review" onclick="switchTab('review')">
             <span class="icon">🔍</span>
-            <span>전략리뷰</span>
+            <span>성과분석</span>
           </div>
         </div>
 
@@ -853,7 +853,7 @@
         </div>
       </div>
 
-      <!-- 전략리뷰 -->
+      <!-- 성과분석 -->
       <div id="tab-review" class="tab-content">
         <div id="reviewContent">
           <!-- 동적으로 렌더링 -->
@@ -3909,7 +3909,7 @@
             </div>
             <div style="background: white; border-radius: 12px; padding: 16px;">
               <div style="font-size: 20px; margin-bottom: 8px;">🔍</div>
-              <div style="font-size: 15px; font-weight: 700; color: #191F28; margin-bottom: 6px;">전략리뷰</div>
+              <div style="font-size: 15px; font-weight: 700; color: #191F28; margin-bottom: 6px;">성과분석</div>
               <div style="font-size: 13px; color: #6B7684; line-height: 1.6;">목표 vs 결과 분석<br>A/B 테스트, 개인 PPT 생성</div>
             </div>
             <div style="background: white; border-radius: 12px; padding: 16px;">
@@ -3996,7 +3996,7 @@
               <strong>생성 가능 PPT:</strong><br>
               • 전략 보고서 (본질목표, 연간목표, KPI)<br>
               • 개인 성과 PPT (목표→KPI→실행→결과)<br>
-              <strong>사용법:</strong> 전략리뷰 → PPT 생성 버튼<br>
+              <strong>사용법:</strong> 성과분석 → PPT 생성 버튼<br>
               <strong>미리보기:</strong> 다운로드 전 슬라이드 미리보기 가능
             </div>
           </div>
@@ -4750,16 +4750,29 @@
     // ========================================
     let kpiViewMode = 'hierarchy'; // hierarchy, team, member
     let kpiMemberFilter = 'all';
+    let kpiSortBy = 'priority'; // priority, progress, name
 
     function renderKPIManagement() {
       const container = document.getElementById('kpiContent');
       if (!container) return;
 
-      const megaProjects = state.megaProjects || [];
-      const projects = state.projects || [];
-      const teamKPIs = state.teamKPIs || [];
+      let megaProjects = [...(state.megaProjects || [])];
+      let projects = [...(state.projects || [])];
+      let teamKPIs = [...(state.teamKPIs || [])];
       const memberKPIs = state.memberKPIs || [];
       const members = (state.teamMembers || []).filter(m => m.role === 'admin' || m.role === 'manager');
+
+      // 정렬 적용
+      if (kpiSortBy === 'priority') {
+        megaProjects.sort((a, b) => (a.priority || 999) - (b.priority || 999));
+        teamKPIs.sort((a, b) => (a.priority || 999) - (b.priority || 999));
+      } else if (kpiSortBy === 'progress') {
+        teamKPIs.sort((a, b) => {
+          const progressA = a.target > 0 ? (a.current / a.target) : 0;
+          const progressB = b.target > 0 ? (b.current / b.target) : 0;
+          return progressA - progressB; // 낮은 달성률 먼저
+        });
+      }
 
       const C = {
         primary: '#3182f6',
@@ -4781,13 +4794,22 @@
       const achievedKPIs = [...teamKPIs, ...memberKPIs].filter(k => k.current >= k.target).length;
       const achievementRate = totalKPIs > 0 ? Math.round((achievedKPIs / totalKPIs) * 100) : 0;
 
+      // 주목 필요 선행지표 (달성률 30% 미만)
+      const attentionKPIs = teamKPIs.filter(k => {
+        const progress = k.target > 0 ? (k.current / k.target) * 100 : 0;
+        return progress < 30 && k.target > 0;
+      }).slice(0, 5);
+
+      // 우선순위 설정된 선행지표
+      const priorityKPIs = teamKPIs.filter(k => k.priority && k.priority <= 3).slice(0, 5);
+
       container.innerHTML = `
         <div style="max-width: 1400px; margin: 0 auto;">
           <!-- 헤더 -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
             <div>
-              <h1 style="font-size: 24px; font-weight: 700; color: ${C.gray900}; margin: 0;">📊 KPI관리</h1>
-              <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">메인 KPI → 서브 KPI → 선행지표 → 내 선행지표 계층 구조</p>
+              <h1 style="font-size: 24px; font-weight: 700; color: ${C.gray900}; margin: 0;">📊 그로스보드</h1>
+              <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">메인 KPI → 서브 KPI → 선행지표 → 내 선행지표</p>
             </div>
             <div style="display: flex; gap: 8px;">
               <button onclick="openMegaProjectModal()" style="padding: 10px 16px; font-size: 13px; font-weight: 600; background: ${C.purple}; color: white; border: none; border-radius: 8px; cursor: pointer;">
@@ -4799,21 +4821,67 @@
             </div>
           </div>
 
+          <!-- 빠른 접근 패널 -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+            <!-- 주목 필요 -->
+            <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 16px; padding: 20px; border: 1px solid #F59E0B;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="font-size: 14px; font-weight: 700; color: #92400E;">⚠️ 주목 필요 (달성률 30% 미만)</div>
+                <span style="font-size: 12px; color: #B45309;">${attentionKPIs.length}개</span>
+              </div>
+              ${attentionKPIs.length > 0 ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  ${attentionKPIs.map(kpi => {
+                    const progress = kpi.target > 0 ? Math.round((kpi.current / kpi.target) * 100) : 0;
+                    return `
+                      <div onclick="openTeamKPIModal(state.teamKPIs.find(k=>k.id==='${kpi.id}'))" style="background: white; padding: 10px 14px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                        <span style="font-size: 13px; font-weight: 600; color: #333;">${kpi.name}</span>
+                        <span style="font-size: 11px; padding: 2px 8px; background: ${C.red}; color: white; border-radius: 10px;">${progress}%</span>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              ` : `<div style="color: #92400E; font-size: 13px;">모든 선행지표가 양호합니다 👍</div>`}
+            </div>
+
+            <!-- 우선순위 TOP -->
+            <div style="background: linear-gradient(135deg, #EDE9FE, #DDD6FE); border-radius: 16px; padding: 20px; border: 1px solid ${C.purple};">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="font-size: 14px; font-weight: 700; color: #5B21B6;">⭐ 우선순위 TOP</div>
+                <span style="font-size: 12px; color: #7C3AED;">${priorityKPIs.length}개</span>
+              </div>
+              ${priorityKPIs.length > 0 ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                  ${priorityKPIs.map((kpi, idx) => {
+                    const progress = kpi.target > 0 ? Math.round((kpi.current / kpi.target) * 100) : 0;
+                    return `
+                      <div onclick="openTeamKPIModal(state.teamKPIs.find(k=>k.id==='${kpi.id}'))" style="background: white; padding: 10px 14px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                        <span style="font-size: 12px; font-weight: 700; color: ${C.purple};">#${kpi.priority}</span>
+                        <span style="font-size: 13px; font-weight: 600; color: #333;">${kpi.name}</span>
+                        <span style="font-size: 11px; padding: 2px 8px; background: ${progress >= 70 ? C.green : progress >= 40 ? C.yellow : C.red}; color: white; border-radius: 10px;">${progress}%</span>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              ` : `<div style="color: #5B21B6; font-size: 13px;">선행지표 편집에서 우선순위를 설정하세요</div>`}
+            </div>
+          </div>
+
           <!-- KPI 요약 카드 -->
           <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px;">
-            <div style="background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 12px; padding: 20px; color: white;">
+            <div style="background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 12px; padding: 20px; color: white; cursor: pointer;" onclick="setKPIViewMode('hierarchy')">
               <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">🎯 메인 KPI</div>
               <div style="font-size: 28px; font-weight: 700;">${megaProjects.length}</div>
             </div>
-            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📁 프로젝트</div>
+            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); cursor: pointer;" onclick="setKPIViewMode('hierarchy')">
+              <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📁 서브 KPI</div>
               <div style="font-size: 28px; font-weight: 700; color: ${C.primary};">${projects.length}</div>
             </div>
-            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); cursor: pointer;" onclick="setKPIViewMode('team')">
               <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📋 선행지표</div>
               <div style="font-size: 28px; font-weight: 700; color: ${C.green};">${teamKPIs.length}</div>
             </div>
-            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); cursor: pointer;" onclick="setKPIViewMode('member')">
               <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">👤 내 선행지표</div>
               <div style="font-size: 28px; font-weight: 700; color: ${C.yellow};">${memberKPIs.length}</div>
             </div>
@@ -4823,17 +4891,27 @@
             </div>
           </div>
 
-          <!-- 뷰 모드 전환 -->
-          <div style="display: flex; gap: 8px; margin-bottom: 20px; background: ${C.gray50}; padding: 4px; border-radius: 10px; width: fit-content;">
-            <button onclick="setKPIViewMode('hierarchy')" style="background: ${kpiViewMode === 'hierarchy' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'hierarchy' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
-              🏗️ 계층 구조
-            </button>
-            <button onclick="setKPIViewMode('team')" style="background: ${kpiViewMode === 'team' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'team' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
-              📋 선행지표
-            </button>
-            <button onclick="setKPIViewMode('member')" style="background: ${kpiViewMode === 'member' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'member' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
-              👤 내 선행지표
-            </button>
+          <!-- 뷰 모드 & 정렬 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+            <div style="display: flex; gap: 8px; background: ${C.gray50}; padding: 4px; border-radius: 10px;">
+              <button onclick="setKPIViewMode('hierarchy')" style="background: ${kpiViewMode === 'hierarchy' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'hierarchy' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+                🏗️ 계층 구조
+              </button>
+              <button onclick="setKPIViewMode('team')" style="background: ${kpiViewMode === 'team' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'team' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+                📋 선행지표
+              </button>
+              <button onclick="setKPIViewMode('member')" style="background: ${kpiViewMode === 'member' ? C.primary : 'transparent'}; color: ${kpiViewMode === 'member' ? 'white' : C.gray500}; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+                👤 내 선행지표
+              </button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 12px; color: ${C.gray500};">정렬:</span>
+              <select onchange="setKPISortBy(this.value)" style="padding: 8px 12px; border: 1px solid ${C.gray200}; border-radius: 8px; font-size: 13px; cursor: pointer;">
+                <option value="priority" ${kpiSortBy === 'priority' ? 'selected' : ''}>⭐ 우선순위</option>
+                <option value="progress" ${kpiSortBy === 'progress' ? 'selected' : ''}>📊 달성률 낮은순</option>
+                <option value="name" ${kpiSortBy === 'name' ? 'selected' : ''}>🔤 이름순</option>
+              </select>
+            </div>
           </div>
 
           <!-- 메인 컨텐츠 -->
@@ -4844,6 +4922,11 @@
           </div>
         </div>
       `;
+    }
+
+    function setKPISortBy(sortBy) {
+      kpiSortBy = sortBy;
+      renderKPIManagement();
     }
 
     function setKPIViewMode(mode) {
@@ -5314,7 +5397,7 @@
     }
 
     // ========================================
-    // 전략리뷰 시스템 (역순 데이터 확인 + 개인별 성공률)
+    // 성과분석 시스템 (역순 데이터 확인 + 개인별 성공률)
     // ========================================
     let reviewViewMode = 'summary'; // summary, reverse, member
 
@@ -5391,7 +5474,7 @@
           <!-- 헤더 -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 16px;">
             <div>
-              <h1 style="font-size: 24px; font-weight: 700; color: ${C.gray900}; margin: 0;">🔍 전략리뷰</h1>
+              <h1 style="font-size: 24px; font-weight: 700; color: ${C.gray900}; margin: 0;">🔍 성과분석</h1>
               <p style="color: ${C.gray500}; margin-top: 4px; font-size: 13px;">역순 데이터 확인 · 개인별 성공률 · 보고서 자동 생성</p>
             </div>
             <div style="display: flex; gap: 8px;">
@@ -5456,7 +5539,7 @@
             <div style="background: linear-gradient(135deg, ${C.primary}, #1b64da); border-radius: 16px; padding: 24px; color: white;">
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                  <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">📄 개인별 전략리뷰 PPT</div>
+                  <div style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">📄 개인별 성과분석 PPT</div>
                   <div style="font-size: 13px; opacity: 0.9;">내 선행지표 → 업무 → 성공률을 정리한 발표 자료</div>
                 </div>
                 <button onclick="generateMemberReport()" style="padding: 12px 20px; background: white; color: ${C.primary}; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
@@ -7261,10 +7344,21 @@
               </select>
             </div>
 
-            <div style="margin-bottom: 16px;">
-              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">KPI 이름 *</label>
-              <input type="text" id="teamKpiName" value="${kpi?.name || ''}" placeholder="예: 일본 인플루언서 20명 확보"
-                style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+            <div style="display: grid; grid-template-columns: 3fr 1fr; gap: 16px; margin-bottom: 16px;">
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">KPI 이름 *</label>
+                <input type="text" id="teamKpiName" value="${kpi?.name || ''}" placeholder="예: 일본 인플루언서 20명 확보"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">⭐ 우선순위</label>
+                <select id="teamKpiPriority" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+                  <option value="">미설정</option>
+                  <option value="1" ${kpi?.priority === 1 ? 'selected' : ''}>🥇 1순위</option>
+                  <option value="2" ${kpi?.priority === 2 ? 'selected' : ''}>🥈 2순위</option>
+                  <option value="3" ${kpi?.priority === 3 ? 'selected' : ''}>🥉 3순위</option>
+                </select>
+              </div>
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px;">
@@ -7341,6 +7435,8 @@
       const target = parseInt(document.getElementById('teamKpiTarget').value) || 0;
       const current = parseInt(document.getElementById('teamKpiCurrent').value) || 0;
       const unit = document.getElementById('teamKpiUnit').value.trim() || '건';
+      const priorityVal = document.getElementById('teamKpiPriority').value;
+      const priority = priorityVal ? parseInt(priorityVal) : null;
 
       if (!projectId) {
         showToast('프로젝트를 선택하세요');
@@ -7374,6 +7470,7 @@
         target,
         current,
         unit,
+        priority,
         assignedMembers,
         updatedAt: new Date().toISOString()
       };
@@ -8101,8 +8198,8 @@
             <button onclick="askQuestion('업무 관리 팁')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;">
               ✅ 업무 관리 팁
             </button>
-            <button onclick="askQuestion('전략리뷰 활용법')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;">
-              📊 전략리뷰 활용법
+            <button onclick="askQuestion('성과분석 활용법')" style="background: white; border: 1px solid var(--gray-300); padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: var(--gray-700); transition: all 0.2s;">
+              📊 성과분석 활용법
             </button>
             <button onclick="window.open('../', '_self')" style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border: 1px solid #3b82f6; padding: 10px 14px; border-radius: 8px; text-align: left; cursor: pointer; font-size: 12px; color: #1d4ed8; font-weight: 600; transition: all 0.2s;">
               🏠 운영센터로 이동
@@ -8192,7 +8289,7 @@
       }
 
       if (q.includes('전략') || q.includes('리뷰') || q.includes('활용')) {
-        return `<strong>📊 전략리뷰 활용법</strong><br><br>
+        return `<strong>📊 성과분석 활용법</strong><br><br>
           <strong>1. 요약 뷰</strong><br>
           목표 달성 현황 한눈에 확인<br><br>
           <strong>2. 역순 데이터</strong><br>
