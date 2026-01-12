@@ -5706,6 +5706,9 @@
       };
     }
 
+    // 미연결 업무 필터 상태
+    let unlinkedFilter = false;
+
     function renderWorkLog() {
       const container = document.getElementById('worklogContent');
       if (!container) return;
@@ -5720,13 +5723,26 @@
           <!-- 헤더 -->
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
             <div>
-              <h1 style="font-size: 26px; font-weight: 700; color: #191F28; margin: 0;">📓 업무일지</h1>
-              <p style="color: #6B7684; margin-top: 8px; font-size: 15px;">팀원별 업무 관리 및 자동 기록</p>
+              <h1 style="font-size: 26px; font-weight: 700; color: #191F28; margin: 0;">📓 업무관리</h1>
+              <p style="color: #6B7684; margin-top: 8px; font-size: 15px;">업무 실행 → 선행지표 연결 → 후행지표 자동 집계</p>
             </div>
             <div style="display: flex; gap: 10px;">
               <button onclick="openQuickTaskModal()" style="padding: 12px 20px; font-size: 14px; font-weight: 600; background: #0064FF; color: white; border: none; border-radius: 12px; cursor: pointer;">
                 ➕ 새 업무
               </button>
+            </div>
+          </div>
+
+          <!-- 후행지표 요약 카드 -->
+          <div id="lagging-indicator-summary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 16px; padding: 20px; margin-bottom: 20px; color: white;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 16px; font-weight: 700;">📊 후행지표 (실제 실행 현황)</div>
+              <div style="font-size: 12px; opacity: 0.8;">선행지표별 완료 업무 집계</div>
+            </div>
+            <div id="lagging-stats" style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px;">
+              <div style="text-align: center; padding: 12px 20px; background: rgba(255,255,255,0.15); border-radius: 12px; min-width: 100px;">
+                <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">로딩중...</div>
+              </div>
             </div>
           </div>
 
@@ -5740,8 +5756,11 @@
                 <button onclick="changeWorkLogMonth(1)" style="background: #E5E8EB; border: none; width: 40px; height: 40px; border-radius: 10px; cursor: pointer; font-size: 18px;">→</button>
               </div>
 
-              <!-- 멤버 필터 -->
+              <!-- 연결 필터 -->
               <div style="display: flex; gap: 8px; align-items: center;">
+                <button id="filter-unlinked" onclick="toggleUnlinkedFilter()" style="background: ${unlinkedFilter ? '#F04452' : '#F2F4F6'}; color: ${unlinkedFilter ? 'white' : '#6B7684'}; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">
+                  🔗 미연결만
+                </button>
                 <div style="display: flex; gap: 4px; background: #F2F4F6; padding: 4px; border-radius: 10px;">
                   <button id="filter-my" onclick="setMemberFilter('my')" style="background: ${memberFilter === 'my' ? '#0064FF' : 'transparent'}; color: ${memberFilter === 'my' ? 'white' : '#6B7684'}; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">👤 내 업무</button>
                   <button id="filter-all" onclick="setMemberFilter('all')" style="background: ${memberFilter === 'all' ? '#0064FF' : 'transparent'}; color: ${memberFilter === 'all' ? 'white' : '#6B7684'}; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">👥 전체 팀</button>
@@ -5783,6 +5802,11 @@
       `;
 
       loadWorkLogData();
+    }
+
+    function toggleUnlinkedFilter() {
+      unlinkedFilter = !unlinkedFilter;
+      renderWorkLog();
     }
 
     async function loadWorkLogData() {
@@ -5839,16 +5863,80 @@
           }
         });
 
+        // 미연결 필터 적용
+        if (unlinkedFilter) {
+          workLogTasks = workLogTasks.filter(t => !t.teamKpiId && !t.kpiId);
+        }
+
         console.log('📋 [결과] 필터링 후:', workLogTasks.length, '건');
         if (allTasks.length > 0 && workLogTasks.length === 0) {
           console.log('📋 [참고] 전체 업무 샘플:', allTasks.slice(0, 3));
         }
 
         renderWorkLogStats();
+        renderLaggingIndicators(allTasks);
         renderWorkLogContent();
       } catch (e) {
         console.error('업무일지 로드 오류:', e);
       }
+    }
+
+    // 후행지표 집계 렌더링
+    function renderLaggingIndicators(allTasks) {
+      const container = document.getElementById('lagging-stats');
+      if (!container) return;
+
+      const teamKPIs = state.teamKPIs || [];
+      const completedTasks = allTasks.filter(t => t.status === 'complete');
+
+      // 선행지표별 완료 업무 집계
+      const kpiStats = {};
+      let unlinkedCount = 0;
+
+      completedTasks.forEach(task => {
+        if (task.teamKpiId) {
+          if (!kpiStats[task.teamKpiId]) {
+            const kpi = teamKPIs.find(k => k.id === task.teamKpiId);
+            kpiStats[task.teamKpiId] = {
+              name: kpi?.name || '알 수 없음',
+              target: kpi?.target || 0,
+              count: 0
+            };
+          }
+          kpiStats[task.teamKpiId].count++;
+        } else {
+          unlinkedCount++;
+        }
+      });
+
+      const statsArray = Object.values(kpiStats);
+
+      if (statsArray.length === 0 && unlinkedCount === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 12px 20px; background: rgba(255,255,255,0.15); border-radius: 12px; min-width: 200px;">
+            <div style="font-size: 13px; opacity: 0.9;">완료된 업무가 없습니다</div>
+            <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">업무를 완료하면 여기에 집계됩니다</div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = `
+        ${statsArray.map(stat => `
+          <div style="text-align: center; padding: 12px 20px; background: rgba(255,255,255,0.15); border-radius: 12px; min-width: 120px;">
+            <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px;" title="${stat.name}">${stat.name}</div>
+            <div style="font-size: 24px; font-weight: 700;">${stat.count}</div>
+            <div style="font-size: 10px; opacity: 0.7;">${stat.target > 0 ? `목표: ${stat.target}` : '실행'}</div>
+          </div>
+        `).join('')}
+        ${unlinkedCount > 0 ? `
+          <div style="text-align: center; padding: 12px 20px; background: rgba(255,100,100,0.2); border-radius: 12px; min-width: 100px; cursor: pointer;" onclick="toggleUnlinkedFilter()">
+            <div style="font-size: 11px; opacity: 0.9; margin-bottom: 4px;">🔗 미연결</div>
+            <div style="font-size: 24px; font-weight: 700;">${unlinkedCount}</div>
+            <div style="font-size: 10px; opacity: 0.7;">연결 필요</div>
+          </div>
+        ` : ''}
+      `;
     }
 
     function renderWorkLogStats() {
@@ -5927,12 +6015,16 @@
                       deadlineBadge = '<span style="background: #F0445220; color: #F04452; font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;">기한초과</span>';
                     }
 
+                    const linkedBadge = task.teamKpiId
+                      ? `<span style="font-size: 10px; padding: 2px 8px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 4px; color: white;">📋 ${task.teamKpiName || '선행지표'}</span>`
+                      : `<span style="font-size: 10px; padding: 2px 8px; background: #FEF3C7; border-radius: 4px; color: #92400E;">🔗 미연결</span>`;
+
                     return `
-                      <div onclick="openTaskDetailModal('${task.id}')" style="background: white; border-radius: 12px; padding: 14px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.06); ${cardBorder}">
+                      <div onclick="openTaskDetailModal('${task.id}')" style="background: white; border-radius: 12px; padding: 14px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.06); ${cardBorder} ${!task.teamKpiId ? 'border-right: 3px solid #F59E0B;' : ''}">
                         <div style="font-weight: 600; color: #191F28; margin-bottom: 8px; font-size: 14px;">${task.title || '제목 없음'}</div>
                         ${deadline ? `<div style="font-size: 12px; color: #8B95A1; display: flex; align-items: center;">📅 ${deadline} ${deadlineBadge}</div>` : ''}
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
-                          ${task.kpiId ? `<span style="font-size: 10px; padding: 2px 8px; background: #E8F3FF; border-radius: 4px; color: #0064FF;">📊 KPI 연결</span>` : ''}
+                          ${linkedBadge}
                           ${task.category ? `<span style="font-size: 10px; padding: 2px 8px; background: #F2F4F6; border-radius: 4px; color: #6B7684;">${task.category}</span>` : ''}
                         </div>
                       </div>
@@ -5955,11 +6047,14 @@
             <div style="text-align: center; padding: 60px; color: #8B95A1;">이번 달 업무가 없습니다</div>
           ` : sortedTasks.map(task => {
             const col = TASK_COLUMNS.find(c => c.id === (task.status || 'waiting')) || TASK_COLUMNS[0];
+            const linkedBadge = task.teamKpiId
+              ? `<span style="font-size: 11px; padding: 2px 8px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 4px; color: white; margin-left: 8px;">📋 ${task.teamKpiName || '선행지표'}</span>`
+              : `<span style="font-size: 11px; padding: 2px 8px; background: #FEF3C7; border-radius: 4px; color: #92400E; margin-left: 8px;">🔗 미연결</span>`;
             return `
-              <div onclick="openTaskDetailModal('${task.id}')" style="display: flex; gap: 16px; padding: 16px; border-bottom: 1px solid #E5E8EB; cursor: pointer;">
+              <div onclick="openTaskDetailModal('${task.id}')" style="display: flex; gap: 16px; padding: 16px; border-bottom: 1px solid #E5E8EB; cursor: pointer; ${!task.teamKpiId ? 'background: #FFFBEB;' : ''}">
                 <div style="font-size: 20px;">${col.icon}</div>
                 <div style="flex: 1;">
-                  <div style="font-weight: 600; color: #191F28;">${task.title || '제목 없음'}</div>
+                  <div style="font-weight: 600; color: #191F28; display: flex; align-items: center; flex-wrap: wrap;">${task.title || '제목 없음'}${linkedBadge}</div>
                   <div style="font-size: 13px; color: #8B95A1; margin-top: 4px;">
                     ${task.dueDate || '날짜 미정'} ${task.category ? `· ${task.category}` : ''}
                   </div>
@@ -6035,14 +6130,18 @@
       const currentMember = getCurrentMember();
       const isAdmin = state.currentUser?.role === 'admin';
 
-      // KPI 필터링: memberId, loginId, name 등 여러 필드로 매칭
-      const allMemberKPIs = state.memberKPIs || [];
-      const memberKPIs = isAdmin ? allMemberKPIs : allMemberKPIs.filter(k =>
-        k.memberId === currentMember.id ||
-        k.memberId === currentMember.loginId ||
-        k.memberName === currentMember.name ||
-        k.memberId === state.currentUser?.loginId
-      );
+      // 선행지표 목록 (teamKPIs)
+      const teamKPIs = state.teamKPIs || [];
+
+      // 프로젝트별로 그룹화
+      const projects = state.projects || [];
+      const groupedKPIs = {};
+      teamKPIs.forEach(kpi => {
+        const project = projects.find(p => p.id === kpi.projectId);
+        const projectName = project?.name || '미분류';
+        if (!groupedKPIs[projectName]) groupedKPIs[projectName] = [];
+        groupedKPIs[projectName].push(kpi);
+      });
 
       const m = document.getElementById('modal');
       if (!m) { showToast('모달 요소를 찾을 수 없습니다'); return; }
@@ -6059,14 +6158,18 @@
               <input type="text" id="taskTitle" placeholder="업무 내용을 입력하세요" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
             </div>
 
-            <!-- KPI 연결 -->
+            <!-- 선행지표 연결 -->
             <div style="margin-bottom: 16px;">
-              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📊 KPI 연결</label>
-              <select id="taskKpiId" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
-                <option value="">연결 안함</option>
-                ${memberKPIs.map(k => `<option value="${k.id}">${k.name} (${k.current}/${k.target} ${k.unit || ''})</option>`).join('')}
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📋 선행지표 연결</label>
+              <select id="taskTeamKpiId" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+                <option value="">연결 안함 (나중에 연결 가능)</option>
+                ${Object.entries(groupedKPIs).map(([projectName, kpis]) => `
+                  <optgroup label="📁 ${projectName}">
+                    ${kpis.map(k => `<option value="${k.id}">${k.name}</option>`).join('')}
+                  </optgroup>
+                `).join('')}
               </select>
-              <div style="font-size: 11px; color: #8B95A1; margin-top: 4px;">💡 KPI를 연결하면 업무 완료 시 자동으로 진척도가 업데이트됩니다</div>
+              <div style="font-size: 11px; color: #8B95A1; margin-top: 4px;">💡 선행지표를 선택하면 후행지표(실행 현황)에 자동 집계됩니다</div>
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
@@ -6127,7 +6230,7 @@
       const deadline = document.getElementById('taskDeadline').value;
       const status = document.getElementById('taskStatus').value;
       const category = document.getElementById('taskCategory').value.trim();
-      const kpiId = document.getElementById('taskKpiId').value;
+      const teamKpiId = document.getElementById('taskTeamKpiId')?.value || '';
       const notes = document.getElementById('taskNotes').value.trim();
       const startDate = document.getElementById('taskStartDate')?.value || '';
 
@@ -6150,14 +6253,23 @@
           source: 'strategy-worklog'
         };
 
-        // KPI 연결
-        if (kpiId) {
-          const kpi = (state.memberKPIs || []).find(k => k.id === kpiId);
-          if (kpi) {
-            taskData.kpiId = kpiId;
-            taskData.kpiName = kpi.name;
-            taskData.teamKpiId = kpi.teamKpiId;
-            taskData.projectId = kpi.projectId;
+        // 선행지표 연결 (teamKPI → 자동으로 내 선행지표에 연결)
+        if (teamKpiId) {
+          const teamKpi = (state.teamKPIs || []).find(k => k.id === teamKpiId);
+          if (teamKpi) {
+            taskData.teamKpiId = teamKpiId;
+            taskData.teamKpiName = teamKpi.name;
+            taskData.projectId = teamKpi.projectId;
+
+            // 내 선행지표 자동 연결 (담당자 기준)
+            const myMemberKpi = (state.memberKPIs || []).find(k =>
+              k.teamKpiId === teamKpiId &&
+              (k.memberId === currentMember.id || k.memberName === currentMember.name)
+            );
+            if (myMemberKpi) {
+              taskData.kpiId = myMemberKpi.id;
+              taskData.kpiName = myMemberKpi.name;
+            }
           }
         }
 
@@ -6193,14 +6305,16 @@
       const isAdmin = state.currentUser?.role === 'admin';
       const allMembers = state.teamMembers || [];
 
-      // KPI 필터링: memberId, loginId, name 등 여러 필드로 매칭 (관리자는 모든 KPI 표시)
-      const allMemberKPIs = state.memberKPIs || [];
-      const memberKPIs = isAdmin ? allMemberKPIs : allMemberKPIs.filter(k =>
-        k.memberId === currentMember.id ||
-        k.memberId === currentMember.loginId ||
-        k.memberName === currentMember.name ||
-        k.memberId === state.currentUser?.loginId
-      );
+      // 선행지표 목록 (teamKPIs)
+      const teamKPIs = state.teamKPIs || [];
+      const projects = state.projects || [];
+      const groupedKPIs = {};
+      teamKPIs.forEach(kpi => {
+        const project = projects.find(p => p.id === kpi.projectId);
+        const projectName = project?.name || '미분류';
+        if (!groupedKPIs[projectName]) groupedKPIs[projectName] = [];
+        groupedKPIs[projectName].push(kpi);
+      });
 
       // 마감까지 남은 시간 계산
       const deadline = task.deadline || task.dueDate;
@@ -6291,16 +6405,24 @@
               </div>
             ` : ''}
 
-            <!-- KPI 연결 정보 -->
-            ${task.kpiId ? `
-              <div style="background: #E8F3FF; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 16px;">📊</span>
+            <!-- 선행지표 연결 정보 -->
+            ${task.teamKpiId ? `
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; color: white;">
+                <span style="font-size: 16px;">📋</span>
                 <div>
-                  <div style="font-size: 12px; color: #0064FF;">연결된 KPI</div>
-                  <div style="font-weight: 600; color: #191F28;">${task.kpiName || 'KPI 연결됨'}</div>
+                  <div style="font-size: 12px; opacity: 0.8;">연결된 선행지표</div>
+                  <div style="font-weight: 600;">${task.teamKpiName || teamKPIs.find(k => k.id === task.teamKpiId)?.name || '선행지표 연결됨'}</div>
                 </div>
               </div>
-            ` : ''}
+            ` : `
+              <div style="background: #FEF3C7; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 16px;">⚠️</span>
+                <div>
+                  <div style="font-size: 12px; color: #92400E;">미연결 업무</div>
+                  <div style="font-weight: 600; color: #78350F;">아래에서 선행지표를 연결해주세요</div>
+                </div>
+              </div>
+            `}
 
             <!-- 상태 변경 -->
             <div style="margin-bottom: 16px;">
@@ -6316,13 +6438,18 @@
               <input type="date" id="editTaskStartDate" value="${task.startDate || new Date().toISOString().split('T')[0]}" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px; background: #F2F4F6;">
             </div>
 
-            <!-- KPI 변경 -->
+            <!-- 선행지표 연결 변경 -->
             <div style="margin-bottom: 16px;">
-              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📊 KPI 연결</label>
-              <select id="editTaskKpiId" style="width: 100%; padding: 12px; border: 1px solid #E5E8EB; border-radius: 10px; font-size: 15px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #333D4B; margin-bottom: 6px;">📋 선행지표 연결</label>
+              <select id="editTaskTeamKpiId" style="width: 100%; padding: 12px; border: 1px solid ${task.teamKpiId ? '#E5E8EB' : '#F59E0B'}; border-radius: 10px; font-size: 15px; ${!task.teamKpiId ? 'background: #FFFBEB;' : ''}">
                 <option value="">연결 안함</option>
-                ${memberKPIs.map(k => `<option value="${k.id}" ${task.kpiId === k.id ? 'selected' : ''}>${k.name} (${k.current}/${k.target})</option>`).join('')}
+                ${Object.entries(groupedKPIs).map(([projectName, kpis]) => `
+                  <optgroup label="📁 ${projectName}">
+                    ${kpis.map(k => `<option value="${k.id}" ${task.teamKpiId === k.id ? 'selected' : ''}>${k.name}</option>`).join('')}
+                  </optgroup>
+                `).join('')}
               </select>
+              <div style="font-size: 11px; color: #8B95A1; margin-top: 4px;">💡 선행지표를 연결하면 후행지표에 자동 집계됩니다</div>
             </div>
 
             <!-- 시행착오/메모 -->
@@ -6363,7 +6490,7 @@
 
     async function updateTaskStatus(taskId) {
       const status = document.getElementById('editTaskStatus').value;
-      const kpiId = document.getElementById('editTaskKpiId')?.value || '';
+      const teamKpiId = document.getElementById('editTaskTeamKpiId')?.value || '';
       const notes = document.getElementById('editTaskNotes')?.value || '';
       const startDate = document.getElementById('editTaskStartDate')?.value || '';
 
@@ -6441,16 +6568,28 @@
           updateData.history = history;
         }
 
-        // KPI 연결 업데이트
-        if (kpiId) {
-          const kpi = (state.memberKPIs || []).find(k => k.id === kpiId);
-          if (kpi) {
-            updateData.kpiId = kpiId;
-            updateData.kpiName = kpi.name;
-            updateData.teamKpiId = kpi.teamKpiId;
-            updateData.projectId = kpi.projectId;
+        // 선행지표 연결 업데이트
+        const currentMember = getCurrentMember();
+        if (teamKpiId) {
+          const teamKpi = (state.teamKPIs || []).find(k => k.id === teamKpiId);
+          if (teamKpi) {
+            updateData.teamKpiId = teamKpiId;
+            updateData.teamKpiName = teamKpi.name;
+            updateData.projectId = teamKpi.projectId;
+
+            // 내 선행지표 자동 연결 (담당자 기준)
+            const myMemberKpi = (state.memberKPIs || []).find(k =>
+              k.teamKpiId === teamKpiId &&
+              (k.memberId === currentMember.id || k.memberName === currentMember.name)
+            );
+            if (myMemberKpi) {
+              updateData.kpiId = myMemberKpi.id;
+              updateData.kpiName = myMemberKpi.name;
+            }
           }
         } else {
+          updateData.teamKpiId = null;
+          updateData.teamKpiName = null;
           updateData.kpiId = null;
           updateData.kpiName = null;
         }
@@ -6473,11 +6612,11 @@
             updateData.isSuccess = true; // 마감일 없으면 성공으로
           }
 
-          // KPI 자동 업데이트 (연결된 경우)
-          if (kpiId && updateData.isSuccess) {
-            const kpi = (state.memberKPIs || []).find(k => k.id === kpiId);
+          // 내 선행지표 자동 업데이트 (연결된 경우, 성공 시에만)
+          if (updateData.kpiId && updateData.isSuccess) {
+            const kpi = (state.memberKPIs || []).find(k => k.id === updateData.kpiId);
             if (kpi) {
-              await db.collection('memberKPIs').doc(kpiId).update({
+              await db.collection('memberKPIs').doc(updateData.kpiId).update({
                 current: (kpi.current || 0) + 1,
                 updatedAt: new Date().toISOString()
               });
