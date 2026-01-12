@@ -88,6 +88,16 @@
 
         .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; padding: 12px 24px; border-radius: 8px; font-size: 14px; z-index: 2000; opacity: 0; transition: opacity 0.3s; }
         .toast.show { opacity: 1; }
+
+        /* 이메일 미리보기 모달 */
+        .email-modal .modal-content { max-width: 720px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; }
+        .email-modal .modal-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+        .email-preview-frame { flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; overflow: auto; background: #f8f9fa; min-height: 400px; }
+        .email-preview-frame iframe { width: 100%; height: 500px; border: none; }
+        .email-actions { display: flex; gap: 8px; margin-top: 16px; }
+        .email-actions .btn-modal { flex: 1; }
+        .btn-modal-email { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        .btn-modal-email:hover { background: linear-gradient(135deg, #16213e 0%, #0f3460 100%); }
     </style>
 </head>
 <body>
@@ -222,6 +232,23 @@
             <div class="modal-footer">
                 <button class="btn-modal btn-modal-cancel" onclick="closeCreateModal()">취소</button>
                 <button class="btn-modal btn-modal-confirm" onclick="createDerivative()">생성하기</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 이메일 미리보기 모달 -->
+    <div id="emailModal" class="modal email-modal">
+        <div class="modal-content">
+            <div class="modal-header">📧 이메일 템플릿</div>
+            <div class="modal-body">
+                <div class="email-preview-frame">
+                    <iframe id="emailPreviewFrame"></iframe>
+                </div>
+                <div class="email-actions">
+                    <button class="btn-modal btn-modal-cancel" onclick="closeEmailModal()">닫기</button>
+                    <button class="btn-modal btn-modal-email" onclick="copyEmailHtml()">📋 HTML 복사</button>
+                    <button class="btn-modal btn-modal-confirm" onclick="downloadEmailHtml()">💾 파일 저장</button>
+                </div>
             </div>
         </div>
     </div>
@@ -372,6 +399,7 @@
                         <div class="derivative-actions">
                             <button class="btn-icon" onclick="copyUrl('${d.urlId}', '${category}')">복사</button>
                             <button class="btn-icon" onclick="openDerivative('${d.urlId}', '${category}')">열기</button>
+                            <button class="btn-icon" onclick="openEmailModal('${d.urlId}', '${category}')" style="background:#1a1a2e;color:#fff;">이메일</button>
                             <button class="btn-icon danger" onclick="deleteDerivative('${category}', '${d.id}')">삭제</button>
                         </div>
                     </div>
@@ -458,10 +486,373 @@
             if (e.target === this) closeCreateModal();
         });
 
+        document.getElementById('emailModal').addEventListener('click', function(e) {
+            if (e.target === this) closeEmailModal();
+        });
+
         // Enter 키로 생성
         document.getElementById('companyName').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') createDerivative();
         });
+
+        // ==================== 이메일 템플릿 기능 ====================
+        let currentEmailHtml = '';
+        let currentEmailCompany = '';
+
+        // 이메일 모달 열기
+        function openEmailModal(urlId, category) {
+            const derivatives = getDerivatives(category);
+            const derivative = derivatives.find(d => d.urlId === urlId);
+
+            if (!derivative) {
+                showToast('제안서를 찾을 수 없습니다.');
+                return;
+            }
+
+            const companyName = derivative.companyName || derivative.name;
+            currentEmailCompany = companyName;
+
+            // 제안서 URL 생성
+            const data = {
+                category: derivative.category,
+                companyName: companyName
+            };
+            const encodedData = btoa(encodeURIComponent(JSON.stringify(data)));
+            const proposalUrl = `${BASE_URL}/supplier/proposal/?d=${encodedData}`;
+
+            // 이메일 HTML 생성
+            currentEmailHtml = generateEmailHtml(companyName, category, proposalUrl);
+
+            // iframe에 이메일 미리보기 표시
+            const iframe = document.getElementById('emailPreviewFrame');
+            iframe.srcdoc = currentEmailHtml;
+
+            document.getElementById('emailModal').classList.add('active');
+        }
+
+        // 이메일 모달 닫기
+        function closeEmailModal() {
+            document.getElementById('emailModal').classList.remove('active');
+            currentEmailHtml = '';
+            currentEmailCompany = '';
+        }
+
+        // 이메일 HTML 복사
+        function copyEmailHtml() {
+            navigator.clipboard.writeText(currentEmailHtml).then(() => {
+                showToast('이메일 HTML이 복사되었습니다!');
+            }).catch(() => {
+                const textarea = document.createElement('textarea');
+                textarea.value = currentEmailHtml;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showToast('이메일 HTML이 복사되었습니다!');
+            });
+        }
+
+        // 이메일 HTML 파일 저장
+        function downloadEmailHtml() {
+            const blob = new Blob([currentEmailHtml], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `모여라딜_제안_${currentEmailCompany}.html`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('이메일 파일이 저장되었습니다!');
+        }
+
+        // 이메일 HTML 생성
+        function generateEmailHtml(companyName, category, proposalUrl) {
+            // 카테고리별 설정
+            const categoryConfig = {
+                food: { name: '식품/음료', icon: '🍽️' },
+                baby: { name: '육아/키즈', icon: '👶' },
+                lifestyle: { name: '생활용품', icon: '🧹' }
+            };
+            const config = categoryConfig[category] || categoryConfig.lifestyle;
+
+            return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>모여라딜 파트너십 제안</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; background-color: #f8f9fa; -webkit-font-smoothing: antialiased;">
+
+  <!-- Email Container -->
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f8f9fa;">
+    <tr>
+      <td style="padding: 40px 20px;">
+
+        <!-- Main Card -->
+        <table role="presentation" style="max-width: 640px; margin: 0 auto; border-collapse: collapse; background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+
+          <!-- Header with Gradient -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); padding: 48px 40px; border-radius: 16px 16px 0 0; text-align: center;">
+              <table role="presentation" style="margin: 0 auto 24px;">
+                <tr>
+                  <td style="background: rgba(255,255,255,0.1); padding: 12px 24px; border-radius: 8px;">
+                    <span style="color: #ffffff; font-size: 24px; font-weight: 700; letter-spacing: 1px;">모여라딜</span>
+                    <span style="color: #e94560; font-size: 24px; font-weight: 700;">.</span>
+                  </td>
+                </tr>
+              </table>
+              <h1 style="margin: 0 0 8px; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">
+                파트너십 제안서
+              </h1>
+              <p style="margin: 0; color: rgba(255,255,255,0.7); font-size: 15px;">
+                Partnership Proposal for Strategic Collaboration
+              </p>
+            </td>
+          </tr>
+
+          <!-- Personalized Greeting -->
+          <tr>
+            <td style="padding: 40px 40px 0;">
+              <table role="presentation" style="width: 100%; background: linear-gradient(135deg, #fff9f0 0%, #fff5eb 100%); border-radius: 12px; border-left: 4px solid #e94560;">
+                <tr>
+                  <td style="padding: 24px;">
+                    <p style="margin: 0 0 4px; color: #e94560; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">
+                      To. 파트너사
+                    </p>
+                    <p style="margin: 0; color: #1a1a2e; font-size: 22px; font-weight: 700;">
+                      ${companyName} 담당자님께
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Main Content -->
+          <tr>
+            <td style="padding: 32px 40px;">
+              <p style="margin: 0 0 20px; color: #333; font-size: 15px; line-height: 1.8;">
+                안녕하세요, <strong style="color: #1a1a2e;">모여라딜</strong>입니다.
+              </p>
+              <p style="margin: 0 0 20px; color: #333; font-size: 15px; line-height: 1.8;">
+                귀사의 브랜드와 제품을 살펴보며 모여라딜과 함께하실 때 큰 시너지가 날 것이라 확신하여 이렇게 파트너십을 제안드립니다.
+              </p>
+              <p style="margin: 0 0 20px; color: #333; font-size: 15px; line-height: 1.8;">
+                모여라딜은 <strong style="color: #e94560;">전국 1,000명 이상의 인플루언서 엠버서더</strong>와 함께하는 공동구매 플랫폼입니다. 검증된 공급사의 고품질 상품을 SNS 홍보 + 친구 추천 바이럴로 판매하고 있으며, 귀사와의 협력을 통해 더 많은 고객에게 가치를 전달하고자 합니다.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Key Benefits Section -->
+          <tr>
+            <td style="padding: 0 40px 32px;">
+              <table role="presentation" style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding-bottom: 16px;">
+                    <p style="margin: 0; color: #1a1a2e; font-size: 18px; font-weight: 700;">
+                      ✦ 파트너 혜택
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <table role="presentation" style="width: 100%; border-collapse: separate; border-spacing: 0 12px;">
+                      <tr>
+                        <td style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+                          <table role="presentation" style="width: 100%;">
+                            <tr>
+                              <td style="width: 48px; vertical-align: top;">
+                                <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #e94560 0%, #ff6b6b 100%); border-radius: 10px; text-align: center; line-height: 40px;">
+                                  <span style="color: #fff; font-size: 18px;">📊</span>
+                                </div>
+                              </td>
+                              <td style="vertical-align: top; padding-left: 12px;">
+                                <p style="margin: 0 0 4px; color: #1a1a2e; font-size: 15px; font-weight: 600;">
+                                  광고비 0원, 리스크 0원
+                                </p>
+                                <p style="margin: 0; color: #666; font-size: 13px; line-height: 1.6;">
+                                  팔린 만큼만 수수료 차감, 초기 비용 없음
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+                          <table role="presentation" style="width: 100%;">
+                            <tr>
+                              <td style="width: 48px; vertical-align: top;">
+                                <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 10px; text-align: center; line-height: 40px;">
+                                  <span style="color: #fff; font-size: 18px;">🎯</span>
+                                </div>
+                              </td>
+                              <td style="vertical-align: top; padding-left: 12px;">
+                                <p style="margin: 0 0 4px; color: #1a1a2e; font-size: 15px; font-weight: 600;">
+                                  1,000+ 엠버서더 SNS 홍보
+                                </p>
+                                <p style="margin: 0; color: #666; font-size: 13px; line-height: 1.6;">
+                                  인스타그램·블로그 실제 사용 후기로 자연스러운 노출
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+                          <table role="presentation" style="width: 100%;">
+                            <tr>
+                              <td style="width: 48px; vertical-align: top;">
+                                <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #0f3460 0%, #16213e 100%); border-radius: 10px; text-align: center; line-height: 40px;">
+                                  <span style="color: #fff; font-size: 18px;">💰</span>
+                                </div>
+                              </td>
+                              <td style="vertical-align: top; padding-left: 12px;">
+                                <p style="margin: 0 0 4px; color: #1a1a2e; font-size: 15px; font-weight: 600;">
+                                  대량 주문 + 빠른 정산
+                                </p>
+                                <p style="margin: 0; color: #666; font-size: 13px; line-height: 1.6;">
+                                  공동구매로 물량 확보, 3~7일 내 정산
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTA Section -->
+          <tr>
+            <td style="padding: 0 40px 40px;">
+              <table role="presentation" style="width: 100%; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 16px;">
+                <tr>
+                  <td style="padding: 32px; text-align: center;">
+                    <p style="margin: 0 0 8px; color: rgba(255,255,255,0.7); font-size: 13px; text-transform: uppercase; letter-spacing: 1px;">
+                      상세 제안서 확인
+                    </p>
+                    <p style="margin: 0 0 24px; color: #ffffff; font-size: 18px; font-weight: 600;">
+                      귀사를 위한 맞춤 제안서를 준비했습니다
+                    </p>
+                    <a href="${proposalUrl}"
+                       style="display: inline-block; background: linear-gradient(135deg, #e94560 0%, #ff6b6b 100%); color: #ffffff; text-decoration: none; padding: 16px 48px; border-radius: 50px; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; box-shadow: 0 4px 15px rgba(233,69,96,0.4);">
+                      제안서 보기 →
+                    </a>
+                    <p style="margin: 20px 0 0; color: rgba(255,255,255,0.5); font-size: 12px;">
+                      클릭 한 번으로 상세 내용을 확인하실 수 있습니다
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Contact Section -->
+          <tr>
+            <td style="padding: 0 40px 40px;">
+              <table role="presentation" style="width: 100%; border-top: 1px solid #eee;">
+                <tr>
+                  <td style="padding-top: 32px;">
+                    <p style="margin: 0 0 16px; color: #1a1a2e; font-size: 15px; line-height: 1.8;">
+                      제안서 검토 후 협력 의향이 있으시다면 편하게 연락 부탁드립니다.<br>
+                      귀사와의 성공적인 파트너십을 기대합니다.
+                    </p>
+                    <p style="margin: 0; color: #333; font-size: 14px; line-height: 1.8;">
+                      감사합니다.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Signature -->
+          <tr>
+            <td style="padding: 0 40px 40px;">
+              <table role="presentation" style="width: 100%; background: #f8f9fa; border-radius: 12px;">
+                <tr>
+                  <td style="padding: 24px;">
+                    <table role="presentation" style="width: 100%;">
+                      <tr>
+                        <td style="vertical-align: middle;">
+                          <p style="margin: 0 0 4px; color: #1a1a2e; font-size: 16px; font-weight: 700;">
+                            모여라딜 사업개발팀
+                          </p>
+                          <p style="margin: 0 0 12px; color: #666; font-size: 13px;">
+                            Business Development Team
+                          </p>
+                          <table role="presentation">
+                            <tr>
+                              <td style="padding-right: 16px;">
+                                <p style="margin: 0; color: #666; font-size: 12px;">
+                                  📞 010-4320-4179
+                                </p>
+                              </td>
+                              <td>
+                                <p style="margin: 0; color: #666; font-size: 12px;">
+                                  💬 <a href="http://pf.kakao.com/_xoxnJHn" style="color: #e94560; text-decoration: none;">카카오채널</a>
+                                </p>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background: #1a1a2e; padding: 32px 40px; border-radius: 0 0 16px 16px;">
+              <table role="presentation" style="width: 100%;">
+                <tr>
+                  <td style="text-align: center;">
+                    <p style="margin: 0 0 8px; color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 600;">
+                      모여라딜 by NetForm R&D
+                    </p>
+                    <p style="margin: 0 0 16px; color: rgba(255,255,255,0.5); font-size: 12px;">
+                      SNS 엠버서더 기반 공동구매 플랫폼
+                    </p>
+                    <p style="margin: 0; color: rgba(255,255,255,0.3); font-size: 11px; line-height: 1.6;">
+                      © 2025 모여라딜. All rights reserved.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+
+        <!-- Unsubscribe -->
+        <table role="presentation" style="max-width: 640px; margin: 24px auto 0;">
+          <tr>
+            <td style="text-align: center;">
+              <p style="margin: 0; color: #999; font-size: 11px;">
+                본 메일은 파트너십 제안을 위해 발송되었습니다.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
+        }
     </script>
 </body>
 </html>
