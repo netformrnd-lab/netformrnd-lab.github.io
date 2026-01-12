@@ -30407,6 +30407,9 @@ async function syncCafe24Orders(isAuto = false) {
           }
         }
 
+        // 🎁 레퍼럴 코드 추출 (주문 메모에서)
+        const referralCode = extractReferralCodeFromMemo(order.buyer_memo);
+
         const docRef = db.collection('cafe24_orders').doc(order.order_id);
         batch.set(docRef, {
           order_id: order.order_id || '',
@@ -30417,11 +30420,16 @@ async function syncCafe24Orders(isAuto = false) {
           payment_status: order.payment_status || '',
           order_status: order.order_status || '',
           items: order.items || [],
+          buyer_memo: order.buyer_memo || '',
           // 🎯 매칭된 딜 정보 추가
           deal_id: matchedDeal ? matchedDeal.id : '',
           deal_title: matchedDeal ? matchedDeal.title : '',
           supplier_id: matchedDeal ? matchedDeal.supplierId : '',
           seller_id: matchedDeal ? matchedDeal.sellerId : '',
+          // 🎁 레퍼럴 정보 추가
+          referralCode: referralCode || '',
+          isReferralPurchase: !!referralCode,
+          cashbackProcessed: false,
           synced_at: new Date().toISOString()
         });
 
@@ -30436,6 +30444,31 @@ async function syncCafe24Orders(isAuto = false) {
       // 남은 데이터 커밋
       if (savedCount > 0 && savedCount % 500 !== 0) {
         await batch.commit();
+      }
+
+      // 🎁 레퍼럴 캐시백 처리 (비동기)
+      // 주문 저장 후 레퍼럴 코드가 있는 주문들에 대해 캐시백 적립
+      let cashbackCount = 0;
+      for (const order of newOrders) {
+        const referralCode = extractReferralCodeFromMemo(order.buyer_memo);
+        if (referralCode) {
+          try {
+            await processReferralCashback(referralCode, {
+              order_id: order.order_id,
+              member_id: order.member_id,
+              order_date: order.order_date,
+              payment_amount: parseFloat(order.order_price_amount || 0),
+              buyer_name: order.billing_name
+            });
+            cashbackCount++;
+          } catch (error) {
+            console.error('캐시백 처리 실패:', order.order_id, error);
+          }
+        }
+      }
+
+      if (cashbackCount > 0) {
+        console.log(`🎁 레퍼럴 캐시백 처리 완료: ${cashbackCount}건`);
       }
     }
 
@@ -30473,6 +30506,226 @@ async function syncCafe24Orders(isAuto = false) {
     }
   }
 }
+
+// ========================================
+// 레퍼럴 캐시백 시스템
+// ========================================
+
+// 레퍼럴 코드 생성 (고유한 8자리 코드)
+async function generateReferralCode(referrerId, dealId, dealTitle) {
+  try {
+    let code;
+    let attempts = 0;
+    const maxAttempts = 5;
+
+    // 중복되지 않는 고유 코드 생성
+    while (attempts < maxAttempts) {
+      code = Math.random().toString(36).substring(2, 10).toUpperCase();
+
+      const existing = await db.collection('referrals').doc(code).get();
+      if (!existing.exists) {
+        break; // 고유한 코드 발견
+      }
+      attempts++;
+    }
+
+    if (attempts >= maxAttempts) {
+      throw new Error('레퍼럴 코드 생성 실패');
+    }
+
+    // Firestore에 레퍼럴 데이터 저장
+    const referralData = {
+      referralCode: code,
+      referrerId: referrerId,
+      dealId: dealId,
+      dealTitle: dealTitle || '',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30일 후
+      clicks: 0,
+      conversions: 0,
+      totalSales: 0,
+      referrerCashback: 0,
+      refereeCashback: 0,
+      totalCashback: 0,
+      status: 'active',
+      purchases: []
+    };
+
+    await db.collection('referrals').doc(code).set(referralData);
+    console.log('✅ 레퍼럴 코드 생성:', code);
+
+    return code;
+  } catch (error) {
+    console.error('레퍼럴 코드 생성 오류:', error);
+    throw error;
+  }
+}
+
+// 주문 메모에서 레퍼럴 코드 추출 (8자리 영문+숫자)
+function extractReferralCodeFromMemo(memo) {
+  if (!memo) return null;
+
+  // 패턴: 8자리 영문+숫자 (예: "ABC123XY")
+  const match = memo.match(/\b[A-Z0-9]{8}\b/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
+// 레퍼럴 구매 검증 (자기 자신 구매 방지, 중복 방지)
+async function validateReferralPurchase(referralCode, purchaserId) {
+  try {
+    const referralDoc = await db.collection('referrals').doc(referralCode).get();
+
+    if (!referralDoc.exists) {
+      console.error('❌ 레퍼럴 코드가 존재하지 않음:', referralCode);
+      return false;
+    }
+
+    const referral = referralDoc.data();
+
+    // 만료 확인
+    if (referral.expiresAt.toDate() < new Date()) {
+      console.error('❌ 레퍼럴 코드 만료:', referralCode);
+      return false;
+    }
+
+    // 상태 확인
+    if (referral.status !== 'active') {
+      console.error('❌ 레퍼럴 코드 비활성:', referralCode);
+      return false;
+    }
+
+    // 자기 자신 구매 방지
+    if (referral.referrerId === purchaserId) {
+      console.error('❌ 자기 자신은 추천할 수 없습니다:', referralCode);
+      return false;
+    }
+
+    // 중복 구매 방지 (1인 1회 제한)
+    const existingCashback = await db.collection('cashbacks')
+      .where('referralCode', '==', referralCode)
+      .where('userId', '==', purchaserId)
+      .where('userType', '==', 'referee')
+      .limit(1)
+      .get();
+
+    if (!existingCashback.empty) {
+      console.error('❌ 이미 캐시백을 받았습니다:', referralCode, purchaserId);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('레퍼럴 검증 오류:', error);
+    return false;
+  }
+}
+
+// 레퍼럴 캐시백 처리 (주문 완료 시 자동 실행)
+async function processReferralCashback(referralCode, order) {
+  try {
+    console.log('🎁 캐시백 처리 시작:', referralCode, order.order_id);
+
+    // 1. 레퍼럴 정보 가져오기
+    const referralDoc = await db.collection('referrals').doc(referralCode).get();
+    if (!referralDoc.exists) {
+      console.error('❌ 레퍼럴 코드가 존재하지 않음:', referralCode);
+      return;
+    }
+
+    const referral = referralDoc.data();
+
+    // 2. 구매자 ID 추출 (카페24 회원 ID)
+    const purchaserId = order.member_id || 'guest_' + order.order_id;
+
+    // 3. 검증
+    const isValid = await validateReferralPurchase(referralCode, purchaserId);
+    if (!isValid) {
+      return;
+    }
+
+    // 4. 딜 정보 가져오기 (캐시백 금액 확인)
+    let referrerReward = 5000;  // 기본값: 추천인 5,000원
+    let refereeReward = 3000;   // 기본값: 피추천인 3,000원
+
+    if (referral.dealId) {
+      const dealDoc = await db.collection('deals').doc(referral.dealId).get();
+      if (dealDoc.exists) {
+        const deal = dealDoc.data();
+        referrerReward = deal.referrerCashback || referrerReward;
+        refereeReward = deal.refereeCashback || refereeReward;
+      }
+    }
+
+    // 5. 추천인 캐시백 적립
+    const referrerCashback = {
+      userId: referral.referrerId,
+      userType: 'referrer',
+      amount: referrerReward,
+      remainingAmount: referrerReward,
+      referralCode: referralCode,
+      orderId: order.order_id,
+      dealId: referral.dealId,
+      dealTitle: referral.dealTitle || '',
+      earnedAt: new Date(),
+      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1년 후
+      status: 'active',
+      usedAmount: 0
+    };
+    await db.collection('cashbacks').add(referrerCashback);
+    console.log('✅ 추천인 캐시백 적립:', referral.referrerId, referrerReward);
+
+    // 6. 피추천인 캐시백 적립
+    const refereeCashback = {
+      userId: purchaserId,
+      userType: 'referee',
+      amount: refereeReward,
+      remainingAmount: refereeReward,
+      referralCode: referralCode,
+      orderId: order.order_id,
+      dealId: referral.dealId,
+      dealTitle: referral.dealTitle || '',
+      earnedAt: new Date(),
+      expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1년 후
+      status: 'active',
+      usedAmount: 0
+    };
+    await db.collection('cashbacks').add(refereeCashback);
+    console.log('✅ 피추천인 캐시백 적립:', purchaserId, refereeReward);
+
+    // 7. 레퍼럴 통계 업데이트
+    await db.collection('referrals').doc(referralCode).update({
+      conversions: firebase.firestore.FieldValue.increment(1),
+      totalSales: firebase.firestore.FieldValue.increment(order.payment_amount || 0),
+      referrerCashback: firebase.firestore.FieldValue.increment(referrerReward),
+      refereeCashback: firebase.firestore.FieldValue.increment(refereeReward),
+      totalCashback: firebase.firestore.FieldValue.increment(referrerReward + refereeReward),
+      purchases: firebase.firestore.FieldValue.arrayUnion({
+        orderId: order.order_id,
+        purchaserId: purchaserId,
+        purchaseDate: new Date(order.order_date),
+        amount: order.payment_amount || 0,
+        referrerReward: referrerReward,
+        refereeReward: refereeReward,
+        status: 'completed'
+      })
+    });
+
+    // 8. 주문에 캐시백 처리 완료 표시
+    await db.collection('cafe24_orders').doc(order.order_id).update({
+      cashbackProcessed: true,
+      cashbackProcessedAt: new Date(),
+      referrerReward: referrerReward,
+      refereeReward: refereeReward
+    });
+
+    console.log(`✅ 캐시백 처리 완료: ${referralCode} → 추천인 ${referrerReward.toLocaleString()}원, 피추천인 ${refereeReward.toLocaleString()}원`);
+
+  } catch (error) {
+    console.error('❌ 캐시백 처리 오류:', error);
+  }
+}
+
+// ========================================
 
 // 카페24 연동 해제
 async function disconnectCafe24() {
