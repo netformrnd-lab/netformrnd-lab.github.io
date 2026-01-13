@@ -563,7 +563,7 @@
         }
 
         // 파생본 생성
-        function createDerivative() {
+        async function createDerivative() {
             const input = document.getElementById('companyName').value.trim();
 
             if (!input) {
@@ -574,13 +574,6 @@
             const urlId = extractEnglish(input);
             if (!urlId) {
                 showToast('영어 부분이 필요합니다. (예: 삼성전자 samsung)');
-                return;
-            }
-
-            // 중복 체크
-            const derivatives = getDerivatives(currentCategory);
-            if (derivatives.some(d => d.urlId === urlId)) {
-                showToast('이미 존재하는 URL입니다.');
                 return;
             }
 
@@ -599,7 +592,6 @@
 
             // 새 파생본 생성
             const newDerivative = {
-                id: Date.now().toString(),
                 urlId: urlId,
                 name: input,
                 companyName: companyName,
@@ -610,12 +602,26 @@
                 createdAt: new Date().toISOString()
             };
 
-            derivatives.push(newDerivative);
-            saveDerivatives(currentCategory, derivatives);
+            try {
+                // Firebase에 저장
+                const docRef = await db.collection('proposalDerivatives').add(newDerivative);
+                newDerivative.id = docRef.id;
 
-            closeCreateModal();
-            updateDerivativesList(currentCategory);
-            showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다!`);
+                closeCreateModal();
+                // Firebase에서 다시 로드
+                await loadProposalsFromFirebase();
+                showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다!`);
+            } catch (err) {
+                console.error('Firebase save error:', err);
+                // 폴백: localStorage 사용
+                const derivatives = getDerivatives(currentCategory);
+                newDerivative.id = Date.now().toString();
+                derivatives.push(newDerivative);
+                saveDerivatives(currentCategory, derivatives);
+                closeCreateModal();
+                updateDerivativesList(currentCategory);
+                showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다! (로컬 저장)`);
+            }
         }
 
         // 파생본 목록 가져오기
