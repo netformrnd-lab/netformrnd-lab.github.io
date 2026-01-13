@@ -322,17 +322,192 @@
     <!-- 토스트 -->
     <div id="toast" class="toast"></div>
 
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
     <script>
+        // Firebase 설정
+        const firebaseConfig = {
+            apiKey: "AIzaSyAQf_Cu9wMji5QsMBQns5eg6nOD_vmrZMs",
+            authDomain: "moyeora-deal-manager.firebaseapp.com",
+            projectId: "moyeora-deal-manager",
+            storageBucket: "moyeora-deal-manager.firebasestorage.app",
+            messagingSenderId: "527148187832",
+            appId: "1:527148187832:web:dc35b0413a7157db34744d"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
         let currentCategory = null;
         let currentCategoryName = null;
         const BASE_URL = 'https://netformrnd-lab.github.io';
 
-        // 페이지 로드 시 파생본 목록 표시
+        // 페이지 로드 시 파생본 목록 표시 (Firebase에서)
         document.addEventListener('DOMContentLoaded', function() {
-            ['food', 'baby', 'lifestyle'].forEach(cat => {
-                updateDerivativesList(cat);
-            });
+            loadProposalsFromFirebase();
         });
+
+        // Firebase에서 제안서 목록 로드
+        async function loadProposalsFromFirebase() {
+            try {
+                const snapshot = await db.collection('proposalDerivatives').orderBy('createdAt', 'desc').get();
+                const proposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                // 카테고리별로 그룹핑
+                const byCategory = {};
+                proposals.forEach(p => {
+                    const cat = mapCategoryToProposal(p.category);
+                    if (!byCategory[cat]) byCategory[cat] = [];
+                    byCategory[cat].push(p);
+                });
+
+                // 각 카테고리별로 목록 업데이트
+                ['food', 'baby', 'lifestyle', 'beauty', 'health', 'pet'].forEach(cat => {
+                    updateDerivativesListFromData(cat, byCategory[cat] || []);
+                });
+            } catch (err) {
+                console.error('Firebase load error:', err);
+                // 폴백: localStorage 사용
+                ['food', 'baby', 'lifestyle'].forEach(cat => {
+                    updateDerivativesList(cat);
+                });
+            }
+        }
+
+        // 카테고리 매핑 (상품리스트 카테고리 → 제안서 카테고리)
+        function mapCategoryToProposal(category) {
+            if (!category) return 'lifestyle';
+            const cat = category.toLowerCase();
+            if (cat.includes('식품') || cat.includes('음료') || cat.includes('food')) return 'food';
+            if (cat.includes('육아') || cat.includes('키즈') || cat.includes('baby') || cat.includes('유아')) return 'baby';
+            if (cat.includes('생활') || cat.includes('리빙') || cat.includes('홈') || cat.includes('lifestyle')) return 'lifestyle';
+            if (cat.includes('뷰티') || cat.includes('화장') || cat.includes('beauty')) return 'beauty';
+            if (cat.includes('건강') || cat.includes('영양') || cat.includes('health')) return 'health';
+            if (cat.includes('반려') || cat.includes('펫') || cat.includes('pet')) return 'pet';
+            return 'lifestyle';
+        }
+
+        // Firebase 데이터로 목록 업데이트
+        function updateDerivativesListFromData(category, derivatives) {
+            const container = document.getElementById(`derivatives-${category}`);
+            if (!container) return;
+
+            if (derivatives.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            let html = \`
+                <div class="derivatives-header">
+                    <span class="derivatives-title">📂 맞춤 제안서</span>
+                    <span class="derivatives-count">\${derivatives.length}개</span>
+                </div>
+            \`;
+
+            derivatives.forEach(d => {
+                const methodLabels = { email: '이메일', phone: '전화', kakao: '카카오톡', website: '홈페이지' };
+                const methods = d.proposalMethods || ['email'];
+                const methodBadges = methods.map(m => \`<span class="method-badge active">\${methodLabels[m] || m}</span>\`).join('');
+                const companyName = d.companyName || d.name || '-';
+
+                html += \`
+                    <div class="derivative-item">
+                        <div class="derivative-info">
+                            <div class="derivative-name">\${companyName}</div>
+                            <div class="derivative-details">
+                                \${d.phone ? \`<span class="derivative-detail-item">📞 \${d.phone}</span>\` : ''}
+                                \${d.productName ? \`<span class="derivative-detail-item">📦 \${d.productName}</span>\` : ''}
+                                <span class="derivative-detail-item">제안: \${methodBadges}</span>
+                            </div>
+                        </div>
+                        <div class="derivative-actions">
+                            <button class="btn-icon" onclick="copyUrlFromFirebase('\${d.id}', '\${category}')">복사</button>
+                            <button class="btn-icon" onclick="openDerivativeFromFirebase('\${d.id}', '\${category}')">열기</button>
+                            <button class="btn-icon" onclick="openEmailModalFromFirebase('\${d.id}', '\${category}')" style="background:#1a1a2e;color:#fff;">이메일</button>
+                            <button class="btn-icon danger" onclick="deleteDerivativeFromFirebase('\${d.id}', '\${category}')">삭제</button>
+                        </div>
+                    </div>
+                \`;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // Firebase에서 URL 복사
+        async function copyUrlFromFirebase(docId, category) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const d = doc.data();
+                const data = { category: category, companyName: d.companyName || d.name };
+                const encodedData = btoa(encodeURIComponent(JSON.stringify(data)));
+                const url = \`\${BASE_URL}/supplier/proposal/?d=\${encodedData}\`;
+                navigator.clipboard.writeText(url).then(() => showToast('URL이 복사되었습니다!'));
+            } catch (err) {
+                showToast('복사 중 오류가 발생했습니다.');
+            }
+        }
+
+        // Firebase에서 제안서 열기
+        async function openDerivativeFromFirebase(docId, category) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const d = doc.data();
+                const data = { category: category, companyName: d.companyName || d.name };
+                const encodedData = btoa(encodeURIComponent(JSON.stringify(data)));
+                window.open(\`/supplier/proposal/?d=\${encodedData}\`, '_blank');
+            } catch (err) {
+                showToast('열기 중 오류가 발생했습니다.');
+            }
+        }
+
+        // Firebase에서 제안서 삭제
+        async function deleteDerivativeFromFirebase(docId, category) {
+            if (!confirm('이 맞춤 제안서를 삭제하시겠습니까?')) return;
+            try {
+                await db.collection('proposalDerivatives').doc(docId).delete();
+                loadProposalsFromFirebase();
+                showToast('삭제되었습니다.');
+            } catch (err) {
+                showToast('삭제 중 오류가 발생했습니다.');
+            }
+        }
+
+        // Firebase에서 이메일 모달
+        async function openEmailModalFromFirebase(docId, category) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const d = doc.data();
+                const companyName = d.companyName || d.name;
+                currentEmailCompany = companyName;
+                currentEmailSubject = \`[모여라딜] \${companyName} 파트너십 제안드립니다\`;
+                document.getElementById('emailSubject').value = currentEmailSubject;
+
+                const data = { category: category, companyName: companyName };
+                const encodedData = btoa(encodeURIComponent(JSON.stringify(data)));
+                const proposalUrl = \`\${BASE_URL}/supplier/proposal/?d=\${encodedData}\`;
+
+                currentEmailHtml = generateEmailHtml(companyName, category, proposalUrl);
+                document.getElementById('emailPreviewFrame').srcdoc = currentEmailHtml;
+                document.getElementById('emailHtmlTextarea').value = currentEmailHtml;
+                switchEmailTab('preview');
+                document.getElementById('emailModal').classList.add('active');
+            } catch (err) {
+                showToast('이메일 모달 열기 중 오류가 발생했습니다.');
+            }
+        }
 
         // 제안서 열기
         function openProposal(url) {

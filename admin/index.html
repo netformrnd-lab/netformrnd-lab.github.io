@@ -16459,17 +16459,74 @@ async function saveProductListItem(e, itemId) {
   };
 
   try {
+    let docRef;
     if (itemId) {
       await db.collection('productList').doc(itemId).update(data);
+      docRef = { id: itemId };
     } else {
       data.createdAt = new Date().toISOString();
       data.createdBy = getCurrentUserId();
-      await db.collection('productList').add(data);
+      docRef = await db.collection('productList').add(data);
     }
+
+    // 회사명이 있으면 제안서 자동 생성
+    if (data.companyName) {
+      await createProposalDerivative(docRef.id, data);
+    }
+
     showToast('✅ 저장되었습니다.');
     closeModal();
   } catch (err) {
+    console.error('Save error:', err);
     showToast('❌ 저장에 실패했습니다.');
+  }
+}
+
+// 제안서 자동 생성 (카테고리 기반)
+async function createProposalDerivative(productListId, data) {
+  try {
+    // 기존 제안서가 있는지 확인 (같은 회사명)
+    const existing = await db.collection('proposalDerivatives')
+      .where('companyName', '==', data.companyName)
+      .get();
+
+    if (!existing.empty) {
+      // 기존 제안서 업데이트
+      const docId = existing.docs[0].id;
+      await db.collection('proposalDerivatives').doc(docId).update({
+        category: data.category || '',
+        productName: data.productName || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        homepage: data.homepage || '',
+        productLink: data.productLink || '',
+        updatedAt: new Date().toISOString()
+      });
+    } else {
+      // 새 제안서 생성
+      const proposalMethods = [];
+      if (data.proposalEmail) proposalMethods.push('email');
+      if (data.proposalPhone) proposalMethods.push('phone');
+      if (data.proposalHomepage) proposalMethods.push('website');
+      if (proposalMethods.length === 0) proposalMethods.push('email');
+
+      await db.collection('proposalDerivatives').add({
+        productListId: productListId,
+        companyName: data.companyName,
+        name: data.companyName,
+        category: data.category || '',
+        productName: data.productName || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        homepage: data.homepage || '',
+        productLink: data.productLink || '',
+        proposalMethods: proposalMethods,
+        createdAt: new Date().toISOString(),
+        createdBy: getCurrentUserId()
+      });
+    }
+  } catch (err) {
+    console.error('Proposal derivative creation error:', err);
   }
 }
 
