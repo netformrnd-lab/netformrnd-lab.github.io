@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>그로스보드 - 읽기 전용</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: #F8FAFC;
+      min-height: 100vh;
+    }
+    :root {
+      --primary: #2563EB;
+      --purple: #6366F1;
+      --green: #10B981;
+      --yellow: #F59E0B;
+      --red: #EF4444;
+      --gray-50: #F8FAFC;
+      --gray-100: #F1F5F9;
+      --gray-200: #E2E8F0;
+      --gray-300: #CBD5E1;
+      --gray-500: #64748B;
+      --gray-700: #334155;
+      --gray-900: #0F172A;
+      --white: #FFFFFF;
+    }
+    .loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid var(--gray-200);
+      border-top: 4px solid var(--purple);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .error-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    .header {
+      background: linear-gradient(135deg, var(--purple), #8B5CF6);
+      color: white;
+      padding: 20px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 {
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .header .badge {
+      background: rgba(255,255,255,0.2);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .kpi-folder {
+      background: var(--white);
+      border-radius: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+      overflow: hidden;
+    }
+    .kpi-folder-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .kpi-folder-header:hover {
+      background: var(--gray-50);
+    }
+    .kpi-folder-toggle {
+      width: 24px;
+      height: 24px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--gray-500);
+      transition: transform 0.2s;
+    }
+    .kpi-folder-toggle.open {
+      transform: rotate(90deg);
+    }
+    .kpi-folder-content {
+      display: none;
+    }
+    .kpi-folder-content.show {
+      display: block;
+    }
+    .refresh-notice {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--gray-900);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading" class="loading-screen">
+    <div class="loading-spinner"></div>
+    <div style="margin-top: 20px; color: var(--gray-500);">데이터를 불러오는 중...</div>
+  </div>
+
+  <div id="error" class="error-screen" style="display: none;">
+    <div style="font-size: 60px; margin-bottom: 20px;">🔒</div>
+    <div style="font-size: 20px; font-weight: 600; color: var(--gray-900); margin-bottom: 8px;">접근 권한이 없습니다</div>
+    <div style="color: var(--gray-500);">유효하지 않거나 비활성화된 링크입니다</div>
+  </div>
+
+  <div id="app" style="display: none;">
+    <div class="header">
+      <div>
+        <h1>📊 그로스보드</h1>
+        <div style="font-size: 12px; opacity: 0.8; margin-top: 4px;">메인 KPI → 서브 KPI → 선행지표 → 내 선행지표</div>
+      </div>
+      <div class="badge">🔒 읽기 전용</div>
+    </div>
+    <div class="container" id="content"></div>
+    <div class="refresh-notice">
+      <div class="live-dot"></div>
+      실시간 업데이트 중
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+  <script>
+    // Firebase 설정
+    const firebaseConfig = {
+      apiKey: "AIzaSyDxNqXrXPNentBcVde0rweuwqJHWLyI-p8",
+      authDomain: "moyeoradeal.firebaseapp.com",
+      projectId: "moyeoradeal",
+      storageBucket: "moyeoradeal.firebasestorage.app",
+      messagingSenderId: "568249498736",
+      appId: "1:568249498736:web:7d6bf89706f3ed73463c1e"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    // 상태
+    let state = {
+      megaProjects: [],
+      projects: [],
+      teamKPIs: [],
+      memberKPIs: [],
+      isValid: false
+    };
+
+    // 색상 상수
+    const C = {
+      primary: '#2563EB',
+      purple: '#6366F1',
+      green: '#10B981',
+      yellow: '#F59E0B',
+      red: '#EF4444',
+      gray50: '#F8FAFC',
+      gray100: '#F1F5F9',
+      gray200: '#E2E8F0',
+      gray300: '#CBD5E1',
+      gray500: '#64748B',
+      gray700: '#334155',
+      gray900: '#0F172A',
+      white: '#FFFFFF'
+    };
+
+    // 단위 타입 헬퍼
+    const KPI_UNIT_TYPES = {
+      revenue: { label: '매출액', unit: '억', suffix: '억' },
+      percent: { label: '퍼센트', unit: '%', suffix: '%' },
+      count: { label: '개수', unit: '개', suffix: '개' },
+      case: { label: '건수', unit: '건', suffix: '건' },
+      won: { label: '금액', unit: '만원', suffix: '만원' }
+    };
+
+    function getTargetUnitInfo(unitType) {
+      return KPI_UNIT_TYPES[unitType] || KPI_UNIT_TYPES.revenue;
+    }
+
+    function formatTargetValue(value, unitType) {
+      const info = getTargetUnitInfo(unitType);
+      if (value === null || value === undefined || value === 0) return '-';
+      if (unitType === 'percent') return `${value}%`;
+      return `${value}${info.suffix}`;
+    }
+
+    // URL에서 토큰 추출
+    function getTokenFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('token');
+    }
+
+    // 토큰 검증
+    async function validateToken(token) {
+      if (!token) return false;
+      try {
+        const snapshot = await db.collection('secretLinks')
+          .where('token', '==', token)
+          .where('isActive', '==', true)
+          .get();
+
+        if (snapshot.empty) return false;
+
+        // 조회수 증가
+        const doc = snapshot.docs[0];
+        await db.collection('secretLinks').doc(doc.id).update({
+          viewCount: firebase.firestore.FieldValue.increment(1),
+          lastViewedAt: new Date().toISOString()
+        });
+
+        return true;
+      } catch (e) {
+        console.error('토큰 검증 오류:', e);
+        return false;
+      }
+    }
+
+    // 데이터 로드 및 실시간 리스닝
+    function loadData() {
+      // 메인 KPI
+      db.collection('megaProjects').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.megaProjects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        render();
+      });
+
+      // 서브 KPI
+      db.collection('projects').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        render();
+      });
+
+      // 선행지표
+      db.collection('teamKPIs').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.teamKPIs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        render();
+      });
+
+      // 내 선행지표
+      db.collection('memberKPIs').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.memberKPIs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        render();
+      });
+    }
+
+    // 진행률 계산
+    function calculateProjectProgress(teamKPIs, memberKPIs) {
+      if (teamKPIs.length === 0) return 0;
+      let totalProgress = 0;
+      teamKPIs.forEach(kpi => {
+        const progress = kpi.target > 0 ? (kpi.current / kpi.target) * 100 : 0;
+        totalProgress += Math.min(progress, 100);
+      });
+      return Math.round(totalProgress / teamKPIs.length);
+    }
+
+    // 토글 기능
+    function toggleKPIFolder(id) {
+      const content = document.getElementById(id);
+      const toggle = document.getElementById(id + '-toggle');
+      if (content && toggle) {
+        content.classList.toggle('show');
+        toggle.classList.toggle('open');
+      }
+    }
+
+    function toggleKPISubFolder(id) {
+      toggleKPIFolder(id);
+    }
+
+    // 렌더링
+    function render() {
+      const container = document.getElementById('content');
+      if (!container) return;
+
+      const { megaProjects, projects, teamKPIs, memberKPIs } = state;
+
+      // 달성률 계산
+      let achievementRate = 0;
+      if (teamKPIs.length > 0) {
+        const totalProgress = teamKPIs.reduce((sum, kpi) => {
+          const progress = kpi.target > 0 ? (kpi.current / kpi.target) * 100 : 0;
+          return sum + Math.min(progress, 100);
+        }, 0);
+        achievementRate = Math.round(totalProgress / teamKPIs.length);
+      }
+
+      // 주목 필요 KPI
+      const attentionKPIs = teamKPIs.filter(kpi => {
+        const project = projects.find(p => p.id === kpi.projectId);
+        const mega = project ? megaProjects.find(m => m.id === project.megaProjectId) : null;
+        const progress = kpi.target > 0 ? Math.round((kpi.current / kpi.target) * 100) : 0;
+        return mega?.priority === 1 && progress < 30;
+      }).slice(0, 5);
+
+      // 우선순위 TOP
+      const priorityMegaKPIs = megaProjects
+        .filter(m => m.priority && m.priority <= 3)
+        .sort((a, b) => a.priority - b.priority);
+
+      container.innerHTML = `
+        <!-- 빠른 접근 패널 -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+          <!-- 주목 필요 -->
+          <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 16px; padding: 20px; border: 1px solid #F59E0B;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 14px; font-weight: 700; color: #92400E;">⚠️ 주목 필요 (1순위 중 달성률 30% 미만)</div>
+              <span style="font-size: 12px; color: #B45309;">${attentionKPIs.length}개</span>
+            </div>
+            ${attentionKPIs.length > 0 ? `
+              <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                ${attentionKPIs.map(kpi => {
+                  const progress = kpi.target > 0 ? Math.round((kpi.current / kpi.target) * 100) : 0;
+                  return `
+                    <div style="background: white; padding: 10px 14px; border-radius: 8px; display: flex; align-items: center; gap: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                      <span style="font-size: 13px; font-weight: 600; color: #333;">${kpi.name}</span>
+                      <span style="font-size: 11px; padding: 2px 8px; background: ${C.red}; color: white; border-radius: 10px;">${progress}%</span>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : `<div style="color: #92400E; font-size: 13px;">1순위 선행지표 모두 양호합니다 👍</div>`}
+          </div>
+
+          <!-- 우선순위 TOP -->
+          <div style="background: linear-gradient(135deg, #EDE9FE, #DDD6FE); border-radius: 16px; padding: 20px; border: 1px solid ${C.purple};">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 14px; font-weight: 700; color: #5B21B6;">⭐ 우선순위 TOP (메인 KPI)</div>
+              <span style="font-size: 12px; color: #7C3AED;">${priorityMegaKPIs.length}개</span>
+            </div>
+            ${priorityMegaKPIs.length > 0 ? `
+              <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                ${priorityMegaKPIs.map(mega => {
+                  const childProjects = projects.filter(p => p.megaProjectId === mega.id);
+                  let progress = 0;
+                  if (childProjects.length > 0) {
+                    const avgProgress = childProjects.reduce((sum, p) => sum + (p.progress || 0), 0) / childProjects.length;
+                    progress = Math.round(avgProgress);
+                  }
+                  return `
+                    <div style="background: white; padding: 10px 14px; border-radius: 8px; display: flex; align-items: center; gap: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                      <span style="font-size: 12px; font-weight: 700; color: ${C.purple};">#${mega.priority}</span>
+                      <span style="font-size: 13px; font-weight: 600; color: #333;">${mega.name}</span>
+                      <span style="font-size: 11px; padding: 2px 8px; background: ${progress >= 70 ? C.green : progress >= 40 ? C.yellow : C.red}; color: white; border-radius: 10px;">${progress}%</span>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : `<div style="color: #5B21B6; font-size: 13px;">메인 KPI에 우선순위를 설정하세요</div>`}
+          </div>
+        </div>
+
+        <!-- KPI 요약 카드 -->
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px;">
+          <div style="background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 12px; padding: 20px; color: white;">
+            <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">🎯 메인 KPI</div>
+            <div style="font-size: 28px; font-weight: 700;">${megaProjects.length}</div>
+          </div>
+          <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📁 서브 KPI</div>
+            <div style="font-size: 28px; font-weight: 700; color: ${C.primary};">${projects.length}</div>
+          </div>
+          <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📋 선행지표</div>
+            <div style="font-size: 28px; font-weight: 700; color: ${C.green};">${teamKPIs.length}</div>
+          </div>
+          <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">👤 내 선행지표</div>
+            <div style="font-size: 28px; font-weight: 700; color: ${C.yellow};">${memberKPIs.length}</div>
+          </div>
+          <div style="background: ${C.white}; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="font-size: 12px; color: ${C.gray500}; margin-bottom: 8px;">📈 달성률</div>
+            <div style="font-size: 28px; font-weight: 700; color: ${achievementRate >= 70 ? C.green : achievementRate >= 40 ? C.yellow : C.red};">${achievementRate}%</div>
+          </div>
+        </div>
+
+        <!-- KPI 계층 구조 -->
+        <div style="margin-top: 24px;">
+          ${megaProjects.length === 0 ? `
+            <div style="text-align: center; padding: 60px 20px; background: ${C.white}; border-radius: 16px;">
+              <div style="font-size: 50px; margin-bottom: 16px;">📊</div>
+              <div style="font-size: 18px; font-weight: 600; color: ${C.gray700};">아직 등록된 KPI가 없습니다</div>
+            </div>
+          ` : megaProjects.map((mega, megaIdx) => {
+            const childProjects = projects.filter(p => p.megaProjectId === mega.id);
+            const megaTeamKPIs = teamKPIs.filter(k => childProjects.some(p => p.id === k.projectId));
+            const megaMemberKPIs = memberKPIs.filter(k => megaTeamKPIs.some(t => t.id === k.teamKpiId));
+            const megaProgress = calculateProjectProgress(megaTeamKPIs, megaMemberKPIs);
+            const megaFolderId = 'mega-folder-' + megaIdx;
+
+            return `
+              <div class="kpi-folder">
+                <!-- 메인 KPI 헤더 -->
+                <div class="kpi-folder-header" onclick="toggleKPIFolder('${megaFolderId}')" style="padding: 20px 24px; border-left: 4px solid ${C.purple}; background: ${C.white};">
+                  <button class="kpi-folder-toggle" id="${megaFolderId}-toggle">▶</button>
+                  <div style="width: 40px; height: 40px; background: linear-gradient(135deg, ${C.purple}, #8B5CF6); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; margin-right: 12px;">🏢</div>
+                  <div style="flex: 1;">
+                    <div style="font-size: 18px; font-weight: 700; color: ${C.gray900};">${mega.name}</div>
+                    <div style="font-size: 12px; color: ${C.gray500}; margin-top: 2px;">${mega.description || ''} · 서브 KPI ${childProjects.length}개</div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 16px;">
+                    ${(mega.targetValue || mega.revenueTarget) ? `<div style="text-align: right;"><div style="font-size: 10px; color: ${C.gray500};">목표</div><div style="font-size: 16px; font-weight: 700; color: ${C.purple};">${formatTargetValue(mega.targetValue || (mega.revenueTarget / 100000000), mega.targetUnitType || 'revenue')}</div></div>` : ''}
+                    <div style="text-align: right;">
+                      <div style="font-size: 10px; color: ${C.gray500};">진행률</div>
+                      <div style="font-size: 16px; font-weight: 700; color: ${megaProgress >= 70 ? C.green : megaProgress >= 40 ? C.yellow : C.red};">${megaProgress}%</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 메인 KPI 내용 -->
+                <div class="kpi-folder-content" id="${megaFolderId}" style="padding: 0 24px 20px 24px;">
+                  <div style="margin-left: 30px; border-left: 2px solid ${C.gray200}; padding-left: 20px; padding-top: 12px;">
+                    ${childProjects.length === 0 ? `
+                      <div style="padding: 20px; background: ${C.gray50}; border-radius: 12px; text-align: center;">
+                        <div style="color: ${C.gray500};">서브 KPI가 없습니다</div>
+                      </div>
+                    ` : childProjects.map((project, projIdx) => {
+                      const projectTeamKPIs = teamKPIs.filter(k => k.projectId === project.id);
+                      const projectMemberKPIs = memberKPIs.filter(k => k.projectId === project.id);
+                      const projectProgress = calculateProjectProgress(projectTeamKPIs, projectMemberKPIs);
+                      const subFolderId = megaFolderId + '-sub-' + projIdx;
+
+                      return `
+                        <div class="kpi-folder" style="background: ${C.gray50}; border-radius: 12px; margin-bottom: 10px; overflow: hidden;">
+                          <!-- 서브 KPI 헤더 -->
+                          <div class="kpi-folder-header" onclick="toggleKPISubFolder('${subFolderId}')" style="padding: 14px 16px;">
+                            <button class="kpi-folder-toggle" id="${subFolderId}-toggle" style="font-size: 10px;">▶</button>
+                            <div style="font-size: 16px; margin-right: 8px;">📁</div>
+                            <div style="flex: 1;">
+                              <div style="font-size: 15px; font-weight: 600; color: ${C.gray900};">${project.name}</div>
+                              <div style="font-size: 11px; color: ${C.gray500};">선행지표 ${projectTeamKPIs.length}개${(project.targetValue || project.revenueGoal) ? ' · 목표 ' + formatTargetValue(project.targetValue || (project.revenueGoal / 100000000), project.targetUnitType || 'revenue') : ''}</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                              <div style="background: ${projectProgress >= 70 ? C.green : projectProgress >= 40 ? C.yellow : C.red}20; padding: 4px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; color: ${projectProgress >= 70 ? C.green : projectProgress >= 40 ? C.yellow : C.red};">
+                                ${projectProgress}%
+                              </div>
+                            </div>
+                          </div>
+
+                          <!-- 서브 KPI 내용 (선행지표) -->
+                          <div class="kpi-folder-content" id="${subFolderId}" style="padding: 0 16px 16px 16px;">
+                            ${projectTeamKPIs.length === 0 ? `
+                              <div style="padding: 16px; background: ${C.white}; border-radius: 8px; text-align: center; color: ${C.gray500}; font-size: 13px;">
+                                선행지표가 없습니다
+                              </div>
+                            ` : projectTeamKPIs.map(kpi => {
+                              const kpiProgress = kpi.target > 0 ? Math.round((kpi.current / kpi.target) * 100) : 0;
+                              return `
+                                <div style="background: ${C.white}; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+                                  <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 14px;">📋</span>
+                                    <span style="font-size: 14px; font-weight: 500; color: ${C.gray900};">${kpi.name}</span>
+                                  </div>
+                                  <div style="display: flex; align-items: center; gap: 12px;">
+                                    <span style="font-size: 13px; color: ${C.gray500};">${kpi.current || 0}/${kpi.target || 0} ${kpi.unit || '건'}</span>
+                                    <div style="background: ${kpiProgress >= 70 ? C.green : kpiProgress >= 40 ? C.yellow : C.red}20; padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; color: ${kpiProgress >= 70 ? C.green : kpiProgress >= 40 ? C.yellow : C.red};">
+                                      ${kpiProgress}%
+                                    </div>
+                                  </div>
+                                </div>
+                              `;
+                            }).join('')}
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    // 초기화
+    async function init() {
+      const token = getTokenFromUrl();
+      const isValid = await validateToken(token);
+
+      document.getElementById('loading').style.display = 'none';
+
+      if (!isValid) {
+        document.getElementById('error').style.display = 'flex';
+        return;
+      }
+
+      document.getElementById('app').style.display = 'block';
+      loadData();
+    }
+
+    init();
+  </script>
+</body>
+</html>
