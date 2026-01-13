@@ -14582,9 +14582,11 @@ function renderProductList() {
   const searchKeyword = state.productListSearchKeyword || '';
   const items = searchKeyword
     ? allItems.filter(p => (p.productName || '').toLowerCase().includes(searchKeyword.toLowerCase()) ||
+                          (p.companyName || '').toLowerCase().includes(searchKeyword.toLowerCase()) ||
                           (p.supplierName || '').toLowerCase().includes(searchKeyword.toLowerCase()) ||
                           (p.brandName || '').toLowerCase().includes(searchKeyword.toLowerCase()) ||
-                          (p.category || '').toLowerCase().includes(searchKeyword.toLowerCase()))
+                          (p.category || '').toLowerCase().includes(searchKeyword.toLowerCase()) ||
+                          (p.businessNumber || '').includes(searchKeyword))
     : allItems;
   
   /// 통계 (순서: 제안 → 온보딩 → 계약)
@@ -14716,10 +14718,9 @@ function renderProductList() {
             <thead>
               <tr>
                 <th>카테고리</th>
-                <th>공급사</th>
+                <th>회사명</th>
                 <th>상품명(SKU)</th>
-                <th style="text-align: right;">예상 판매가</th>
-                <th>출처/링크</th>
+                <th>상품링크</th>
                 <th style="text-align: center;">제안</th>
                 <th style="text-align: center;">온보딩</th>
                 <th style="text-align: center;">계약</th>
@@ -14762,15 +14763,14 @@ function renderProductList() {
                 <tr style="${rowBg}">
                   <td>${p.category ? `<span class="status-badge status-confirmed" style="font-size: 11px;">${p.category}</span>` : '-'}</td>
                   <td>
-                    <div><strong>${p.supplierName || p.brandName || '-'}</strong></div>
-                    ${p.brandName && p.supplierName && p.brandName !== p.supplierName ? `<div style="font-size: 10px; color: #6b7280;">브랜드: ${p.brandName}</div>` : ''}
+                    <div><strong>${p.companyName || p.supplierName || p.brandName || '-'}</strong></div>
+                    ${p.bizStatus ? `<div style="font-size: 10px; color: ${p.bizStatus.includes('계속') ? '#16a34a' : p.bizStatus.includes('휴업') ? '#f59e0b' : '#dc2626'};">${p.bizStatus}</div>` : ''}
                   </td>
                   <td>
                     <div>${p.productName || '-'}</div>
                     ${p.notes ? `<div style="font-size: 11px; color: var(--gray-500); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${p.notes}">${p.notes}</div>` : ''}
                   </td>
-                  <td style="text-align: right;">${p.expectedPrice ? Number(p.expectedPrice).toLocaleString() + '원' : '-'}</td>
-                  <td>${p.sourceLink ? `<a href="${p.sourceLink.startsWith('http') ? p.sourceLink : 'https://' + p.sourceLink}" target="_blank" style="color: var(--primary);">링크</a>` : (p.source || '-')}</td>
+                  <td>${p.productLink ? `<a href="${p.productLink.startsWith('http') ? p.productLink : 'https://' + p.productLink}" target="_blank" style="color: var(--primary);">상품링크</a>` : '-'}</td>
                   <td style="text-align: center;">
                     <label class="checkbox-wrapper" style="padding: 6px 10px; display: inline-flex; background: white; border-radius: 6px; border: 2px solid ${p.proposed ? '#22c55e' : '#e5e7eb'}; cursor: pointer;" onclick="event.stopPropagation(); toggleProductListField('${p.id}', 'proposed', ${!p.proposed})">
                       <input type="checkbox" ${p.proposed ? 'checked' : ''} style="pointer-events: none;">
@@ -15973,39 +15973,74 @@ function openProductListModal(itemId = null) {
   
   const m = document.getElementById('modal');
   m.className = 'modal show';
-  
+
   const isEdit = itemId !== null;
   const p = isEdit ? state.productList.find(item => item.id === itemId) : {};
-  
+
   m.innerHTML = `
-    <div class="modal-content" style="max-width: 600px;">
+    <div class="modal-content" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">
       <div class="modal-header">
         <h2 class="modal-title">${isEdit ? '상품 수정' : '탐색 상품 추가'}</h2>
         <button class="modal-close" onclick="closeModal()">×</button>
       </div>
-      
+
       <form onsubmit="saveProductListItem(event, '${itemId || ''}')">
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">카테고리</label>
-            <input type="text" class="form-input" id="pl-category" value="${p.category || ''}" placeholder="예: 뷰티, 식품, 가전">
+        <!-- 🔍 조회 섹션 -->
+        <div style="margin-bottom: 16px; padding: 16px; background: #eff6ff; border-radius: 12px; border: 1px solid #bfdbfe;">
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #1e40af;">🔍 기업 조회</h4>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <input type="text" class="form-input" id="pl-search-query" placeholder="사업자등록번호 또는 상호명 입력" style="flex: 1; min-width: 200px; font-size: 13px;">
+            <button type="button" class="btn" style="padding: 8px 16px; font-size: 12px; background: #3b82f6; color: white; white-space: nowrap;" onclick="searchBizno()">
+              🔍 조회
+            </button>
           </div>
-          <div class="form-group">
-            <label class="form-label">공급사명</label>
-            <input type="text" class="form-input" id="pl-supplier-name" value="${p.supplierName || ''}" placeholder="실제 공급업체명 (비즈노 자동 입력)">
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">브랜드명 <span style="font-weight: 400; font-size: 12px; color: #6b7280;">(선택)</span></label>
-          <input type="text" class="form-input" id="pl-brand" value="${p.brandName || ''}" placeholder="브랜드명이 다를 경우 입력">
+          <div id="pl-bizno-result" style="margin-top: 10px; display: none;"></div>
         </div>
 
-        <!-- 업체 정보 -->
+        <!-- 🏢 기업 정보 섹션 -->
         <div style="margin-bottom: 16px; padding: 16px; background: #f0fdf4; border-radius: 12px; border: 1px solid #bbf7d0;">
-          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #166534;">🏢 업체 정보</h4>
-          <div class="form-row" style="margin-bottom: 12px;">
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #166534;">🏢 기업 정보 <span style="font-weight: 400; font-size: 11px; color: #6b7280;">(자동입력 또는 수동입력)</span></h4>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label" style="font-size: 12px;">회사명 *</label>
+              <input type="text" class="form-input" id="pl-company-name" value="${p.companyName || ''}" required placeholder="회사명" style="font-size: 13px;">
+            </div>
             <div class="form-group" style="flex: 1;">
-              <label class="form-label" style="font-size: 13px;">업체 규모</label>
+              <label class="form-label" style="font-size: 12px;">사업자등록번호</label>
+              <input type="text" class="form-input" id="pl-business-number" value="${p.businessNumber || ''}" placeholder="000-00-00000" style="font-size: 13px;">
+            </div>
+          </div>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">대표자명</label>
+              <input type="text" class="form-input" id="pl-ceo-name" value="${p.ceoName || ''}" placeholder="대표자명" style="font-size: 13px;">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">사업자상태</label>
+              <input type="text" class="form-input" id="pl-biz-status" value="${p.bizStatus || ''}" placeholder="계속/휴업/폐업" style="font-size: 13px;">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">법인구분</label>
+              <input type="text" class="form-input" id="pl-corp-type" value="${p.corpType || ''}" placeholder="법인/개인" style="font-size: 13px;">
+            </div>
+          </div>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">업태</label>
+              <input type="text" class="form-input" id="pl-uptae" value="${p.uptae || ''}" placeholder="업태" style="font-size: 13px;">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">종목</label>
+              <input type="text" class="form-input" id="pl-jongmok" value="${p.jongmok || ''}" placeholder="종목" style="font-size: 13px;">
+            </div>
+          </div>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">기업규모</label>
               <select id="pl-company-size" class="form-select" style="font-size: 13px;">
                 <option value="">선택</option>
                 <option value="대기업" ${p.companySize === '대기업' ? 'selected' : ''}>대기업</option>
@@ -16014,164 +16049,150 @@ function openProductListModal(itemId = null) {
                 <option value="스타트업" ${p.companySize === '스타트업' ? 'selected' : ''}>스타트업</option>
               </select>
             </div>
-          </div>
-          <div>
-            <label class="form-label" style="font-size: 13px; margin-bottom: 8px;">사업 유형 <span style="font-weight: 400; color: #6b7280;">(복수선택)</span></label>
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #d1d5db;">
-                <input type="checkbox" id="pl-biz-own-brand" ${p.bizOwnBrand ? 'checked' : ''}>
-                <span style="font-size: 13px;">🏷️ 자체브랜드</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #d1d5db;">
-                <input type="checkbox" id="pl-biz-multi-brand" ${p.bizMultiBrand ? 'checked' : ''}>
-                <span style="font-size: 13px;">🏪 타브랜드입점</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #d1d5db;">
-                <input type="checkbox" id="pl-biz-odm-oem" ${p.bizOdmOem ? 'checked' : ''}>
-                <span style="font-size: 13px;">ODM/OEM유통</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #d1d5db;">
-                <input type="checkbox" id="pl-biz-distributor" ${p.bizDistributor ? 'checked' : ''}>
-                <span style="font-size: 13px;">📦 총판/도매</span>
-              </label>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">본사/지사</label>
+              <select id="pl-branch-type" class="form-select" style="font-size: 13px;">
+                <option value="">선택</option>
+                <option value="본사" ${p.branchType === '본사' ? 'selected' : ''}>본사</option>
+                <option value="지사" ${p.branchType === '지사' ? 'selected' : ''}>지사</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">종업원수</label>
+              <input type="text" class="form-input" id="pl-employee-count" value="${p.employeeCount || ''}" placeholder="예: 50명" style="font-size: 13px;">
             </div>
           </div>
-          <div style="margin-top: 12px;">
-            <label class="form-label" style="font-size: 13px;">사업자등록번호</label>
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <input type="text" class="form-input" id="pl-business-number" value="${p.businessNumber || ''}" placeholder="예: 123-45-67890" style="max-width: 180px; font-size: 13px;">
-              <button type="button" class="btn" style="padding: 8px 12px; font-size: 12px; background: #3b82f6; color: white; white-space: nowrap;" onclick="searchBizno()">
-                🔍 조회
-              </button>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">전화번호</label>
+              <input type="tel" class="form-input" id="pl-phone" value="${p.phone || ''}" placeholder="02-000-0000" style="font-size: 13px;">
             </div>
-            <div id="pl-bizno-result" style="margin-top: 8px; padding: 10px; background: #f0f9ff; border-radius: 8px; font-size: 12px; display: none;"></div>
-          </div>
-          <div style="margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 100px;">
-              <label class="form-label" style="font-size: 13px;">사업자상태</label>
-              <input type="text" class="form-input" id="pl-biz-status" value="${p.bizStatus || ''}" placeholder="자동 입력" style="font-size: 13px; background: #f9fafb;">
-            </div>
-            <div style="flex: 1; min-width: 140px;">
-              <label class="form-label" style="font-size: 13px;">과세유형</label>
-              <input type="text" class="form-input" id="pl-taxtype" value="${p.taxtype || ''}" placeholder="자동 입력" style="font-size: 13px; background: #f9fafb;">
-            </div>
-            <div style="flex: 1; min-width: 120px;">
-              <label class="form-label" style="font-size: 13px;">법인번호</label>
-              <input type="text" class="form-input" id="pl-corp-number" value="${p.corpNumber || ''}" placeholder="자동 입력" style="font-size: 13px; background: #f9fafb;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">회사이메일</label>
+              <input type="email" class="form-input" id="pl-email" value="${p.email || ''}" placeholder="company@email.com" style="font-size: 13px;">
             </div>
           </div>
-          <div style="margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 150px;">
-              <label class="form-label" style="font-size: 13px;">업태</label>
-              <input type="text" class="form-input" id="pl-uptae" value="${p.uptae || ''}" placeholder="자동 입력 또는 직접 입력" style="font-size: 13px;">
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">홈페이지</label>
+              <input type="url" class="form-input" id="pl-homepage" value="${p.homepage || ''}" placeholder="https://www.example.com" style="font-size: 13px;">
             </div>
-            <div style="flex: 1; min-width: 150px;">
-              <label class="form-label" style="font-size: 13px;">종목</label>
-              <input type="text" class="form-input" id="pl-jongmok" value="${p.jongmok || ''}" placeholder="자동 입력 또는 직접 입력" style="font-size: 13px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">통신판매업번호</label>
+              <input type="text" class="form-input" id="pl-ecommerce-number" value="${p.ecommerceNumber || ''}" placeholder="제0000-서울강남-0000호" style="font-size: 13px;">
+            </div>
+          </div>
+
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 2;">
+              <label class="form-label" style="font-size: 12px;">회사주소</label>
+              <input type="text" class="form-input" id="pl-address" value="${p.address || ''}" placeholder="회사 주소" style="font-size: 13px;">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">등록일</label>
+              <input type="text" class="form-input" id="pl-reg-date" value="${p.regDate || ''}" placeholder="YYYY-MM-DD" style="font-size: 13px;">
             </div>
           </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">상품명(SKU) *</label>
-          <input type="text" class="form-input" id="pl-name" value="${p.productName || ''}" required placeholder="상품명 또는 SKU를 입력하세요">
-        </div>
-        
-        <div class="form-group">
-          <label class="form-label">예상 판매가 (원)</label>
-          <input type="number" class="form-input" id="pl-price" value="${p.expectedPrice || ''}" placeholder="예상 판매 가격">
-        </div>
+        <!-- 📦 상품 정보 섹션 -->
+        <div style="margin-bottom: 16px; padding: 16px; background: #fef3c7; border-radius: 12px; border: 1px solid #fcd34d;">
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #92400e;">📦 상품 정보</h4>
 
-        <div class="form-group">
-          <label class="form-label">공급사 홈페이지 링크</label>
-          <input type="url" class="form-input" id="pl-link" value="${p.sourceLink || ''}" placeholder="공급사 홈페이지 또는 상품 페이지 URL">
-        </div>
+          <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">카테고리</label>
+              <input type="text" class="form-input" id="pl-category" value="${p.category || ''}" placeholder="예: 뷰티, 식품, 가전" style="font-size: 13px;">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">제조국</label>
+              <input type="text" class="form-input" id="pl-origin" value="${p.origin || ''}" placeholder="예: 한국, 중국" style="font-size: 13px;">
+            </div>
+          </div>
 
-        <div class="form-row">
+          <div class="form-group" style="margin-bottom: 10px;">
+            <label class="form-label" style="font-size: 12px;">상품명(SKU) *</label>
+            <input type="text" class="form-input" id="pl-name" value="${p.productName || ''}" required placeholder="상품명 또는 SKU" style="font-size: 13px;">
+          </div>
+
           <div class="form-group">
-            <label class="form-label">전화번호</label>
-            <input type="tel" class="form-input" id="pl-phone" value="${p.phone || ''}" placeholder="예: 010-1234-5678">
-          </div>
-          <div class="form-group">
-            <label class="form-label">이메일</label>
-            <input type="email" class="form-input" id="pl-email" value="${p.email || ''}" placeholder="예: supplier@email.com">
+            <label class="form-label" style="font-size: 12px;">상품링크</label>
+            <input type="url" class="form-input" id="pl-product-link" value="${p.productLink || ''}" placeholder="상품 페이지 URL" style="font-size: 13px;">
           </div>
         </div>
 
-        <!-- 진행 상태 (제안 → 온보딩 → 계약) -->
-        <div style="margin-bottom: 20px; padding: 16px; background: var(--gray-50); border-radius: 12px;">
-          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--gray-700);">진행 상태 <span style="font-weight: 400; font-size: 12px; color: var(--gray-500);">(제안 → 온보딩 → 계약)</span></h4>
-          <div style="display: flex; gap: 16px; flex-wrap: wrap;">
-            <label class="checkbox-wrapper" style="padding: 10px 16px; background: white; border-radius: 8px; border: 2px solid ${p.proposed ? '#22c55e' : '#e5e7eb'};">
-              <input type="checkbox" id="pl-proposed" ${p.proposed ? 'checked' : ''} onchange="document.getElementById('pl-proposal-section').style.display=this.checked?'block':'none'">
-              <span style="font-weight: 500; color: ${p.proposed ? '#16a34a' : 'inherit'};">① 제안완료</span>
+        <!-- ✅ 체크리스트 섹션 -->
+        <div style="margin-bottom: 16px; padding: 16px; background: var(--gray-50); border-radius: 12px;">
+          <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--gray-700);">✅ 진행 체크리스트</h4>
+
+          <!-- 제안 -->
+          <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border: 2px solid ${p.proposed ? '#22c55e' : '#e5e7eb'};">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+              <input type="checkbox" id="pl-proposed" ${p.proposed ? 'checked' : ''} onchange="document.getElementById('pl-proposal-methods').style.display=this.checked?'flex':'none'">
+              <span style="font-weight: 600; font-size: 13px; color: ${p.proposed ? '#16a34a' : 'inherit'};">① 제안완료</span>
             </label>
-            <label class="checkbox-wrapper" style="padding: 10px 16px; background: white; border-radius: 8px; border: 2px solid ${p.onboarding || p.contacted ? '#3b82f6' : '#e5e7eb'};">
-              <input type="checkbox" id="pl-onboarding" ${p.onboarding || p.contacted ? 'checked' : ''} onchange="document.getElementById('pl-source-section').style.display=this.checked?'block':'none'">
-              <span style="font-weight: 500; color: ${p.onboarding || p.contacted ? '#1d4ed8' : 'inherit'};">② 온보딩</span>
+            <div id="pl-proposal-methods" style="display: ${p.proposed ? 'flex' : 'none'}; gap: 8px; flex-wrap: wrap; margin-left: 24px;">
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-proposal-email" ${p.proposalEmail ? 'checked' : ''}> 이메일
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-proposal-phone" ${p.proposalPhone ? 'checked' : ''}> 전화
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-proposal-homepage" ${p.proposalHomepage ? 'checked' : ''}> 홈페이지
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-proposal-meeting" ${p.proposalMeeting ? 'checked' : ''}> 대면
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-proposal-exhibition" ${p.proposalExhibition ? 'checked' : ''}> 박람회
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-proposal-dm" ${p.proposalDm ? 'checked' : ''}> DM
+              </label>
+            </div>
+          </div>
+
+          <!-- 온보딩 -->
+          <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border: 2px solid ${p.onboarding ? '#3b82f6' : '#e5e7eb'};">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+              <input type="checkbox" id="pl-onboarding" ${p.onboarding ? 'checked' : ''} onchange="document.getElementById('pl-onboarding-methods').style.display=this.checked?'flex':'none'">
+              <span style="font-weight: 600; font-size: 13px; color: ${p.onboarding ? '#1d4ed8' : 'inherit'};">② 온보딩</span>
             </label>
-            <label class="checkbox-wrapper" style="padding: 10px 16px; background: ${p.contracted ? 'linear-gradient(135deg, #8b5cf6, #7c3aed)' : 'white'}; border-radius: 8px; border: 2px solid ${p.contracted ? '#8b5cf6' : '#e5e7eb'};">
+            <div id="pl-onboarding-methods" style="display: ${p.onboarding ? 'flex' : 'none'}; gap: 8px; flex-wrap: wrap; margin-left: 24px;">
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-guide" ${p.obGuide ? 'checked' : ''}> 가이드전달
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-product" ${p.obProductInfo ? 'checked' : ''}> 상품정보
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-biz-license" ${p.obBizLicense ? 'checked' : ''}> 사업자등록증
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-bank" ${p.obBank ? 'checked' : ''}> 통장사본
+              </label>
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; background: #f3f4f6; border-radius: 4px; cursor: pointer;">
+                <input type="checkbox" id="pl-ob-contract" ${p.obContract ? 'checked' : ''}> 계약서
+              </label>
+            </div>
+          </div>
+
+          <!-- 계약 -->
+          <div style="padding: 12px; background: ${p.contracted ? 'linear-gradient(135deg, #8b5cf6, #7c3aed)' : 'white'}; border-radius: 8px; border: 2px solid ${p.contracted ? '#8b5cf6' : '#e5e7eb'};">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" id="pl-contracted" ${p.contracted ? 'checked' : ''}>
-              <span style="font-weight: 500; color: ${p.contracted ? 'white' : 'inherit'};">③ 계약완료</span>
+              <span style="font-weight: 600; font-size: 13px; color: ${p.contracted ? 'white' : 'inherit'};">③ 계약완료</span>
             </label>
           </div>
-          <div id="pl-proposal-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #e5e7eb; display: ${p.proposed ? 'block' : 'none'};">
-            <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--gray-600);">📞 제안 방법</h4>
-            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #e5e7eb;">
-                <input type="checkbox" id="pl-proposal-email" ${p.proposalEmail ? 'checked' : ''}>
-                <span style="font-size: 13px;">📧 이메일</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #e5e7eb;">
-                <input type="checkbox" id="pl-proposal-phone" ${p.proposalPhone ? 'checked' : ''}>
-                <span style="font-size: 13px;">📞 전화</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #e5e7eb;">
-                <input type="checkbox" id="pl-proposal-homepage" ${p.proposalHomepage ? 'checked' : ''}>
-                <span style="font-size: 13px;">🌐 홈페이지</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #e5e7eb;">
-                <input type="checkbox" id="pl-proposal-meeting" ${p.proposalMeeting ? 'checked' : ''}>
-                <span style="font-size: 13px;">🤝 대면미팅</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 8px 12px; background: white; border-radius: 6px; border: 1px solid #e5e7eb;">
-                <input type="checkbox" id="pl-proposal-exhibition" ${p.proposalExhibition ? 'checked' : ''}>
-                <span style="font-size: 13px;">🎪 박람회</span>
-              </label>
-            </div>
-          </div>
-          <div id="pl-source-section" style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #e5e7eb; display: ${p.onboarding || p.contacted ? 'block' : 'none'};">
-            <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--gray-600);">📊 유입경로</h4>
-            <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="radio" name="pl-sourceType" value="outbound" ${p.sourceType === 'outbound' ? 'checked' : ''}>
-                <span style="font-size: 13px;">📤 아웃바운드 (직접제안)</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="radio" name="pl-sourceType" value="inbound" ${p.sourceType === 'inbound' ? 'checked' : ''}>
-                <span style="font-size: 13px;">📥 인바운드 (외부유입)</span>
-              </label>
-            </div>
-            <select id="pl-sourceDetail" class="form-select" style="max-width: 200px; font-size: 13px;">
-              <option value="">상세 선택</option>
-              <optgroup label="아웃바운드">
-                <option value="직접제안" ${p.sourceDetail === '직접제안' ? 'selected' : ''}>직접제안</option>
-                <option value="콜드메일" ${p.sourceDetail === '콜드메일' ? 'selected' : ''}>콜드메일</option>
-                <option value="DM발송" ${p.sourceDetail === 'DM발송' ? 'selected' : ''}>DM발송</option>
-              </optgroup>
-              <optgroup label="인바운드">
-                <option value="지인추천" ${p.sourceDetail === '지인추천' ? 'selected' : ''}>지인추천</option>
-                <option value="광고유입" ${p.sourceDetail === '광고유입' ? 'selected' : ''}>광고유입</option>
-                <option value="SNS유입" ${p.sourceDetail === 'SNS유입' ? 'selected' : ''}>SNS유입</option>
-                <option value="문의접수" ${p.sourceDetail === '문의접수' ? 'selected' : ''}>문의접수</option>
-              </optgroup>
-            </select>
-          </div>
         </div>
-        
+
+        <!-- 비고 -->
         <div class="form-group">
           <label class="form-label">비고</label>
-          <textarea class="form-textarea" id="pl-notes" rows="3" placeholder="메모 (공구 제안 시 참고사항 등)">${p.notes || ''}</textarea>
+          <textarea class="form-textarea" id="pl-notes" rows="2" placeholder="메모 (공구 제안 시 참고사항 등)">${p.notes || ''}</textarea>
         </div>
         
         <div class="modal-footer">
@@ -16186,14 +16207,14 @@ function openProductListModal(itemId = null) {
   `;
 }
 
-// 비즈노 API로 사업자정보 조회
+// 비즈노 API로 사업자정보 조회 (사업자등록번호 또는 상호명)
 async function searchBizno() {
-  const biznoInput = document.getElementById('pl-business-number');
+  const searchInput = document.getElementById('pl-search-query');
   const resultDiv = document.getElementById('pl-bizno-result');
-  const bizno = biznoInput.value.replace(/-/g, '').trim();
+  const query = searchInput.value.trim();
 
-  if (!bizno || bizno.length < 10) {
-    showToast('사업자등록번호를 입력해주세요 (10자리)');
+  if (!query) {
+    showToast('사업자등록번호 또는 상호명을 입력해주세요');
     return;
   }
 
@@ -16201,64 +16222,117 @@ async function searchBizno() {
   resultDiv.innerHTML = '<span style="color: #6b7280;">🔄 조회 중...</span>';
 
   try {
-    // 비즈노 무료 API 호출
     const apiKey = 'I095G09r20FS20qdITbvG1in2v9m';
-    const url = `https://bizno.net/api/fapi?key=${apiKey}&gb=1&q=${bizno}&type=json&status=Y`;
+    // 숫자만 있으면 사업자번호로, 아니면 상호명으로 조회
+    const cleanQuery = query.replace(/-/g, '');
+    const isNumber = /^\d{10}$/.test(cleanQuery);
+    const url = `https://bizno.net/api/fapi?key=${apiKey}&gb=1&q=${encodeURIComponent(isNumber ? cleanQuery : query)}&type=json&status=Y`;
 
     const response = await fetch(url);
     const data = await response.json();
 
     if (data.resultCode === 0 && data.items && data.items.length > 0) {
-      const item = data.items[0];
-
-      // 사업자 상태 표시
-      let statusText = '';
-      let statusColor = '#16a34a';
-      if (item.bsttcd === '01' || item.bstt === '계속사업자') {
-        statusText = '✅ 계속사업자';
-      } else if (item.bsttcd === '02' || item.bstt === '휴업자') {
-        statusText = '⚠️ 휴업자';
-        statusColor = '#f59e0b';
-      } else if (item.bsttcd === '03' || item.bstt === '폐업자') {
-        statusText = '❌ 폐업자';
-        statusColor = '#dc2626';
+      // 여러 결과가 있으면 선택 가능하게 표시
+      if (data.items.length > 1) {
+        resultDiv.innerHTML = `
+          <div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">🔍 ${data.items.length}개 검색결과 (선택하세요)</div>
+          <div style="max-height: 200px; overflow-y: auto;">
+            ${data.items.slice(0, 10).map((item, idx) => {
+              let statusText = item.bstt || '상태 미확인';
+              let statusColor = '#6b7280';
+              if (item.bsttcd === '01') { statusText = '✅ 계속'; statusColor = '#16a34a'; }
+              else if (item.bsttcd === '02') { statusText = '⚠️ 휴업'; statusColor = '#f59e0b'; }
+              else if (item.bsttcd === '03') { statusText = '❌ 폐업'; statusColor = '#dc2626'; }
+              return `
+                <div style="padding: 10px; margin-bottom: 6px; background: white; border-radius: 8px; border: 1px solid #e5e7eb; cursor: pointer; transition: all 0.2s;"
+                     onmouseover="this.style.borderColor='#3b82f6'; this.style.background='#eff6ff';"
+                     onmouseout="this.style.borderColor='#e5e7eb'; this.style.background='white';"
+                     onclick="selectBiznoResult(${idx})">
+                  <div style="font-weight: 600; color: #1e40af;">${item.company || '회사명 없음'}</div>
+                  <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">
+                    ${item.bno ? item.bno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3') : '-'} ·
+                    <span style="color: ${statusColor};">${statusText}</span>
+                    ${item.uptae ? ` · ${item.uptae}` : ''}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+        // 전역에 검색 결과 저장
+        window.biznoSearchResults = data.items.slice(0, 10);
       } else {
-        statusText = item.bstt || '상태 미확인';
-        statusColor = '#6b7280';
+        // 단일 결과
+        const item = data.items[0];
+        showSingleBiznoResult(item, resultDiv);
       }
-
-      // 비즈노 결과를 전역 변수에 저장
-      window.lastBiznoResult = {
-        company: item.company || '',
-        bizno: item.bno || bizno,
-        taxtype: item.taxtype || '',
-        cno: item.cno || '',
-        bsttcd: item.bsttcd || '',
-        bstt: item.bstt || statusText,
-        uptae: item.uptae || '',
-        jongmok: item.jongmok || ''
-      };
-
-      resultDiv.innerHTML = `
-        <div style="display: flex; flex-direction: column; gap: 6px;">
-          <div style="font-weight: 600; color: #1e40af;">📋 ${item.company || '회사명 없음'}</div>
-          <div style="color: ${statusColor}; font-weight: 500;">${statusText}</div>
-          ${item.taxtype ? `<div style="color: #6b7280;">과세유형: ${item.taxtype}</div>` : ''}
-          ${item.uptae ? `<div style="color: #6b7280;">업태: ${item.uptae}</div>` : ''}
-          ${item.jongmok ? `<div style="color: #6b7280;">종목: ${item.jongmok}</div>` : ''}
-          ${item.cno ? `<div style="color: #6b7280;">법인번호: ${item.cno}</div>` : ''}
-          <button type="button" class="btn" style="margin-top: 6px; padding: 6px 10px; font-size: 11px; background: #22c55e; color: white;" onclick="applyBiznoResult()">
-            ✓ 정보 적용
-          </button>
-        </div>
-      `;
     } else {
-      resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 결과가 없습니다. 사업자등록번호를 확인해주세요.</span>';
+      resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 결과가 없습니다.</span>';
     }
   } catch (err) {
     console.error('Bizno API error:', err);
     resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 중 오류가 발생했습니다.</span>';
   }
+}
+
+// 검색 결과에서 선택
+function selectBiznoResult(idx) {
+  const item = window.biznoSearchResults[idx];
+  const resultDiv = document.getElementById('pl-bizno-result');
+  showSingleBiznoResult(item, resultDiv);
+}
+
+// 단일 결과 표시
+function showSingleBiznoResult(item, resultDiv) {
+  let statusText = item.bstt || '상태 미확인';
+  let statusColor = '#16a34a';
+  if (item.bsttcd === '01' || item.bstt === '계속사업자') {
+    statusText = '✅ 계속사업자';
+  } else if (item.bsttcd === '02' || item.bstt === '휴업자') {
+    statusText = '⚠️ 휴업자';
+    statusColor = '#f59e0b';
+  } else if (item.bsttcd === '03' || item.bstt === '폐업자') {
+    statusText = '❌ 폐업자';
+    statusColor = '#dc2626';
+  } else {
+    statusColor = '#6b7280';
+  }
+
+  // 비즈노 결과를 전역 변수에 저장
+  window.lastBiznoResult = {
+    company: item.company || '',
+    bizno: item.bno || '',
+    bstt: statusText.replace(/[✅⚠️❌]\s*/, ''),
+    corpType: item.cno ? '법인' : '개인',
+    uptae: item.uptae || '',
+    jongmok: item.jongmok || '',
+    ceoName: item.pnm || '',
+    phone: item.telno || '',
+    address: item.addr || '',
+    homepage: item.homepage || '',
+    regDate: item.bgdt || '',
+    employeeCount: item.empCnt || '',
+    ecommerceNumber: item.dmgb || ''
+  };
+
+  resultDiv.innerHTML = `
+    <div style="padding: 12px; background: white; border-radius: 8px; border: 2px solid #22c55e;">
+      <div style="font-weight: 600; color: #1e40af; font-size: 14px; margin-bottom: 8px;">📋 ${item.company || '회사명 없음'}</div>
+      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; font-size: 11px; color: #6b7280;">
+        <div>사업자번호: ${item.bno ? item.bno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3') : '-'}</div>
+        <div style="color: ${statusColor}; font-weight: 500;">상태: ${statusText}</div>
+        ${item.pnm ? `<div>대표자: ${item.pnm}</div>` : ''}
+        ${item.uptae ? `<div>업태: ${item.uptae}</div>` : ''}
+        ${item.jongmok ? `<div>종목: ${item.jongmok}</div>` : ''}
+        ${item.addr ? `<div style="grid-column: span 2;">주소: ${item.addr}</div>` : ''}
+        ${item.telno ? `<div>전화: ${item.telno}</div>` : ''}
+        ${item.homepage ? `<div>홈페이지: ${item.homepage}</div>` : ''}
+      </div>
+      <button type="button" class="btn" style="margin-top: 10px; padding: 8px 16px; font-size: 12px; background: #22c55e; color: white; width: 100%;" onclick="applyBiznoResult()">
+        ✓ 정보 적용
+      </button>
+    </div>
+  `;
 }
 
 // 비즈노 조회 결과 적용
@@ -16269,50 +16343,61 @@ function applyBiznoResult() {
     return;
   }
 
-  // 공급사명에 회사명 적용
-  const supplierInput = document.getElementById('pl-supplier-name');
-  if (supplierInput && result.company) {
-    supplierInput.value = result.company;
-  }
+  // 회사명
+  const companyInput = document.getElementById('pl-company-name');
+  if (companyInput && result.company) companyInput.value = result.company;
 
-  // 사업자번호 포맷 적용
+  // 사업자번호
   const biznoInput = document.getElementById('pl-business-number');
   if (biznoInput && result.bizno) {
-    const formatted = result.bizno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3');
-    biznoInput.value = formatted;
+    biznoInput.value = result.bizno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3');
   }
 
-  // 과세유형 적용
-  const taxtypeInput = document.getElementById('pl-taxtype');
-  if (taxtypeInput && result.taxtype) {
-    taxtypeInput.value = result.taxtype;
-  }
+  // 대표자명
+  const ceoInput = document.getElementById('pl-ceo-name');
+  if (ceoInput && result.ceoName) ceoInput.value = result.ceoName;
 
-  // 법인번호 적용
-  const cnoInput = document.getElementById('pl-corp-number');
-  if (cnoInput && result.cno) {
-    cnoInput.value = result.cno;
-  }
-
-  // 사업자상태 적용
+  // 사업자상태
   const statusInput = document.getElementById('pl-biz-status');
-  if (statusInput && result.bstt) {
-    statusInput.value = result.bstt;
-  }
+  if (statusInput && result.bstt) statusInput.value = result.bstt;
 
-  // 업태 적용
+  // 법인구분
+  const corpTypeInput = document.getElementById('pl-corp-type');
+  if (corpTypeInput && result.corpType) corpTypeInput.value = result.corpType;
+
+  // 업태
   const uptaeInput = document.getElementById('pl-uptae');
-  if (uptaeInput && result.uptae) {
-    uptaeInput.value = result.uptae;
-  }
+  if (uptaeInput && result.uptae) uptaeInput.value = result.uptae;
 
-  // 종목 적용
+  // 종목
   const jongmokInput = document.getElementById('pl-jongmok');
-  if (jongmokInput && result.jongmok) {
-    jongmokInput.value = result.jongmok;
-  }
+  if (jongmokInput && result.jongmok) jongmokInput.value = result.jongmok;
 
-  showToast('✅ 공급사 정보가 적용되었습니다.');
+  // 전화번호
+  const phoneInput = document.getElementById('pl-phone');
+  if (phoneInput && result.phone) phoneInput.value = result.phone;
+
+  // 회사주소
+  const addressInput = document.getElementById('pl-address');
+  if (addressInput && result.address) addressInput.value = result.address;
+
+  // 홈페이지
+  const homepageInput = document.getElementById('pl-homepage');
+  if (homepageInput && result.homepage) homepageInput.value = result.homepage;
+
+  // 등록일
+  const regDateInput = document.getElementById('pl-reg-date');
+  if (regDateInput && result.regDate) regDateInput.value = result.regDate;
+
+  // 종업원수
+  const employeeInput = document.getElementById('pl-employee-count');
+  if (employeeInput && result.employeeCount) employeeInput.value = result.employeeCount;
+
+  // 통신판매업번호
+  const ecommerceInput = document.getElementById('pl-ecommerce-number');
+  if (ecommerceInput && result.ecommerceNumber) ecommerceInput.value = result.ecommerceNumber;
+
+  showToast('✅ 기업 정보가 적용되었습니다.');
   document.getElementById('pl-bizno-result').style.display = 'none';
 }
 
@@ -16321,46 +16406,58 @@ async function saveProductListItem(e, itemId) {
   e.preventDefault();
   if (!canEdit()) { showNoPermission(); return; }
 
-  // 유입경로 수집
-  const sourceTypeRadio = document.querySelector('input[name="pl-sourceType"]:checked');
-  const sourceType = sourceTypeRadio ? sourceTypeRadio.value : '';
-  const sourceDetail = document.getElementById('pl-sourceDetail')?.value || '';
-
   const data = {
-    category: document.getElementById('pl-category').value,
-    supplierName: document.getElementById('pl-supplier-name').value,
-    brandName: document.getElementById('pl-brand').value,
-    companySize: document.getElementById('pl-company-size').value,
-    bizOwnBrand: document.getElementById('pl-biz-own-brand').checked,
-    bizMultiBrand: document.getElementById('pl-biz-multi-brand').checked,
-    bizOdmOem: document.getElementById('pl-biz-odm-oem').checked,
-    bizDistributor: document.getElementById('pl-biz-distributor').checked,
+    // 기업 정보
+    companyName: document.getElementById('pl-company-name').value,
     businessNumber: document.getElementById('pl-business-number').value,
+    ceoName: document.getElementById('pl-ceo-name').value,
     bizStatus: document.getElementById('pl-biz-status').value,
-    taxtype: document.getElementById('pl-taxtype').value,
-    corpNumber: document.getElementById('pl-corp-number').value,
+    corpType: document.getElementById('pl-corp-type').value,
     uptae: document.getElementById('pl-uptae').value,
     jongmok: document.getElementById('pl-jongmok').value,
-    productName: document.getElementById('pl-name').value,
-    expectedPrice: Number(document.getElementById('pl-price').value) || 0,
-    sourceLink: document.getElementById('pl-link').value,
+    companySize: document.getElementById('pl-company-size').value,
+    branchType: document.getElementById('pl-branch-type').value,
+    employeeCount: document.getElementById('pl-employee-count').value,
     phone: document.getElementById('pl-phone').value,
     email: document.getElementById('pl-email').value,
+    homepage: document.getElementById('pl-homepage').value,
+    ecommerceNumber: document.getElementById('pl-ecommerce-number').value,
+    address: document.getElementById('pl-address').value,
+    regDate: document.getElementById('pl-reg-date').value,
+
+    // 상품 정보
+    category: document.getElementById('pl-category').value,
+    origin: document.getElementById('pl-origin').value,
+    productName: document.getElementById('pl-name').value,
+    productLink: document.getElementById('pl-product-link').value,
+
+    // 체크리스트 - 제안
     proposed: document.getElementById('pl-proposed').checked,
-    onboarding: document.getElementById('pl-onboarding').checked,
-    contracted: document.getElementById('pl-contracted').checked,
     proposalEmail: document.getElementById('pl-proposal-email').checked,
     proposalPhone: document.getElementById('pl-proposal-phone').checked,
     proposalHomepage: document.getElementById('pl-proposal-homepage').checked,
     proposalMeeting: document.getElementById('pl-proposal-meeting').checked,
     proposalExhibition: document.getElementById('pl-proposal-exhibition').checked,
-    sourceType: sourceType,
-    sourceDetail: sourceDetail,
+    proposalDm: document.getElementById('pl-proposal-dm').checked,
+
+    // 체크리스트 - 온보딩
+    onboarding: document.getElementById('pl-onboarding').checked,
+    obGuide: document.getElementById('pl-ob-guide').checked,
+    obProductInfo: document.getElementById('pl-ob-product').checked,
+    obBizLicense: document.getElementById('pl-ob-biz-license').checked,
+    obBank: document.getElementById('pl-ob-bank').checked,
+    obContract: document.getElementById('pl-ob-contract').checked,
+
+    // 체크리스트 - 계약
+    contracted: document.getElementById('pl-contracted').checked,
+
+    // 비고
     notes: document.getElementById('pl-notes').value,
+
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentUserId()
   };
-  
+
   try {
     if (itemId) {
       await db.collection('productList').doc(itemId).update(data);
