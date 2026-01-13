@@ -2622,6 +2622,74 @@
       };
     }
 
+    // 파이프라인 소요시간 계산 함수
+    function calculatePipelineDurations(productList) {
+      // 제안→온보딩완료 소요시간 계산
+      const proposalToOnboardingDurations = [];
+      // 제안→계약완료 소요시간 계산
+      const proposalToContractDurations = [];
+
+      productList.forEach(p => {
+        // 제안→온보딩완료 소요시간
+        if (p.proposedAt && p.onboardingCompletedAt) {
+          const proposedDate = new Date(p.proposedAt);
+          const onboardingDate = new Date(p.onboardingCompletedAt);
+          const diffMs = onboardingDate - proposedDate;
+          if (diffMs > 0) {
+            proposalToOnboardingDurations.push(diffMs);
+          }
+        }
+
+        // 제안→계약완료 소요시간
+        if (p.proposedAt && p.contractedAt) {
+          const proposedDate = new Date(p.proposedAt);
+          const contractedDate = new Date(p.contractedAt);
+          const diffMs = contractedDate - proposedDate;
+          if (diffMs > 0) {
+            proposalToContractDurations.push(diffMs);
+          }
+        }
+      });
+
+      // 평균 계산 (밀리초 → 일 단위)
+      const msToDay = 1000 * 60 * 60 * 24;
+      const avgProposalToOnboarding = proposalToOnboardingDurations.length > 0
+        ? proposalToOnboardingDurations.reduce((sum, d) => sum + d, 0) / proposalToOnboardingDurations.length / msToDay
+        : null;
+      const avgProposalToContract = proposalToContractDurations.length > 0
+        ? proposalToContractDurations.reduce((sum, d) => sum + d, 0) / proposalToContractDurations.length / msToDay
+        : null;
+
+      return {
+        proposalToOnboarding: {
+          avg: avgProposalToOnboarding,
+          count: proposalToOnboardingDurations.length
+        },
+        proposalToContract: {
+          avg: avgProposalToContract,
+          count: proposalToContractDurations.length
+        }
+      };
+    }
+
+    // 소요시간을 읽기 쉬운 형식으로 변환
+    function formatDuration(days) {
+      if (days === null || days === undefined) return '-';
+      if (days < 1) {
+        const hours = Math.round(days * 24);
+        return hours + '시간';
+      } else if (days < 7) {
+        return days.toFixed(1) + '일';
+      } else {
+        const weeks = Math.floor(days / 7);
+        const remainingDays = Math.round(days % 7);
+        if (remainingDays === 0) {
+          return weeks + '주';
+        }
+        return weeks + '주 ' + remainingDays + '일';
+      }
+    }
+
     function renderSalesDashboard() {
       const container = document.getElementById('salesDashboardContent');
       if (!container) return;
@@ -2789,6 +2857,9 @@
           contracted: mProductList.filter(s => s.contracted).length
         };
 
+        // 파이프라인 소요시간 계산 (상품 파이프라인 기준)
+        const pipelineDurations = calculatePipelineDurations(mProductList);
+
         const mDeals = allDeals.filter(d => d.registeredBy === member.id);
         const mYearDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
         const mMonthDeals = mDeals.filter(d => (d.endDate || '').startsWith(thisMonth));
@@ -2819,7 +2890,8 @@
           sales: totalSales,
           profit: totalProfit,
           sellerPipeline,
-          supplierPipeline
+          supplierPipeline,
+          pipelineDurations
         };
       });
 
@@ -3206,6 +3278,120 @@
                   </tfoot>
                 </table>
               </div>
+            `}
+          </div>
+
+          <!-- ⏱️ 팀원별 파이프라인 소요시간 -->
+          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 16px; font-weight: 700; color: ${C.black};">⏱️ 팀원별 파이프라인 소요시간</div>
+              <div style="font-size: 12px; color: ${C.gray500};">상품 파이프라인 기준</div>
+            </div>
+
+            ${memberStats.length === 0 ? `
+              <div style="text-align: center; padding: 40px; color: ${C.gray500};">등록된 팀원이 없습니다.</div>
+            ` : `
+              <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                  <thead>
+                    <tr style="background: linear-gradient(135deg, #F0FDF4, #DBEAFE);">
+                      <th style="padding: 12px 8px; text-align: left; font-weight: 600; color: ${C.gray700}; border-bottom: 2px solid ${C.gray200};">팀원</th>
+                      <th colspan="2" style="padding: 10px; text-align: center; font-weight: 700; color: #16a34a; border-bottom: 1px solid #86efac; background: #F0FDF4;">
+                        📝 제안 → 🤝 온보딩완료
+                      </th>
+                      <th colspan="2" style="padding: 10px; text-align: center; font-weight: 700; color: #8b5cf6; border-bottom: 1px solid #c4b5fd; background: #DBEAFE;">
+                        📝 제안 → 📄 계약완료
+                      </th>
+                    </tr>
+                    <tr style="background: ${C.gray50};">
+                      <th style="padding: 8px; border-bottom: 2px solid ${C.gray200};"></th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">평균 소요시간</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">건수</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">평균 소요시간</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">건수</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${memberStats.map(m => `
+                      <tr style="border-bottom: 1px solid ${C.gray100};">
+                        <td style="padding: 12px 8px;">
+                          <div style="display: flex; align-items: center; gap: 8px;">
+                            <div style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, ${C.primary}, #3B82F6); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 11px;">
+                              ${(m.name || m.id || '?').charAt(0)}
+                            </div>
+                            <span style="font-weight: 600; color: ${C.black};">${m.name || m.id}</span>
+                          </div>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center;">
+                          <span style="font-weight: 600; color: ${m.pipelineDurations?.proposalToOnboarding?.avg !== null ? '#16a34a' : C.gray400};">
+                            ${formatDuration(m.pipelineDurations?.proposalToOnboarding?.avg)}
+                          </span>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${C.gray500};">
+                          ${m.pipelineDurations?.proposalToOnboarding?.count || 0}건
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center;">
+                          <span style="font-weight: 600; color: ${m.pipelineDurations?.proposalToContract?.avg !== null ? '#8b5cf6' : C.gray400};">
+                            ${formatDuration(m.pipelineDurations?.proposalToContract?.avg)}
+                          </span>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${C.gray500};">
+                          ${m.pipelineDurations?.proposalToContract?.count || 0}건
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                  <tfoot>
+                    ${(() => {
+                      // 전체 평균 계산
+                      const totalDurations = calculatePipelineDurations(allProductList);
+                      return `
+                        <tr style="background: ${C.gray50}; border-top: 2px solid ${C.gray200};">
+                          <td style="padding: 12px 8px; font-weight: 700;">전체 평균</td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #16a34a;">
+                            ${formatDuration(totalDurations.proposalToOnboarding.avg)}
+                          </td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 600; color: ${C.gray600};">
+                            ${totalDurations.proposalToOnboarding.count}건
+                          </td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #8b5cf6;">
+                            ${formatDuration(totalDurations.proposalToContract.avg)}
+                          </td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 600; color: ${C.gray600};">
+                            ${totalDurations.proposalToContract.count}건
+                          </td>
+                        </tr>
+                      `;
+                    })()}
+                  </tfoot>
+                </table>
+              </div>
+
+              <!-- 인사이트 카드 -->
+              ${(() => {
+                const totalDurations = calculatePipelineDurations(allProductList);
+                const hasData = totalDurations.proposalToOnboarding.count > 0 || totalDurations.proposalToContract.count > 0;
+                if (!hasData) return '';
+
+                return `
+                  <div style="margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                    ${totalDurations.proposalToOnboarding.avg !== null ? `
+                      <div style="background: linear-gradient(135deg, #F0FDF4, #DCFCE7); border-radius: 12px; padding: 16px; border: 1px solid #86efac;">
+                        <div style="font-size: 11px; color: #15803d; font-weight: 600; margin-bottom: 4px;">📝 → 🤝 평균 온보딩 완료</div>
+                        <div style="font-size: 24px; font-weight: 700; color: #16a34a;">${formatDuration(totalDurations.proposalToOnboarding.avg)}</div>
+                        <div style="font-size: 11px; color: #22c55e; margin-top: 4px;">${totalDurations.proposalToOnboarding.count}건 데이터 기준</div>
+                      </div>
+                    ` : ''}
+                    ${totalDurations.proposalToContract.avg !== null ? `
+                      <div style="background: linear-gradient(135deg, #F5F3FF, #EDE9FE); border-radius: 12px; padding: 16px; border: 1px solid #c4b5fd;">
+                        <div style="font-size: 11px; color: #7c3aed; font-weight: 600; margin-bottom: 4px;">📝 → 📄 평균 계약 완료</div>
+                        <div style="font-size: 24px; font-weight: 700; color: #8b5cf6;">${formatDuration(totalDurations.proposalToContract.avg)}</div>
+                        <div style="font-size: 11px; color: #a78bfa; margin-top: 4px;">${totalDurations.proposalToContract.count}건 데이터 기준</div>
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              })()}
             `}
           </div>
         </div>
