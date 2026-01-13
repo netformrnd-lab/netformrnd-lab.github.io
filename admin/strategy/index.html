@@ -1853,8 +1853,8 @@
                 <div style="font-size: 13px; color: var(--gray-500);">${project.description || ''}</div>
               </div>
               <div style="text-align: right;">
-                <div style="font-size: 24px; font-weight: 800; color: var(--primary);">${project.revenueGoal >= 100000000 ? (project.revenueGoal/100000000).toFixed(1) + '억' : (project.revenueGoal/10000).toLocaleString() + '만'}</div>
-                <div style="font-size: 11px; color: var(--gray-500);">매출 목표</div>
+                <div style="font-size: 24px; font-weight: 800; color: var(--primary);">${formatTargetValue(project.targetValue || (project.revenueGoal ? (project.revenueGoal >= 100000000 ? project.revenueGoal/100000000 : project.revenueGoal/10000) : 0), project.targetUnitType || (project.revenueGoal && project.revenueGoal < 100000000 ? 'won' : 'revenue'))}</div>
+                <div style="font-size: 11px; color: var(--gray-500);">${getTargetUnitInfo(project.targetUnitType || 'revenue').label} 목표</div>
               </div>
             </div>
 
@@ -5056,7 +5056,7 @@
                 <div style="font-size: 12px; color: ${C.gray500}; margin-top: 2px;">${mega.description || ''} · 서브 KPI ${childProjects.length}개</div>
               </div>
               <div style="display: flex; align-items: center; gap: 16px;">
-                ${mega.revenueTarget ? `<div style="text-align: right;"><div style="font-size: 10px; color: ${C.gray500};">목표</div><div style="font-size: 16px; font-weight: 700; color: ${C.purple};">${(mega.revenueTarget / 100000000).toFixed(1)}억</div></div>` : ''}
+                ${(mega.targetValue || mega.revenueTarget) ? `<div style="text-align: right;"><div style="font-size: 10px; color: ${C.gray500};">목표</div><div style="font-size: 16px; font-weight: 700; color: ${C.purple};">${formatTargetValue(mega.targetValue || (mega.revenueTarget / 100000000), mega.targetUnitType || 'revenue')}</div></div>` : ''}
                 <div style="text-align: right;">
                   <div style="font-size: 10px; color: ${C.gray500};">진행률</div>
                   <div style="font-size: 16px; font-weight: 700; color: ${megaProgress >= 70 ? C.green : megaProgress >= 40 ? C.yellow : C.red};">${megaProgress}%</div>
@@ -5087,7 +5087,7 @@
                         <div style="font-size: 16px; margin-right: 8px;">📁</div>
                         <div style="flex: 1;">
                           <div style="font-size: 15px; font-weight: 600; color: ${C.gray900};">${project.name}</div>
-                          <div style="font-size: 11px; color: ${C.gray500};">선행지표 ${projectTeamKPIs.length}개${project.revenueGoal ? ' · 목표 ' + (project.revenueGoal / 100000000).toFixed(1) + '억' : ''}</div>
+                          <div style="font-size: 11px; color: ${C.gray500};">선행지표 ${projectTeamKPIs.length}개${(project.targetValue || project.revenueGoal) ? ' · 목표 ' + formatTargetValue(project.targetValue || (project.revenueGoal / 100000000), project.targetUnitType || 'revenue') : ''}</div>
                         </div>
                         <div style="display: flex; align-items: center; gap: 10px;">
                           <div style="background: ${projectProgress >= 70 ? C.green : projectProgress >= 40 ? C.yellow : C.red}20; padding: 4px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; color: ${projectProgress >= 70 ? C.green : projectProgress >= 40 ? C.yellow : C.red};">
@@ -7249,6 +7249,46 @@
     }
 
     // ========================================
+    // KPI 목표 단위 타입 헬퍼 함수
+    // ========================================
+    const KPI_UNIT_TYPES = {
+      revenue: { label: '매출액', unit: '억', suffix: '억' },
+      percent: { label: '퍼센트', unit: '%', suffix: '%' },
+      count: { label: '개수', unit: '개', suffix: '개' },
+      case: { label: '건수', unit: '건', suffix: '건' },
+      won: { label: '금액', unit: '만원', suffix: '만원' }
+    };
+
+    function getTargetUnitInfo(unitType) {
+      return KPI_UNIT_TYPES[unitType] || KPI_UNIT_TYPES.revenue;
+    }
+
+    function formatTargetValue(value, unitType) {
+      const info = getTargetUnitInfo(unitType);
+      if (value === null || value === undefined || value === 0) return '-';
+      if (unitType === 'percent') return `${value}%`;
+      return `${value}${info.suffix}`;
+    }
+
+    function updateMegaProjectTargetLabel() {
+      const unitType = document.getElementById('megaProjectUnitType')?.value || 'revenue';
+      const info = getTargetUnitInfo(unitType);
+      const label = document.getElementById('megaProjectTargetLabel');
+      if (label) {
+        label.textContent = `목표값 (${info.unit})`;
+      }
+    }
+
+    function updateProjectTargetLabel() {
+      const unitType = document.getElementById('projectUnitTypeV2')?.value || 'revenue';
+      const info = getTargetUnitInfo(unitType);
+      const label = document.getElementById('projectTargetLabelV2');
+      if (label) {
+        label.textContent = `목표값 (${info.unit})`;
+      }
+    }
+
+    // ========================================
     // 메인 KPI → 서브 KPI 계층 구조
     // ========================================
     function openMegaProjectModal(megaProject = null) {
@@ -7279,10 +7319,23 @@
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
               <div>
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표 매출액 (억)</label>
-                <input type="number" id="megaProjectRevenue" value="${megaProject?.revenueTarget ? megaProject.revenueTarget / 100000000 : ''}" placeholder="5"
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표 단위</label>
+                <select id="megaProjectUnitType" onchange="updateMegaProjectTargetLabel()" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+                  <option value="revenue" ${!megaProject?.targetUnitType || megaProject?.targetUnitType === 'revenue' ? 'selected' : ''}>매출액 (억원)</option>
+                  <option value="percent" ${megaProject?.targetUnitType === 'percent' ? 'selected' : ''}>퍼센트 (%)</option>
+                  <option value="count" ${megaProject?.targetUnitType === 'count' ? 'selected' : ''}>개수 (개)</option>
+                  <option value="case" ${megaProject?.targetUnitType === 'case' ? 'selected' : ''}>건수 (건)</option>
+                  <option value="won" ${megaProject?.targetUnitType === 'won' ? 'selected' : ''}>금액 (만원)</option>
+                </select>
+              </div>
+              <div>
+                <label id="megaProjectTargetLabel" style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표값</label>
+                <input type="number" id="megaProjectTargetValue" value="${megaProject?.targetUnitType && megaProject.targetUnitType !== 'revenue' ? (megaProject.targetValue || '') : (megaProject?.revenueTarget ? megaProject.revenueTarget / 100000000 : '')}" placeholder="목표값 입력"
                   style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
               </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
               <div>
                 <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">⭐ 우선순위</label>
                 <select id="megaProjectPriority" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
@@ -7292,9 +7345,6 @@
                   <option value="3" ${megaProject?.priority === 3 ? 'selected' : ''}>3순위 ⭐</option>
                 </select>
               </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
               <div>
                 <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연결 연도</label>
                 <select id="megaProjectYear" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
@@ -7343,10 +7393,18 @@
         return;
       }
 
+      const targetUnitType = document.getElementById('megaProjectUnitType').value || 'revenue';
+      const targetValue = parseFloat(document.getElementById('megaProjectTargetValue').value) || 0;
+
+      // 하위 호환성을 위해 revenueTarget도 유지 (매출액 타입일 때만)
+      const revenueTarget = targetUnitType === 'revenue' ? targetValue * 100000000 : 0;
+
       const data = {
         name,
         description: document.getElementById('megaProjectDesc').value.trim(),
-        revenueTarget: (parseFloat(document.getElementById('megaProjectRevenue').value) || 0) * 100000000,
+        targetUnitType,
+        targetValue,
+        revenueTarget, // 하위 호환성
         priority: parseInt(document.getElementById('megaProjectPriority').value) || null,
         year: parseInt(document.getElementById('megaProjectYear').value) || null,
         status: document.getElementById('megaProjectStatus').value || 'active',
@@ -7421,12 +7479,25 @@
                 style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">${project?.description || ''}</textarea>
             </div>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
               <div>
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표 매출 (억)</label>
-                <input type="number" id="projectRevenueV2" value="${project?.revenueGoal ? project.revenueGoal / 100000000 : ''}" placeholder="2"
-                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표 단위</label>
+                <select id="projectUnitTypeV2" onchange="updateProjectTargetLabel()" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+                  <option value="revenue" ${!project?.targetUnitType || project?.targetUnitType === 'revenue' ? 'selected' : ''}>매출액 (억원)</option>
+                  <option value="percent" ${project?.targetUnitType === 'percent' ? 'selected' : ''}>퍼센트 (%)</option>
+                  <option value="count" ${project?.targetUnitType === 'count' ? 'selected' : ''}>개수 (개)</option>
+                  <option value="case" ${project?.targetUnitType === 'case' ? 'selected' : ''}>건수 (건)</option>
+                  <option value="won" ${project?.targetUnitType === 'won' ? 'selected' : ''}>금액 (만원)</option>
+                </select>
               </div>
+              <div>
+                <label id="projectTargetLabelV2" style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">목표값</label>
+                <input type="number" id="projectTargetValueV2" value="${project?.targetUnitType && project.targetUnitType !== 'revenue' ? (project.targetValue || '') : (project?.revenueGoal ? project.revenueGoal / 100000000 : '')}" placeholder="목표값 입력"
+                  style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 15px;">
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
               <div>
                 <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">시작일</label>
                 <input type="date" id="projectStartV2" value="${project?.startDate || ''}"
@@ -7462,11 +7533,19 @@
         return;
       }
 
+      const targetUnitType = document.getElementById('projectUnitTypeV2').value || 'revenue';
+      const targetValue = parseFloat(document.getElementById('projectTargetValueV2').value) || 0;
+
+      // 하위 호환성을 위해 revenueGoal도 유지 (매출액 타입일 때만)
+      const revenueGoal = targetUnitType === 'revenue' ? targetValue * 100000000 : 0;
+
       const data = {
         megaProjectId,
         name,
         description: document.getElementById('projectDescV2').value.trim(),
-        revenueGoal: (parseFloat(document.getElementById('projectRevenueV2').value) || 0) * 100000000,
+        targetUnitType,
+        targetValue,
+        revenueGoal, // 하위 호환성
         startDate: document.getElementById('projectStartV2').value,
         endDate: document.getElementById('projectEndV2').value,
         updatedAt: new Date().toISOString()
