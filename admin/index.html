@@ -16107,6 +16107,10 @@ function openProductListModal(itemId = null) {
               <input type="text" class="form-input" id="pl-category" value="${p.category || ''}" placeholder="예: 뷰티, 식품, 가전" style="font-size: 13px;">
             </div>
             <div class="form-group" style="flex: 1;">
+              <label class="form-label" style="font-size: 12px;">브랜드명</label>
+              <input type="text" class="form-input" id="pl-brand-name" value="${p.brandName || ''}" placeholder="예: 삼성, LG" style="font-size: 13px;">
+            </div>
+            <div class="form-group" style="flex: 1;">
               <label class="form-label" style="font-size: 12px;">제조국</label>
               <input type="text" class="form-input" id="pl-origin" value="${p.origin || ''}" placeholder="예: 한국, 중국" style="font-size: 13px;">
             </div>
@@ -16223,21 +16227,25 @@ async function searchBizno() {
 
   try {
     const apiKey = 'I095G09r20FS20qdITbvG1in2v9m';
-    // 숫자만 있으면 사업자번호로, 아니면 상호명으로 조회
+    // 숫자와 하이픈만 있으면 사업자번호로, 아니면 상호명으로 조회
     const cleanQuery = query.replace(/-/g, '');
-    const isNumber = /^\d{10}$/.test(cleanQuery);
+    const isNumber = /^\d+$/.test(cleanQuery) && cleanQuery.length >= 3;
     const url = `https://bizno.net/api/fapi?key=${apiKey}&gb=1&q=${encodeURIComponent(isNumber ? cleanQuery : query)}&type=json&status=Y`;
 
     const response = await fetch(url);
     const data = await response.json();
 
-    if (data.resultCode === 0 && data.items && data.items.length > 0) {
+    // 유효한 items만 필터링 (null/undefined 제거)
+    const validItems = (data.items || []).filter(item => item && typeof item === 'object');
+
+    if (data.resultCode === 0 && validItems.length > 0) {
       // 여러 결과가 있으면 선택 가능하게 표시
-      if (data.items.length > 1) {
+      if (validItems.length > 1) {
         resultDiv.innerHTML = `
-          <div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">🔍 ${data.items.length}개 검색결과 (선택하세요)</div>
+          <div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">🔍 ${validItems.length}개 검색결과 (선택하세요)</div>
           <div style="max-height: 200px; overflow-y: auto;">
-            ${data.items.slice(0, 10).map((item, idx) => {
+            ${validItems.slice(0, 10).map((item, idx) => {
+              if (!item) return '';
               let statusText = item.bstt || '상태 미확인';
               let statusColor = '#6b7280';
               if (item.bsttcd === '01') { statusText = '✅ 계속'; statusColor = '#16a34a'; }
@@ -16260,14 +16268,18 @@ async function searchBizno() {
           </div>
         `;
         // 전역에 검색 결과 저장
-        window.biznoSearchResults = data.items.slice(0, 10);
+        window.biznoSearchResults = validItems.slice(0, 10);
       } else {
         // 단일 결과
-        const item = data.items[0];
-        showSingleBiznoResult(item, resultDiv);
+        const item = validItems[0];
+        if (item) {
+          showSingleBiznoResult(item, resultDiv);
+        } else {
+          resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 결과가 없습니다.</span>';
+        }
       }
     } else {
-      resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 결과가 없습니다.</span>';
+      resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 결과가 없습니다. 사업자번호를 확인해주세요.</span>';
     }
   } catch (err) {
     console.error('Bizno API error:', err);
@@ -16427,6 +16439,7 @@ async function saveProductListItem(e, itemId) {
 
     // 상품 정보
     category: document.getElementById('pl-category').value,
+    brandName: document.getElementById('pl-brand-name').value,
     origin: document.getElementById('pl-origin').value,
     productName: document.getElementById('pl-name').value,
     productLink: document.getElementById('pl-product-link').value,
