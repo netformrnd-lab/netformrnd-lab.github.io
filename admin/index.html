@@ -16028,6 +16028,16 @@ function openProductListModal(itemId = null) {
               </label>
             </div>
           </div>
+          <div style="margin-top: 12px;">
+            <label class="form-label" style="font-size: 13px;">사업자등록번호</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <input type="text" class="form-input" id="pl-business-number" value="${p.businessNumber || ''}" placeholder="예: 123-45-67890" style="max-width: 180px; font-size: 13px;">
+              <button type="button" class="btn" style="padding: 8px 12px; font-size: 12px; background: #3b82f6; color: white; white-space: nowrap;" onclick="searchBizno()">
+                🔍 조회
+              </button>
+            </div>
+            <div id="pl-bizno-result" style="margin-top: 8px; padding: 10px; background: #f0f9ff; border-radius: 8px; font-size: 12px; display: none;"></div>
+          </div>
         </div>
 
         <div class="form-group">
@@ -16144,6 +16154,86 @@ function openProductListModal(itemId = null) {
   `;
 }
 
+// 비즈노 API로 사업자정보 조회
+async function searchBizno() {
+  const biznoInput = document.getElementById('pl-business-number');
+  const resultDiv = document.getElementById('pl-bizno-result');
+  const bizno = biznoInput.value.replace(/-/g, '').trim();
+
+  if (!bizno || bizno.length < 10) {
+    showToast('사업자등록번호를 입력해주세요 (10자리)');
+    return;
+  }
+
+  resultDiv.style.display = 'block';
+  resultDiv.innerHTML = '<span style="color: #6b7280;">🔄 조회 중...</span>';
+
+  try {
+    // 비즈노 무료 API 호출
+    const apiKey = 'I095G09r20FS20qdITbvG1in2v9m';
+    const url = `https://bizno.net/api/fapi?key=${apiKey}&gb=1&q=${bizno}&type=json&status=Y`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data.resultCode === 0 && data.items && data.items.length > 0) {
+      const item = data.items[0];
+
+      // 사업자 상태 표시
+      let statusText = '';
+      let statusColor = '#16a34a';
+      if (item.bsttcd === '01' || item.bstt === '계속사업자') {
+        statusText = '✅ 계속사업자';
+      } else if (item.bsttcd === '02' || item.bstt === '휴업자') {
+        statusText = '⚠️ 휴업자';
+        statusColor = '#f59e0b';
+      } else if (item.bsttcd === '03' || item.bstt === '폐업자') {
+        statusText = '❌ 폐업자';
+        statusColor = '#dc2626';
+      } else {
+        statusText = item.bstt || '상태 미확인';
+        statusColor = '#6b7280';
+      }
+
+      resultDiv.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <div style="font-weight: 600; color: #1e40af;">📋 ${item.company || '회사명 없음'}</div>
+          <div style="color: ${statusColor}; font-weight: 500;">${statusText}</div>
+          ${item.taxtype ? `<div style="color: #6b7280;">과세유형: ${item.taxtype}</div>` : ''}
+          ${item.cno ? `<div style="color: #6b7280;">법인번호: ${item.cno}</div>` : ''}
+          <button type="button" class="btn" style="margin-top: 6px; padding: 6px 10px; font-size: 11px; background: #22c55e; color: white;" onclick="applyBiznoResult('${(item.company || '').replace(/'/g, "\\'")}', '${item.bno || bizno}')">
+            ✓ 정보 적용
+          </button>
+        </div>
+      `;
+    } else {
+      resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 결과가 없습니다. 사업자등록번호를 확인해주세요.</span>';
+    }
+  } catch (err) {
+    console.error('Bizno API error:', err);
+    resultDiv.innerHTML = '<span style="color: #dc2626;">❌ 조회 중 오류가 발생했습니다.</span>';
+  }
+}
+
+// 비즈노 조회 결과 적용
+function applyBiznoResult(company, bizno) {
+  // 브랜드/공급사명에 회사명 적용
+  const brandInput = document.getElementById('pl-brand');
+  if (brandInput && company) {
+    brandInput.value = company;
+  }
+
+  // 사업자번호 포맷 적용
+  const biznoInput = document.getElementById('pl-business-number');
+  if (biznoInput && bizno) {
+    const formatted = bizno.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3');
+    biznoInput.value = formatted;
+  }
+
+  showToast('✅ 사업자 정보가 적용되었습니다.');
+  document.getElementById('pl-bizno-result').style.display = 'none';
+}
+
 // 상품 리스트 저장
 async function saveProductListItem(e, itemId) {
   e.preventDefault();
@@ -16162,6 +16252,7 @@ async function saveProductListItem(e, itemId) {
     bizMultiBrand: document.getElementById('pl-biz-multi-brand').checked,
     bizOdmOem: document.getElementById('pl-biz-odm-oem').checked,
     bizDistributor: document.getElementById('pl-biz-distributor').checked,
+    businessNumber: document.getElementById('pl-business-number').value,
     productName: document.getElementById('pl-name').value,
     expectedPrice: Number(document.getElementById('pl-price').value) || 0,
     sourceLink: document.getElementById('pl-link').value,
