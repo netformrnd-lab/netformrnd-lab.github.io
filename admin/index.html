@@ -12958,6 +12958,36 @@ function openSellerListModal(item = null, bulk = false) {
               </optgroup>
             </select>
           </div>
+
+          <!-- 🎁 이벤트 참여 -->
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #e5e7eb;">
+            <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--gray-600);">🎁 참여 이벤트</h4>
+            <div id="sl-events-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
+              ${(s.events || []).map(e => `
+                <div class="sl-event-tag" data-event-id="${e.id}" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #fcd34d; border-radius: 20px; font-size: 12px; font-weight: 500; color: #92400e;">
+                  <span>🎉 ${e.name}</span>
+                  <span onclick="removeSellerEvent('${e.id}')" style="cursor: pointer; color: #b45309; font-weight: 700;">&times;</span>
+                </div>
+              `).join('')}
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <select id="sl-event-select" class="form-select" style="flex: 1; max-width: 280px; font-size: 13px;">
+                <option value="">이벤트 선택...</option>
+                <optgroup label="입점 이벤트">
+                  <option value="recruitment_2025q1">2025년 1분기 입점이벤트</option>
+                  <option value="recruitment_welcome">신규 셀러 웰컴 이벤트</option>
+                </optgroup>
+                <optgroup label="프로모션">
+                  <option value="promo_first_deal">첫 공구 지원 이벤트</option>
+                  <option value="promo_commission_free">수수료 면제 이벤트</option>
+                </optgroup>
+                <optgroup label="추천">
+                  <option value="referral_friend">친구 추천 이벤트</option>
+                </optgroup>
+              </select>
+              <button type="button" class="btn btn-secondary" onclick="addSellerEvent()" style="padding: 8px 16px; font-size: 13px;">+ 추가</button>
+            </div>
+          </div>
         </div>
         
         <div class="form-group">
@@ -13038,6 +13068,77 @@ function removeSellerProduct(productId) {
   }
 }
 
+// 🎁 셀러 이벤트 추가
+const SELLER_EVENTS = {
+  'recruitment_2025q1': { name: '2025년 1분기 입점이벤트', type: 'recruitment', benefits: ['수수료 면제 3개월'] },
+  'recruitment_welcome': { name: '신규 셀러 웰컴 이벤트', type: 'recruitment', benefits: ['첫 공구 지원금 5만원'] },
+  'promo_first_deal': { name: '첫 공구 지원 이벤트', type: 'promotion', benefits: ['마케팅 지원'] },
+  'promo_commission_free': { name: '수수료 면제 이벤트', type: 'promotion', benefits: ['수수료 0%'] },
+  'referral_friend': { name: '친구 추천 이벤트', type: 'referral', benefits: ['추천인/피추천인 각 3만원'] }
+};
+
+function addSellerEvent() {
+  const select = document.getElementById('sl-event-select');
+  const eventId = select.value;
+  if (!eventId) return;
+
+  const eventInfo = SELLER_EVENTS[eventId];
+  if (!eventInfo) return;
+
+  const container = document.getElementById('sl-events-container');
+
+  // 이미 추가된 이벤트인지 확인
+  if (container.querySelector(`[data-event-id="${eventId}"]`)) {
+    showToast('이미 추가된 이벤트입니다.');
+    return;
+  }
+
+  const tag = document.createElement('div');
+  tag.className = 'sl-event-tag';
+  tag.setAttribute('data-event-id', eventId);
+  tag.style.cssText = 'display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #fcd34d; border-radius: 20px; font-size: 12px; font-weight: 500; color: #92400e;';
+  tag.innerHTML = `
+    <span>🎉 ${eventInfo.name}</span>
+    <span onclick="removeSellerEvent('${eventId}')" style="cursor: pointer; color: #b45309; font-weight: 700;">&times;</span>
+  `;
+  container.appendChild(tag);
+
+  select.value = '';
+  showToast(`"${eventInfo.name}" 이벤트가 추가되었습니다.`);
+}
+
+function removeSellerEvent(eventId) {
+  const container = document.getElementById('sl-events-container');
+  const tag = container.querySelector(`[data-event-id="${eventId}"]`);
+  if (tag) {
+    tag.remove();
+    showToast('이벤트가 제거되었습니다.');
+  }
+}
+
+// 선택된 이벤트 목록 수집
+function collectSelectedEvents() {
+  const container = document.getElementById('sl-events-container');
+  const tags = container.querySelectorAll('.sl-event-tag');
+  const events = [];
+
+  tags.forEach(tag => {
+    const eventId = tag.getAttribute('data-event-id');
+    const eventInfo = SELLER_EVENTS[eventId];
+    if (eventInfo) {
+      events.push({
+        id: eventId,
+        name: eventInfo.name,
+        type: eventInfo.type,
+        benefits: eventInfo.benefits,
+        joinedAt: new Date().toISOString()
+      });
+    }
+  });
+
+  return events;
+}
+
 function submitSellerListForm(e, id) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
@@ -13056,6 +13157,9 @@ function submitSellerListForm(e, id) {
   const sourceType = sourceTypeRadio ? sourceTypeRadio.value : '';
   const sourceDetail = document.getElementById('sl-sourceDetail')?.value || '';
 
+  // 이벤트 수집
+  const events = collectSelectedEvents();
+
   const data = {
     category: document.getElementById('sl-category').value,
     accountName: document.getElementById('sl-accountName').value,
@@ -13070,6 +13174,7 @@ function submitSellerListForm(e, id) {
     sourceType: sourceType,
     sourceDetail: sourceDetail,
     proposedProducts: proposedProducts,
+    events: events,  // 🎁 참여 이벤트 목록
     notes: document.getElementById('sl-notes').value,
     updatedAt: new Date().toISOString(),
     updatedBy: getCurrentUserId()
@@ -13273,7 +13378,11 @@ function renderSellerList() {
 
   // 카테고리 목록 추출
   const categories = [...new Set(allSellers.map(s => s.category).filter(c => c))];
-  
+
+  // 이벤트 참여 셀러 수 계산
+  const eventSellers = allSellers.filter(s => s.events && s.events.length > 0);
+  const recruitmentEventSellers = eventSellers.filter(s => s.events.some(e => e.type === 'recruitment'));
+
   app.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">셀러 관리</h1>
@@ -13297,7 +13406,7 @@ function renderSellerList() {
     </div>
 
     <!-- 통계 카드 (제안 → 컨택 → 계약 순서) -->
-    <div class="stats-row" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 16px;">
+    <div class="stats-row" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 16px;">
       <div class="stat-card">
         <div class="stat-label">전체 셀러</div>
         <div class="stat-value">${totalCount}명</div>
@@ -13313,6 +13422,10 @@ function renderSellerList() {
       <div class="stat-card highlight">
         <div class="stat-label">🎉 계약완료</div>
         <div class="stat-value">${contractedCount}명</div>
+      </div>
+      <div class="stat-card" style="background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #fcd34d; cursor: pointer;" onclick="filterSellersByEvent('recruitment')">
+        <div class="stat-label" style="color: #92400e;">🎁 입점이벤트</div>
+        <div class="stat-value" style="color: #b45309;">${recruitmentEventSellers.length}명</div>
       </div>
     </div>
     
@@ -13332,15 +13445,28 @@ function renderSellerList() {
       ${searchKeyword ? `<p style="font-size: 13px; color: var(--gray-500); margin-top: 8px;">"${searchKeyword}" 검색 결과: ${filteredSellers.length}건</p>` : ''}
     </div>
     
+    <!-- 이벤트 필터 활성화 알림 배너 -->
+    ${window.sellerListEventFilter ? `
+      <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #fcd34d; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 18px;">🎁</span>
+          <span style="font-weight: 600; color: #92400e;">입점이벤트 셀러만 표시 중 (${recruitmentEventSellers.length}명)</span>
+        </div>
+        <button onclick="clearEventFilter()" style="padding: 6px 12px; background: white; border: 1px solid #fcd34d; border-radius: 6px; font-size: 12px; font-weight: 600; color: #92400e; cursor: pointer;">필터 해제</button>
+      </div>
+    ` : ''}
+
     <!-- 상태 필터 (제안 → 온보딩 → 계약) -->
     <div class="card" style="margin-bottom: 16px;">
       <div class="filter-bar">
         <div class="filter-group">
-          <button class="filter-btn ${!window.sellerListStatusFilter ? 'active' : ''}" onclick="filterSellerListByStatus('')">전체</button>
+          <button class="filter-btn ${!window.sellerListStatusFilter && !window.sellerListEventFilter ? 'active' : ''}" onclick="filterSellerListByStatus('')">전체</button>
           <button class="filter-btn ${window.sellerListStatusFilter === 'notProposed' ? 'active' : ''}" onclick="filterSellerListByStatus('notProposed')" style="color: #d97706;">미제안</button>
           <button class="filter-btn ${window.sellerListStatusFilter === 'proposed' ? 'active' : ''}" onclick="filterSellerListByStatus('proposed')" style="color: #16a34a;">제안완료</button>
           <button class="filter-btn ${window.sellerListStatusFilter === 'onboarding' ? 'active' : ''}" onclick="filterSellerListByStatus('onboarding')" style="color: #1d4ed8;">온보딩</button>
           <button class="filter-btn ${window.sellerListStatusFilter === 'contracted' ? 'active' : ''}" onclick="filterSellerListByStatus('contracted')" style="color: #7c3aed;">계약완료</button>
+          <span style="border-left: 1px solid var(--gray-300); height: 20px; margin: 0 8px;"></span>
+          <button class="filter-btn ${window.sellerListEventFilter === 'recruitment' ? 'active' : ''}" onclick="filterSellersByEvent('recruitment')" style="color: #b45309; background: ${window.sellerListEventFilter === 'recruitment' ? '#fef3c7' : 'transparent'};">🎁 입점이벤트</button>
         </div>
       </div>
     </div>
@@ -13407,6 +13533,11 @@ function renderSellerList() {
                 if (window.sellerListStatusFilter === 'proposed' && (!s.proposed || s.onboarding || s.contacted)) return false;
                 if (window.sellerListStatusFilter === 'onboarding' && (!(s.onboarding || s.contacted) || s.contracted)) return false;
                 if (window.sellerListStatusFilter === 'contracted' && !s.contracted) return false;
+                // 이벤트 필터
+                if (window.sellerListEventFilter) {
+                  if (!s.events || s.events.length === 0) return false;
+                  if (!s.events.some(e => e.type === window.sellerListEventFilter)) return false;
+                }
                 return true;
               })
               .map(s => {
@@ -13447,6 +13578,12 @@ function renderSellerList() {
                 <td>
                   <div>
                     <strong>${s.accountName}</strong>
+                    ${(s.events && s.events.length > 0) ? `
+                      <div style="display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px;">
+                        ${s.events.slice(0, 2).map(e => `<span style="display: inline-block; padding: 1px 6px; background: ${e.type === 'recruitment' ? '#fef3c7' : e.type === 'promotion' ? '#dbeafe' : '#dcfce7'}; color: ${e.type === 'recruitment' ? '#92400e' : e.type === 'promotion' ? '#1e40af' : '#166534'}; font-size: 9px; font-weight: 600; border-radius: 4px;">🎁 ${e.name.length > 8 ? e.name.substring(0, 8) + '...' : e.name}</span>`).join('')}
+                        ${s.events.length > 2 ? `<span style="font-size: 9px; color: var(--gray-400);">+${s.events.length - 2}</span>` : ''}
+                      </div>
+                    ` : ''}
                     ${s.notes ? `<div style="font-size: 11px; color: var(--gray-500); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${s.notes}">${s.notes}</div>` : ''}
                   </div>
                 </td>
@@ -13517,6 +13654,21 @@ function clearSellerListSearch() {
 // 상태 필터
 function filterSellerListByStatus(status) {
   window.sellerListStatusFilter = status;
+  window.sellerListEventFilter = '';  // 상태 필터 시 이벤트 필터 초기화
+  renderSellerList();
+}
+
+// 이벤트 필터 (입점이벤트 셀러 보기)
+function filterSellersByEvent(eventType) {
+  window.sellerListEventFilter = eventType;
+  window.sellerListStatusFilter = '';  // 이벤트 필터 시 상태 필터 초기화
+  renderSellerList();
+  showToast(`🎁 ${eventType === 'recruitment' ? '입점이벤트' : eventType} 셀러만 표시합니다.`);
+}
+
+// 이벤트 필터 초기화
+function clearEventFilter() {
+  window.sellerListEventFilter = '';
   renderSellerList();
 }
 
