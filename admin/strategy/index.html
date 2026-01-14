@@ -1423,6 +1423,12 @@
         if (state.currentTab === 'dashboard') renderSalesDashboard();
       });
 
+      // 셀러 제안 데이터 (아웃바운드 파이프라인용)
+      db.collection('sellerProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        state.sellerProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentTab === 'dashboard') renderSalesDashboard();
+      });
+
       // 상품 리스트 데이터 (파이프라인/온보딩용)
       db.collection('productList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
         state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -2622,7 +2628,7 @@
       };
     }
 
-    // 파이프라인 소요시간 계산 함수
+    // 파이프라인 소요시간 계산 함수 (공급사/상품용)
     function calculatePipelineDurations(productList) {
       // 제안→온보딩완료 소요시간 계산
       const proposalToOnboardingDurations = [];
@@ -2668,6 +2674,57 @@
         proposalToContract: {
           avg: avgProposalToContract,
           count: proposalToContractDurations.length
+        }
+      };
+    }
+
+    // 셀러 파이프라인 소요시간 계산 함수
+    function calculateSellerPipelineDurations(sellerProposals) {
+      // 제안→온보딩완료 소요시간 계산
+      const proposalToOnboardingDurations = [];
+      // 제안→입점완료 소요시간 계산
+      const proposalToListedDurations = [];
+
+      sellerProposals.forEach(s => {
+        // 제안→온보딩완료 소요시간
+        const proposalAt = s.proposalAt || s.createdAt;
+        if (proposalAt && s.onboardingCompletedAt) {
+          const proposedDate = new Date(proposalAt);
+          const onboardingDate = new Date(s.onboardingCompletedAt);
+          const diffMs = onboardingDate - proposedDate;
+          if (diffMs > 0) {
+            proposalToOnboardingDurations.push(diffMs);
+          }
+        }
+
+        // 제안→입점완료 소요시간
+        if (proposalAt && s.listedAt) {
+          const proposedDate = new Date(proposalAt);
+          const listedDate = new Date(s.listedAt);
+          const diffMs = listedDate - proposedDate;
+          if (diffMs > 0) {
+            proposalToListedDurations.push(diffMs);
+          }
+        }
+      });
+
+      // 평균 계산 (밀리초 → 일 단위)
+      const msToDay = 1000 * 60 * 60 * 24;
+      const avgProposalToOnboarding = proposalToOnboardingDurations.length > 0
+        ? proposalToOnboardingDurations.reduce((sum, d) => sum + d, 0) / proposalToOnboardingDurations.length / msToDay
+        : null;
+      const avgProposalToListed = proposalToListedDurations.length > 0
+        ? proposalToListedDurations.reduce((sum, d) => sum + d, 0) / proposalToListedDurations.length / msToDay
+        : null;
+
+      return {
+        proposalToOnboarding: {
+          avg: avgProposalToOnboarding,
+          count: proposalToOnboardingDurations.length
+        },
+        proposalToListed: {
+          avg: avgProposalToListed,
+          count: proposalToListedDurations.length
         }
       };
     }
@@ -2860,6 +2917,11 @@
         // 파이프라인 소요시간 계산 (상품 파이프라인 기준)
         const pipelineDurations = calculatePipelineDurations(mProductList);
 
+        // 셀러 파이프라인 소요시간 계산 (sellerProposals 기준)
+        const allSellerProposals = state.sellerProposals || [];
+        const mSellerProposals = allSellerProposals.filter(s => s.createdBy === member.loginId || s.createdBy === member.id);
+        const sellerPipelineDurations = calculateSellerPipelineDurations(mSellerProposals);
+
         const mDeals = allDeals.filter(d => d.registeredBy === member.id);
         const mYearDeals = mDeals.filter(d => (d.startDate || d.createdAt || '').startsWith(thisYearStr));
         const mMonthDeals = mDeals.filter(d => (d.endDate || '').startsWith(thisMonth));
@@ -2891,7 +2953,8 @@
           profit: totalProfit,
           sellerPipeline,
           supplierPipeline,
-          pipelineDurations
+          pipelineDurations,
+          sellerPipelineDurations
         };
       });
 
@@ -3367,7 +3430,7 @@
                 </table>
               </div>
 
-              <!-- 인사이트 카드 -->
+              <!-- 인사이트 카드 (공급사) -->
               ${(() => {
                 const totalDurations = calculatePipelineDurations(allProductList);
                 const hasData = totalDurations.proposalToOnboarding.count > 0 || totalDurations.proposalToContract.count > 0;
@@ -3387,6 +3450,122 @@
                         <div style="font-size: 11px; color: #7c3aed; font-weight: 600; margin-bottom: 4px;">📝 → 📄 평균 계약 완료</div>
                         <div style="font-size: 24px; font-weight: 700; color: #8b5cf6;">${formatDuration(totalDurations.proposalToContract.avg)}</div>
                         <div style="font-size: 11px; color: #a78bfa; margin-top: 4px;">${totalDurations.proposalToContract.count}건 데이터 기준</div>
+                      </div>
+                    ` : ''}
+                  </div>
+                `;
+              })()}
+            `}
+          </div>
+
+          <!-- ⏱️ 팀원별 셀러 파이프라인 소요시간 -->
+          <div style="background: ${C.white}; border-radius: 16px; padding: 24px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 16px; font-weight: 700; color: ${C.black};">👩‍💼 팀원별 셀러 파이프라인 소요시간</div>
+              <div style="font-size: 12px; color: ${C.gray500};">셀러 제안 기준 (아웃바운드)</div>
+            </div>
+
+            ${memberStats.length === 0 ? `
+              <div style="text-align: center; padding: 40px; color: ${C.gray500};">등록된 팀원이 없습니다.</div>
+            ` : `
+              <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                  <thead>
+                    <tr style="background: linear-gradient(135deg, #FEF3C7, #FDE68A);">
+                      <th style="padding: 12px 8px; text-align: left; font-weight: 600; color: ${C.gray700}; border-bottom: 2px solid ${C.gray200};">팀원</th>
+                      <th colspan="2" style="padding: 10px; text-align: center; font-weight: 700; color: #d97706; border-bottom: 1px solid #fcd34d; background: #FEF3C7;">
+                        📝 제안 → 🤝 온보딩완료
+                      </th>
+                      <th colspan="2" style="padding: 10px; text-align: center; font-weight: 700; color: #ff6b35; border-bottom: 1px solid #ffb5a0; background: #FFF1EB;">
+                        📝 제안 → ✅ 입점완료
+                      </th>
+                    </tr>
+                    <tr style="background: ${C.gray50};">
+                      <th style="padding: 8px; border-bottom: 2px solid ${C.gray200};"></th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">평균 소요시간</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">건수</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">평균 소요시간</th>
+                      <th style="padding: 8px 6px; text-align: center; font-weight: 500; color: ${C.gray600}; border-bottom: 2px solid ${C.gray200};">건수</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${memberStats.map(m => `
+                      <tr style="border-bottom: 1px solid ${C.gray100};">
+                        <td style="padding: 12px 8px;">
+                          <div style="display: flex; align-items: center; gap: 8px;">
+                            <div style="width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg, #ff6b35, #ff9500); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 11px;">
+                              ${(m.name || m.id || '?').charAt(0)}
+                            </div>
+                            <span style="font-weight: 600; color: ${C.black};">${m.name || m.id}</span>
+                          </div>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center;">
+                          <span style="font-weight: 600; color: ${m.sellerPipelineDurations?.proposalToOnboarding?.avg !== null ? '#d97706' : C.gray400};">
+                            ${formatDuration(m.sellerPipelineDurations?.proposalToOnboarding?.avg)}
+                          </span>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${C.gray500};">
+                          ${m.sellerPipelineDurations?.proposalToOnboarding?.count || 0}건
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center;">
+                          <span style="font-weight: 600; color: ${m.sellerPipelineDurations?.proposalToListed?.avg !== null ? '#ff6b35' : C.gray400};">
+                            ${formatDuration(m.sellerPipelineDurations?.proposalToListed?.avg)}
+                          </span>
+                        </td>
+                        <td style="padding: 8px 6px; text-align: center; color: ${C.gray500};">
+                          ${m.sellerPipelineDurations?.proposalToListed?.count || 0}건
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                  <tfoot>
+                    ${(() => {
+                      // 전체 평균 계산 (셀러)
+                      const allSellerProposals = state.sellerProposals || [];
+                      const totalSellerDurations = calculateSellerPipelineDurations(allSellerProposals);
+                      return `
+                        <tr style="background: ${C.gray50}; border-top: 2px solid ${C.gray200};">
+                          <td style="padding: 12px 8px; font-weight: 700;">전체 평균</td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #d97706;">
+                            ${formatDuration(totalSellerDurations.proposalToOnboarding.avg)}
+                          </td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 600; color: ${C.gray600};">
+                            ${totalSellerDurations.proposalToOnboarding.count}건
+                          </td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 700; color: #ff6b35;">
+                            ${formatDuration(totalSellerDurations.proposalToListed.avg)}
+                          </td>
+                          <td style="padding: 8px 6px; text-align: center; font-weight: 600; color: ${C.gray600};">
+                            ${totalSellerDurations.proposalToListed.count}건
+                          </td>
+                        </tr>
+                      `;
+                    })()}
+                  </tfoot>
+                </table>
+              </div>
+
+              <!-- 인사이트 카드 (셀러) -->
+              ${(() => {
+                const allSellerProposals = state.sellerProposals || [];
+                const totalSellerDurations = calculateSellerPipelineDurations(allSellerProposals);
+                const hasData = totalSellerDurations.proposalToOnboarding.count > 0 || totalSellerDurations.proposalToListed.count > 0;
+                if (!hasData) return '';
+
+                return `
+                  <div style="margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                    ${totalSellerDurations.proposalToOnboarding.avg !== null ? `
+                      <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 12px; padding: 16px; border: 1px solid #fcd34d;">
+                        <div style="font-size: 11px; color: #92400e; font-weight: 600; margin-bottom: 4px;">📝 → 🤝 셀러 평균 온보딩</div>
+                        <div style="font-size: 24px; font-weight: 700; color: #d97706;">${formatDuration(totalSellerDurations.proposalToOnboarding.avg)}</div>
+                        <div style="font-size: 11px; color: #b45309; margin-top: 4px;">${totalSellerDurations.proposalToOnboarding.count}건 데이터 기준</div>
+                      </div>
+                    ` : ''}
+                    ${totalSellerDurations.proposalToListed.avg !== null ? `
+                      <div style="background: linear-gradient(135deg, #FFF1EB, #FFE4D6); border-radius: 12px; padding: 16px; border: 1px solid #ffb5a0;">
+                        <div style="font-size: 11px; color: #c2410c; font-weight: 600; margin-bottom: 4px;">📝 → ✅ 셀러 평균 입점완료</div>
+                        <div style="font-size: 24px; font-weight: 700; color: #ff6b35;">${formatDuration(totalSellerDurations.proposalToListed.avg)}</div>
+                        <div style="font-size: 11px; color: #ea580c; margin-top: 4px;">${totalSellerDurations.proposalToListed.count}건 데이터 기준</div>
                       </div>
                     ` : ''}
                   </div>

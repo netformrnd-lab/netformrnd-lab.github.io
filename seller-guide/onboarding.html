@@ -840,6 +840,8 @@
         let sellerData = null;
         let uploadedFiles = {};
         let bankInputMode = 'input';
+        let sourceType = 'inbound';  // 인바운드/아웃바운드 구분
+        let dataCollection = 'sellers';  // 데이터 저장 컬렉션
 
         // 초기화
         document.addEventListener('DOMContentLoaded', async function() {
@@ -853,9 +855,15 @@
                 storage = firebase.storage();
             }
 
-            // URL에서 셀러 ID 가져오기
+            // URL에서 파라미터 가져오기
             const params = new URLSearchParams(window.location.search);
             sellerId = params.get('id') || params.get('seller');
+            sourceType = params.get('source') || 'inbound';
+
+            // 아웃바운드인 경우 sellerProposals 컬렉션 사용
+            if (sourceType === 'outbound') {
+                dataCollection = 'sellerProposals';
+            }
 
             if (sellerId) {
                 await loadSellerData();
@@ -873,15 +881,29 @@
         // 셀러 데이터 로드
         async function loadSellerData() {
             try {
-                const doc = await db.collection('sellers').doc(sellerId).get();
+                const doc = await db.collection(dataCollection).doc(sellerId).get();
                 if (doc.exists) {
                     sellerData = doc.data();
                     document.getElementById('sellerInfo').style.display = 'inline-block';
-                    document.getElementById('sellerName').textContent = sellerData.name || '셀러';
+                    document.getElementById('sellerName').textContent = sellerData.name || sellerData.sellerName || '셀러';
 
                     // 이미 제출한 경우
                     if (sellerData.documentsSubmitted) {
                         showSubmittedStatus();
+                    }
+                } else {
+                    // 아웃바운드에서 못 찾으면 인바운드(sellers)에서도 찾아보기
+                    if (sourceType === 'outbound') {
+                        const sellerDoc = await db.collection('sellers').doc(sellerId).get();
+                        if (sellerDoc.exists) {
+                            dataCollection = 'sellers';
+                            sellerData = sellerDoc.data();
+                            document.getElementById('sellerInfo').style.display = 'inline-block';
+                            document.getElementById('sellerName').textContent = sellerData.name || '셀러';
+                            if (sellerData.documentsSubmitted) {
+                                showSubmittedStatus();
+                            }
+                        }
                     }
                 }
             } catch(e) {
@@ -1078,8 +1100,7 @@
 
                 // Firestore에 저장
                 if (sellerId) {
-                    // 기존 셀러에 서류 정보 업데이트
-                    await db.collection('sellers').doc(sellerId).update({
+                    const updateData = {
                         documentsSubmitted: true,
                         documentsApproved: false,
                         onboardingDocuments: docData,
@@ -1088,11 +1109,35 @@
                         obIdCard: true,
                         journeyDocuments: true,
                         journeyBankInfo: true,
-                        journeyIdCard: true
-                    });
+                        journeyIdCard: true,
+                        // 타임스탬프 기록 (소요시간 추적용)
+                        onboardingCompletedAt: new Date().toISOString(),
+                        // 소스 타입 기록
+                        sourceType: sourceType
+                    };
+
+                    // 아웃바운드인 경우 stage 업데이트
+                    if (sourceType === 'outbound' && dataCollection === 'sellerProposals') {
+                        updateData.stage = 'onboarding';  // 온보딩 단계로 변경
+                    }
+
+                    await db.collection(dataCollection).doc(sellerId).update(updateData);
+
+                    // 아웃바운드인 경우 sellers 컬렉션에도 복사 (입점 준비)
+                    if (sourceType === 'outbound') {
+                        const sellerEntry = {
+                            ...sellerData,
+                            ...updateData,
+                            originalProposalId: sellerId,
+                            createdAt: sellerData.createdAt || new Date().toISOString()
+                        };
+                        // sellers 컬렉션에 동일 ID로 생성 또는 업데이트
+                        await db.collection('sellers').doc(sellerId).set(sellerEntry, { merge: true });
+                    }
                 } else {
                     // 셀러 ID 없이 제출된 경우 - 대기 컬렉션에 저장
                     docData.source = 'direct_onboarding'; // 온보딩 직접 접속
+                    docData.sourceType = 'inbound';
                     await db.collection('pendingOnboardings').add(docData);
                 }
 
