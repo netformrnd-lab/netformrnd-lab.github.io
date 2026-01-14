@@ -178,6 +178,27 @@
         .duplicate-meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
         .modal-actions-row { display: flex; gap: 8px; margin-top: 16px; }
         .modal-actions-row .btn-modal { flex: 1; }
+
+        /* 커스텀 제안방안 입력 */
+        .custom-method-row { display: flex; gap: 8px; margin-top: 12px; }
+        .custom-method-input { flex: 1; padding: 10px 14px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 13px; font-family: inherit; }
+        .custom-method-input:focus { outline: none; border-color: #f59e0b; }
+        .btn-add-method { padding: 10px 16px; background: #f59e0b; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn-add-method:hover { background: #d97706; }
+        .custom-methods-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .custom-method-tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 20px; font-size: 12px; color: #92400e; }
+        .custom-method-tag .remove-btn { cursor: pointer; font-size: 14px; opacity: 0.7; }
+        .custom-method-tag .remove-btn:hover { opacity: 1; }
+
+        /* 연락 방법 드롭다운 */
+        .contact-dropdown { position: relative; display: inline-block; }
+        .contact-btn { padding: 6px 12px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #fff; border: none; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+        .contact-btn:hover { background: linear-gradient(135deg, #d97706 0%, #b45309 100%); }
+        .contact-menu { display: none; position: absolute; top: 100%; right: 0; margin-top: 4px; background: #fff; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); min-width: 160px; z-index: 100; overflow: hidden; }
+        .contact-menu.show { display: block; }
+        .contact-menu-item { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; color: #374151; cursor: pointer; transition: all 0.15s; border: none; background: none; width: 100%; text-align: left; }
+        .contact-menu-item:hover { background: #f3f4f6; color: #f59e0b; }
+        .contact-menu-item .icon { font-size: 16px; }
     </style>
 </head>
 <body>
@@ -370,10 +391,23 @@
                         <span class="method-label">💬 카카오톡</span>
                     </label>
                     <label class="method-checkbox">
+                        <input type="checkbox" id="methodDM" value="dm">
+                        <span class="method-label">✉️ DM</span>
+                    </label>
+                    <label class="method-checkbox">
+                        <input type="checkbox" id="methodInfocLink" value="infoclink">
+                        <span class="method-label">🔗 인포크링크</span>
+                    </label>
+                    <label class="method-checkbox">
                         <input type="checkbox" id="methodWebsite" value="website">
                         <span class="method-label">🌐 홈페이지</span>
                     </label>
                 </div>
+                <div class="custom-method-row">
+                    <input type="text" id="customMethodInput" class="custom-method-input" placeholder="다른 제안 방식 추가 (예: 문자, 팩스)">
+                    <button type="button" class="btn-add-method" onclick="addCustomMethod()">+ 추가</button>
+                </div>
+                <div class="custom-methods-list" id="customMethodsList"></div>
             </div>
             <div class="modal-footer">
                 <button class="btn-modal btn-modal-cancel" onclick="closeCreateModal()">취소</button>
@@ -457,6 +491,9 @@
         let currentCategory = null;
         let currentCategoryName = null;
         const BASE_URL = 'https://netformrnd-lab.github.io';
+        let customMethods = [];  // 커스텀 제안방안 목록
+        let isEditMode = false;  // 수정 모드 여부
+        let editingDocId = null;  // 수정 중인 문서 ID
 
         // 페이지 로드 시 파생본 목록 표시 (Firebase에서)
         document.addEventListener('DOMContentLoaded', function() {
@@ -520,10 +557,14 @@
                 </div>
             `;
 
+            const methodLabels = { email: '이메일', phone: '전화', kakao: '카카오톡', dm: 'DM', infoclink: '인포크링크', website: '홈페이지' };
+
             derivatives.forEach(d => {
-                const methodLabels = { email: '이메일', phone: '전화', kakao: '카카오톡', website: '홈페이지' };
                 const methods = d.proposalMethods || ['email'];
-                const methodBadges = methods.map(m => `<span class="method-badge active">${methodLabels[m] || m}</span>`).join('');
+                const allMethods = [...methods, ...(d.customMethods || [])];
+                const methodBadges = allMethods.slice(0, 3).map(m =>
+                    `<span class="method-badge active">${methodLabels[m] || m}</span>`
+                ).join('') + (allMethods.length > 3 ? `<span class="method-badge">+${allMethods.length - 3}</span>` : '');
                 const companyName = d.companyName || d.name || '-';
                 const stage = d.stage || 'proposal';
                 const stageBadge = getStageDisplay(stage);
@@ -536,7 +577,7 @@
                                 <span class="status-badge ${stage}">${stageBadge}</span>
                                 ${d.phone ? `<span class="derivative-detail-item">📞 ${d.phone}</span>` : ''}
                                 ${d.productName ? `<span class="derivative-detail-item">📦 ${d.productName}</span>` : ''}
-                                <span class="derivative-detail-item">제안: ${methodBadges}</span>
+                                <span class="derivative-detail-item">${methodBadges}</span>
                             </div>
                         </div>
                         <div class="derivative-actions">
@@ -546,9 +587,30 @@
                             ${stage === 'onboarding' ? `
                                 <button class="btn-icon success" onclick="markAsContracted('${d.id}')">계약완료</button>
                             ` : ''}
+                            <button class="btn-icon" onclick="openEditModal('${d.id}')" style="background:#3b82f6;color:#fff;border-color:#3b82f6;">수정</button>
+                            <div class="contact-dropdown">
+                                <button class="contact-btn" onclick="toggleContactMenu(event, '${d.id}')">
+                                    제안 <span style="font-size:10px;">▼</span>
+                                </button>
+                                <div class="contact-menu" id="contact-menu-${d.id}">
+                                    <button class="contact-menu-item" onclick="openCallScript('${d.id}', '${category}')">
+                                        <span class="icon">📞</span> 전화 대본
+                                    </button>
+                                    <button class="contact-menu-item" onclick="openEmailModalFromFirebase('${d.id}', '${category}')">
+                                        <span class="icon">📧</span> 이메일
+                                    </button>
+                                    <button class="contact-menu-item" onclick="openKakaoContact('${d.id}')">
+                                        <span class="icon">💬</span> 카카오톡
+                                    </button>
+                                    <button class="contact-menu-item" onclick="openDMContact('${d.id}')">
+                                        <span class="icon">✉️</span> DM
+                                    </button>
+                                    <button class="contact-menu-item" onclick="openInfocLink('${d.id}', '${category}')">
+                                        <span class="icon">🔗</span> 인포크링크
+                                    </button>
+                                </div>
+                            </div>
                             <button class="btn-icon" onclick="copyUrlFromFirebase('${d.id}', '${category}')">복사</button>
-                            <button class="btn-icon" onclick="openDerivativeFromFirebase('${d.id}', '${category}')">열기</button>
-                            <button class="btn-icon" onclick="openEmailModalFromFirebase('${d.id}', '${category}')" style="background:#1a1a2e;color:#fff;">이메일</button>
                             <button class="btn-icon danger" onclick="deleteDerivativeFromFirebase('${d.id}', '${category}')">삭제</button>
                         </div>
                     </div>
@@ -631,6 +693,8 @@
         function openCreateModal(category, categoryName) {
             currentCategory = category;
             currentCategoryName = categoryName;
+            isEditMode = false;
+            editingDocId = null;
             document.getElementById('companyName').value = '';
             document.getElementById('companyPhone').value = '';
             document.getElementById('urlPreview').style.display = 'none';
@@ -638,9 +702,88 @@
             document.getElementById('methodEmail').checked = true;
             document.getElementById('methodPhone').checked = false;
             document.getElementById('methodKakao').checked = false;
+            document.getElementById('methodDM').checked = false;
+            document.getElementById('methodInfocLink').checked = false;
             document.getElementById('methodWebsite').checked = false;
+            customMethods = [];
+            renderCustomMethods();
+            document.querySelector('#createModal .modal-header').textContent = '📝 맞춤 제안서 생성';
+            document.querySelector('#createModal .btn-modal-confirm').textContent = '생성하기';
             document.getElementById('createModal').classList.add('active');
             document.getElementById('companyName').focus();
+        }
+
+        // 수정 모달 열기
+        async function openEditModal(docId) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+
+                const data = doc.data();
+                isEditMode = true;
+                editingDocId = docId;
+                currentCategory = data.category;
+                currentCategoryName = data.categoryName;
+
+                // 폼 필드 채우기
+                document.getElementById('companyName').value = data.name || '';
+                document.getElementById('companyPhone').value = data.phone || '';
+                document.getElementById('urlPreview').style.display = 'none';
+
+                // 제안 방식 설정
+                const methods = data.proposalMethods || ['email'];
+                document.getElementById('methodEmail').checked = methods.includes('email');
+                document.getElementById('methodPhone').checked = methods.includes('phone');
+                document.getElementById('methodKakao').checked = methods.includes('kakao');
+                document.getElementById('methodDM').checked = methods.includes('dm');
+                document.getElementById('methodInfocLink').checked = methods.includes('infoclink');
+                document.getElementById('methodWebsite').checked = methods.includes('website');
+
+                // 커스텀 방식 설정
+                customMethods = data.customMethods || [];
+                renderCustomMethods();
+
+                document.querySelector('#createModal .modal-header').textContent = '✏️ 제안서 수정';
+                document.querySelector('#createModal .btn-modal-confirm').textContent = '수정';
+                document.getElementById('createModal').classList.add('active');
+            } catch (err) {
+                console.error('Load error:', err);
+                showToast('제안서 정보를 불러올 수 없습니다.');
+            }
+        }
+
+        // 커스텀 제안방안 추가
+        function addCustomMethod() {
+            const input = document.getElementById('customMethodInput');
+            const value = input.value.trim();
+            if (!value) return;
+            if (customMethods.includes(value)) {
+                showToast('이미 추가된 방식입니다.');
+                return;
+            }
+            customMethods.push(value);
+            renderCustomMethods();
+            input.value = '';
+        }
+
+        // 커스텀 제안방안 제거
+        function removeCustomMethod(index) {
+            customMethods.splice(index, 1);
+            renderCustomMethods();
+        }
+
+        // 커스텀 제안방안 목록 렌더링
+        function renderCustomMethods() {
+            const container = document.getElementById('customMethodsList');
+            container.innerHTML = customMethods.map((m, i) => `
+                <span class="custom-method-tag">
+                    ${m}
+                    <span class="remove-btn" onclick="removeCustomMethod(${i})">✕</span>
+                </span>
+            `).join('');
         }
 
         // 생성 모달 닫기
@@ -648,6 +791,8 @@
             document.getElementById('createModal').classList.remove('active');
             currentCategory = null;
             currentCategoryName = null;
+            isEditMode = false;
+            editingDocId = null;
         }
 
         // 입력 시 URL 미리보기
@@ -675,7 +820,7 @@
             return match ? match.join(' ') : text;
         }
 
-        // 파생본 생성
+        // 파생본 생성/수정
         async function createDerivative() {
             const input = document.getElementById('companyName').value.trim();
 
@@ -685,7 +830,7 @@
             }
 
             const urlId = extractEnglish(input);
-            if (!urlId) {
+            if (!urlId && !isEditMode) {
                 showToast('영어 부분이 필요합니다. (예: 삼성전자 samsung)');
                 return;
             }
@@ -701,42 +846,75 @@
             if (document.getElementById('methodEmail').checked) proposalMethods.push('email');
             if (document.getElementById('methodPhone').checked) proposalMethods.push('phone');
             if (document.getElementById('methodKakao').checked) proposalMethods.push('kakao');
+            if (document.getElementById('methodDM').checked) proposalMethods.push('dm');
+            if (document.getElementById('methodInfocLink').checked) proposalMethods.push('infoclink');
             if (document.getElementById('methodWebsite').checked) proposalMethods.push('website');
 
-            // 새 파생본 생성
-            const newDerivative = {
-                urlId: urlId,
-                name: input,
-                companyName: companyName,
-                phone: phone,
-                proposalMethods: proposalMethods,
-                category: currentCategory,
-                categoryName: currentCategoryName,
-                sourceType: 'outbound',  // 아웃바운드 구분
-                stage: 'proposal',  // 파이프라인 단계
-                proposalAt: new Date().toISOString(),  // 제안 시점 (소요시간 계산용)
-                createdAt: new Date().toISOString()
-            };
-
             try {
-                // Firebase에 저장
-                const docRef = await db.collection('proposalDerivatives').add(newDerivative);
-                newDerivative.id = docRef.id;
+                if (isEditMode && editingDocId) {
+                    // 수정 모드
+                    const updateData = {
+                        name: input,
+                        companyName: companyName,
+                        phone: phone,
+                        proposalMethods: proposalMethods,
+                        customMethods: customMethods,
+                        updatedAt: new Date().toISOString()
+                    };
+                    if (urlId) updateData.urlId = urlId;
 
-                closeCreateModal();
-                // Firebase에서 다시 로드
-                await loadProposalsFromFirebase();
-                showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다!`);
+                    await db.collection('proposalDerivatives').doc(editingDocId).update(updateData);
+                    closeCreateModal();
+                    await loadProposalsFromFirebase();
+                    showToast(`"${companyName}" 제안서가 수정되었습니다!`);
+                } else {
+                    // 생성 모드
+                    const newDerivative = {
+                        urlId: urlId,
+                        name: input,
+                        companyName: companyName,
+                        phone: phone,
+                        proposalMethods: proposalMethods,
+                        customMethods: customMethods,
+                        category: currentCategory,
+                        categoryName: currentCategoryName,
+                        sourceType: 'outbound',
+                        stage: 'proposal',
+                        proposalAt: new Date().toISOString(),
+                        createdAt: new Date().toISOString()
+                    };
+
+                    const docRef = await db.collection('proposalDerivatives').add(newDerivative);
+                    newDerivative.id = docRef.id;
+
+                    closeCreateModal();
+                    await loadProposalsFromFirebase();
+                    showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다!`);
+                }
             } catch (err) {
                 console.error('Firebase save error:', err);
-                // 폴백: localStorage 사용
-                const derivatives = getDerivatives(currentCategory);
-                newDerivative.id = Date.now().toString();
-                derivatives.push(newDerivative);
-                saveDerivatives(currentCategory, derivatives);
-                closeCreateModal();
-                updateDerivativesList(currentCategory);
-                showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다! (로컬 저장)`);
+                if (!isEditMode) {
+                    // 폴백: localStorage 사용 (생성 모드만)
+                    const derivatives = getDerivatives(currentCategory);
+                    const newDerivative = {
+                        id: Date.now().toString(),
+                        urlId: urlId,
+                        name: input,
+                        companyName: companyName,
+                        phone: phone,
+                        proposalMethods: proposalMethods,
+                        customMethods: customMethods,
+                        category: currentCategory,
+                        categoryName: currentCategoryName
+                    };
+                    derivatives.push(newDerivative);
+                    saveDerivatives(currentCategory, derivatives);
+                    closeCreateModal();
+                    updateDerivativesList(currentCategory);
+                    showToast(`"${companyName}" 맞춤 제안서가 생성되었습니다! (로컬 저장)`);
+                } else {
+                    showToast('수정에 실패했습니다.');
+                }
             }
         }
 
@@ -1558,6 +1736,143 @@
         document.getElementById('duplicateModal').addEventListener('click', function(e) {
             if (e.target === this) closeDuplicateModal();
         });
+
+        // ==================== 연락 방법 함수 ====================
+
+        // 연락 방법 드롭다운 토글
+        function toggleContactMenu(event, docId) {
+            event.stopPropagation();
+            // 다른 메뉴 닫기
+            document.querySelectorAll('.contact-menu').forEach(menu => {
+                if (menu.id !== `contact-menu-${docId}`) {
+                    menu.classList.remove('show');
+                }
+            });
+            // 현재 메뉴 토글
+            const menu = document.getElementById(`contact-menu-${docId}`);
+            menu.classList.toggle('show');
+        }
+
+        // 문서 클릭 시 드롭다운 닫기
+        document.addEventListener('click', function() {
+            document.querySelectorAll('.contact-menu').forEach(menu => {
+                menu.classList.remove('show');
+            });
+        });
+
+        // 전화 대본 열기
+        async function openCallScript(docId, category) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const data = doc.data();
+                const companyName = encodeURIComponent(data.companyName || data.name || '');
+                const categoryName = encodeURIComponent(data.categoryName || category || '');
+                const phone = encodeURIComponent(data.phone || '');
+
+                const url = `/supplier/call-script/template.html?company=${companyName}&category=${categoryName}&phone=${phone}`;
+                window.open(url, '_blank');
+            } catch (err) {
+                console.error('Error:', err);
+                showToast('전화 대본을 열 수 없습니다.');
+            }
+        }
+
+        // 카카오톡 연락
+        async function openKakaoContact(docId) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const data = doc.data();
+                const companyName = data.companyName || data.name;
+
+                const message = `안녕하세요 ${companyName} 담당자님! 👋
+
+모여라딜 공급사 파트너십 담당자입니다.
+
+저희 모여라딜은 SNS 공동구매 전문 플랫폼인데요,
+인플루언서들과 협업해서 공구 진행하고 있어요.
+
+✨ 마케팅 비용 없이 SNS 홍보
+✨ 공동구매로 대량 주문 보장
+✨ 빠른 정산 (3~7일)
+✨ CS/교환/반품 대행
+
+입점 관련해서 간단히 상담 가능할까요? 😊`;
+
+                await navigator.clipboard.writeText(message);
+                showToast('카카오톡 메시지가 복사되었습니다! 카카오톡에 붙여넣기 하세요.');
+            } catch (err) {
+                console.error('Error:', err);
+                showToast('메시지 복사에 실패했습니다.');
+            }
+        }
+
+        // DM 연락
+        async function openDMContact(docId) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const data = doc.data();
+                const companyName = data.companyName || data.name;
+
+                const message = `안녕하세요 ${companyName} 담당자님! ✨
+
+모여라딜 공급사 파트너십 담당입니다.
+제품 보고 연락드려요!
+
+저희는 SNS 공동구매 플랫폼인데,
+인플루언서들과 협업해서 공구 진행해요.
+
+🎁 마케팅 비용 없음 (판매 수수료만)
+🎁 대량 주문으로 물류비 효율화
+🎁 빠른 정산
+
+관심 있으시면 편하게 답변 주세요! 💬`;
+
+                await navigator.clipboard.writeText(message);
+                showToast('DM 메시지가 복사되었습니다! SNS에 붙여넣기 하세요.');
+            } catch (err) {
+                console.error('Error:', err);
+                showToast('메시지 복사에 실패했습니다.');
+            }
+        }
+
+        // 인포크링크 생성
+        async function openInfocLink(docId, category) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(docId).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다.');
+                    return;
+                }
+                const data = doc.data();
+                const companyName = data.companyName || data.name;
+
+                // 인포크링크용 제안 페이지 URL 생성
+                const proposalData = {
+                    category: category,
+                    companyName: companyName
+                };
+                const encodedData = btoa(encodeURIComponent(JSON.stringify(proposalData)));
+                const infocLink = `${BASE_URL}/supplier/proposal/?d=${encodedData}`;
+
+                await navigator.clipboard.writeText(infocLink);
+                showToast('인포크링크가 복사되었습니다! 공유 가능합니다.');
+            } catch (err) {
+                console.error('Error:', err);
+                showToast('링크 생성에 실패했습니다.');
+            }
+        }
     </script>
 </body>
 </html>
