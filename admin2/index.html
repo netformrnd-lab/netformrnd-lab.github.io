@@ -4030,6 +4030,20 @@ function openDealModal(deal = null) {
           </button>
           <input type="hidden" id="deal-start" value="${d.startDate}">
           <input type="hidden" id="deal-end" value="${d.endDate}">
+
+          <!-- 시간 설정 영역 -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+            <div>
+              <label style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px; display: block;">⏰ 시작 시간</label>
+              <input type="time" id="deal-start-time" value="${d.startTime || '09:00'}" class="form-input" style="padding: 10px 12px;">
+            </div>
+            <div>
+              <label style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px; display: block;">⏰ 종료 시간</label>
+              <input type="time" id="deal-end-time" value="${d.endTime || '09:00'}" class="form-input" style="padding: 10px 12px;">
+            </div>
+          </div>
+          <p style="font-size: 12px; color: var(--gray-500); margin-top: 6px;">💡 공구 시작/종료 시간을 설정하세요.</p>
+
           <div id="date-range-picker" style="display: none; margin-top: 12px; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; background: white;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
               <button type="button" class="btn btn-ghost btn-sm" onclick="changePickerMonth(-1)">◀</button>
@@ -4158,34 +4172,7 @@ function openDealModal(deal = null) {
             </div>
           </div>
         ` : ''}
-        
-        <!-- 📊 분석용 정보 -->
-        <div class="form-group">
-          <label class="form-label">📊 분석 정보 (보고용)</label>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; background: var(--gray-50); border-radius: 12px;">
-            <div>
-              <label style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px; display: block;">컨텐츠 가이드 지원</label>
-              <select class="form-input" id="deal-content-guide" style="font-size: 13px;">
-                <option value="" ${!d.contentGuide ? 'selected' : ''}>선택</option>
-                <option value="full" ${d.contentGuide === 'full' ? 'selected' : ''}>✅ 전체 지원</option>
-                <option value="partial" ${d.contentGuide === 'partial' ? 'selected' : ''}>⚠️ 일부 지원</option>
-                <option value="none" ${d.contentGuide === 'none' ? 'selected' : ''}>❌ 미지원</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px; display: block;">소비자 만족도</label>
-              <select class="form-input" id="deal-satisfaction" style="font-size: 13px;">
-                <option value="" ${!d.satisfaction ? 'selected' : ''}>선택</option>
-                <option value="excellent" ${d.satisfaction === 'excellent' ? 'selected' : ''}>⭐⭐⭐ 매우좋음</option>
-                <option value="good" ${d.satisfaction === 'good' ? 'selected' : ''}>⭐⭐ 좋음</option>
-                <option value="normal" ${d.satisfaction === 'normal' ? 'selected' : ''}>⭐ 보통</option>
-                <option value="bad" ${d.satisfaction === 'bad' ? 'selected' : ''}>👎 불만</option>
-              </select>
-            </div>
-          </div>
-          <p style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">💡 공구 완료 후 분석 보고에 활용됩니다.</p>
-        </div>
-        
+
         <!-- 🎯 이벤트비용 추가 -->
         <div class="form-group">
           <label class="form-label">이벤트비용 <span style="font-weight: 400; color: var(--gray-500);">(원)</span></label>
@@ -4642,6 +4629,8 @@ function submitDealForm(e, id) {
     sellerId: document.getElementById('deal-seller').value,
     startDate: document.getElementById('deal-start').value,
     endDate: document.getElementById('deal-end').value,
+    startTime: document.getElementById('deal-start-time')?.value || '09:00',
+    endTime: document.getElementById('deal-end-time')?.value || '09:00',
     status: statusRadio ? statusRadio.value : 'negotiating',
     notes: document.getElementById('deal-notes').value,
     eventCost: Number(document.getElementById('deal-eventCost')?.value) || 0, // 🎯 이벤트비용
@@ -4659,9 +4648,6 @@ function submitDealForm(e, id) {
     journeySellerSettle: document.getElementById('journey-seller-settle')?.checked || false,
     journeySupplierSettle: document.getElementById('journey-supplier-settle')?.checked || false,
     journeyComplete: document.getElementById('journey-complete')?.checked || false,
-    // 분석용 정보
-    contentGuide: document.getElementById('deal-content-guide')?.value || '',
-    satisfaction: document.getElementById('deal-satisfaction')?.value || '',
     updatedAt: new Date().toISOString()
   };
   if (id) data.id = id;
@@ -7046,10 +7032,20 @@ function renderSellers() {
   // 카테고리 옵션
   const categories = ['육아', '식품', '미용', '생활', '취미', '건강'];
   
-  // 공구 상태별 카운트
-  const completedDealsCount = state.deals.filter(d => d.status === 'completed').length;
-  const ongoingDealsCount = state.deals.filter(d => d.status === 'ongoing' || d.status === 'negotiating').length;
-  const scheduledDealsCount = state.deals.filter(d => d.status === 'scheduled' || d.status === 'confirmed').length;
+  // 공구 상태별 카운트 (날짜 기반으로 자동 계산)
+  const today = new Date().toISOString().split('T')[0];
+  const completedDealsCount = state.deals.filter(d => {
+    if (d.status === 'negotiating') return false;
+    return d.endDate && d.endDate < today;
+  }).length;
+  const ongoingDealsCount = state.deals.filter(d => {
+    if (d.status === 'negotiating') return false;
+    return d.startDate && d.endDate && d.startDate <= today && d.endDate >= today;
+  }).length;
+  const scheduledDealsCount = state.deals.filter(d => {
+    if (d.status === 'negotiating') return false;
+    return d.startDate && d.startDate > today;
+  }).length;
   
   // 판매액 기준 셀러 분류
   const sellers100M = state.sellers.filter(s => (sellerStats[s.id]?.totalSalesAmount || 0) >= 1000000);
