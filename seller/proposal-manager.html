@@ -170,6 +170,29 @@
         .duplicate-meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
         .modal-actions-row { display: flex; gap: 8px; margin-top: 16px; }
         .modal-actions-row .btn-modal { flex: 1; }
+
+        /* 제안 방식 체크박스 */
+        .method-checkbox { display: flex; align-items: center; cursor: pointer; padding: 10px 16px; background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 8px; transition: all 0.2s; }
+        .method-checkbox:hover { border-color: #ff6b35; background: #fff8f5; }
+        .method-checkbox input[type="checkbox"] { display: none; }
+        .method-checkbox input[type="checkbox"]:checked + .method-label { color: #ff6b35; font-weight: 600; }
+        .method-checkbox:has(input[type="checkbox"]:checked) { border-color: #ff6b35; background: #fff8f5; }
+        .method-label { font-size: 13px; color: #374151; white-space: nowrap; }
+
+        /* 방법 배지 */
+        .method-badge { display: inline-block; padding: 2px 6px; background: #e5e7eb; color: #374151; font-size: 10px; border-radius: 4px; margin-right: 4px; }
+        .method-badge.active { background: #fff1eb; color: #ff6b35; }
+
+        /* 커스텀 제안방안 입력 */
+        .custom-method-row { display: flex; gap: 8px; margin-top: 12px; }
+        .custom-method-input { flex: 1; padding: 10px 14px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 13px; font-family: inherit; }
+        .custom-method-input:focus { outline: none; border-color: #ff6b35; }
+        .btn-add-method { padding: 10px 16px; background: #ff6b35; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn-add-method:hover { background: #e55a2b; }
+        .custom-methods-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .custom-method-tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: #fff1eb; border: 1px solid #ff6b35; border-radius: 20px; font-size: 12px; color: #ff6b35; }
+        .custom-method-tag .remove-btn { cursor: pointer; font-size: 14px; opacity: 0.7; }
+        .custom-method-tag .remove-btn:hover { opacity: 1; }
     </style>
 </head>
 <body>
@@ -392,6 +415,35 @@
                     </label>
                 </div>
 
+                <label class="modal-label" style="margin-top: 16px;">제안 방식 (복수 선택 가능)</label>
+                <div class="proposal-methods" style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px;">
+                    <label class="method-checkbox">
+                        <input type="checkbox" id="methodEmail" value="email" checked>
+                        <span class="method-label">📧 이메일</span>
+                    </label>
+                    <label class="method-checkbox">
+                        <input type="checkbox" id="methodPhone" value="phone">
+                        <span class="method-label">📞 전화</span>
+                    </label>
+                    <label class="method-checkbox">
+                        <input type="checkbox" id="methodKakao" value="kakao">
+                        <span class="method-label">💬 카카오톡</span>
+                    </label>
+                    <label class="method-checkbox">
+                        <input type="checkbox" id="methodDM" value="dm">
+                        <span class="method-label">✉️ DM</span>
+                    </label>
+                    <label class="method-checkbox">
+                        <input type="checkbox" id="methodInfocLink" value="infoclink">
+                        <span class="method-label">🔗 인포크링크</span>
+                    </label>
+                </div>
+                <div class="custom-method-row">
+                    <input type="text" id="customMethodInput" class="custom-method-input" placeholder="다른 제안 방식 추가 (예: 문자, 팩스)">
+                    <button type="button" class="btn-add-method" onclick="addCustomMethod()">+ 추가</button>
+                </div>
+                <div class="custom-methods-list" id="customMethodsList"></div>
+
                 <label class="modal-label" style="margin-top: 16px;">메모</label>
                 <textarea id="sellerMemo" class="modal-input" rows="3" placeholder="특이사항, 참고 정보 등"></textarea>
             </div>
@@ -482,6 +534,9 @@
         let selectedFollower = null;
         let currentOnboardingLink = '';
         let currentEmailHtml = '';
+        let customMethods = [];  // 커스텀 제안방안 목록
+        let isEditMode = false;  // 수정 모드 여부
+        let editingProposalId = null;  // 수정 중인 제안 ID
 
         // 페이지 로드 시 데이터 로드
         document.addEventListener('DOMContentLoaded', function() {
@@ -570,8 +625,16 @@
                 </div>
             `;
 
+            // 제안방안 라벨
+            const methodLabels = { email: '이메일', phone: '전화', kakao: '카카오톡', dm: 'DM', infoclink: '인포크링크' };
+
             proposals.forEach(p => {
                 const stageBadge = getStageDisplay(p.stage);
+                const methods = p.proposalMethods || ['email'];
+                const allMethods = [...methods, ...(p.customMethods || [])];
+                const methodBadges = allMethods.slice(0, 3).map(m =>
+                    `<span class="method-badge active">${methodLabels[m] || m}</span>`
+                ).join('') + (allMethods.length > 3 ? `<span class="method-badge">+${allMethods.length - 3}</span>` : '');
 
                 html += `
                     <div class="proposal-item">
@@ -581,6 +644,7 @@
                                 <span class="status-badge ${p.stage || 'proposal'}">${stageBadge}</span>
                                 ${p.followers ? `<span>👥 ${p.followers}</span>` : ''}
                                 ${p.phone ? `<span>📞 ${p.phone}</span>` : ''}
+                                <span>${methodBadges}</span>
                             </div>
                         </div>
                         <div class="proposal-actions">
@@ -590,6 +654,7 @@
                             ${p.stage === 'onboarding' ? `
                                 <button class="btn-icon success" onclick="markAsListed('${p.id}')">입점완료</button>
                             ` : ''}
+                            <button class="btn-icon" onclick="openEditModal('${p.id}')" style="background:#3b82f6;color:#fff;border-color:#3b82f6;">수정</button>
                             <div class="contact-dropdown">
                                 <button class="contact-btn" onclick="toggleContactMenu(event, '${p.id}')">
                                     제안 <span style="font-size:10px;">▼</span>
@@ -635,6 +700,8 @@
         function openCreateModal(type, typeName) {
             currentType = type;
             currentTypeName = typeName;
+            isEditMode = false;
+            editingProposalId = null;
             document.getElementById('sellerName').value = '';
             document.getElementById('sellerAccount').value = '';
             document.getElementById('sellerPhone').value = '';
@@ -644,7 +711,105 @@
             document.querySelectorAll('.follower-option').forEach(el => el.classList.remove('selected'));
             document.querySelectorAll('.sns-option').forEach(el => el.classList.remove('selected'));
             document.querySelectorAll('.sns-option input').forEach(el => el.checked = false);
+            // 제안 방식 초기화
+            document.getElementById('methodEmail').checked = true;
+            document.getElementById('methodPhone').checked = false;
+            document.getElementById('methodKakao').checked = false;
+            document.getElementById('methodDM').checked = false;
+            document.getElementById('methodInfocLink').checked = false;
+            customMethods = [];
+            renderCustomMethods();
+            document.querySelector('.modal-header').textContent = '📝 새 셀러 제안 등록';
+            document.querySelector('.btn-modal-confirm').textContent = '등록';
             document.getElementById('createModal').classList.add('active');
+        }
+
+        // 수정 모달 열기
+        async function openEditModal(proposalId) {
+            try {
+                const doc = await db.collection('sellerProposals').doc(proposalId).get();
+                if (!doc.exists) {
+                    showToast('제안을 찾을 수 없습니다.');
+                    return;
+                }
+
+                const data = doc.data();
+                isEditMode = true;
+                editingProposalId = proposalId;
+                currentType = data.sellerType || 'instagram';
+                currentTypeName = data.sellerTypeName || '인스타그램';
+
+                // 폼 필드 채우기
+                document.getElementById('sellerName').value = data.name || data.sellerName || '';
+                document.getElementById('sellerAccount').value = data.account || '';
+                document.getElementById('sellerPhone').value = data.phone || '';
+                document.getElementById('sellerEmail').value = data.email || '';
+                document.getElementById('sellerMemo').value = data.memo || '';
+
+                // 팔로워 선택
+                selectedFollower = data.followers || null;
+                document.querySelectorAll('.follower-option').forEach(el => {
+                    el.classList.toggle('selected', el.dataset.value === selectedFollower);
+                });
+
+                // 카테고리 선택
+                const categories = data.categories || [];
+                document.querySelectorAll('#categoryOptions input').forEach(el => {
+                    const isSelected = categories.includes(el.value);
+                    el.checked = isSelected;
+                    el.closest('.sns-option').classList.toggle('selected', isSelected);
+                });
+
+                // 제안 방식 설정
+                const methods = data.proposalMethods || ['email'];
+                document.getElementById('methodEmail').checked = methods.includes('email');
+                document.getElementById('methodPhone').checked = methods.includes('phone');
+                document.getElementById('methodKakao').checked = methods.includes('kakao');
+                document.getElementById('methodDM').checked = methods.includes('dm');
+                document.getElementById('methodInfocLink').checked = methods.includes('infoclink');
+
+                // 커스텀 방식 설정
+                customMethods = data.customMethods || [];
+                renderCustomMethods();
+
+                document.querySelector('.modal-header').textContent = '✏️ 셀러 제안 수정';
+                document.querySelector('.btn-modal-confirm').textContent = '수정';
+                document.getElementById('createModal').classList.add('active');
+            } catch (err) {
+                console.error('Load error:', err);
+                showToast('제안 정보를 불러올 수 없습니다.');
+            }
+        }
+
+        // 커스텀 제안방안 추가
+        function addCustomMethod() {
+            const input = document.getElementById('customMethodInput');
+            const value = input.value.trim();
+            if (!value) return;
+            if (customMethods.includes(value)) {
+                showToast('이미 추가된 방식입니다.');
+                return;
+            }
+            customMethods.push(value);
+            renderCustomMethods();
+            input.value = '';
+        }
+
+        // 커스텀 제안방안 제거
+        function removeCustomMethod(index) {
+            customMethods.splice(index, 1);
+            renderCustomMethods();
+        }
+
+        // 커스텀 제안방안 목록 렌더링
+        function renderCustomMethods() {
+            const container = document.getElementById('customMethodsList');
+            container.innerHTML = customMethods.map((m, i) => `
+                <span class="custom-method-tag">
+                    ${m}
+                    <span class="remove-btn" onclick="removeCustomMethod(${i})">✕</span>
+                </span>
+            `).join('');
         }
 
         function closeCreateModal() {
@@ -665,7 +830,7 @@
             checkbox.checked = !checkbox.checked;
         }
 
-        // 제안 생성
+        // 제안 생성/수정
         async function createProposal() {
             const name = document.getElementById('sellerName').value.trim();
             if (!name) {
@@ -679,7 +844,15 @@
                 categories.push(el.value);
             });
 
-            const newProposal = {
+            // 선택된 제안 방식 수집
+            const proposalMethods = [];
+            if (document.getElementById('methodEmail').checked) proposalMethods.push('email');
+            if (document.getElementById('methodPhone').checked) proposalMethods.push('phone');
+            if (document.getElementById('methodKakao').checked) proposalMethods.push('kakao');
+            if (document.getElementById('methodDM').checked) proposalMethods.push('dm');
+            if (document.getElementById('methodInfocLink').checked) proposalMethods.push('infoclink');
+
+            const proposalData = {
                 name: name,
                 sellerName: name,
                 account: document.getElementById('sellerAccount').value.trim(),
@@ -687,21 +860,33 @@
                 email: document.getElementById('sellerEmail').value.trim(),
                 followers: selectedFollower,
                 categories: categories,
+                proposalMethods: proposalMethods,
+                customMethods: customMethods,
                 memo: document.getElementById('sellerMemo').value.trim(),
                 sellerType: currentType,
                 sellerTypeName: currentTypeName,
-                type: 'recruitment',  // 셀러 입점 제안 (기존 공구 제안과 구분)
-                sourceType: 'outbound',  // 아웃바운드
-                stage: 'proposal',
-                createdAt: new Date().toISOString(),
-                proposalAt: new Date().toISOString()
+                type: 'recruitment',
+                sourceType: 'outbound'
             };
 
             try {
-                await db.collection('sellerProposals').add(newProposal);
-                closeCreateModal();
-                await loadSellerProposals();
-                showToast(`"${name}" 셀러 제안이 등록되었습니다!`);
+                if (isEditMode && editingProposalId) {
+                    // 수정 모드
+                    proposalData.updatedAt = new Date().toISOString();
+                    await db.collection('sellerProposals').doc(editingProposalId).update(proposalData);
+                    closeCreateModal();
+                    await loadSellerProposals();
+                    showToast(`"${name}" 셀러 제안이 수정되었습니다!`);
+                } else {
+                    // 생성 모드
+                    proposalData.stage = 'proposal';
+                    proposalData.createdAt = new Date().toISOString();
+                    proposalData.proposalAt = new Date().toISOString();
+                    await db.collection('sellerProposals').add(proposalData);
+                    closeCreateModal();
+                    await loadSellerProposals();
+                    showToast(`"${name}" 셀러 제안이 등록되었습니다!`);
+                }
             } catch (err) {
                 console.error('Save error:', err);
                 showToast('저장에 실패했습니다.');
