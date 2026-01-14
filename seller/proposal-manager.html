@@ -145,6 +145,17 @@
         .email-preview-frame iframe { width: 100%; height: 400px; border: none; }
         .email-actions { display: flex; gap: 8px; margin-top: 16px; }
         .email-actions .btn-modal { flex: 1; }
+
+        /* 중복 확인 모달 */
+        .duplicate-list { max-height: 200px; overflow-y: auto; margin: 16px 0; }
+        .duplicate-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f9fafb; border-radius: 8px; margin-bottom: 8px; border: 2px solid transparent; cursor: pointer; transition: all 0.2s; }
+        .duplicate-item:hover { border-color: #ff6b35; background: #fff8f5; }
+        .duplicate-item.selected { border-color: #ff6b35; background: #fff8f5; }
+        .duplicate-info { flex: 1; }
+        .duplicate-name { font-size: 14px; font-weight: 600; color: #111; }
+        .duplicate-meta { font-size: 12px; color: #6b7280; margin-top: 4px; }
+        .modal-actions-row { display: flex; gap: 8px; margin-top: 16px; }
+        .modal-actions-row .btn-modal { flex: 1; }
     </style>
 </head>
 <body>
@@ -409,6 +420,25 @@
     </div>
 
     <div id="toast" class="toast"></div>
+
+    <!-- 중복 확인 모달 -->
+    <div id="duplicateModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">🔍 셀러 중복 확인</div>
+            <div class="modal-body">
+                <p style="font-size: 14px; color: #6b7280; margin-bottom: 16px;">
+                    동일한 이름의 셀러가 이미 등록되어 있습니다.<br>
+                    기존 셀러와 병합하거나 새로 추가할 수 있습니다.
+                </p>
+                <div class="duplicate-list" id="duplicateList"></div>
+                <div class="modal-actions-row">
+                    <button class="btn-modal btn-modal-cancel" onclick="closeDuplicateModal()">취소</button>
+                    <button class="btn-modal" style="background:#3b82f6;color:#fff;" onclick="mergeWithSelected()">선택 항목에 병합</button>
+                    <button class="btn-modal btn-modal-confirm" onclick="addAsNew()">새로 추가</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
@@ -675,20 +705,168 @@
             }
         }
 
+        // 현재 처리 중인 제안 정보 (중복 확인용)
+        let pendingListedData = null;
+        let duplicateSellers = [];
+        let selectedDuplicateId = null;
+
         // 입점완료 처리
         async function markAsListed(proposalId) {
-            if (!confirm('입점완료 처리하시겠습니까?')) return;
+            if (!confirm('입점완료 처리하시겠습니까?\n셀러 DB로 등록됩니다.')) return;
 
             try {
-                await db.collection('sellerProposals').doc(proposalId).update({
-                    stage: 'listed',
-                    listedAt: new Date().toISOString()
-                });
-                await loadSellerProposals();
-                showToast('입점완료 처리되었습니다!');
+                // 제안 정보 가져오기
+                const doc = await db.collection('sellerProposals').doc(proposalId).get();
+                if (!doc.exists) {
+                    showToast('제안을 찾을 수 없습니다.');
+                    return;
+                }
+
+                const proposalData = doc.data();
+                const sellerName = proposalData.name || proposalData.sellerName || '';
+
+                // 중복 확인: 같은 이름의 셀러가 있는지
+                const duplicateCheck = await db.collection('sellers')
+                    .where('name', '==', sellerName)
+                    .get();
+
+                if (!duplicateCheck.empty) {
+                    // 중복 발견 - 모달 표시
+                    pendingListedData = { proposalId, proposalData };
+                    duplicateSellers = duplicateCheck.docs.map(d => ({ id: d.id, ...d.data() }));
+                    showDuplicateModal(duplicateSellers, sellerName);
+                } else {
+                    // 중복 없음 - 바로 등록
+                    await completeListing(proposalId, proposalData, null);
+                }
             } catch (err) {
                 console.error('Error:', err);
                 showToast('처리 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 중복 확인 모달 표시
+        function showDuplicateModal(duplicates, sellerName) {
+            const listEl = document.getElementById('duplicateList');
+            listEl.innerHTML = duplicates.map(d => `
+                <div class="duplicate-item" onclick="selectDuplicate('${d.id}')" data-id="${d.id}">
+                    <div class="duplicate-info">
+                        <div class="duplicate-name">${d.name || sellerName}</div>
+                        <div class="duplicate-meta">
+                            ${d.type ? `🏷️ ${d.type}` : ''}
+                            ${d.followers ? ` · 👥 ${d.followers}` : ''}
+                            ${d.registeredAt ? ` · 등록: ${new Date(d.registeredAt).toLocaleDateString()}` : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            selectedDuplicateId = null;
+            document.getElementById('duplicateModal').classList.add('active');
+        }
+
+        // 중복 항목 선택
+        function selectDuplicate(id) {
+            selectedDuplicateId = id;
+            document.querySelectorAll('.duplicate-item').forEach(el => {
+                el.classList.toggle('selected', el.dataset.id === id);
+            });
+        }
+
+        // 중복 모달 닫기
+        function closeDuplicateModal() {
+            document.getElementById('duplicateModal').classList.remove('active');
+            pendingListedData = null;
+            duplicateSellers = [];
+            selectedDuplicateId = null;
+        }
+
+        // 선택한 항목과 병합
+        async function mergeWithSelected() {
+            if (!selectedDuplicateId) {
+                showToast('병합할 셀러를 선택해주세요.');
+                return;
+            }
+
+            if (!pendingListedData) return;
+
+            try {
+                const { proposalId, proposalData } = pendingListedData;
+
+                // 기존 셀러 정보 업데이트 (새 정보 병합)
+                const updateData = {
+                    lastUpdatedAt: new Date().toISOString(),
+                    crmSource: 'merged'
+                };
+
+                // 새로운 정보가 있으면 추가
+                if (proposalData.phone) updateData.phone = proposalData.phone;
+                if (proposalData.email) updateData.email = proposalData.email;
+                if (proposalData.account) updateData.snsAccount = proposalData.account;
+                if (proposalData.followers) updateData.followers = proposalData.followers;
+                if (proposalData.categories) updateData.categories = proposalData.categories;
+
+                await db.collection('sellers').doc(selectedDuplicateId).update(updateData);
+
+                // 제안서 상태 업데이트
+                await db.collection('sellerProposals').doc(proposalId).update({
+                    stage: 'listed',
+                    listedAt: new Date().toISOString(),
+                    linkedSellerId: selectedDuplicateId,
+                    mergedWith: selectedDuplicateId
+                });
+
+                closeDuplicateModal();
+                await loadSellerProposals();
+                showToast('기존 셀러와 병합되었습니다.');
+            } catch (err) {
+                console.error('Merge error:', err);
+                showToast('병합 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 새로 추가
+        async function addAsNew() {
+            if (!pendingListedData) return;
+
+            const { proposalId, proposalData } = pendingListedData;
+            await completeListing(proposalId, proposalData, null);
+            closeDuplicateModal();
+        }
+
+        // 입점 완료 처리 (셀러 DB에 등록)
+        async function completeListing(proposalId, proposalData, linkedId) {
+            try {
+                // 셀러 DB에 새로 추가
+                const sellerData = {
+                    name: proposalData.name || proposalData.sellerName,
+                    phone: proposalData.phone || '',
+                    email: proposalData.email || '',
+                    type: proposalData.sellerTypeName || proposalData.sellerType || '',
+                    snsAccount: proposalData.account || '',
+                    followers: proposalData.followers || '',
+                    categories: proposalData.categories || [],
+                    source: 'crm',
+                    sourceType: proposalData.sourceType || 'outbound',
+                    registeredAt: new Date().toISOString(),
+                    status: 'active',
+                    notes: `CRM을 통해 등록됨 (제안 ID: ${proposalId})`
+                };
+
+                const newSellerRef = await db.collection('sellers').add(sellerData);
+
+                // 제안서 상태 업데이트
+                await db.collection('sellerProposals').doc(proposalId).update({
+                    stage: 'listed',
+                    listedAt: new Date().toISOString(),
+                    linkedSellerId: newSellerRef.id
+                });
+
+                await loadSellerProposals();
+                showToast('입점완료! 셀러 DB에 등록되었습니다.');
+            } catch (err) {
+                console.error('Complete listing error:', err);
+                showToast('셀러 등록 중 오류가 발생했습니다.');
             }
         }
 
@@ -983,6 +1161,9 @@ ${sellerName}님의 채널을 보고 연락드려요. 저희 모여라딜은 아
         });
         document.getElementById('onboardingModal').addEventListener('click', function(e) {
             if (e.target === this) closeOnboardingModal();
+        });
+        document.getElementById('duplicateModal').addEventListener('click', function(e) {
+            if (e.target === this) closeDuplicateModal();
         });
     </script>
 </body>
