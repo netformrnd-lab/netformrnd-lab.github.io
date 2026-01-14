@@ -14,19 +14,27 @@
 
 ```
 /consumer/
-├── product.html       # 상품 상세 페이지
-├── events.html        # 이벤트 페이지 (후기, 선착순)
-├── secret-seller.html # 시크릿 셀러 전용 페이지
-└── my-cashback.html   # 내 캐시백 조회
+├── product/index.html       # 상품 상세 페이지
+├── events/index.html        # 이벤트 페이지 (후기, 선착순)
+├── secret-seller/index.html # 시크릿 셀러 전용 페이지
+└── my-cashback/index.html   # 내 캐시백 조회
 ```
+
+### 클린 URL
+| 페이지 | URL |
+|-------|-----|
+| 상품 | `/consumer/product/?id={dealId}` |
+| 이벤트 | `/consumer/events/` |
+| 시크릿 셀러 | `/consumer/secret-seller/?code={코드}` |
+| 캐시백 | `/consumer/my-cashback/` |
 
 ---
 
-## 1. 상품 페이지 (`/consumer/product.html`)
+## 1. 상품 페이지 (`/consumer/product/`)
 
 ### 접근 URL
 ```
-/consumer/product.html?id={dealId}&ref={referralCode}
+/consumer/product/?id={dealId}&ref={referralCode}
 ```
 
 ### 기능
@@ -59,7 +67,7 @@ db.collection('referrals').doc(code).set({
 
 ---
 
-## 2. 이벤트 페이지 (`/consumer/events.html`)
+## 2. 이벤트 페이지 (`/consumer/events/`)
 
 ### 기능
 
@@ -101,11 +109,11 @@ db.collection('reviews')
 
 ---
 
-## 3. 시크릿 셀러 페이지 (`/consumer/secret-seller.html`)
+## 3. 시크릿 셀러 페이지 (`/consumer/secret-seller/`)
 
 ### 접근 URL
 ```
-/consumer/secret-seller.html?code={secretCode}
+/consumer/secret-seller/?code={secretCode}
 ```
 
 ### 기능
@@ -141,7 +149,7 @@ db.collection('deals')
 
 ---
 
-## 4. 캐시백 조회 페이지 (`/consumer/my-cashback.html`)
+## 4. 캐시백 조회 페이지 (`/consumer/my-cashback/`)
 
 ### 기능
 - **전화번호로 조회**: 별도 회원가입 없이 연락처로 조회
