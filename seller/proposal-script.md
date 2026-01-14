@@ -113,7 +113,7 @@
 moyeora-deal@kakao.com으로 연락 주시거나
 아래 링크에서 신청해주세요!
 
-👉 셀러 입점신청: https://moyeora-deal.com/seller/apply.html
+👉 셀러 입점신청: https://moyeora-deal.com/seller/apply/
 
 좋은 기회가 되셨으면 좋겠습니다 😊
 ```
@@ -407,7 +407,7 @@ VIP 셀러분들은 [X+5]%까지 받고 계세요.
 혹시 여유 생기시면 언제든 연락주세요.
 저희 입점신청 링크 남겨드릴게요.
 
-👉 https://moyeora-deal.com/seller/apply.html
+👉 https://moyeora-deal.com/seller/apply/
 
 좋은 하루 되세요!
 ```
