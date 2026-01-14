@@ -109,42 +109,52 @@ db.collection('reviews')
 
 ---
 
-## 3. 시크릿 셀러 페이지 (`/consumer/secret-seller/`)
+## 3. 셀러 전용 상품 페이지 (`/consumer/secret-seller/`)
+
+### 개요
+셀러에게 제공하는 **전용 상품 판매 페이지**입니다. 소비자는 **오직 이 링크를 통해서만** 해당 상품을 구매할 수 있습니다.
 
 ### 접근 URL
 ```
-/consumer/secret-seller/?code={secretCode}
+/consumer/secret-seller/?seller={sellerId}&deal={dealId}&ref={referralCode}
 ```
 
 ### 기능
-- **시크릿 코드 인증**: 셀러 전용 코드로 접근
-- **전용 할인**: 일반 가격 대비 추가 할인
-- **VIP 혜택**: 추가 캐시백, 무료 배송 등
-- **친구 초대**: 시크릿 코드 포함 링크 공유
+- **셀러 정보 표시**: 셀러명, 전용 공동구매 배지
+- **공동구매 일정**: 시작일/종료일, D-day 카운트다운
+- **상태별 표시**:
+  - 오픈 예정: 카운트다운 + 알림 신청 섹션
+  - 진행중: 구매 버튼 활성화
+  - 종료: 구매 버튼 비활성화
+- **오픈 알림 신청**: 카카오톡/문자 선택
+- **친구 공유**: 레퍼럴 링크 생성 및 공유
+- **카페24 연동**: 구매 시 카페24로 이동
 
-### 셀러 혜택
-| 혜택 | 내용 |
-|-----|------|
-| 추가 할인 | 최대 30% |
-| 추가 캐시백 | +5,000원 |
-| 배송 | 무료 + 익일 출고 |
-| 친구 초대 보상 | 나 10,000원 / 친구 5,000원 |
+### 어드민에서 링크 생성
+1. **어드민** → **공구 관리** → 공구 클릭
+2. 공구 수정 모달 하단의 **"셀러 전용 상품 페이지"** 섹션
+3. **📋 복사** 버튼으로 링크 복사
+4. **💬 카카오톡 공유** 또는 **👁️ 미리보기** 가능
 
 ### Firestore 연동
 ```javascript
-// 시크릿 코드 검증
-db.collection('sellers')
-    .where('secretCode', '==', code)
-    .get()
+// 셀러 정보 조회
+db.collection('sellers').doc(sellerId).get()
 
-// 또는
-db.collection('secretSellerCodes').doc(code).get()
+// 공구 정보 조회
+db.collection('deals').doc(dealId).get()
 
-// 시크릿 상품 조회
-db.collection('deals')
-    .where('isSecretSeller', '==', true)
-    .where('status', 'in', ['ongoing', 'active'])
-    .get()
+// 알림 신청 저장
+db.collection('notifications').add({
+    dealId, dealTitle, sellerId, sellerName,
+    phone, type: 'kakao'|'sms', status: 'pending'
+})
+
+// 레퍼럴 코드 생성
+db.collection('referrals').doc(code).set({
+    referralCode, dealId, sellerId, sellerName,
+    clicks: 0, conversions: 0
+})
 ```
 
 ---
@@ -424,5 +434,234 @@ deals 컬렉션에 다음 필드 추가:
 - [ ] 친구 공유 (카카오톡, 문자, 링크 복사)
 - [ ] 카페24로 이동 (레퍼럴 코드 포함)
 - [ ] 후기 작성 및 이미지/영상 업로드
-- [ ] 시크릿 셀러 코드 인증
+- [ ] 셀러 전용 페이지 접근 및 구매
 - [ ] 캐시백 조회
+
+---
+
+## 카페24 소비자 페이지 관리
+
+### 개요
+소비자 페이지를 카페24에 업로드하여 `moyeoradeal.shop` 도메인으로 서비스합니다.
+데이터는 Firebase에서 관리하고, HTML/JS만 카페24에 호스팅합니다.
+
+---
+
+### 📁 카페24 폴더 구조
+
+```
+카페24 디자인 편집기
+└── consumer/
+    ├── product/
+    │   └── index.html      # 상품 상세 페이지
+    ├── events/
+    │   └── index.html      # 이벤트 페이지
+    ├── secret-seller/
+    │   └── index.html      # 셀러 전용 상품 페이지
+    └── my-cashback/
+        └── index.html      # 캐시백 조회 페이지
+```
+
+---
+
+### 🔧 페이지 수정 방법
+
+#### 1. 카페24 관리자 접속
+```
+https://moyeora02.cafe24.com/disp/admin/
+```
+
+#### 2. 디자인 편집기 열기
+- **디자인** → **디자인 편집** 클릭
+- 또는 단축키 `Ctrl + D`
+
+#### 3. 파일 찾기
+- 왼쪽 폴더 트리에서 `consumer` 폴더 펼치기
+- 수정할 페이지 폴더 클릭 (예: `product`)
+- `index.html` 더블클릭하여 편집기 열기
+
+#### 4. 코드 수정
+- HTML/CSS/JavaScript 수정
+- **저장** 버튼 클릭 또는 `Ctrl + S`
+
+#### 5. 미리보기
+- **미리보기** 버튼으로 확인
+- 또는 실제 URL로 접속하여 확인
+
+---
+
+### ➕ 새 페이지 추가 방법
+
+#### 방법 1: 폴더 방식 (클린 URL)
+
+1. **폴더 생성**
+   - `consumer` 폴더 우클릭 → **새 폴더**
+   - 폴더명 입력 (예: `faq`)
+
+2. **index.html 생성**
+   - 새로 만든 폴더 클릭
+   - 우클릭 → **새 파일** → `index.html`
+
+3. **코드 작성**
+   - 기존 페이지를 복사하여 수정하거나 새로 작성
+   - Firebase 연동 코드 포함
+
+4. **결과 URL**
+   ```
+   https://moyeoradeal.shop/consumer/faq/
+   ```
+
+#### 방법 2: 단일 파일 방식
+
+1. **파일 생성**
+   - `consumer` 폴더에서 우클릭 → **새 파일**
+   - 파일명 입력 (예: `about.html`)
+
+2. **결과 URL**
+   ```
+   https://moyeoradeal.shop/consumer/about.html
+   ```
+
+---
+
+### 📝 페이지 템플릿
+
+새 페이지 생성 시 기본 템플릿:
+
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>페이지 제목 - 모여라딜</title>
+    <link rel="icon" href="/favicon.ico">
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <!-- Kakao SDK -->
+    <script src="https://t1.kakaocdn.net/kakao_js_sdk/2.5.0/kakao.min.js"></script>
+
+    <style>
+        /* 스타일 작성 */
+    </style>
+</head>
+<body>
+    <!-- 헤더 -->
+    <div class="header">
+        <a href="/" class="logo">모여라딜</a>
+    </div>
+
+    <!-- 콘텐츠 -->
+    <div class="container">
+        <!-- 페이지 내용 -->
+    </div>
+
+    <script>
+        // Firebase 설정
+        const firebaseConfig = {
+            apiKey: "AIzaSyAQf_Cu9wMji5QsMBQns5eg6nOD_vmrZMs",
+            authDomain: "moyeora-deal-manager.firebaseapp.com",
+            projectId: "moyeora-deal-manager",
+            storageBucket: "moyeora-deal-manager.firebasestorage.app",
+            messagingSenderId: "878495183009",
+            appId: "1:878495183009:web:7c7f5f3b6c3d5f5f5f5f5f"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // Kakao SDK 초기화
+        Kakao.init('2e874ef8e5b6a792564592d49632a83e');
+
+        // 페이지 로직 작성
+    </script>
+</body>
+</html>
+```
+
+---
+
+### ⚠️ 주의사항
+
+#### 1. 경로 충돌 확인
+카페24 기본 경로와 충돌하지 않도록 주의:
+- `/product/` - 카페24 기본 상품 경로 (사용 금지)
+- `/board/` - 카페24 게시판 경로 (사용 금지)
+- `/member/` - 카페24 회원 경로 (사용 금지)
+
+**권장**: `/consumer/` 하위 폴더만 사용
+
+#### 2. JavaScript 에러 처리
+```javascript
+// Firebase 초기화 중복 방지
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
+
+// Kakao SDK 중복 초기화 방지
+if (!Kakao.isInitialized()) {
+    Kakao.init('YOUR_KEY');
+}
+```
+
+#### 3. 캐시 문제
+수정 후 반영이 안 되면:
+- 브라우저 캐시 삭제 (`Ctrl + Shift + R`)
+- 카페24 캐시 초기화 (디자인 편집기 → 캐시 관리)
+
+#### 4. 모바일 대응
+반드시 반응형으로 제작:
+```css
+@media (max-width: 768px) {
+    /* 모바일 스타일 */
+}
+```
+
+---
+
+### 🔄 GitHub ↔ 카페24 동기화
+
+GitHub에서 페이지를 수정한 경우:
+
+1. **GitHub에서 코드 복사**
+   - `/consumer/` 폴더의 수정된 파일 열기
+   - 전체 코드 복사
+
+2. **카페24에 붙여넣기**
+   - 카페24 디자인 편집기 열기
+   - 해당 파일 선택
+   - 전체 선택 후 붙여넣기
+   - 저장
+
+3. **확인**
+   - 실제 URL에서 동작 확인
+
+---
+
+### 📋 페이지별 URL 정리
+
+| 페이지 | URL | 파라미터 |
+|-------|-----|---------|
+| 상품 상세 | `/consumer/product/` | `?id={dealId}&ref={refCode}` |
+| 이벤트 | `/consumer/events/` | - |
+| 셀러 전용 | `/consumer/secret-seller/` | `?seller={sellerId}&deal={dealId}` |
+| 캐시백 | `/consumer/my-cashback/` | - |
+
+---
+
+### 🛠️ 문제 해결
+
+#### Firebase 연결 안 됨
+1. Firebase Console → 승인 도메인에 `moyeoradeal.shop` 추가 확인
+2. 브라우저 콘솔에서 에러 확인 (`F12`)
+
+#### 카카오 공유 안 됨
+1. Kakao Developers → 플랫폼 → 사이트 도메인에 `https://moyeoradeal.shop` 추가 확인
+2. JavaScript 키 확인
+
+#### 페이지 404 에러
+1. 폴더/파일 경로 확인
+2. `index.html` 파일 존재 여부 확인
+3. 카페24 캐시 초기화
