@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>베테랑대디 데이터 추출</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #333;
+      border-bottom: 3px solid #fc9600;
+      padding-bottom: 10px;
+    }
+    .section {
+      background: white;
+      padding: 20px;
+      margin: 20px 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    button {
+      background: #fc9600;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #e08600;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    pre {
+      background: #f8f8f8;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .status {
+      padding: 10px;
+      border-radius: 4px;
+      margin: 10px 0;
+    }
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .status.info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    .data-count {
+      font-size: 24px;
+      font-weight: bold;
+      color: #fc9600;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔍 베테랑대디 데이터 추출 도구</h1>
+
+  <div class="section">
+    <h2>1. 데이터 추출</h2>
+    <button onclick="extractData()" id="extractBtn">데이터 추출 시작</button>
+    <button onclick="exportToJSON()" id="exportBtn" disabled>JSON 파일로 내보내기</button>
+    <button onclick="copyToClipboard()" id="copyBtn" disabled>클립보드에 복사</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="section">
+    <h2>2. 추출된 데이터</h2>
+    <div id="results"></div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+
+  <script>
+    // Firebase 설정
+    const firebaseConfig = {
+      apiKey: "AIzaSyBlXq0tC0xYY9XHggkYM9k6rBOkqAEv-R8",
+      authDomain: "moyeoradeal-test.firebaseapp.com",
+      projectId: "moyeoradeal-test",
+      storageBucket: "moyeoradeal-test.firebasestorage.app",
+      messagingSenderId: "559819212501",
+      appId: "1:559819212501:web:f43f1feff99c8ffbb4bfa1",
+      measurementId: "G-G6CBXDQCN6"
+    };
+
+    // Firebase 초기화
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    let extractedData = null;
+
+    function showStatus(message, type = 'info') {
+      const statusDiv = document.getElementById('status');
+      statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+    }
+
+    async function extractData() {
+      const extractBtn = document.getElementById('extractBtn');
+      extractBtn.disabled = true;
+      extractBtn.textContent = '추출 중...';
+
+      showStatus('🔍 베테랑대디 데이터를 검색하고 있습니다...', 'info');
+
+      try {
+        const data = {
+          searchTerm: '베테랑대디',
+          timestamp: new Date().toISOString(),
+          suppliers: [],
+          products: []
+        };
+
+        // 1. suppliers 컬렉션에서 베테랑대디 검색
+        showStatus('📋 공급사(suppliers) 데이터 검색 중...', 'info');
+        const suppliersSnapshot = await db.collection('suppliers').get();
+        const allSuppliers = [];
+
+        suppliersSnapshot.forEach(doc => {
+          const supplierData = { id: doc.id, ...doc.data() };
+          allSuppliers.push(supplierData);
+
+          // 베테랑대디와 관련된 데이터 찾기 (대소문자 구분 없이)
+          const searchFields = [
+            supplierData.name,
+            supplierData.brandName,
+            supplierData.businessName,
+            supplierData.representativeName,
+            supplierData.contactPerson
+          ].filter(Boolean).join(' ').toLowerCase();
+
+          if (searchFields.includes('베테랑') ||
+              searchFields.includes('대디') ||
+              searchFields.includes('베테랑대디') ||
+              searchFields.includes('veteran') ||
+              searchFields.includes('daddy')) {
+            data.suppliers.push(supplierData);
+          }
+        });
+
+        // 2. supplierProducts 컬렉션에서 베테랑대디 관련 상품 검색
+        showStatus('🛍️ 상품(supplierProducts) 데이터 검색 중...', 'info');
+        const productsSnapshot = await db.collection('supplierProducts').get();
+        const allProducts = [];
+
+        productsSnapshot.forEach(doc => {
+          const productData = { id: doc.id, ...doc.data() };
+          allProducts.push(productData);
+
+          // 베테랑대디와 관련된 상품 찾기
+          const searchFields = [
+            productData.brandName,
+            productData.supplierName,
+            productData.productName
+          ].filter(Boolean).join(' ').toLowerCase();
+
+          if (searchFields.includes('베테랑') ||
+              searchFields.includes('대디') ||
+              searchFields.includes('베테랑대디') ||
+              searchFields.includes('veteran') ||
+              searchFields.includes('daddy')) {
+            data.products.push(productData);
+          }
+
+          // supplierId로도 매칭
+          if (data.suppliers.length > 0) {
+            const supplierIds = data.suppliers.map(s => s.id);
+            if (productData.supplierId && supplierIds.includes(productData.supplierId)) {
+              // 중복 체크
+              if (!data.products.find(p => p.id === productData.id)) {
+                data.products.push(productData);
+              }
+            }
+          }
+        });
+
+        // 3. 전체 통계 추가
+        data.statistics = {
+          totalSuppliers: allSuppliers.length,
+          totalProducts: allProducts.length,
+          matchedSuppliers: data.suppliers.length,
+          matchedProducts: data.products.length
+        };
+
+        extractedData = data;
+        displayResults(data);
+
+        if (data.suppliers.length === 0 && data.products.length === 0) {
+          showStatus('⚠️ "베테랑대디"와 일치하는 데이터를 찾을 수 없습니다. 전체 공급사 목록을 확인해주세요.', 'error');
+        } else {
+          showStatus(`✅ 추출 완료! 공급사 ${data.suppliers.length}개, 상품 ${data.products.length}개를 찾았습니다.`, 'success');
+          document.getElementById('exportBtn').disabled = false;
+          document.getElementById('copyBtn').disabled = false;
+        }
+
+      } catch (error) {
+        console.error('Error:', error);
+        showStatus(`❌ 오류 발생: ${error.message}`, 'error');
+      } finally {
+        extractBtn.disabled = false;
+        extractBtn.textContent = '데이터 추출 시작';
+      }
+    }
+
+    function displayResults(data) {
+      const resultsDiv = document.getElementById('results');
+
+      let html = `
+        <div class="data-count">
+          📊 전체: 공급사 ${data.statistics.totalSuppliers}개 / 상품 ${data.statistics.totalProducts}개
+        </div>
+        <div class="data-count">
+          ✅ 매칭: 공급사 ${data.statistics.matchedSuppliers}개 / 상품 ${data.statistics.matchedProducts}개
+        </div>
+        <hr>
+      `;
+
+      if (data.suppliers.length > 0) {
+        html += '<h3>🏢 베테랑대디 공급사 정보</h3>';
+        data.suppliers.forEach((supplier, index) => {
+          html += `
+            <div style="margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 4px;">
+              <strong>#${index + 1} ${supplier.name || '이름없음'}</strong><br>
+              <small>ID: ${supplier.id}</small><br>
+              ${supplier.brandName ? `브랜드명: ${supplier.brandName}<br>` : ''}
+              ${supplier.businessName ? `사업자명: ${supplier.businessName}<br>` : ''}
+              ${supplier.representativeName ? `대표자: ${supplier.representativeName}<br>` : ''}
+              ${supplier.contactPerson ? `담당자: ${supplier.contactPerson}<br>` : ''}
+              ${supplier.phone ? `전화: ${supplier.phone}<br>` : ''}
+              ${supplier.email ? `이메일: ${supplier.email}<br>` : ''}
+              생성일: ${supplier.createdAt || 'N/A'}
+            </div>
+          `;
+        });
+      }
+
+      if (data.products.length > 0) {
+        html += '<h3>📦 베테랑대디 상품 목록</h3>';
+        data.products.forEach((product, index) => {
+          html += `
+            <div style="margin: 10px 0; padding: 10px; background: #fff8f0; border-radius: 4px;">
+              <strong>#${index + 1} ${product.productName || '상품명 없음'}</strong><br>
+              <small>ID: ${product.id}</small><br>
+              브랜드: ${product.brandName || 'N/A'}<br>
+              공급사ID: ${product.supplierId || 'N/A'}<br>
+              공급가: ${product.supplyPrice ? product.supplyPrice.toLocaleString() + '원' : 'N/A'}<br>
+              소비자가: ${product.retailPrice ? product.retailPrice.toLocaleString() + '원' : 'N/A'}<br>
+              생성일: ${product.createdAt || 'N/A'}
+            </div>
+          `;
+        });
+      }
+
+      html += '<h3>📄 전체 데이터 (JSON)</h3>';
+      html += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+
+      resultsDiv.innerHTML = html;
+    }
+
+    function exportToJSON() {
+      if (!extractedData) return;
+
+      const dataStr = JSON.stringify(extractedData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(dataBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `베테랑대디_데이터_${new Date().toISOString().split('T')[0]}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+
+      showStatus('✅ JSON 파일이 다운로드되었습니다.', 'success');
+    }
+
+    function copyToClipboard() {
+      if (!extractedData) return;
+
+      const dataStr = JSON.stringify(extractedData, null, 2);
+      navigator.clipboard.writeText(dataStr).then(() => {
+        showStatus('✅ 클립보드에 복사되었습니다.', 'success');
+      }).catch(err => {
+        showStatus('❌ 복사 실패: ' + err.message, 'error');
+      });
+    }
+
+    // 페이지 로드 시 안내 메시지
+    window.addEventListener('load', () => {
+      showStatus('👆 "데이터 추출 시작" 버튼을 클릭하여 베테랑대디 데이터를 검색하세요.', 'info');
+    });
+  </script>
+</body>
+</html>
