@@ -3449,7 +3449,9 @@ let state = {
   // 셀러 문의
   sellerInquiries: [],
   // 대기 중인 공급사 온보딩 서류
-  pendingSupplierOnboardings: []
+  pendingSupplierOnboardings: [],
+  // 제안서 요청
+  proposalRequests: []
 };
 
 // 상수
@@ -3636,6 +3638,13 @@ function setupListeners() {
     state.sellerInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
     // 문의 배지 업데이트
+    if (typeof updateInquiryBadge === 'function') updateInquiryBadge();
+  });
+
+  // 제안서 요청 목록
+  db.collection('proposalRequests').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+    state.proposalRequests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
     if (typeof updateInquiryBadge === 'function') updateInquiryBadge();
   });
 
@@ -26848,11 +26857,13 @@ function renderSupplierInquiries() {
   const app = document.getElementById('app');
   const supplierInquiries = state.supplierInquiries || [];
   const sellerInquiries = state.sellerInquiries || [];
+  const proposalRequests = state.proposalRequests || [];
   const allInquiries = [...supplierInquiries, ...sellerInquiries];
 
   const supplierPending = supplierInquiries.filter(i => i.status === 'pending' || !i.status).length;
   const sellerPending = sellerInquiries.filter(i => i.status === 'pending' || !i.status).length;
-  const totalPending = supplierPending + sellerPending;
+  const proposalPending = proposalRequests.filter(i => i.status === 'pending' || !i.status).length;
+  const totalPending = supplierPending + sellerPending + proposalPending;
 
   const formatDateStr = (timestamp) => {
     if (!timestamp) return '-';
@@ -26939,10 +26950,10 @@ function renderSupplierInquiries() {
     </div>
 
     <!-- 요약 카드 -->
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px;">
       <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">전체 문의</div>
-        <div style="font-size: 28px; font-weight: 700; color: var(--gray-900);">${allInquiries.length}</div>
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">전체</div>
+        <div style="font-size: 28px; font-weight: 700; color: var(--gray-900);">${allInquiries.length + proposalRequests.length}</div>
       </div>
       <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
         <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">대기 중</div>
@@ -26955,6 +26966,10 @@ function renderSupplierInquiries() {
       <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
         <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">셀러 문의</div>
         <div style="font-size: 28px; font-weight: 700; color: #10b981;">${sellerInquiries.length}</div>
+      </div>
+      <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 4px;">제안서 요청</div>
+        <div style="font-size: 28px; font-weight: 700; color: #8b5cf6;">${proposalRequests.length}</div>
       </div>
     </div>
 
@@ -26977,6 +26992,15 @@ function renderSupplierInquiries() {
         <span style="font-size: 16px;">👤</span> 셀러 문의
         <span style="background: ${currentInquiryTab === 'seller' ? '#10b981' : 'var(--gray-300)'}; color: white; padding: 2px 8px; border-radius: 8px; font-size: 12px;">${sellerInquiries.length}</span>
         ${sellerPending > 0 ? `<span style="background: #dc2626; color: white; padding: 2px 6px; border-radius: 6px; font-size: 11px;">대기 ${sellerPending}</span>` : ''}
+      </button>
+      <button id="inquiryTab-proposal" onclick="switchInquiryTab('proposal')" style="
+        flex: 1; padding: 14px; border: none; border-radius: 10px; font-size: 14px; font-weight: 600;
+        ${currentInquiryTab === 'proposal' ? 'background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);' : 'background: transparent; color: var(--gray-500);'}
+        cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+      ">
+        <span style="font-size: 16px;">📄</span> 제안서 요청
+        <span style="background: ${currentInquiryTab === 'proposal' ? '#8b5cf6' : 'var(--gray-300)'}; color: white; padding: 2px 8px; border-radius: 8px; font-size: 12px;">${proposalRequests.length}</span>
+        ${proposalPending > 0 ? `<span style="background: #dc2626; color: white; padding: 2px 6px; border-radius: 6px; font-size: 11px;">대기 ${proposalPending}</span>` : ''}
       </button>
     </div>
 
@@ -27003,7 +27027,75 @@ function renderSupplierInquiries() {
         ${renderTable(sellerInquiries, 'seller')}
       </div>
     </div>
+
+    <!-- 제안서 요청 탭 -->
+    <div id="inquiryContent-proposal" style="display: ${currentInquiryTab === 'proposal' ? 'block' : 'none'};">
+      <div style="background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+        <div style="padding: 20px; border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 18px;">📄</span>
+          <h2 style="font-size: 16px; font-weight: 700;">제안서 요청 목록</h2>
+          <span style="background: var(--gray-100); padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; color: var(--gray-600);">${proposalRequests.length}</span>
+        </div>
+        ${renderProposalTable(proposalRequests)}
+      </div>
+    </div>
   `;
+
+  // 제안서 요청 테이블 렌더링
+  function renderProposalTable(requests) {
+    if (requests.length === 0) {
+      return \`
+        <div style="text-align: center; padding: 48px; color: var(--gray-500);">
+          <div style="font-size: 48px; margin-bottom: 12px;">📄</div>
+          <p>아직 제안서 요청 내역이 없습니다.</p>
+        </div>
+      \`;
+    }
+
+    return \`
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">상태</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">유형</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">이름</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">연락처</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">요청일시</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">메모</th>
+            <th style="padding: 12px 16px; text-align: center; font-size: 13px; font-weight: 600; color: var(--gray-600);">액션</th>
+          </tr>
+        </thead>
+        <tbody>
+          \${requests.map(item => \`
+            <tr style="border-bottom: 1px solid var(--gray-100);">
+              <td style="padding: 14px 16px;">\${getStatusBadge(item.status)}</td>
+              <td style="padding: 14px 16px;">
+                <span style="background: \${item.type === 'supplier' ? '#dbeafe' : '#d1fae5'}; color: \${item.type === 'supplier' ? '#1d4ed8' : '#059669'}; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">\${item.type === 'supplier' ? '공급사' : '셀러'}</span>
+              </td>
+              <td style="padding: 14px 16px; font-weight: 500;">\${item.name || '-'}</td>
+              <td style="padding: 14px 16px;">
+                <a href="tel:\${(item.contact || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500;">\${item.contact || '-'}</a>
+              </td>
+              <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600);">\${formatDateStr(item.createdAt)}</td>
+              <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">\${item.note || '-'}</td>
+              <td style="padding: 14px 16px; text-align: center;">
+                <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                  \${item.status !== 'processing' ? \`
+                    <button onclick="updateInquiryStatus('proposalRequests', '\${item.id}', 'processing')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
+                  \` : ''}
+                  \${item.status !== 'completed' ? \`
+                    <button onclick="updateInquiryStatus('proposalRequests', '\${item.id}', 'completed')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">완료</button>
+                  \` : ''}
+                  <button onclick="openInquiryNoteModal('proposalRequests', '\${item.id}', '\${(item.note || '').replace(/'/g, "\\\\'")}')" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">메모</button>
+                  <button onclick="deleteInquiry('proposalRequests', '\${item.id}')" style="padding: 6px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">삭제</button>
+                </div>
+              </td>
+            </tr>
+          \`).join('')}
+        </tbody>
+      </table>
+    \`;
+  }
 }
 
 // 문의 탭 전환
@@ -27081,7 +27173,8 @@ function updateInquiryBadge() {
   if (!badge) return;
   const supplierPending = (state.supplierInquiries || []).filter(i => i.status === 'pending' || !i.status).length;
   const sellerPending = (state.sellerInquiries || []).filter(i => i.status === 'pending' || !i.status).length;
-  const totalPending = supplierPending + sellerPending;
+  const proposalPending = (state.proposalRequests || []).filter(i => i.status === 'pending' || !i.status).length;
+  const totalPending = supplierPending + sellerPending + proposalPending;
   if (totalPending > 0) {
     badge.textContent = totalPending;
     badge.style.display = 'inline-block';
