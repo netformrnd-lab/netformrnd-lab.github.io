@@ -753,6 +753,30 @@
             font-weight: 600;
         }
 
+        /* Accounting Toggle */
+        .accounting-toggle {
+            padding: 10px 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .accounting-toggle:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+        }
+
+        .accounting-toggle.active {
+            background: #fc9600;
+            border-color: #fc9600;
+            color: #191b30;
+        }
+
         @media (max-width: 768px) {
             .scenario-buttons {
                 flex-direction: column;
@@ -763,7 +787,7 @@
             }
 
             .scenario-detail {
-                grid-template-columns: 1fr;
+                grid-template-columns: 1fr 1fr;
             }
         }
     </style>
@@ -804,10 +828,16 @@
                     </button>
                 </div>
 
+                <!-- Accounting Method Toggle -->
+                <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 24px;">
+                    <button class="accounting-toggle active" data-method="net" onclick="setAccountingMethod('net')">순액법</button>
+                    <button class="accounting-toggle" data-method="gross" onclick="setAccountingMethod('gross')">총액법</button>
+                </div>
+
                 <!-- Summary Results -->
                 <div class="exec-summary-grid">
                     <div class="exec-summary-item">
-                        <div class="exec-summary-label">연간 총 매출</div>
+                        <div class="exec-summary-label" id="summaryRevenueLabel">연간 매출 (수수료)</div>
                         <div class="exec-summary-value" id="summaryRevenue">10억8천만원</div>
                     </div>
                     <div class="exec-summary-item">
@@ -837,6 +867,10 @@
                     <div class="scenario-detail-item">
                         <span class="scenario-detail-label">손익분기점</span>
                         <span class="scenario-detail-value" id="summaryBreakeven">4.7개월</span>
+                    </div>
+                    <div class="scenario-detail-item">
+                        <span class="scenario-detail-label">회계기준</span>
+                        <span class="scenario-detail-value" id="summaryAccountingMethod">순액법</span>
                     </div>
                 </div>
             </div>
@@ -876,17 +910,25 @@
                             <option value="50000">5만원</option>
                         </select>
                     </div>
+                    <div class="control-group">
+                        <label class="control-label">회계 기준</label>
+                        <select class="control-select" id="accountingMethod">
+                            <option value="net" selected>순액법 (수수료 매출)</option>
+                            <option value="gross">총액법 (거래액 매출)</option>
+                        </select>
+                    </div>
                 </div>
 
                 <div class="calc-result-box">
                     <div class="calc-result-header">
                         <div class="calc-result-title">시뮬레이션 결과</div>
                         <div class="calc-result-badge" id="resultBadge">3만원 × 5명 × 2건</div>
+                        <div class="calc-result-badge" id="accountingBadge" style="margin-left: 8px; background: #191b30; color: #fff;">순액법</div>
                     </div>
 
                     <div class="calc-result-grid">
                         <div class="calc-result-item">
-                            <div class="calc-result-label">연간 총 매출</div>
+                            <div class="calc-result-label" id="revenueLabel">연간 총 매출</div>
                             <div class="calc-result-value" id="annualRevenue">10억8천만원</div>
                         </div>
                         <div class="calc-result-item">
@@ -1903,6 +1945,9 @@
             observer.observe(bar);
         });
 
+        // Global State
+        let currentAccountingMethod = 'net'; // 'net' = 순액법, 'gross' = 총액법
+
         // Scenario Configuration
         const scenarios = {
             conservative: { sellers: 3, deals: 1, price: 30000, label: '소심하게' },
@@ -1927,22 +1972,22 @@
             return (amount < 0 ? '-' : '') + absAmount.toLocaleString() + '원';
         }
 
-        function calculateWithParams(sellerCount, dealCount, priceLevel) {
+        function calculateWithParams(sellerCount, dealCount, priceLevel, accountingMethod) {
             // 기본 계산
             const qtyPerDeal = 300;
             const monthlyQtyPerSeller = dealCount * qtyPerDeal;
-            const monthlyRevenuePerSeller = monthlyQtyPerSeller * priceLevel;
-            const annualRevenue = monthlyRevenuePerSeller * 12 * sellerCount;
+            const monthlyGrossRevenue = monthlyQtyPerSeller * priceLevel; // 총 거래액
+            const annualGrossRevenue = monthlyGrossRevenue * 12 * sellerCount;
 
             // 1-3개월 온보딩 기간 (1명당)
             const paymentFeeRate = 0.04;
             const onboardingGiftCard = 500000; // 50만원 상품권
-            const monthlyPaymentFee = monthlyRevenuePerSeller * paymentFeeRate;
+            const monthlyPaymentFee = monthlyGrossRevenue * paymentFeeRate;
             const onboardingLossPerSeller = (monthlyPaymentFee * 3) + onboardingGiftCard;
 
             // 4-12개월 정상 운영 (1명당)
             const commissionRate = 0.15;
-            const monthlyCommission = monthlyRevenuePerSeller * commissionRate;
+            const monthlyCommission = monthlyGrossRevenue * commissionRate; // 수수료 수익
             const monthlyNetProfit = monthlyCommission - monthlyPaymentFee;
 
             // 보너스 계산 (누적 판매량 기준)
@@ -1959,6 +2004,12 @@
             const totalAnnualProfit = annualProfitPerSeller * sellerCount;
             const totalOperatingProfit = operatingProfitPerSeller * sellerCount;
 
+            // 순액법 매출 (수수료 수익만)
+            const annualNetRevenue = monthlyCommission * 9 * sellerCount; // 4-12개월 수수료만
+
+            // 회계기준에 따른 매출 선택
+            const displayRevenue = accountingMethod === 'gross' ? annualGrossRevenue : annualNetRevenue;
+
             // ROI 계산
             const roi = Math.round((totalAnnualProfit / totalInitialInvestment) * 100);
 
@@ -1967,7 +2018,9 @@
             const breakevenMonths = 3 + (totalInitialInvestment / monthlyNetProfitTotal);
 
             return {
-                annualRevenue,
+                annualRevenue: displayRevenue,
+                annualGrossRevenue,
+                annualNetRevenue,
                 totalInitialInvestment,
                 totalAnnualProfit,
                 totalOperatingProfit,
@@ -1975,6 +2028,36 @@
                 breakevenMonths,
                 monthlyQtyPerSeller
             };
+        }
+
+        function setAccountingMethod(method) {
+            currentAccountingMethod = method;
+
+            // Update toggle buttons in summary
+            document.querySelectorAll('.accounting-toggle').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`.accounting-toggle[data-method="${method}"]`).classList.add('active');
+
+            // Update dropdown in calculator
+            document.getElementById('accountingMethod').value = method;
+
+            // Update labels
+            const methodLabel = method === 'gross' ? '총액법' : '순액법';
+            const revenueLabel = method === 'gross' ? '연간 거래액 (총액)' : '연간 매출 (수수료)';
+
+            document.getElementById('summaryRevenueLabel').textContent = revenueLabel;
+            document.getElementById('summaryAccountingMethod').textContent = methodLabel;
+            document.getElementById('revenueLabel').textContent = revenueLabel;
+            document.getElementById('accountingBadge').textContent = methodLabel;
+
+            // Recalculate with current scenario
+            const activeScenario = document.querySelector('.scenario-btn.active');
+            if (activeScenario) {
+                selectScenario(activeScenario.dataset.scenario);
+            } else {
+                calculateSimulation();
+            }
         }
 
         function selectScenario(scenarioKey) {
@@ -1986,7 +2069,7 @@
 
             // Get scenario config
             const scenario = scenarios[scenarioKey];
-            const result = calculateWithParams(scenario.sellers, scenario.deals, scenario.price);
+            const result = calculateWithParams(scenario.sellers, scenario.deals, scenario.price, currentAccountingMethod);
 
             // Update summary display
             document.getElementById('summaryRevenue').textContent = formatKoreanMoney(result.annualRevenue);
@@ -2008,8 +2091,23 @@
             const sellerCount = parseInt(document.getElementById('sellerCount').value);
             const dealCount = parseInt(document.getElementById('dealCount').value);
             const priceLevel = parseInt(document.getElementById('priceLevel').value);
+            const accountingMethod = document.getElementById('accountingMethod').value;
 
-            const result = calculateWithParams(sellerCount, dealCount, priceLevel);
+            // Sync accounting method with global state
+            if (accountingMethod !== currentAccountingMethod) {
+                currentAccountingMethod = accountingMethod;
+                document.querySelectorAll('.accounting-toggle').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.method === accountingMethod);
+                });
+                const methodLabel = accountingMethod === 'gross' ? '총액법' : '순액법';
+                const revenueLabel = accountingMethod === 'gross' ? '연간 거래액 (총액)' : '연간 매출 (수수료)';
+                document.getElementById('summaryRevenueLabel').textContent = revenueLabel;
+                document.getElementById('summaryAccountingMethod').textContent = methodLabel;
+                document.getElementById('revenueLabel').textContent = revenueLabel;
+                document.getElementById('accountingBadge').textContent = methodLabel;
+            }
+
+            const result = calculateWithParams(sellerCount, dealCount, priceLevel, currentAccountingMethod);
 
             // 가격 표시 변환
             const priceName = priceLevel === 20000 ? '2만원' : priceLevel === 30000 ? '3만원' : '5만원';
@@ -2025,6 +2123,12 @@
             document.getElementById('onboardingProfit').textContent = formatKoreanMoney(-result.totalInitialInvestment);
             document.getElementById('operatingProfit').textContent = formatKoreanMoney(result.totalOperatingProfit);
             document.getElementById('breakeven').textContent = result.breakevenMonths.toFixed(1) + '개월';
+
+            // Update summary too
+            document.getElementById('summaryRevenue').textContent = formatKoreanMoney(result.annualRevenue);
+            document.getElementById('summaryInvestment').textContent = formatKoreanMoney(-result.totalInitialInvestment);
+            document.getElementById('summaryProfit').textContent = formatKoreanMoney(result.totalAnnualProfit);
+            document.getElementById('summaryRoi').textContent = result.roi + '%';
 
             // 색상 업데이트
             const profitEl = document.getElementById('annualProfit');
@@ -2051,6 +2155,7 @@
         document.getElementById('sellerCount').addEventListener('change', calculateSimulation);
         document.getElementById('dealCount').addEventListener('change', calculateSimulation);
         document.getElementById('priceLevel').addEventListener('change', calculateSimulation);
+        document.getElementById('accountingMethod').addEventListener('change', calculateSimulation);
 
         // 초기 시나리오 선택 (기본)
         selectScenario('standard');
