@@ -1055,14 +1055,21 @@
           </div>
         </div>
 
-        <!-- 최근 사용 -->
-        <div id="okrRecentSection" class="card" style="margin-bottom: 20px; display: none;">
+        <!-- 즐겨찾기 고정 영역 -->
+        <div id="okrFavoritesSection" class="card" style="margin-bottom: 20px; display: none; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border: 2px solid var(--warning);">
           <div style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-            <span>🕐</span> 최근 사용
+            <span>⭐</span> 즐겨찾기
           </div>
-          <div id="okrRecentButtons" style="display: flex; flex-wrap: wrap; gap: 10px;">
+          <div id="okrFavoritesButtons" style="display: flex; flex-wrap: wrap; gap: 10px;">
             <!-- 동적으로 렌더링 -->
           </div>
+        </div>
+
+        <!-- Undo 알림 -->
+        <div id="okrUndoNotification" style="display: none; position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: var(--gray-800); color: white; padding: 12px 24px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 1000; display: none; align-items: center; gap: 16px;">
+          <span id="okrUndoMessage">기록되었습니다</span>
+          <button onclick="undoOkrWork()" style="background: var(--warning); color: var(--gray-800); border: none; padding: 6px 16px; border-radius: 8px; font-weight: 700; cursor: pointer; font-family: inherit;">실행취소</button>
+          <button onclick="hideUndoNotification()" style="background: transparent; color: var(--gray-400); border: none; font-size: 18px; cursor: pointer;">✕</button>
         </div>
 
         <!-- 업무 기록 버튼들 -->
@@ -1434,6 +1441,32 @@
   <!-- 토스트 -->
   <div id="toast"></div>
 
+  <!-- 운영센터 활동 내역 퀵배너 (우측 하단) -->
+  <div id="opsCenterQuickBanner" style="position: fixed; bottom: 24px; right: 24px; z-index: 900; display: none;">
+    <!-- 미니 배너 (접힌 상태) -->
+    <div id="opsBannerMini" onclick="toggleOpsBanner(true)" style="background: linear-gradient(135deg, #1E40AF, #3B82F6); color: white; padding: 12px 16px; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4); display: flex; align-items: center; gap: 10px; transition: all 0.3s;">
+      <span style="font-size: 20px;">🏢</span>
+      <span style="font-weight: 600; font-size: 13px;">운영센터</span>
+      <span id="opsBadge" style="background: var(--danger); padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; display: none;">0</span>
+    </div>
+    <!-- 확장 패널 -->
+    <div id="opsBannerExpanded" style="display: none; background: white; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.15); width: 320px; max-height: 400px; overflow: hidden;">
+      <div style="background: linear-gradient(135deg, #1E40AF, #3B82F6); color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 20px;">🏢</span>
+          <span style="font-weight: 700;">운영센터 활동</span>
+        </div>
+        <button onclick="toggleOpsBanner(false)" style="background: transparent; border: none; color: white; font-size: 18px; cursor: pointer;">✕</button>
+      </div>
+      <div id="opsBannerContent" style="padding: 16px; max-height: 300px; overflow-y: auto;">
+        <!-- 동적 렌더링 -->
+      </div>
+      <div style="padding: 12px 16px; border-top: 1px solid var(--gray-100); text-align: center;">
+        <a href="../operations/" style="color: var(--primary); font-size: 13px; font-weight: 600; text-decoration: none;">운영센터로 이동 →</a>
+      </div>
+    </div>
+  </div>
+
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -1732,6 +1765,14 @@
       if (tabEl) tabEl.classList.add('active');
 
       render();
+
+      // OKR 탭 여부 확인 후 운영센터 배너 표시/숨김
+      const isOkrTab = tabId.startsWith('okr-');
+      if (isOkrTab) {
+        showOpsCenterBanner();
+      } else {
+        hideOpsCenterBanner();
+      }
 
       // 탭별 렌더링
       switch(tabId) {
@@ -10369,7 +10410,7 @@
       dailyLogs: [],
       todayLogs: [],
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
-      recentUsed: JSON.parse(localStorage.getItem('okrRecentUsed') || '[]'),
+      expandedKRs: [],
       searchQuery: '',
       showFavoritesOnly: false
     };
@@ -10546,6 +10587,19 @@
       const oRate = calcOkrObjectiveRate();
       const krRates = okrState.keyResults.map(kr => ({ ...kr, rate: calcOkrKRRate(kr.id) }));
 
+      // KPI 현황 데이터 준비
+      const kpiStatusData = okrState.kpis.map(kpi => {
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
+        const rate = calcOkrKPIRate(kpi.id);
+        const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+        const currentValue = lagsForKPI.reduce((sum, lag) => {
+          const lagLogs = okrState.dailyLogs.filter(log => log.laggingIndicatorId === lag.id);
+          return sum + lagLogs.reduce((s, l) => s + (l.resultValue || 0), 0);
+        }, 0);
+        return { ...kpi, kr, krIdx, rate, currentValue };
+      });
+
       container.innerHTML = `
         <div class="card" style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 28px; margin-bottom: 20px;">
           <div style="font-size: 18px; font-weight: 700; margin-bottom: 8px; line-height: 1.4;">${okrState.objective.name}</div>
@@ -10555,36 +10609,88 @@
             <div style="height: 100%; width: ${Math.min(oRate, 100)}%; background: white; border-radius: 6px; transition: width 0.5s;"></div>
           </div>
         </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
-          <div class="card">
-            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📈 KR 현황</div>
-            <div style="display: flex; flex-direction: column; gap: 16px;">
-              ${krRates.map((kr, idx) => `
-                <div style="padding: 16px; border-radius: 12px; background: var(--gray-50); cursor: pointer;" onclick="switchTab('okr-record')">
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">
-                      <span>${okrIcons[idx] || '📊'}</span> ${kr.name}
-                    </div>
-                    <span style="padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; background: ${okrColors[idx]}20; color: ${okrColors[idx]}">${kr.rate}%</span>
+
+        <!-- KR 현황 -->
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📈 KR 현황</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+            ${krRates.map((kr, idx) => `
+              <div style="padding: 16px; border-radius: 12px; background: var(--gray-50); cursor: pointer; border-left: 4px solid ${okrColors[idx]};" onclick="switchTab('okr-record')">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                  <div style="font-size: 13px; font-weight: 600; color: var(--gray-800); display: flex; align-items: center; gap: 6px;">
+                    <span>${okrIcons[idx] || '📊'}</span> ${kr.name}
                   </div>
-                  <div style="height: 8px; background: var(--gray-200); border-radius: 4px; overflow: hidden;">
-                    <div style="height: 100%; width: ${Math.min(kr.rate, 100)}%; background: ${okrColors[idx]}; border-radius: 4px; transition: width 0.5s;"></div>
-                  </div>
+                  <span style="padding: 3px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; background: ${okrColors[idx]}20; color: ${okrColors[idx]}">${kr.rate}%</span>
                 </div>
-              `).join('')}
+                <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
+                  <div style="height: 100%; width: ${Math.min(kr.rate, 100)}%; background: ${okrColors[idx]}; border-radius: 3px; transition: width 0.5s;"></div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <!-- KPI 현황 (신규 추가) -->
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📊 KPI 현황</div>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <thead>
+                <tr style="background: var(--gray-50);">
+                  <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">KPI</th>
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">KR</th>
+                  <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">현재</th>
+                  <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">목표</th>
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">달성률</th>
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">진행</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${kpiStatusData.length > 0 ? kpiStatusData.map(kpi => {
+                  const statusColor = kpi.rate >= 80 ? 'var(--success)' : kpi.rate >= 50 ? 'var(--warning)' : 'var(--danger)';
+                  return `
+                    <tr style="border-bottom: 1px solid var(--gray-100);">
+                      <td style="padding: 12px; font-weight: 500; color: var(--gray-800);">${kpi.name}</td>
+                      <td style="padding: 12px; text-align: center;">
+                        <span style="padding: 2px 8px; border-radius: 12px; font-size: 11px; background: ${okrColors[kpi.krIdx]}20; color: ${okrColors[kpi.krIdx]};">${kpi.kr?.name || '-'}</span>
+                      </td>
+                      <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">${kpi.currentValue.toLocaleString()}</td>
+                      <td style="padding: 12px; text-align: right; color: var(--gray-500);">${(kpi.targetValue || 0).toLocaleString()} ${kpi.unit || ''}</td>
+                      <td style="padding: 12px; text-align: center;">
+                        <span style="font-weight: 700; color: ${statusColor};">${kpi.rate}%</span>
+                      </td>
+                      <td style="padding: 12px; width: 100px;">
+                        <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
+                          <div style="height: 100%; width: ${Math.min(kpi.rate, 100)}%; background: ${statusColor}; border-radius: 3px;"></div>
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('') : '<tr><td colspan="6" style="padding: 30px; text-align: center; color: var(--gray-400);">KPI가 없습니다</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 오늘 내 업무 기여도 -->
+        <div class="card">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">🔄 오늘 내 업무 기여도</div>
+          ${okrState.todayLogs.length > 0 ? `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;">
+              ${okrState.todayLogs.slice(0, 8).map(log => {
+                const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                const kpi = okrState.kpis.find(k => k.id === log.kpiId);
+                const kr = okrState.keyResults.find(k => k.id === log.krId);
+                const krIdx = okrState.keyResults.findIndex(k => k.id === log.krId);
+                return `<div style="display: flex; align-items: center; gap: 8px; padding: 12px; background: var(--gray-50); border-radius: 8px; font-size: 13px; border-left: 3px solid ${okrColors[krIdx] || 'var(--gray-300)'};">
+                  <span style="font-size: 16px;">${getOkrLagIcon(lag?.name || '')}</span>
+                  <span style="flex: 1;">${lag?.name || '업무'}</span>
+                  <span style="font-weight: 700; color: var(--success);">+${log.resultValue}</span>
+                </div>`;
+              }).join('')}
             </div>
-          </div>
-          <div class="card">
-            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">🔄 오늘 내 업무 기여도</div>
-            ${okrState.todayLogs.length > 0 ? okrState.todayLogs.slice(0, 5).map(log => {
-              const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
-              const kpi = okrState.kpis.find(k => k.id === log.kpiId);
-              const kr = okrState.keyResults.find(k => k.id === log.krId);
-              return `<div style="display: flex; align-items: center; gap: 8px; padding: 12px; background: var(--gray-50); border-radius: 8px; margin-bottom: 8px; font-size: 13px;">
-                <span>${lag?.name || '업무'}</span><span style="color: var(--gray-400);">→</span><span style="font-weight: 600; color: var(--success);">+${log.resultValue}</span><span style="color: var(--gray-400);">→</span><span>${kr?.name || 'KR'}</span>
-              </div>`;
-            }).join('') : '<div style="color: var(--gray-400); font-size: 13px; padding: 20px;">오늘 기록된 업무가 없습니다</div>'}
-          </div>
+            ${okrState.todayLogs.length > 8 ? `<div style="text-align: center; margin-top: 12px; color: var(--gray-500); font-size: 12px;">외 ${okrState.todayLogs.length - 8}건 더보기</div>` : ''}
+          ` : '<div style="color: var(--gray-400); font-size: 13px; padding: 30px; text-align: center;">오늘 기록된 업무가 없습니다<br><span style="font-size: 12px;">업무기록 탭에서 기록해보세요</span></div>'}
         </div>
       `;
     }
@@ -10603,16 +10709,21 @@
         return;
       }
 
-      // 최근 사용 버튼
-      updateOkrRecentSection();
+      // 즐겨찾기 상단 고정 영역 렌더링
+      updateOkrFavoritesSection();
 
-      // KR별 업무 기록 버튼
+      // KR별 업무 기록 버튼 (접힘 처리)
       let html = '';
       okrState.keyResults.forEach((kr, krIdx) => {
         const kpisForKR = okrState.kpis.filter(k => k.keyResultId === kr.id);
         const krRate = calcOkrKRRate(kr.id);
 
-        let buttonsHtml = '';
+        // 즐겨찾기된 항목과 나머지 분리
+        let favoriteButtonsHtml = '';
+        let otherButtonsHtml = '';
+        let favoriteCount = 0;
+        let otherCount = 0;
+
         kpisForKR.forEach(kpi => {
           const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
           lagsForKPI.forEach(lag => {
@@ -10623,7 +10734,7 @@
             const matchesFavorite = !okrState.showFavoritesOnly || isFavorite;
 
             if (matchesSearch && matchesFavorite) {
-              buttonsHtml += `
+              const btnHtml = `
                 <div class="okr-record-btn" onclick="recordOkrWork('${kr.id}', '${kpi.id}', '${lag.id}')" style="background: white; border: 2px solid var(--gray-200); border-radius: 12px; padding: 16px 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 120px; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'; this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'" onmouseout="this.style.borderColor='var(--gray-200)'; this.style.transform='none'; this.style.boxShadow='none'">
                   <div style="position: absolute; top: 8px; right: 8px; cursor: pointer; font-size: 16px; opacity: ${isFavorite ? 1 : 0.3};" onclick="event.stopPropagation(); toggleOkrFavorite('${lag.id}')">⭐</div>
                   <div style="font-size: 28px;">${getOkrLagIcon(lag.name)}</div>
@@ -10632,20 +10743,44 @@
                   <div style="background: ${okrColors[krIdx]}; color: white; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 700; margin-top: 4px;">+1</div>
                 </div>
               `;
+              if (isFavorite) {
+                favoriteButtonsHtml += btnHtml;
+                favoriteCount++;
+              } else {
+                otherButtonsHtml += btnHtml;
+                otherCount++;
+              }
             }
           });
         });
 
-        if (buttonsHtml || !okrState.searchQuery) {
+        const krCollapseId = `kr-collapse-${krIdx}`;
+        const isExpanded = okrState.expandedKRs && okrState.expandedKRs.includes(kr.id);
+
+        if (favoriteButtonsHtml || otherButtonsHtml || !okrState.searchQuery) {
           html += `
             <div class="card" style="margin-bottom: 20px;">
               <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
                 <span>${okrIcons[krIdx] || '📊'}</span> ${kr.name}
                 <span style="padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; color: white; background: ${okrColors[krIdx]}">${krRate}%</span>
               </div>
-              <div style="display: flex; flex-wrap: wrap; gap: 12px;">
-                ${buttonsHtml || '<div style="color: var(--gray-400); font-size: 13px;">검색 결과 없음</div>'}
-              </div>
+              ${favoriteButtonsHtml ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: ${otherCount > 0 ? '16px' : '0'};">
+                  ${favoriteButtonsHtml}
+                </div>
+              ` : ''}
+              ${otherCount > 0 ? `
+                <div style="border-top: 1px dashed var(--gray-200); padding-top: 12px;">
+                  <div onclick="toggleKRExpand('${kr.id}')" style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--gray-500); font-size: 13px; margin-bottom: ${isExpanded ? '12px' : '0'};">
+                    <span style="transform: rotate(${isExpanded ? '90deg' : '0deg'}); transition: transform 0.2s;">▶</span>
+                    기타 항목 (${otherCount}개)
+                  </div>
+                  <div id="${krCollapseId}" style="display: ${isExpanded ? 'flex' : 'none'}; flex-wrap: wrap; gap: 12px;">
+                    ${otherButtonsHtml}
+                  </div>
+                </div>
+              ` : ''}
+              ${!favoriteButtonsHtml && !otherButtonsHtml ? '<div style="color: var(--gray-400); font-size: 13px;">검색 결과 없음</div>' : ''}
             </div>
           `;
         }
@@ -10657,32 +10792,49 @@
       updateOkrTodaySummary();
     }
 
-    // 최근 사용 섹션 업데이트
-    function updateOkrRecentSection() {
-      const section = document.getElementById('okrRecentSection');
-      const container = document.getElementById('okrRecentButtons');
+    // 즐겨찾기 상단 고정 섹션 업데이트
+    function updateOkrFavoritesSection() {
+      const section = document.getElementById('okrFavoritesSection');
+      const container = document.getElementById('okrFavoritesButtons');
       if (!section || !container) return;
 
-      if (okrState.recentUsed.length === 0) {
+      if (okrState.favorites.length === 0) {
+        section.style.display = 'none';
+        return;
+      }
+
+      const favoriteLags = okrState.laggingIndicators.filter(l => okrState.favorites.includes(l.id));
+      if (favoriteLags.length === 0) {
         section.style.display = 'none';
         return;
       }
 
       section.style.display = 'block';
-      container.innerHTML = okrState.recentUsed.slice(0, 5).map(lagId => {
-        const lag = okrState.laggingIndicators.find(l => l.id === lagId);
-        if (!lag) return '';
+      container.innerHTML = favoriteLags.map(lag => {
         const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
         const kr = okrState.keyResults.find(k => k.id === kpi?.keyResultId);
         const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
         return `
-          <div onclick="recordOkrWork('${kr?.id}', '${kpi?.id}', '${lag.id}')" style="background: white; border: 2px solid ${okrColors[krIdx] || 'var(--gray-200)'}; border-radius: 10px; padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+          <div onclick="recordOkrWork('${kr?.id}', '${kpi?.id}', '${lag.id}')" style="background: white; border: 2px solid ${okrColors[krIdx] || 'var(--gray-200)'}; border-radius: 10px; padding: 10px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s; box-shadow: 0 2px 8px rgba(0,0,0,0.08);" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'">
             <span style="font-size: 20px;">${getOkrLagIcon(lag.name)}</span>
             <span style="font-size: 13px; font-weight: 600;">${lag.name}</span>
+            <span style="font-size: 11px; color: var(--gray-500);">${lag.version}버전</span>
             <span style="background: ${okrColors[krIdx] || 'var(--primary)'}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700;">+1</span>
           </div>
         `;
       }).join('');
+    }
+
+    // KR 영역 접기/펼치기 토글
+    function toggleKRExpand(krId) {
+      if (!okrState.expandedKRs) okrState.expandedKRs = [];
+      const idx = okrState.expandedKRs.indexOf(krId);
+      if (idx === -1) {
+        okrState.expandedKRs.push(krId);
+      } else {
+        okrState.expandedKRs.splice(idx, 1);
+      }
+      renderOkrRecord();
     }
 
     // 오늘 기록 요약 업데이트
@@ -10741,6 +10893,10 @@
       renderOkrRecord();
     }
 
+    // 마지막 기록 (Undo용)
+    let lastOkrLog = null;
+    let undoTimeout = null;
+
     // 업무 기록
     async function recordOkrWork(krId, kpiId, lagId) {
       try {
@@ -10753,24 +10909,222 @@
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
-        await db.collection('okr_dailyLogs').add(log);
+        const docRef = await db.collection('okr_dailyLogs').add(log);
+        const logWithId = { ...log, id: docRef.id };
 
         // 로컬 상태 업데이트
-        okrState.dailyLogs.unshift({ ...log, id: 'temp-' + Date.now() });
+        okrState.dailyLogs.unshift(logWithId);
         okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
 
-        // 최근 사용 업데이트
-        okrState.recentUsed = [lagId, ...okrState.recentUsed.filter(id => id !== lagId)].slice(0, 10);
-        localStorage.setItem('okrRecentUsed', JSON.stringify(okrState.recentUsed));
+        // Undo를 위해 마지막 기록 저장
+        lastOkrLog = logWithId;
 
         renderOkrDashboard();
         renderOkrRecord();
 
-        showToast('기록되었습니다!', 'success');
+        // Undo 알림 표시
+        const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+        showUndoNotification(lag?.name || '업무');
       } catch (e) {
         console.error('기록 오류:', e);
         showToast('기록 실패', 'error');
       }
+    }
+
+    // Undo 알림 표시
+    function showUndoNotification(itemName) {
+      const notification = document.getElementById('okrUndoNotification');
+      const message = document.getElementById('okrUndoMessage');
+      if (!notification || !message) return;
+
+      message.textContent = `"${itemName}" 기록됨`;
+      notification.style.display = 'flex';
+
+      // 5초 후 자동 숨김
+      if (undoTimeout) clearTimeout(undoTimeout);
+      undoTimeout = setTimeout(() => {
+        hideUndoNotification();
+      }, 5000);
+    }
+
+    // Undo 알림 숨기기
+    function hideUndoNotification() {
+      const notification = document.getElementById('okrUndoNotification');
+      if (notification) notification.style.display = 'none';
+      if (undoTimeout) {
+        clearTimeout(undoTimeout);
+        undoTimeout = null;
+      }
+    }
+
+    // 업무 기록 실행 취소
+    async function undoOkrWork() {
+      if (!lastOkrLog || !lastOkrLog.id) {
+        showToast('취소할 기록이 없습니다', 'error');
+        return;
+      }
+
+      try {
+        // Firestore에서 삭제
+        await db.collection('okr_dailyLogs').doc(lastOkrLog.id).delete();
+
+        // 로컬 상태에서 제거
+        okrState.dailyLogs = okrState.dailyLogs.filter(l => l.id !== lastOkrLog.id);
+        okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+
+        const lag = okrState.laggingIndicators.find(l => l.id === lastOkrLog.laggingIndicatorId);
+        showToast(`"${lag?.name || '업무'}" 기록이 취소되었습니다`, 'success');
+
+        lastOkrLog = null;
+        hideUndoNotification();
+
+        renderOkrDashboard();
+        renderOkrRecord();
+      } catch (e) {
+        console.error('Undo 오류:', e);
+        showToast('취소 실패', 'error');
+      }
+    }
+
+    // ========================================
+    // 운영센터 활동 내역 퀵배너
+    // ========================================
+    let opsCenterActivities = [];
+
+    // 운영센터 배너 표시 (OKR 탭에서만)
+    function showOpsCenterBanner() {
+      const banner = document.getElementById('opsCenterQuickBanner');
+      if (banner) banner.style.display = 'block';
+      loadOpsCenterActivities();
+    }
+
+    // 운영센터 배너 숨기기
+    function hideOpsCenterBanner() {
+      const banner = document.getElementById('opsCenterQuickBanner');
+      if (banner) banner.style.display = 'none';
+    }
+
+    // 운영센터 배너 펼침/접기 토글
+    function toggleOpsBanner(expand) {
+      const mini = document.getElementById('opsBannerMini');
+      const expanded = document.getElementById('opsBannerExpanded');
+      if (!mini || !expanded) return;
+
+      if (expand) {
+        mini.style.display = 'none';
+        expanded.style.display = 'block';
+        renderOpsBannerContent();
+      } else {
+        mini.style.display = 'flex';
+        expanded.style.display = 'none';
+      }
+    }
+
+    // 운영센터 활동 내역 로드 (최근 7일)
+    async function loadOpsCenterActivities() {
+      try {
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+
+        // 운영센터 활동 로그 컬렉션에서 로드 (ops_activity_logs)
+        const snapshot = await db.collection('ops_activity_logs')
+          .where('date', '>=', sevenDaysAgoStr)
+          .orderBy('date', 'desc')
+          .orderBy('createdAt', 'desc')
+          .limit(20)
+          .get();
+
+        opsCenterActivities = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+
+        // 배지 업데이트 (오늘 활동 수)
+        const todayActivities = opsCenterActivities.filter(a => a.date === okrToday);
+        const badge = document.getElementById('opsBadge');
+        if (badge) {
+          if (todayActivities.length > 0) {
+            badge.textContent = todayActivities.length;
+            badge.style.display = 'inline';
+          } else {
+            badge.style.display = 'none';
+          }
+        }
+      } catch (e) {
+        console.log('운영센터 활동 로드:', e.message);
+        // 컬렉션이 없으면 빈 배열 유지
+        opsCenterActivities = [];
+      }
+    }
+
+    // 운영센터 배너 내용 렌더링
+    function renderOpsBannerContent() {
+      const container = document.getElementById('opsBannerContent');
+      if (!container) return;
+
+      if (opsCenterActivities.length === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 30px 20px;">
+            <div style="font-size: 40px; margin-bottom: 12px;">📋</div>
+            <div style="color: var(--gray-500); font-size: 13px;">최근 7일간 운영센터 활동이 없습니다</div>
+            <div style="color: var(--gray-400); font-size: 12px; margin-top: 8px;">운영센터에서 작업을 기록하면 여기에 표시됩니다</div>
+          </div>
+        `;
+        return;
+      }
+
+      // 날짜별로 그룹화
+      const grouped = {};
+      opsCenterActivities.forEach(activity => {
+        const date = activity.date || '날짜 없음';
+        if (!grouped[date]) grouped[date] = [];
+        grouped[date].push(activity);
+      });
+
+      const today = okrToday;
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      container.innerHTML = Object.entries(grouped).map(([date, activities]) => {
+        let dateLabel = date;
+        if (date === today) dateLabel = '오늘';
+        else if (date === yesterdayStr) dateLabel = '어제';
+        else dateLabel = date.slice(5).replace('-', '/');
+
+        return `
+          <div style="margin-bottom: 16px;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--gray-400); margin-bottom: 8px; text-transform: uppercase;">${dateLabel}</div>
+            ${activities.map(a => `
+              <div style="display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;">
+                <span style="font-size: 16px;">${getOpsActivityIcon(a.type)}</span>
+                <div style="flex: 1;">
+                  <div style="font-size: 13px; font-weight: 600; color: var(--gray-700);">${a.title || a.type || '활동'}</div>
+                  <div style="font-size: 11px; color: var(--gray-500);">${a.description || ''}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 운영센터 활동 아이콘
+    function getOpsActivityIcon(type) {
+      const icons = {
+        'deal': '💰',
+        'meeting': '🤝',
+        'call': '📞',
+        'email': '📧',
+        'report': '📊',
+        'task': '✅',
+        'visit': '🚗',
+        'contract': '📝',
+        'support': '🛠️',
+        'inquiry': '❓'
+      };
+      return icons[type] || '📌';
     }
 
     // OKR 목표설정 렌더링
