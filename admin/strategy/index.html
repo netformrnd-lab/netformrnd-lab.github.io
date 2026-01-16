@@ -11230,9 +11230,11 @@
                   </div>
                   <span style="padding: 3px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; background: ${okrColors[idx]}20; color: ${okrColors[idx]}">${kr.rate}%</span>
                 </div>
-                ${kr.assignedNames && kr.assignedNames.length > 0 ? `
+                ${kr.mainAssigneeName || (kr.subAssigneeNames && kr.subAssigneeNames.length > 0) ? `
                   <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 10px;">
-                    👤 ${kr.assignedNames.join(', ')}
+                    ${kr.mainAssigneeName ? `⭐ ${kr.mainAssigneeName}` : ''}
+                    ${kr.mainAssigneeName && kr.subAssigneeNames && kr.subAssigneeNames.length > 0 ? ' · ' : ''}
+                    ${kr.subAssigneeNames && kr.subAssigneeNames.length > 0 ? `📌 ${kr.subAssigneeNames.join(', ')}` : ''}
                   </div>
                 ` : ''}
                 <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
@@ -11583,9 +11585,14 @@
                   ${okrState.keyResults.map((kr, idx) => `
                     <th style="padding: 12px; text-align: center; font-weight: 600; color: ${okrColors[idx]}; border-bottom: 2px solid var(--gray-200); min-width: 80px;">
                       <div>${kr.name}</div>
-                      ${kr.assignedNames && kr.assignedNames.length > 0 ? `
+                      ${kr.mainAssigneeName ? `
                         <div style="font-size: 10px; font-weight: 400; color: var(--gray-500); margin-top: 4px;">
-                          👤 ${kr.assignedNames.join(', ')}
+                          ⭐ ${kr.mainAssigneeName}
+                        </div>
+                      ` : ''}
+                      ${kr.subAssigneeNames && kr.subAssigneeNames.length > 0 ? `
+                        <div style="font-size: 10px; font-weight: 400; color: var(--gray-500); margin-top: 2px;">
+                          📌 ${kr.subAssigneeNames.join(', ')}
                         </div>
                       ` : ''}
                     </th>
@@ -11604,14 +11611,17 @@
                     <td style="padding: 12px; text-align: center; color: var(--gray-700);">${member.activityCount}건</td>
                     <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--success);">${formatAmountWithSummary(member.resultValue, '원')}</td>
                     ${member.krContributions.map(krc => {
-                      const isAssigned = krc.kr.assignedTo && krc.kr.assignedTo.includes(member.id);
+                      const isMain = krc.kr.mainAssignee === member.id;
+                      const isSub = krc.kr.subAssignees && krc.kr.subAssignees.includes(member.id);
+                      const isAssigned = isMain || isSub;
+                      const icon = isMain ? '⭐ ' : isSub ? '📌 ' : '';
                       return `
                       <td style="padding: 12px; text-align: center; ${isAssigned ? `background: ${okrColors[krc.krIdx]}08;` : ''}">
                         ${krc.count > 0 ? `
                           <span style="display: inline-block; padding: 4px 10px; background: ${okrColors[krc.krIdx]}15; color: ${okrColors[krc.krIdx]}; border-radius: 12px; font-size: 12px; font-weight: 600;">
-                            ${isAssigned ? '⭐ ' : ''}${krc.count}건
+                            ${icon}${krc.count}건
                           </span>
-                        ` : isAssigned ? `<span style="color: var(--gray-400);">⭐ -</span>` : '<span style="color: var(--gray-300);">-</span>'}
+                        ` : isAssigned ? `<span style="color: var(--gray-400);">${icon}-</span>` : '<span style="color: var(--gray-300);">-</span>'}
                       </td>
                     `;
                     }).join('')}
@@ -13827,7 +13837,8 @@
     function openOkrKRModal(krId = null) {
       const kr = krId ? okrState.keyResults.find(k => k.id === krId) : null;
       const teamMembers = (state.teamMembers || []).filter(m => m.role !== 'ceo' && m.role !== 'guest');
-      const assignedTo = kr?.assignedTo || [];
+      const mainAssignee = kr?.mainAssignee || '';
+      const subAssignees = kr?.subAssignees || [];
 
       showModal(`
         <div style="padding: 24px; max-width: 600px;">
@@ -13846,20 +13857,39 @@
               <input type="text" id="okrKRUnit" value="${kr?.unit || ''}" placeholder="원" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; font-family: inherit;">
             </div>
           </div>
-          <div style="margin-bottom: 20px;">
-            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">👤 주 담당 팀원 (복수 선택 가능)</label>
+
+          <!-- 주 담당 -->
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">⭐ 주 담당 팀원 (1명 선택)</label>
             <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">
-              모든 팀원이 이 KR에 기록할 수 있지만, 선택된 팀원이 집중 담당합니다
+              이 KR의 주요 책임자입니다
             </div>
             <div style="background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto;">
               ${teamMembers.length > 0 ? teamMembers.map(member => `
                 <label style="display: flex; align-items: center; padding: 8px; cursor: pointer; border-radius: 6px; transition: background 0.15s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
-                  <input type="checkbox" class="kr-assigned-member" value="${member.id}" data-name="${member.name}" ${assignedTo.includes(member.id) ? 'checked' : ''} style="width: 18px; height: 18px; margin-right: 10px; cursor: pointer;">
+                  <input type="radio" name="kr-main-assignee" class="kr-main-assignee" value="${member.id}" data-name="${member.name}" ${mainAssignee === member.id ? 'checked' : ''} style="width: 18px; height: 18px; margin-right: 10px; cursor: pointer;">
                   <span style="font-size: 14px; color: var(--gray-800);">${member.name}</span>
                 </label>
               `).join('') : '<div style="text-align: center; color: var(--gray-400); padding: 20px;">등록된 팀원이 없습니다</div>'}
             </div>
           </div>
+
+          <!-- 서브 담당 -->
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📌 서브 담당 팀원 (복수 선택 가능)</label>
+            <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">
+              주 담당을 지원하는 팀원들입니다
+            </div>
+            <div style="background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto;">
+              ${teamMembers.length > 0 ? teamMembers.map(member => `
+                <label style="display: flex; align-items: center; padding: 8px; cursor: pointer; border-radius: 6px; transition: background 0.15s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
+                  <input type="checkbox" class="kr-sub-assignee" value="${member.id}" data-name="${member.name}" ${subAssignees.includes(member.id) ? 'checked' : ''} style="width: 18px; height: 18px; margin-right: 10px; cursor: pointer;">
+                  <span style="font-size: 14px; color: var(--gray-800);">${member.name}</span>
+                </label>
+              `).join('') : '<div style="text-align: center; color: var(--gray-400); padding: 20px;">등록된 팀원이 없습니다</div>'}
+            </div>
+          </div>
+
           <div style="display: flex; justify-content: ${kr ? 'space-between' : 'flex-end'}; gap: 12px;">
             ${kr ? `<button class="btn" style="background: var(--danger-light, #FEE2E2); color: var(--danger);" onclick="deleteOkrKR('${kr.id}')">삭제</button>` : ''}
             <div style="display: flex; gap: 12px;">
@@ -13875,17 +13905,24 @@
       const name = document.getElementById('okrKRName')?.value.trim();
       if (!name) { showToast('KR명을 입력해주세요', 'error'); return; }
 
-      // 선택된 담당 팀원 수집
-      const checkboxes = document.querySelectorAll('.kr-assigned-member:checked');
-      const assignedTo = Array.from(checkboxes).map(cb => cb.value);
-      const assignedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
+      // 주 담당 팀원 수집
+      const mainRadio = document.querySelector('.kr-main-assignee:checked');
+      const mainAssignee = mainRadio ? mainRadio.value : '';
+      const mainAssigneeName = mainRadio ? mainRadio.dataset.name : '';
+
+      // 서브 담당 팀원 수집
+      const subCheckboxes = document.querySelectorAll('.kr-sub-assignee:checked');
+      const subAssignees = Array.from(subCheckboxes).map(cb => cb.value);
+      const subAssigneeNames = Array.from(subCheckboxes).map(cb => cb.dataset.name);
 
       const data = {
         objectiveId: okrState.objective.id, name,
         targetValue: parseFloat(document.getElementById('okrKRTargetValue')?.value) || 0,
         unit: document.getElementById('okrKRUnit')?.value.trim() || '',
-        assignedTo: assignedTo,
-        assignedNames: assignedNames,
+        mainAssignee: mainAssignee,
+        mainAssigneeName: mainAssigneeName,
+        subAssignees: subAssignees,
+        subAssigneeNames: subAssigneeNames,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       try {
