@@ -10768,7 +10768,11 @@
         period: 'all',      // all, thisWeek, thisMonth, custom
         krId: 'all',        // all 또는 특정 KR ID
         status: 'all'       // all, inProgress, completed, behind
-      }))
+      })),
+      // 버전 관리 (localStorage 유지)
+      versions: JSON.parse(localStorage.getItem('okrVersions') || JSON.stringify([
+        { id: 'A', name: 'A', description: '', fixed: true }
+      ]))
     };
 
     const okrToday = new Date().toISOString().split('T')[0];
@@ -12016,8 +12020,25 @@
       }
     }
 
+    // 현재 선택된 지표 정보 저장 (버전 업데이트 시 폼 재렌더링용)
+    let currentSelectedLag = null;
+
+    // 버전 업데이트 이벤트 리스너
+    window.addEventListener('versionUpdated', () => {
+      if (currentSelectedLag) {
+        selectLagForRecord(
+          currentSelectedLag.krId,
+          currentSelectedLag.kpiId,
+          currentSelectedLag.lagId,
+          currentSelectedLag.krIdx
+        );
+      }
+    });
+
     // 지표 선택 시 오른쪽에 입력 폼 표시
     function selectLagForRecord(krId, kpiId, lagId, krIdx) {
+      // 현재 선택된 지표 정보 저장
+      currentSelectedLag = { krId, kpiId, lagId, krIdx };
       const kr = okrState.keyResults.find(k => k.id === krId);
       const kpi = okrState.kpis.find(k => k.id === kpiId);
       const lag = okrState.laggingIndicators.find(l => l.id === lagId);
@@ -12062,12 +12083,36 @@
             <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
               🏷️ 버전
             </label>
-            <div style="display: flex; gap: 8px;">
-              <button type="button" id="versionBtnA" onclick="selectWorkVersion('A')" style="flex: 1; padding: 10px; border: 2px solid ${okrColors[krIdx]}; border-radius: 8px; background: ${okrColors[krIdx]}15; color: ${okrColors[krIdx]}; font-size: 13px; font-weight: 700; cursor: pointer;">A버전</button>
-              <button type="button" id="versionBtnB" onclick="selectWorkVersion('B')" style="flex: 1; padding: 10px; border: 2px solid var(--gray-200); border-radius: 8px; background: white; color: var(--gray-600); font-size: 13px; font-weight: 600; cursor: pointer;">B버전</button>
-              <button type="button" id="versionBtnC" onclick="selectWorkVersion('C')" style="flex: 1; padding: 10px; border: 2px solid var(--gray-200); border-radius: 8px; background: white; color: var(--gray-600); font-size: 13px; font-weight: 600; cursor: pointer;">C버전</button>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              ${okrState.versions.map((v, idx) => `
+                <div style="position: relative; flex: ${v.fixed ? '1 1 0' : '0 0 auto'};">
+                  <button type="button" id="versionBtn${v.id}" onclick="selectWorkVersion('${v.id}')"
+                    style="width: 100%; min-width: ${v.fixed ? 'auto' : '80px'}; padding: 10px ${v.fixed ? '10px' : '28px 10px 10px'}; border: 2px solid ${idx === 0 ? okrColors[krIdx] : 'var(--gray-200)'}; border-radius: 8px; background: ${idx === 0 ? okrColors[krIdx] + '15' : 'white'}; color: ${idx === 0 ? okrColors[krIdx] : 'var(--gray-600)'}; font-size: 13px; font-weight: ${idx === 0 ? '700' : '600'}; cursor: pointer; white-space: nowrap;">
+                    ${v.name}${v.fixed ? '버전' : ''}
+                  </button>
+                  ${!v.fixed ? `
+                    <div style="position: absolute; top: 2px; right: 2px; display: flex; gap: 2px;">
+                      <button onclick="event.stopPropagation(); editWorkVersion('${v.id}')"
+                        style="width: 20px; height: 20px; padding: 0; border: none; border-radius: 4px; background: rgba(0,0,0,0.05); color: var(--gray-600); font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center;"
+                        title="수정">✏️</button>
+                      <button onclick="event.stopPropagation(); deleteWorkVersion('${v.id}')"
+                        style="width: 20px; height: 20px; padding: 0; border: none; border-radius: 4px; background: rgba(255,0,0,0.05); color: var(--danger); font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center;"
+                        title="삭제">🗑️</button>
+                    </div>
+                  ` : ''}
+                </div>
+              `).join('')}
+              <button type="button" onclick="addWorkVersion()"
+                style="flex: 0 0 auto; min-width: 40px; padding: 10px; border: 2px dashed var(--gray-300); border-radius: 8px; background: white; color: var(--gray-500); font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center;"
+                title="버전 추가">➕</button>
             </div>
             <input type="hidden" id="workRecordVersion" value="A" />
+          </div>
+
+          <!-- 버전 설명 -->
+          <div style="margin-bottom: 16px;">
+            <input type="text" id="workRecordVersionDesc" placeholder="버전 설명 (선택사항)" readonly
+              style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; color: var(--gray-600); background: var(--gray-50);" />
           </div>
 
           <!-- 수량 입력 -->
@@ -12124,11 +12169,18 @@
     function selectWorkVersion(version) {
       document.getElementById('workRecordVersion').value = version;
 
+      // 현재 선택된 버전의 설명 표시
+      const versionObj = okrState.versions.find(v => v.id === version);
+      const descInput = document.getElementById('workRecordVersionDesc');
+      if (descInput && versionObj) {
+        descInput.value = versionObj.description || '';
+      }
+
       // 모든 버전 버튼 스타일 초기화
-      ['A', 'B', 'C'].forEach(v => {
-        const btn = document.getElementById(`versionBtn${v}`);
+      okrState.versions.forEach(v => {
+        const btn = document.getElementById(`versionBtn${v.id}`);
         if (btn) {
-          if (v === version) {
+          if (v.id === version) {
             btn.style.borderColor = 'var(--primary)';
             btn.style.background = 'var(--primary-light)';
             btn.style.color = 'var(--primary)';
@@ -12141,6 +12193,200 @@
           }
         }
       });
+    }
+
+    // 버전 추가
+    function addWorkVersion() {
+      // 다음 버전 ID 생성 (B, C, D, E...)
+      const lastVersion = okrState.versions[okrState.versions.length - 1];
+      const lastId = lastVersion.id;
+      const nextId = String.fromCharCode(lastId.charCodeAt(0) + 1);
+
+      // 모달로 버전 이름과 설명 입력받기
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;';
+      modal.innerHTML = `
+        <div style="background: white; border-radius: 12px; padding: 24px; max-width: 400px; width: 90%;">
+          <h3 style="margin: 0 0 20px 0; font-size: 18px; font-weight: 700;">새 버전 추가</h3>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              버전명 <span style="color: var(--danger);">*</span>
+            </label>
+            <input type="text" id="newVersionName" value="${nextId}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" placeholder="예: B, Plan B, 테스트버전 등" />
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              설명 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
+            </label>
+            <textarea id="newVersionDesc" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; resize: none; height: 60px;" placeholder="이 버전에 대한 설명을 입력하세요"></textarea>
+          </div>
+
+          <div style="display: flex; gap: 8px;">
+            <button onclick="this.closest('div[style*=fixed]').remove()" style="flex: 1; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; color: var(--gray-700); font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+            <button onclick="confirmAddVersion()" style="flex: 1; padding: 10px; border: none; border-radius: 8px; background: var(--primary); color: white; font-size: 14px; font-weight: 700; cursor: pointer;">추가</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      // 이름 입력 포커스
+      setTimeout(() => document.getElementById('newVersionName').focus(), 100);
+    }
+
+    // 버전 추가 확인
+    function confirmAddVersion() {
+      const nameInput = document.getElementById('newVersionName');
+      const descInput = document.getElementById('newVersionDesc');
+      const name = nameInput?.value.trim() || '';
+      const description = descInput?.value.trim() || '';
+
+      if (!name) {
+        showToast('버전명을 입력해주세요', 'error');
+        return;
+      }
+
+      // 중복 체크
+      if (okrState.versions.some(v => v.name === name)) {
+        showToast('이미 존재하는 버전명입니다', 'error');
+        return;
+      }
+
+      // 다음 ID 생성
+      const lastVersion = okrState.versions[okrState.versions.length - 1];
+      const lastId = lastVersion.id;
+      const nextId = String.fromCharCode(lastId.charCodeAt(0) + 1);
+
+      // 버전 추가
+      const newVersion = {
+        id: nextId,
+        name: name,
+        description: description,
+        fixed: false
+      };
+
+      okrState.versions.push(newVersion);
+      localStorage.setItem('okrVersions', JSON.stringify(okrState.versions));
+
+      // 모달 닫기
+      document.querySelectorAll('div[style*=fixed]').forEach(el => {
+        if (el.innerHTML.includes('새 버전 추가')) el.remove();
+      });
+
+      showToast('버전이 추가되었습니다', 'success');
+
+      // 업무기록 폼이 열려있으면 새로고침
+      const formArea = document.getElementById('workRecordFormArea');
+      if (formArea && formArea.innerHTML.includes('버전')) {
+        // 현재 선택된 지표 정보 가져오기
+        const versionInput = document.getElementById('workRecordVersion');
+        if (versionInput) {
+          // 폼을 다시 렌더링하기 위해 이벤트 디스패치
+          window.dispatchEvent(new CustomEvent('versionUpdated'));
+        }
+      }
+    }
+
+    // 버전 수정
+    function editWorkVersion(versionId) {
+      const version = okrState.versions.find(v => v.id === versionId);
+      if (!version) return;
+
+      if (version.fixed) {
+        showToast('A버전은 수정할 수 없습니다', 'error');
+        return;
+      }
+
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;';
+      modal.innerHTML = `
+        <div style="background: white; border-radius: 12px; padding: 24px; max-width: 400px; width: 90%;">
+          <h3 style="margin: 0 0 20px 0; font-size: 18px; font-weight: 700;">버전 수정</h3>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              버전명 <span style="color: var(--danger);">*</span>
+            </label>
+            <input type="text" id="editVersionName" value="${version.name}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;" placeholder="예: B, Plan B, 테스트버전 등" />
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              설명 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
+            </label>
+            <textarea id="editVersionDesc" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; resize: none; height: 60px;" placeholder="이 버전에 대한 설명을 입력하세요">${version.description || ''}</textarea>
+          </div>
+
+          <div style="display: flex; gap: 8px;">
+            <button onclick="this.closest('div[style*=fixed]').remove()" style="flex: 1; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; color: var(--gray-700); font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+            <button onclick="confirmEditVersion('${versionId}')" style="flex: 1; padding: 10px; border: none; border-radius: 8px; background: var(--primary); color: white; font-size: 14px; font-weight: 700; cursor: pointer;">수정</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      // 이름 입력 포커스
+      setTimeout(() => document.getElementById('editVersionName').focus(), 100);
+    }
+
+    // 버전 수정 확인
+    function confirmEditVersion(versionId) {
+      const nameInput = document.getElementById('editVersionName');
+      const descInput = document.getElementById('editVersionDesc');
+      const name = nameInput?.value.trim() || '';
+      const description = descInput?.value.trim() || '';
+
+      if (!name) {
+        showToast('버전명을 입력해주세요', 'error');
+        return;
+      }
+
+      // 중복 체크 (자신 제외)
+      if (okrState.versions.some(v => v.id !== versionId && v.name === name)) {
+        showToast('이미 존재하는 버전명입니다', 'error');
+        return;
+      }
+
+      // 버전 수정
+      const version = okrState.versions.find(v => v.id === versionId);
+      if (version) {
+        version.name = name;
+        version.description = description;
+        localStorage.setItem('okrVersions', JSON.stringify(okrState.versions));
+      }
+
+      // 모달 닫기
+      document.querySelectorAll('div[style*=fixed]').forEach(el => {
+        if (el.innerHTML.includes('버전 수정')) el.remove();
+      });
+
+      showToast('버전이 수정되었습니다', 'success');
+
+      // 업무기록 폼이 열려있으면 새로고침
+      window.dispatchEvent(new CustomEvent('versionUpdated'));
+    }
+
+    // 버전 삭제
+    function deleteWorkVersion(versionId) {
+      const version = okrState.versions.find(v => v.id === versionId);
+      if (!version) return;
+
+      if (version.fixed) {
+        showToast('A버전은 삭제할 수 없습니다', 'error');
+        return;
+      }
+
+      if (!confirm(`"${version.name}" 버전을 삭제하시겠습니까?`)) return;
+
+      // 버전 삭제
+      okrState.versions = okrState.versions.filter(v => v.id !== versionId);
+      localStorage.setItem('okrVersions', JSON.stringify(okrState.versions));
+
+      showToast('버전이 삭제되었습니다', 'success');
+
+      // 업무기록 폼이 열려있으면 새로고침
+      window.dispatchEvent(new CustomEvent('versionUpdated'));
     }
 
     // 인라인 업무기록 제출
@@ -12610,8 +12856,10 @@
 
         // Undo 알림 표시
         const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+        const versionObj = okrState.versions.find(v => v.id === version);
+        const versionName = versionObj ? (versionObj.fixed ? `${versionObj.name}버전` : versionObj.name) : (version || 'A버전');
         const quantityText = quantity > 1 ? ` (${quantity}건)` : '';
-        const versionText = version ? ` [${version}버전]` : '';
+        const versionText = ` [${versionName}]`;
         showUndoNotification(`${lag?.name || '업무'}${versionText}${quantityText}`);
       } catch (e) {
         console.error('기록 오류:', e);
