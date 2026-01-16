@@ -1088,7 +1088,7 @@
             <h1 class="page-title">🎯 목표설정</h1>
             <p class="page-desc">O, KR, KPI, 후행지표를 설정하세요</p>
           </div>
-          <button class="btn btn-primary" onclick="openOkrObjectiveModal()">목표 수정</button>
+          <button id="okrObjectiveEditBtn" class="btn btn-primary" onclick="openOkrObjectiveModal()">목표 수정</button>
         </div>
         <div id="okrSettingsContent">
           <!-- 동적으로 렌더링 -->
@@ -10812,12 +10812,31 @@
     function calcOkrKPIRate(kpiId) {
       const kpi = okrState.kpis.find(k => k.id === kpiId);
       if (!kpi || !kpi.targetValue) return 0;
-      const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
-      const totalValue = lagsForKPI.reduce((sum, lag) => {
+
+      // 성과형(result) 후행지표만 KPI 달성률에 반영
+      const resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'result');
+
+      const totalValue = resultLags.reduce((sum, lag) => {
+        const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
+        const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+
+        // 건당 예상 금액이 있으면 곱하기, 없으면 직접 합산
+        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+          return sum + (logSum * lag.valuePerUnit);
+        }
+        return sum + logSum;
+      }, 0);
+
+      return Math.min(Math.round((totalValue / kpi.targetValue) * 100), 100);
+    }
+
+    // 활동형 지표 통계 계산
+    function calcActivityStats(kpiId) {
+      const activityLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type !== 'result');
+      return activityLags.reduce((sum, lag) => {
         const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
         return sum + logs.reduce((s, l) => s + (l.resultValue || 0), 0);
       }, 0);
-      return Math.min(Math.round((totalValue / kpi.targetValue) * 100), 100);
     }
 
     // OKR 아이콘 반환
@@ -10966,6 +10985,83 @@
                 })()}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- 활동 vs 성과 요약 -->
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📊 활동 vs 성과 현황</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <!-- 활동형 요약 -->
+            <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; border-left: 4px solid var(--gray-400);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: flex; align-items: center; gap: 6px;">
+                  📋 활동형 지표
+                </div>
+                <span style="font-size: 11px; padding: 2px 8px; background: var(--gray-200); color: var(--gray-600); border-radius: 10px;">참고용</span>
+              </div>
+              ${(() => {
+                const activityLags = okrState.laggingIndicators.filter(l => l.type !== 'result');
+                const activityLogs = okrState.dailyLogs.filter(log => {
+                  const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                  return lag && lag.type !== 'result';
+                });
+                const totalActivityCount = activityLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                const todayActivityCount = activityLogs.filter(l => l.date === okrToday).reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                return `
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-size: 13px; color: var(--gray-500);">등록된 지표</span>
+                    <span style="font-size: 14px; font-weight: 600;">${activityLags.length}개</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-size: 13px; color: var(--gray-500);">총 활동 횟수</span>
+                    <span style="font-size: 14px; font-weight: 600;">${totalActivityCount.toLocaleString()}건</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="font-size: 13px; color: var(--gray-500);">오늘 활동</span>
+                    <span style="font-size: 14px; font-weight: 600; color: var(--primary);">${todayActivityCount}건</span>
+                  </div>
+                `;
+              })()}
+            </div>
+            <!-- 성과형 요약 -->
+            <div style="background: var(--success-light); border-radius: 12px; padding: 16px; border-left: 4px solid var(--success);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: flex; align-items: center; gap: 6px;">
+                  💰 성과형 지표
+                </div>
+                <span style="font-size: 11px; padding: 2px 8px; background: var(--success); color: white; border-radius: 10px;">KPI 반영</span>
+              </div>
+              ${(() => {
+                const resultLags = okrState.laggingIndicators.filter(l => l.type === 'result');
+                const resultLogs = okrState.dailyLogs.filter(log => {
+                  const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                  return lag && lag.type === 'result';
+                });
+                let totalResultValue = 0;
+                let todayResultValue = 0;
+                resultLogs.forEach(log => {
+                  const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                  const value = lag?.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+                  totalResultValue += value;
+                  if (log.date === okrToday) todayResultValue += value;
+                });
+                return `
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-size: 13px; color: var(--gray-600);">등록된 지표</span>
+                    <span style="font-size: 14px; font-weight: 600;">${resultLags.length}개</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-size: 13px; color: var(--gray-600);">총 성과 금액</span>
+                    <span style="font-size: 14px; font-weight: 700; color: var(--success);">${totalResultValue.toLocaleString()}원</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="font-size: 13px; color: var(--gray-600);">오늘 성과</span>
+                    <span style="font-size: 14px; font-weight: 700; color: var(--success);">${todayResultValue.toLocaleString()}원</span>
+                  </div>
+                `;
+              })()}
+            </div>
           </div>
         </div>
 
@@ -11232,13 +11328,18 @@
                         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(95px, 1fr)); gap: 8px;">
                           ${lagsForKPI.map(lag => {
                             const isFavorite = okrState.favorites.includes(lag.id);
+                            const isResult = lag.type === 'result';
+                            const typeBadge = isResult
+                              ? '<span style="position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%); font-size: 8px; padding: 1px 4px; background: var(--success); color: white; border-radius: 4px;">💰성과</span>'
+                              : '<span style="position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%); font-size: 8px; padding: 1px 4px; background: var(--gray-400); color: white; border-radius: 4px;">📋활동</span>';
                             return `
-                              <div id="lag-btn-${lag.id}" style="background: white; border: 2px solid var(--gray-200); border-radius: 8px; padding: 10px 6px; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'" onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='var(--gray-200)'">
+                              <div id="lag-btn-${lag.id}" style="background: white; border: 2px solid ${isResult ? 'var(--success-light)' : 'var(--gray-200)'}; border-radius: 8px; padding: 10px 6px 18px; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'" onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='${isResult ? 'var(--success-light)' : 'var(--gray-200)'}'" ${isResult ? 'title="성과형: KPI에 반영됨"' : 'title="활동형: 참고용"'}>
                                 <div onclick="event.stopPropagation(); showEditLagForm('${lag.id}')" style="position: absolute; top: 2px; left: 2px; font-size: 10px; color: var(--gray-400); cursor: pointer; padding: 2px;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--gray-400)'" title="수정">✏️</div>
                                 <div style="position: absolute; top: 2px; right: 2px; font-size: 10px; opacity: ${isFavorite ? 1 : 0.3};">⭐</div>
                                 <div onclick="selectLagForRecord('${kr.id}', '${kpi.id}', '${lag.id}', ${krIdx})" style="font-size: 20px; margin-bottom: 4px;">${getOkrLagIcon(lag.name)}</div>
                                 <div onclick="selectLagForRecord('${kr.id}', '${kpi.id}', '${lag.id}', ${krIdx})" style="font-size: 11px; font-weight: 600; color: var(--gray-700); word-break: keep-all;">${lag.name}</div>
                                 <div onclick="selectLagForRecord('${kr.id}', '${kpi.id}', '${lag.id}', ${krIdx})" style="font-size: 9px; color: var(--gray-500);">${lag.version}버전</div>
+                                ${typeBadge}
                               </div>
                             `;
                           }).join('')}
@@ -11306,9 +11407,41 @@
 
           <div style="margin-bottom: 16px;">
             <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              📊 유형 <span style="color: var(--danger);">*</span>
+            </label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s;" onclick="this.querySelector('input').checked=true; this.style.borderColor='var(--primary)'; this.style.background='var(--primary-light)'; this.parentElement.children[1].style.borderColor='var(--gray-200)'; this.parentElement.children[1].style.background='white'; document.getElementById('newLagValuePerUnit').parentElement.style.display='none';">
+                <input type="radio" name="newLagType" value="activity" checked style="display: none;">
+                <span style="font-size: 18px;">📋</span>
+                <div>
+                  <div style="font-size: 13px; font-weight: 600;">활동형</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">행동 횟수 추적</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s; background: white;" onclick="this.querySelector('input').checked=true; this.style.borderColor='var(--success)'; this.style.background='var(--success-light)'; this.parentElement.children[0].style.borderColor='var(--gray-200)'; this.parentElement.children[0].style.background='white'; document.getElementById('newLagValuePerUnit').parentElement.style.display='block';">
+                <input type="radio" name="newLagType" value="result" style="display: none;">
+                <span style="font-size: 18px;">💰</span>
+                <div>
+                  <div style="font-size: 13px; font-weight: 600;">성과형</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">KPI 달성에 반영</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
               📝 지표 이름 <span style="color: var(--danger);">*</span>
             </label>
             <input type="text" id="newLagName" placeholder="예: SNS 마케팅" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+          </div>
+
+          <div style="margin-bottom: 16px; display: none;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              💵 건당 예상 금액 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
+            </label>
+            <input type="number" id="newLagValuePerUnit" placeholder="예: 10000000" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+            <div style="font-size: 10px; color: var(--gray-500); margin-top: 4px;">1건당 예상 기여 금액 (자동 환산용)</div>
           </div>
 
           <div style="margin-bottom: 20px;">
@@ -11333,6 +11466,9 @@
     async function addNewLaggingIndicator(krId, kpiId, krIdx) {
       const name = document.getElementById('newLagName')?.value?.trim();
       const version = document.getElementById('newLagVersion')?.value || 'A';
+      const typeRadio = document.querySelector('input[name="newLagType"]:checked');
+      const lagType = typeRadio?.value || 'activity';
+      const valuePerUnit = parseInt(document.getElementById('newLagValuePerUnit')?.value) || 0;
 
       if (!name) {
         showToast('지표 이름을 입력해주세요', 'error');
@@ -11345,6 +11481,8 @@
           name,
           version,
           target: 10,
+          type: lagType, // 'activity' 또는 'result'
+          valuePerUnit: lagType === 'result' ? valuePerUnit : 0, // 성과형일 때만 건당 금액
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
@@ -11355,7 +11493,7 @@
         okrState.laggingIndicators.push(lagWithId);
 
         // 변경 이력 저장
-        await saveChangeLog('laggingIndicator', 'create', { id: docRef.id, name, version });
+        await saveChangeLog('laggingIndicator', 'create', { id: docRef.id, name, version, type: lagType });
 
         showToast(`"${name}" 추가됨`, 'success');
 
@@ -12381,7 +12519,27 @@
       const container = document.getElementById('okrSettingsContent');
       if (!container) return;
 
+      // 관리자 여부 확인
+      const isAdmin = state.currentUser?.role === 'admin';
+
+      // 목표 수정 버튼 숨김/표시
+      const objEditBtn = document.getElementById('okrObjectiveEditBtn');
+      if (objEditBtn) {
+        objEditBtn.style.display = isAdmin ? 'inline-block' : 'none';
+      }
+
+      const lockBadge = !isAdmin ? `
+        <div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--warning-light); border: 1px solid var(--warning); border-radius: 10px; margin-bottom: 20px;">
+          <span style="font-size: 20px;">🔒</span>
+          <div>
+            <div style="font-size: 14px; font-weight: 600; color: var(--warning);">보기 전용 모드</div>
+            <div style="font-size: 12px; color: var(--gray-600);">목표설정 수정은 관리자만 가능합니다</div>
+          </div>
+        </div>
+      ` : '';
+
       container.innerHTML = `
+        ${lockBadge}
         <div style="background: linear-gradient(135deg, var(--primary-light, #EBF5FF), #DDD6FE); border: 2px solid var(--primary); border-radius: 16px; padding: 24px; margin-bottom: 24px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">🎯 최종 목표 (O)</div>
@@ -12394,7 +12552,7 @@
 
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">📈 핵심 결과 (KR)</div>
-          <button class="btn btn-primary" onclick="openOkrKRModal()" ${!okrState.objective ? 'disabled' : ''}>+ KR 추가</button>
+          ${isAdmin ? `<button class="btn btn-primary" onclick="openOkrKRModal()" ${!okrState.objective ? 'disabled' : ''}>+ KR 추가</button>` : ''}
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 16px;">
@@ -12404,23 +12562,31 @@
               <div class="card" style="border-left: 4px solid ${okrColors[idx]};">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                   <div style="font-size: 16px; font-weight: 700; color: var(--gray-800);">${kr.name}</div>
-                  <div>
-                    <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="openOkrKRModal('${kr.id}')">편집</button>
-                    <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="openOkrKPIModal('${kr.id}')">+ KPI</button>
-                  </div>
+                  ${isAdmin ? `
+                    <div>
+                      <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="openOkrKRModal('${kr.id}')">편집</button>
+                      <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="openOkrKPIModal('${kr.id}')">+ KPI</button>
+                    </div>
+                  ` : ''}
                 </div>
                 <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 12px;">목표: ${(kr.targetValue || 0).toLocaleString()} ${kr.unit || ''}</div>
                 <div style="display: flex; flex-direction: column; gap: 12px; margin-left: 16px;">
                   ${kpisForKR.map(kpi => {
                     const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                    const resultCount = lagsForKPI.filter(l => l.type === 'result').length;
+                    const activityCount = lagsForKPI.filter(l => l.type !== 'result').length;
                     return `
                       <div style="padding: 12px 16px; background: var(--gray-50); border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
                         <div>
                           <div style="font-size: 14px; font-weight: 600; color: var(--gray-700);">${kpi.name}</div>
                           <div style="font-size: 13px; color: var(--gray-500);">목표: ${(kpi.targetValue || 0).toLocaleString()} ${kpi.unit || ''}</div>
-                          <div style="font-size: 11px; color: var(--gray-400); margin-top: 4px;">후행지표: ${lagsForKPI.map(l => l.version + '버전').join(', ') || '없음'}</div>
+                          <div style="font-size: 11px; color: var(--gray-400); margin-top: 4px;">
+                            후행지표: ${lagsForKPI.length}개
+                            ${resultCount > 0 ? `<span style="color: var(--success);">(💰성과 ${resultCount})</span>` : ''}
+                            ${activityCount > 0 ? `<span style="color: var(--gray-500);">(📋활동 ${activityCount})</span>` : ''}
+                          </div>
                         </div>
-                        <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="openOkrKPIModal('${kr.id}', '${kpi.id}')">편집</button>
+                        ${isAdmin ? `<button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="openOkrKPIModal('${kr.id}', '${kpi.id}')">편집</button>` : ''}
                       </div>
                     `;
                   }).join('')}
