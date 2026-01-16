@@ -8392,11 +8392,11 @@
     }
 
     // ========================================
-    // 시크릿 링크 관리
+    // 시크릿 링크 관리 (스냅샷 기반 공유)
     // ========================================
     async function loadSecretLinks() {
       try {
-        const snapshot = await db.collection('secretLinks').orderBy('createdAt', 'desc').get();
+        const snapshot = await db.collection('growthboardShareLinks').orderBy('createdAt', 'desc').get();
         return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       } catch (e) {
         console.error('시크릿 링크 로드 오류:', e);
@@ -8413,9 +8413,21 @@
       return token;
     }
 
+    // 현재 OKR 상태를 스냅샷으로 생성
+    function createOkrSnapshot() {
+      return {
+        objective: okrState.objective ? { ...okrState.objective } : null,
+        keyResults: okrState.keyResults.map(kr => ({ ...kr })),
+        kpis: okrState.kpis.map(kpi => ({ ...kpi })),
+        laggingIndicators: okrState.laggingIndicators.map(lag => ({ ...lag })),
+        dailyLogs: okrState.dailyLogs.map(log => ({ ...log })),
+        snapshotCreatedAt: new Date().toISOString()
+      };
+    }
+
     async function openSecretLinkModal() {
       const links = await loadSecretLinks();
-      const baseUrl = window.location.origin + '/admin/strategy/viewer.html';
+      const baseUrl = window.location.origin + '/admin/strategy/growthboard-share.html';
 
       const m = document.getElementById('modal');
       if (!m) return;
@@ -8428,11 +8440,12 @@
           </div>
           <div style="padding: 24px;">
             <div style="background: #EFF6FF; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
-              <div style="font-size: 14px; font-weight: 600; color: #1E40AF; margin-bottom: 8px;">📋 시크릿 링크란?</div>
+              <div style="font-size: 14px; font-weight: 600; color: #1E40AF; margin-bottom: 8px;">📋 공유 링크란?</div>
               <div style="font-size: 13px; color: #3B82F6; line-height: 1.6;">
                 • 링크를 아는 사람만 그로스보드를 볼 수 있습니다<br>
                 • 읽기 전용으로 수정/편집이 불가능합니다<br>
-                • 실시간으로 변경된 데이터가 반영됩니다
+                • 링크 생성 시점의 <b>스냅샷 데이터</b>가 저장됩니다<br>
+                • 기업/투자자 공유용 경영 대시보드로 활용하세요
               </div>
             </div>
 
@@ -8446,16 +8459,22 @@
             <div id="secretLinkList" style="max-height: 300px; overflow-y: auto;">
               ${links.length === 0 ? `
                 <div style="text-align: center; padding: 40px 20px; color: var(--gray-500);">
-                  <div style="font-size: 40px; margin-bottom: 12px;">🔒</div>
-                  <div>생성된 링크가 없습니다</div>
-                  <div style="font-size: 12px; margin-top: 4px;">새 링크를 생성하여 외부에 공유하세요</div>
+                  <div style="font-size: 40px; margin-bottom: 12px;">📸</div>
+                  <div>생성된 공유 링크가 없습니다</div>
+                  <div style="font-size: 12px; margin-top: 4px;">새 링크를 생성하여 현재 데이터를 스냅샷으로 저장하세요</div>
                 </div>
-              ` : links.map(link => `
+              ` : links.map(link => {
+                const snapshotDate = link.lastUpdatedAt || link.createdAt;
+                const snapshotDateStr = new Date(snapshotDate).toLocaleDateString('ko-KR') + ' ' + new Date(snapshotDate).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+                return `
                 <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-200);">
                   <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
                     <div>
                       <div style="font-size: 14px; font-weight: 600; color: var(--gray-900);">${link.name || '이름 없음'}</div>
-                      <div style="font-size: 11px; color: var(--gray-500); margin-top: 2px;">생성: ${new Date(link.createdAt).toLocaleDateString('ko-KR')}</div>
+                      <div style="font-size: 11px; color: var(--gray-500); margin-top: 2px;">
+                        📸 스냅샷: ${snapshotDateStr}
+                        ${link.viewCount > 0 ? `&nbsp;·&nbsp;👁️ ${link.viewCount}회 조회` : ''}
+                      </div>
                     </div>
                     <div style="display: flex; gap: 6px;">
                       <span style="padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; ${link.isActive ? 'background: #D1FAE5; color: #059669;' : 'background: #FEE2E2; color: #DC2626;'}">
@@ -8472,6 +8491,9 @@
                     </button>
                   </div>
                   <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+                    <button onclick="refreshSnapshotLink('${link.id}')" style="padding: 6px 12px; background: #DBEAFE; color: #1D4ED8; border: none; border-radius: 6px; cursor: pointer; font-size: 11px;">
+                      🔄 스냅샷 갱신
+                    </button>
                     <button onclick="toggleSecretLink('${link.id}', ${!link.isActive})" style="padding: 6px 12px; background: ${link.isActive ? '#FEF3C7' : '#D1FAE5'}; color: ${link.isActive ? '#92400E' : '#059669'}; border: none; border-radius: 6px; cursor: pointer; font-size: 11px;">
                       ${link.isActive ? '비활성화' : '활성화'}
                     </button>
@@ -8480,7 +8502,7 @@
                     </button>
                   </div>
                 </div>
-              `).join('')}
+              `}).join('')}
             </div>
           </div>
           <div class="modal-footer">
@@ -8494,17 +8516,25 @@
       const name = prompt('링크 이름을 입력하세요 (예: 투자자 공유용, 파트너사 공유)');
       if (!name) return;
 
+      // 목표가 설정되어 있는지 확인
+      if (!okrState.objective) {
+        showToast('목표를 먼저 설정해주세요');
+        return;
+      }
+
       const token = generateSecretToken();
+      const snapshotData = createOkrSnapshot();
 
       try {
-        await db.collection('secretLinks').add({
+        await db.collection('growthboardShareLinks').add({
           name,
           token,
           isActive: true,
           createdAt: new Date().toISOString(),
-          viewCount: 0
+          viewCount: 0,
+          snapshotData: snapshotData
         });
-        showToast('시크릿 링크가 생성되었습니다');
+        showToast('공유 링크가 생성되었습니다 (현재 데이터 스냅샷 저장됨)');
         openSecretLinkModal(); // 새로고침
       } catch (e) {
         console.error(e);
@@ -8523,7 +8553,7 @@
 
     async function toggleSecretLink(linkId, isActive) {
       try {
-        await db.collection('secretLinks').doc(linkId).update({ isActive });
+        await db.collection('growthboardShareLinks').doc(linkId).update({ isActive });
         showToast(isActive ? '링크가 활성화되었습니다' : '링크가 비활성화되었습니다');
         openSecretLinkModal();
       } catch (e) {
@@ -8536,12 +8566,36 @@
       if (!confirm('이 링크를 삭제하시겠습니까?\n삭제 후에는 이 링크로 접근할 수 없습니다.')) return;
 
       try {
-        await db.collection('secretLinks').doc(linkId).delete();
+        await db.collection('growthboardShareLinks').doc(linkId).delete();
         showToast('링크가 삭제되었습니다');
         openSecretLinkModal();
       } catch (e) {
         console.error(e);
         showToast('삭제 실패');
+      }
+    }
+
+    // 스냅샷 갱신 기능
+    async function refreshSnapshotLink(linkId) {
+      if (!confirm('이 링크의 스냅샷을 현재 데이터로 갱신하시겠습니까?\n기존 스냅샷은 덮어씌워집니다.')) return;
+
+      if (!okrState.objective) {
+        showToast('목표를 먼저 설정해주세요');
+        return;
+      }
+
+      const snapshotData = createOkrSnapshot();
+
+      try {
+        await db.collection('growthboardShareLinks').doc(linkId).update({
+          snapshotData: snapshotData,
+          lastUpdatedAt: new Date().toISOString()
+        });
+        showToast('스냅샷이 갱신되었습니다');
+        openSecretLinkModal();
+      } catch (e) {
+        console.error(e);
+        showToast('스냅샷 갱신 실패');
       }
     }
 
