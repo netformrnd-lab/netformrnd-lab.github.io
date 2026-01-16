@@ -10412,7 +10412,13 @@
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
       expandedKRs: [],
       searchQuery: '',
-      showFavoritesOnly: false
+      showFavoritesOnly: false,
+      // KPI 필터 설정 (localStorage 유지)
+      kpiFilter: JSON.parse(localStorage.getItem('okrKpiFilter') || JSON.stringify({
+        period: 'all',      // all, thisWeek, thisMonth, custom
+        krId: 'all',        // all 또는 특정 KR ID
+        status: 'all'       // all, inProgress, completed, behind
+      }))
     };
 
     const okrToday = new Date().toISOString().split('T')[0];
@@ -10630,9 +10636,28 @@
           </div>
         </div>
 
-        <!-- KPI 현황 (신규 추가) -->
+        <!-- KPI 현황 (필터 기능 추가) -->
         <div class="card" style="margin-bottom: 20px;">
-          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📊 KPI 현황</div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">📊 KPI 현황</div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <select id="kpiFilterPeriod" onchange="updateKpiFilter('period', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
+                <option value="all" ${okrState.kpiFilter.period === 'all' ? 'selected' : ''}>전체 기간</option>
+                <option value="thisWeek" ${okrState.kpiFilter.period === 'thisWeek' ? 'selected' : ''}>이번 주</option>
+                <option value="thisMonth" ${okrState.kpiFilter.period === 'thisMonth' ? 'selected' : ''}>이번 달</option>
+              </select>
+              <select id="kpiFilterKR" onchange="updateKpiFilter('krId', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
+                <option value="all" ${okrState.kpiFilter.krId === 'all' ? 'selected' : ''}>전체 KR</option>
+                ${okrState.keyResults.map((kr, idx) => `<option value="${kr.id}" ${okrState.kpiFilter.krId === kr.id ? 'selected' : ''}>${okrIcons[idx] || '📊'} ${kr.name}</option>`).join('')}
+              </select>
+              <select id="kpiFilterStatus" onchange="updateKpiFilter('status', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
+                <option value="all" ${okrState.kpiFilter.status === 'all' ? 'selected' : ''}>전체 상태</option>
+                <option value="completed" ${okrState.kpiFilter.status === 'completed' ? 'selected' : ''}>✅ 달성 (80%+)</option>
+                <option value="inProgress" ${okrState.kpiFilter.status === 'inProgress' ? 'selected' : ''}>🔄 진행 중 (50-79%)</option>
+                <option value="behind" ${okrState.kpiFilter.status === 'behind' ? 'selected' : ''}>⚠️ 미달 (50% 미만)</option>
+              </select>
+            </div>
+          </div>
           <div style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
               <thead>
@@ -10646,27 +10671,40 @@
                 </tr>
               </thead>
               <tbody>
-                ${kpiStatusData.length > 0 ? kpiStatusData.map(kpi => {
-                  const statusColor = kpi.rate >= 80 ? 'var(--success)' : kpi.rate >= 50 ? 'var(--warning)' : 'var(--danger)';
-                  return `
-                    <tr style="border-bottom: 1px solid var(--gray-100);">
-                      <td style="padding: 12px; font-weight: 500; color: var(--gray-800);">${kpi.name}</td>
-                      <td style="padding: 12px; text-align: center;">
-                        <span style="padding: 2px 8px; border-radius: 12px; font-size: 11px; background: ${okrColors[kpi.krIdx]}20; color: ${okrColors[kpi.krIdx]};">${kpi.kr?.name || '-'}</span>
-                      </td>
-                      <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">${kpi.currentValue.toLocaleString()}</td>
-                      <td style="padding: 12px; text-align: right; color: var(--gray-500);">${(kpi.targetValue || 0).toLocaleString()} ${kpi.unit || ''}</td>
-                      <td style="padding: 12px; text-align: center;">
-                        <span style="font-weight: 700; color: ${statusColor};">${kpi.rate}%</span>
-                      </td>
-                      <td style="padding: 12px; width: 100px;">
-                        <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
-                          <div style="height: 100%; width: ${Math.min(kpi.rate, 100)}%; background: ${statusColor}; border-radius: 3px;"></div>
-                        </div>
-                      </td>
-                    </tr>
-                  `;
-                }).join('') : '<tr><td colspan="6" style="padding: 30px; text-align: center; color: var(--gray-400);">KPI가 없습니다</td></tr>'}
+                ${(() => {
+                  // 필터 적용
+                  let filtered = kpiStatusData;
+                  if (okrState.kpiFilter.krId !== 'all') {
+                    filtered = filtered.filter(kpi => kpi.keyResultId === okrState.kpiFilter.krId);
+                  }
+                  if (okrState.kpiFilter.status !== 'all') {
+                    if (okrState.kpiFilter.status === 'completed') filtered = filtered.filter(kpi => kpi.rate >= 80);
+                    else if (okrState.kpiFilter.status === 'inProgress') filtered = filtered.filter(kpi => kpi.rate >= 50 && kpi.rate < 80);
+                    else if (okrState.kpiFilter.status === 'behind') filtered = filtered.filter(kpi => kpi.rate < 50);
+                  }
+                  return filtered.length > 0 ? filtered.map(kpi => {
+                    const statusColor = kpi.rate >= 80 ? 'var(--success)' : kpi.rate >= 50 ? 'var(--warning)' : 'var(--danger)';
+                    const statusIcon = kpi.rate >= 80 ? '✅' : kpi.rate >= 50 ? '🔄' : '⚠️';
+                    return `
+                      <tr style="border-bottom: 1px solid var(--gray-100);">
+                        <td style="padding: 12px; font-weight: 500; color: var(--gray-800);">${statusIcon} ${kpi.name}</td>
+                        <td style="padding: 12px; text-align: center;">
+                          <span style="padding: 2px 8px; border-radius: 12px; font-size: 11px; background: ${okrColors[kpi.krIdx]}20; color: ${okrColors[kpi.krIdx]};">${kpi.kr?.name || '-'}</span>
+                        </td>
+                        <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">${kpi.currentValue.toLocaleString()}</td>
+                        <td style="padding: 12px; text-align: right; color: var(--gray-500);">${(kpi.targetValue || 0).toLocaleString()} ${kpi.unit || ''}</td>
+                        <td style="padding: 12px; text-align: center;">
+                          <span style="font-weight: 700; color: ${statusColor};">${kpi.rate}%</span>
+                        </td>
+                        <td style="padding: 12px; width: 100px;">
+                          <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
+                            <div style="height: 100%; width: ${Math.min(kpi.rate, 100)}%; background: ${statusColor}; border-radius: 3px;"></div>
+                          </div>
+                        </td>
+                      </tr>
+                    `;
+                  }).join('') : '<tr><td colspan="6" style="padding: 30px; text-align: center; color: var(--gray-400);">필터 조건에 맞는 KPI가 없습니다</td></tr>';
+                })()}
               </tbody>
             </table>
           </div>
@@ -10712,102 +10750,93 @@
       // 즐겨찾기 상단 고정 영역 렌더링
       updateOkrFavoritesSection();
 
-      // KR별 업무 기록 (폴더형 3칸 배열)
-      let html = '';
+      // KR 카드 3칸 배열 (클릭 시 모달 선택)
+      let krCardsHtml = `
+        <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 16px;">📊 KR 선택 → KPI → 후행지표 기록</div>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 24px;">
+      `;
+
       okrState.keyResults.forEach((kr, krIdx) => {
         const kpisForKR = okrState.kpis.filter(k => k.keyResultId === kr.id);
         const krRate = calcOkrKRRate(kr.id);
+        const lagCount = kpisForKR.reduce((sum, kpi) => sum + okrState.laggingIndicators.filter(l => l.kpiId === kpi.id).length, 0);
+        const todayLogsForKR = okrState.todayLogs.filter(log => log.krId === kr.id);
 
-        // 즐겨찾기된 항목과 나머지 분리
-        let favoriteCards = [];
-        let otherCards = [];
-
-        kpisForKR.forEach(kpi => {
-          const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
-          lagsForKPI.forEach(lag => {
-            const isFavorite = okrState.favorites.includes(lag.id);
-            const matchesSearch = !okrState.searchQuery ||
-              lag.name.toLowerCase().includes(okrState.searchQuery.toLowerCase()) ||
-              kpi.name.toLowerCase().includes(okrState.searchQuery.toLowerCase());
-            const matchesFavorite = !okrState.showFavoritesOnly || isFavorite;
-
-            if (matchesSearch && matchesFavorite) {
-              const cardData = { lag, kpi, kr, krIdx, isFavorite };
-              if (isFavorite) {
-                favoriteCards.push(cardData);
-              } else {
-                otherCards.push(cardData);
-              }
-            }
-          });
-        });
-
-        // 폴더형 카드 HTML 생성 함수
-        const createFolderCard = (data) => {
-          const { lag, kpi, kr, krIdx, isFavorite } = data;
-          return `
-            <div class="okr-folder-card" style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; overflow: hidden; transition: all 0.2s; cursor: pointer; display: flex; flex-direction: column;"
-                 onmouseover="this.style.boxShadow='0 8px 24px rgba(0,0,0,0.12)'; this.style.transform='translateY(-3px)';"
-                 onmouseout="this.style.boxShadow='none'; this.style.transform='none';">
-              <!-- 폴더 탭 (KPI 정보) -->
-              <div style="background: ${okrColors[krIdx]}15; border-bottom: 1px solid ${okrColors[krIdx]}30; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
-                <div style="font-size: 11px; font-weight: 600; color: ${okrColors[krIdx]}; display: flex; align-items: center; gap: 6px;">
-                  <span style="font-size: 12px;">📂</span> ${kpi.name}
-                </div>
-                <div style="cursor: pointer; font-size: 14px; opacity: ${isFavorite ? 1 : 0.3};" onclick="event.stopPropagation(); toggleOkrFavorite('${lag.id}')">⭐</div>
-              </div>
-              <!-- 선행지표 참고 정보 -->
-              ${kpi.leadingIndicator ? `
-                <div style="background: var(--gray-50); padding: 6px 14px; border-bottom: 1px solid var(--gray-100);">
-                  <div style="font-size: 10px; color: var(--gray-500); display: flex; align-items: center; gap: 4px;">
-                    <span>📌</span> 선행: ${kpi.leadingIndicator}
-                  </div>
-                </div>
-              ` : ''}
-              <!-- 후행지표 (기록 대상) -->
-              <div onclick="recordOkrWork('${kr.id}', '${kpi.id}', '${lag.id}')" style="padding: 16px; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;">
-                <div style="font-size: 32px;">${getOkrLagIcon(lag.name)}</div>
-                <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); text-align: center;">${lag.name}</div>
-                <div style="font-size: 11px; color: var(--gray-500);">${lag.version}버전</div>
-                <div style="background: ${okrColors[krIdx]}; color: white; padding: 8px 20px; border-radius: 24px; font-size: 14px; font-weight: 700; margin-top: 6px; box-shadow: 0 2px 8px ${okrColors[krIdx]}40;">+1 기록</div>
-              </div>
+        krCardsHtml += `
+          <div onclick="openKrSelectionModal('${kr.id}')" style="background: white; border: 2px solid var(--gray-200); border-radius: 16px; overflow: hidden; cursor: pointer; transition: all 0.3s; box-shadow: 0 2px 8px rgba(0,0,0,0.04);"
+               onmouseover="this.style.borderColor='${okrColors[krIdx]}'; this.style.transform='translateY(-4px)'; this.style.boxShadow='0 12px 32px rgba(0,0,0,0.12)';"
+               onmouseout="this.style.borderColor='var(--gray-200)'; this.style.transform='none'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';">
+            <!-- KR 헤더 -->
+            <div style="background: linear-gradient(135deg, ${okrColors[krIdx]}, ${okrColors[krIdx]}CC); color: white; padding: 20px;">
+              <div style="font-size: 36px; margin-bottom: 12px;">${okrIcons[krIdx] || '📊'}</div>
+              <div style="font-size: 16px; font-weight: 700; margin-bottom: 4px; line-height: 1.3;">${kr.name}</div>
+              <div style="font-size: 24px; font-weight: 800;">${krRate}%</div>
             </div>
-          `;
-        };
-
-        const krCollapseId = `kr-collapse-${krIdx}`;
-        const isExpanded = okrState.expandedKRs && okrState.expandedKRs.includes(kr.id);
-
-        if (favoriteCards.length || otherCards.length || !okrState.searchQuery) {
-          html += `
-            <div class="card" style="margin-bottom: 24px; border-left: 4px solid ${okrColors[krIdx]};">
-              <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 20px;">${okrIcons[krIdx] || '📊'}</span> ${kr.name}
-                <span style="padding: 4px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; color: white; background: ${okrColors[krIdx]}">${krRate}%</span>
+            <!-- KR 정보 -->
+            <div style="padding: 16px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                <div style="font-size: 12px; color: var(--gray-500);">KPI ${kpisForKR.length}개</div>
+                <div style="font-size: 12px; color: var(--gray-500);">기록항목 ${lagCount}개</div>
               </div>
-              ${favoriteCards.length ? `
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: ${otherCards.length > 0 ? '20px' : '0'};">
-                  ${favoriteCards.map(createFolderCard).join('')}
+              <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden; margin-bottom: 12px;">
+                <div style="height: 100%; width: ${Math.min(krRate, 100)}%; background: ${okrColors[krIdx]}; border-radius: 3px;"></div>
+              </div>
+              ${todayLogsForKR.length > 0 ? `
+                <div style="font-size: 11px; color: var(--success); font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                  ✅ 오늘 ${todayLogsForKR.length}건 기록
                 </div>
-              ` : ''}
-              ${otherCards.length > 0 ? `
-                <div style="border-top: 1px dashed var(--gray-200); padding-top: 16px;">
-                  <div onclick="toggleKRExpand('${kr.id}')" style="display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--gray-500); font-size: 13px; margin-bottom: ${isExpanded ? '16px' : '0'}; padding: 8px; border-radius: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background=''">
-                    <span style="transform: rotate(${isExpanded ? '90deg' : '0deg'}); transition: transform 0.2s;">▶</span>
-                    기타 항목 펼치기 (${otherCards.length}개)
-                  </div>
-                  <div id="${krCollapseId}" style="display: ${isExpanded ? 'grid' : 'none'}; grid-template-columns: repeat(3, 1fr); gap: 16px;">
-                    ${otherCards.map(createFolderCard).join('')}
-                  </div>
-                </div>
-              ` : ''}
-              ${!favoriteCards.length && !otherCards.length ? '<div style="color: var(--gray-400); font-size: 13px; text-align: center; padding: 20px;">검색 결과 없음</div>' : ''}
+              ` : `
+                <div style="font-size: 11px; color: var(--gray-400);">오늘 기록 없음</div>
+              `}
             </div>
-          `;
-        }
+            <!-- 클릭 유도 -->
+            <div style="background: var(--gray-50); padding: 12px 16px; text-align: center; border-top: 1px solid var(--gray-100);">
+              <span style="font-size: 13px; color: ${okrColors[krIdx]}; font-weight: 600;">클릭하여 기록하기 →</span>
+            </div>
+          </div>
+        `;
       });
 
-      container.innerHTML = html;
+      krCardsHtml += '</div>';
+
+      // 오늘 기록 내역 (삭제 기능 포함)
+      let todayRecordsHtml = '';
+      if (okrState.todayLogs.length > 0) {
+        todayRecordsHtml = `
+          <div class="card" style="background: var(--gray-50);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">
+                📋 오늘 기록 내역 (${okrState.todayLogs.length}건)
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
+              ${okrState.todayLogs.map(log => {
+                const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                const kpi = okrState.kpis.find(k => k.id === log.kpiId);
+                const kr = okrState.keyResults.find(k => k.id === log.krId);
+                const krIdx = okrState.keyResults.findIndex(k => k.id === log.krId);
+                const logTime = log.registeredTime || '';
+                return `
+                  <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[krIdx] || 'var(--gray-300)'};">
+                    <span style="font-size: 20px;">${getOkrLagIcon(lag?.name || '')}</span>
+                    <div style="flex: 1;">
+                      <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${lag?.name || '업무'}</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">${kr?.name || ''} → ${kpi?.name || ''}</div>
+                    </div>
+                    <div style="text-align: right;">
+                      <div style="font-size: 13px; font-weight: 700; color: var(--success);">+${log.resultValue || 1}</div>
+                      ${logTime ? `<div style="font-size: 10px; color: var(--gray-400);">${logTime}</div>` : ''}
+                    </div>
+                    <button onclick="deleteOkrLog('${log.id}')" style="background: none; border: none; color: var(--gray-400); cursor: pointer; padding: 4px 8px; font-size: 14px;" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--gray-400)'" title="삭제">🗑️</button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = krCardsHtml + todayRecordsHtml;
 
       // 오늘 기록 요약 업데이트
       updateOkrTodaySummary();
@@ -10884,6 +10913,76 @@
       `).join('');
     }
 
+    // KPI 필터 업데이트
+    function updateKpiFilter(key, value) {
+      okrState.kpiFilter[key] = value;
+      localStorage.setItem('okrKpiFilter', JSON.stringify(okrState.kpiFilter));
+      renderOkrDashboard();
+    }
+
+    // KR 선택 모달 열기 (업무기록용)
+    function openKrSelectionModal(krId) {
+      const kr = okrState.keyResults.find(k => k.id === krId);
+      const krIdx = okrState.keyResults.findIndex(k => k.id === krId);
+      const kpisForKR = okrState.kpis.filter(k => k.keyResultId === krId);
+
+      if (!kr) return;
+
+      showModal(`
+        <div style="padding: 24px; max-width: 600px;">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid ${okrColors[krIdx]};">
+            <span style="font-size: 32px;">${okrIcons[krIdx] || '📊'}</span>
+            <div>
+              <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${kr.name}</div>
+              <div style="font-size: 13px; color: var(--gray-500);">달성률: ${calcOkrKRRate(kr.id)}%</div>
+            </div>
+          </div>
+
+          <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">📊 KPI 선택 → 후행지표 기록</div>
+
+          <div style="display: flex; flex-direction: column; gap: 16px; max-height: 400px; overflow-y: auto;">
+            ${kpisForKR.map(kpi => {
+              const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+              const kpiRate = calcOkrKPIRate(kpi.id);
+              return `
+                <div style="background: var(--gray-50); border-radius: 12px; padding: 16px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <div style="font-size: 14px; font-weight: 600; color: var(--gray-800);">📂 ${kpi.name}</div>
+                    <span style="font-size: 12px; color: ${kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)'}; font-weight: 600;">${kpiRate}%</span>
+                  </div>
+                  ${kpi.leadingIndicator ? `<div style="font-size: 11px; color: var(--gray-500); margin-bottom: 12px; padding: 6px 10px; background: white; border-radius: 6px;">📌 선행지표: ${kpi.leadingIndicator}</div>` : ''}
+                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;">
+                    ${lagsForKPI.map(lag => {
+                      const isFavorite = okrState.favorites.includes(lag.id);
+                      return `
+                        <div onclick="recordOkrWorkFromModal('${kr.id}', '${kpi.id}', '${lag.id}')" style="background: white; border: 2px solid var(--gray-200); border-radius: 10px; padding: 12px; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'; this.style.transform='translateY(-2px)'" onmouseout="this.style.borderColor='var(--gray-200)'; this.style.transform='none'">
+                          <div style="position: absolute; top: 6px; right: 6px; font-size: 12px; opacity: ${isFavorite ? 1 : 0.3};">⭐</div>
+                          <div style="font-size: 24px; margin-bottom: 6px;">${getOkrLagIcon(lag.name)}</div>
+                          <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
+                          <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 6px;">${lag.version}버전</div>
+                          <div style="background: ${okrColors[krIdx]}; color: white; padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 700;">+1</div>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <div style="margin-top: 20px; text-align: right;">
+            <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // 모달에서 업무 기록 (시간 데이터 포함)
+    async function recordOkrWorkFromModal(krId, kpiId, lagId) {
+      closeModal();
+      await recordOkrWork(krId, kpiId, lagId);
+    }
+
     // 검색 필터
     function filterOkrRecordButtons() {
       const searchInput = document.getElementById('okrRecordSearch');
@@ -10919,14 +11018,27 @@
     let undoTimeout = null;
 
     // 업무 기록
+    // 시간 포맷 함수
+    function formatTime(date) {
+      const hours = date.getHours().toString().padStart(2, '0');
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      return `${hours}:${minutes}`;
+    }
+
     async function recordOkrWork(krId, kpiId, lagId) {
       try {
+        const now = new Date();
+        const registeredTime = formatTime(now);
+
         const log = {
           date: okrToday,
           memberId: state.currentUser?.uid || 'anonymous',
           memberName: state.currentUser?.name || '사용자',
           krId, kpiId, laggingIndicatorId: lagId,
           resultValue: 1,
+          // 시간 데이터 추가
+          registeredTime: registeredTime,
+          registeredTimestamp: now.getTime(),
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
@@ -10949,6 +11061,38 @@
       } catch (e) {
         console.error('기록 오류:', e);
         showToast('기록 실패', 'error');
+      }
+    }
+
+    // 업무기록 삭제 (확인 절차 포함)
+    async function deleteOkrLog(logId) {
+      if (!logId) return;
+
+      const log = okrState.dailyLogs.find(l => l.id === logId);
+      if (!log) {
+        showToast('기록을 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+      const confirmMsg = `"${lag?.name || '업무'}" 기록을 삭제하시겠습니까?`;
+
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        await db.collection('okr_dailyLogs').doc(logId).delete();
+
+        // 로컬 상태에서 제거
+        okrState.dailyLogs = okrState.dailyLogs.filter(l => l.id !== logId);
+        okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+
+        showToast('기록이 삭제되었습니다', 'success');
+
+        renderOkrDashboard();
+        renderOkrRecord();
+      } catch (e) {
+        console.error('삭제 오류:', e);
+        showToast('삭제 실패', 'error');
       }
     }
 
