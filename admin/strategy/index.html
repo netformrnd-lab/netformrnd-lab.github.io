@@ -851,6 +851,10 @@
             <span class="icon">🔬</span>
             <span>실험분석</span>
           </div>
+          <div class="nav-item" data-tab="change-logs" onclick="switchTab('change-logs')">
+            <span class="icon">📋</span>
+            <span>변경이력</span>
+          </div>
         </div>
 
         <div class="nav-section">
@@ -1093,6 +1097,17 @@
           <p class="page-desc">A/B 테스트 결과를 비교 분석하세요</p>
         </div>
         <div id="okrExperimentContent">
+          <!-- 동적으로 렌더링 -->
+        </div>
+      </div>
+
+      <!-- 변경이력 -->
+      <div id="tab-change-logs" class="tab-content">
+        <div class="page-header">
+          <h1 class="page-title">📋 변경이력</h1>
+          <p class="page-desc">전략사이클에서 변경된 모든 데이터를 확인하세요</p>
+        </div>
+        <div id="changeLogsContent">
           <!-- 동적으로 렌더링 -->
         </div>
       </div>
@@ -1772,6 +1787,105 @@
         case 'okr-record': renderOkrRecord(); break;
         case 'okr-settings': renderOkrSettings(); break;
         case 'okr-experiment': renderOkrExperiment(); break;
+        case 'change-logs': renderChangeLogs(); break;
+      }
+    }
+
+    // 변경이력 렌더링
+    async function renderChangeLogs() {
+      const container = document.getElementById('changeLogsContent');
+      if (!container) return;
+
+      container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--gray-500);">불러오는 중...</div>';
+
+      try {
+        const snapshot = await db.collection('okr_changeLogs')
+          .orderBy('timestamp', 'desc')
+          .limit(100)
+          .get();
+
+        const logs = [];
+        snapshot.forEach(doc => logs.push({ id: doc.id, ...doc.data() }));
+
+        if (logs.length === 0) {
+          container.innerHTML = `
+            <div class="card" style="text-align: center; padding: 60px;">
+              <div style="font-size: 64px; margin-bottom: 16px;">📋</div>
+              <div style="font-size: 18px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">변경 이력이 없습니다</div>
+              <div style="font-size: 14px; color: var(--gray-500);">목표설정, 업무기록 등에서 데이터를 수정하면<br>이곳에 이력이 기록됩니다.</div>
+            </div>
+          `;
+          return;
+        }
+
+        const getActionLabel = (action) => {
+          switch (action) {
+            case 'create': return { text: '추가', color: 'var(--success)', bg: 'var(--success-light)' };
+            case 'update': return { text: '수정', color: 'var(--primary)', bg: 'var(--primary-light)' };
+            case 'delete': return { text: '삭제', color: 'var(--danger)', bg: 'var(--danger-light)' };
+            default: return { text: action, color: 'var(--gray-600)', bg: 'var(--gray-100)' };
+          }
+        };
+
+        const getEntityLabel = (type) => {
+          switch (type) {
+            case 'laggingIndicator': return '후행지표';
+            case 'kpi': return 'KPI';
+            case 'keyResult': return 'KR';
+            case 'dailyLog': return '업무기록';
+            default: return type;
+          }
+        };
+
+        const formatTimestamp = (ts) => {
+          if (!ts) return '-';
+          const date = ts.toDate ? ts.toDate() : new Date(ts);
+          return date.toLocaleString('ko-KR', {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+          });
+        };
+
+        container.innerHTML = `
+          <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+              <div style="font-size: 16px; font-weight: 700;">최근 변경 이력 (${logs.length}건)</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 12px; max-height: 600px; overflow-y: auto;">
+              ${logs.map(log => {
+                const action = getActionLabel(log.action);
+                const entity = getEntityLabel(log.entityType);
+                let detail = '';
+
+                if (log.data?.changes) {
+                  const changes = log.data.changes;
+                  if (changes.name) {
+                    detail = `"${changes.name.from}" → "${changes.name.to}"`;
+                  }
+                } else if (log.data?.name) {
+                  detail = `"${log.data.name}"`;
+                }
+
+                return `
+                  <div style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--gray-50); border-radius: 10px;">
+                    <span style="background: ${action.bg}; color: ${action.color}; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap;">${action.text}</span>
+                    <div style="flex: 1;">
+                      <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
+                        ${entity} ${detail}
+                      </div>
+                      <div style="font-size: 12px; color: var(--gray-500);">
+                        ${log.userName || '사용자'} · ${formatTimestamp(log.timestamp)}
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      } catch (e) {
+        console.error('변경이력 로드 오류:', e);
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--danger);">로드 실패</div>';
       }
     }
 
@@ -10968,7 +11082,7 @@
                             const isFavorite = okrState.favorites.includes(lag.id);
                             return `
                               <div id="lag-btn-${lag.id}" style="background: white; border: 2px solid var(--gray-200); border-radius: 8px; padding: 10px 6px; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'" onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='var(--gray-200)'">
-                                <div onclick="event.stopPropagation(); confirmDeleteLag('${lag.id}', '${lag.name}')" style="position: absolute; top: 2px; left: 2px; font-size: 10px; color: var(--gray-400); cursor: pointer; padding: 2px;" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--gray-400)'" title="삭제">✕</div>
+                                <div onclick="event.stopPropagation(); showEditLagForm('${lag.id}')" style="position: absolute; top: 2px; left: 2px; font-size: 10px; color: var(--gray-400); cursor: pointer; padding: 2px;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--gray-400)'" title="수정">✏️</div>
                                 <div style="position: absolute; top: 2px; right: 2px; font-size: 10px; opacity: ${isFavorite ? 1 : 0.3};">⭐</div>
                                 <div onclick="selectLagForRecord('${kr.id}', '${kpi.id}', '${lag.id}', ${krIdx})" style="font-size: 20px; margin-bottom: 4px;">${getOkrLagIcon(lag.name)}</div>
                                 <div onclick="selectLagForRecord('${kr.id}', '${kpi.id}', '${lag.id}', ${krIdx})" style="font-size: 11px; font-weight: 600; color: var(--gray-700); word-break: keep-all;">${lag.name}</div>
@@ -11088,6 +11202,9 @@
         // 로컬 상태 업데이트
         okrState.laggingIndicators.push(lagWithId);
 
+        // 변경 이력 저장
+        await saveChangeLog('laggingIndicator', 'create', { id: docRef.id, name, version });
+
         showToast(`"${name}" 추가됨`, 'success');
 
         // 모달 새로고침
@@ -11130,6 +11247,139 @@
       `;
     }
 
+    // 후행지표 수정 폼 표시
+    function showEditLagForm(lagId) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+      const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+      const krIdx = kr ? okrState.keyResults.findIndex(k => k.id === kr.id) : 0;
+
+      const formArea = document.getElementById('workRecordFormArea');
+      if (!formArea) return;
+
+      formArea.innerHTML = `
+        <div style="width: 100%;">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid ${okrColors[krIdx]};">
+            <span style="font-size: 28px;">✏️</span>
+            <div>
+              <div style="font-size: 16px; font-weight: 700; color: var(--gray-800);">후행지표 수정</div>
+              <div style="font-size: 11px; color: var(--gray-500);">이름 및 버전 변경</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              📝 지표 이름 <span style="color: var(--danger);">*</span>
+            </label>
+            <input type="text" id="editLagName" value="${lag.name}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              🏷️ 버전
+            </label>
+            <select id="editLagVersion" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+              <option value="A" ${lag.version === 'A' ? 'selected' : ''}>A버전</option>
+              <option value="B" ${lag.version === 'B' ? 'selected' : ''}>B버전</option>
+              <option value="C" ${lag.version === 'C' ? 'selected' : ''}>C버전</option>
+            </select>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              🎯 목표 수량
+            </label>
+            <input type="number" id="editLagTarget" value="${lag.target || 10}" min="1" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+          </div>
+
+          <div style="display: flex; gap: 12px;">
+            <button onclick="cancelDeleteLag()" style="flex: 1; padding: 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+            <button onclick="executeEditLag('${lagId}')" style="flex: 1; padding: 12px; background: ${okrColors[krIdx]}; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">저장</button>
+          </div>
+
+          <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button onclick="confirmDeleteLag('${lagId}', '${lag.name}')" style="width: 100%; padding: 10px; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">🗑️ 이 지표 삭제</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // 후행지표 수정 실행
+    async function executeEditLag(lagId) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      const newName = document.getElementById('editLagName')?.value?.trim();
+      const newVersion = document.getElementById('editLagVersion')?.value || 'A';
+      const newTarget = parseInt(document.getElementById('editLagTarget')?.value) || 10;
+
+      if (!newName) {
+        showToast('지표 이름을 입력해주세요', 'error');
+        return;
+      }
+
+      const oldName = lag.name;
+      const oldVersion = lag.version;
+
+      try {
+        await db.collection('okr_laggingIndicators').doc(lagId).update({
+          name: newName,
+          version: newVersion,
+          target: newTarget,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 변경 이력 저장
+        await saveChangeLog('laggingIndicator', 'update', {
+          id: lagId,
+          changes: {
+            name: { from: oldName, to: newName },
+            version: { from: oldVersion, to: newVersion }
+          }
+        });
+
+        // 로컬 상태 업데이트
+        lag.name = newName;
+        lag.version = newVersion;
+        lag.target = newTarget;
+
+        showToast('수정되었습니다', 'success');
+
+        // 모달 새로고침
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        if (kpi) {
+          const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+          if (kr) {
+            closeModal();
+            openKrSelectionModal(kr.id);
+            return;
+          }
+        }
+        cancelDeleteLag();
+      } catch (e) {
+        console.error('후행지표 수정 오류:', e);
+        showToast('수정 실패', 'error');
+      }
+    }
+
+    // 변경 이력 저장
+    async function saveChangeLog(entityType, action, data) {
+      try {
+        await db.collection('okr_changeLogs').add({
+          entityType, // 'laggingIndicator', 'kpi', 'keyResult', 'dailyLog'
+          action, // 'create', 'update', 'delete'
+          data,
+          userId: state.currentUser?.uid || 'anonymous',
+          userName: state.currentUser?.name || '사용자',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) {
+        console.error('변경 이력 저장 오류:', e);
+      }
+    }
+
     // 삭제 취소
     function cancelDeleteLag() {
       const formArea = document.getElementById('workRecordFormArea');
@@ -11157,6 +11407,9 @@
 
       try {
         await db.collection('okr_laggingIndicators').doc(lagId).delete();
+
+        // 변경 이력 저장
+        await saveChangeLog('laggingIndicator', 'delete', { id: lagId, name: lag.name });
 
         // 로컬 상태에서 제거
         okrState.laggingIndicators = okrState.laggingIndicators.filter(l => l.id !== lagId);
