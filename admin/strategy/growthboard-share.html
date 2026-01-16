@@ -628,13 +628,26 @@
   <div id="app" style="display: none;">
     <div class="header">
       <div class="header-inner">
-        <h1>📊 팀 & 개인 그로스보드</h1>
+        <h1>📊 그로스보드</h1>
         <div class="header-meta">
           <div class="badge">🔒 읽기 전용</div>
           <div class="snapshot-date" id="snapshotDate"></div>
         </div>
       </div>
     </div>
+
+    <!-- 탭 네비게이션 -->
+    <div style="background: white; border-bottom: 2px solid var(--gray-200); box-shadow: 0 2px 4px rgba(0,0,0,0.04);">
+      <div style="max-width: 1200px; margin: 0 auto; padding: 0 32px; display: flex; gap: 8px;">
+        <button id="tabTeam" onclick="switchTab('team')" style="padding: 16px 24px; border: none; background: none; font-size: 15px; font-weight: 600; color: var(--primary); cursor: pointer; position: relative; border-bottom: 3px solid var(--primary);">
+          📈 팀 그로스보드
+        </button>
+        <button id="tabPersonal" onclick="switchTab('personal')" style="padding: 16px 24px; border: none; background: none; font-size: 15px; font-weight: 600; color: var(--gray-500); cursor: pointer; position: relative; border-bottom: 3px solid transparent;">
+          👤 개인 그로스보드
+        </button>
+      </div>
+    </div>
+
     <div class="container" id="content"></div>
     <div class="footer">
       <div>이 페이지는 읽기 전용 공유 페이지입니다.</div>
@@ -666,6 +679,33 @@
 
     // 스냅샷 데이터
     let snapshotData = null;
+
+    // 현재 탭
+    let currentTab = 'team'; // 'team' 또는 'personal'
+
+    // 탭 전환
+    function switchTab(tab) {
+      currentTab = tab;
+
+      // 탭 버튼 스타일 업데이트
+      const teamBtn = document.getElementById('tabTeam');
+      const personalBtn = document.getElementById('tabPersonal');
+
+      if (tab === 'team') {
+        teamBtn.style.color = 'var(--primary)';
+        teamBtn.style.borderBottomColor = 'var(--primary)';
+        personalBtn.style.color = 'var(--gray-500)';
+        personalBtn.style.borderBottomColor = 'transparent';
+      } else {
+        teamBtn.style.color = 'var(--gray-500)';
+        teamBtn.style.borderBottomColor = 'transparent';
+        personalBtn.style.color = 'var(--primary)';
+        personalBtn.style.borderBottomColor = 'var(--primary)';
+      }
+
+      // 컨텐츠 렌더링
+      render();
+    }
 
     // URL에서 토큰 추출
     function getTokenFromUrl() {
@@ -1048,8 +1088,125 @@
       `;
     }
 
+    // 개인 그로스보드 탭 렌더링 (독립 탭)
+    function renderPersonalGrowthboardTab() {
+      const container = document.getElementById('content');
+      if (!container || !snapshotData) return;
+
+      // 팀원별 통계 집계
+      const memberStats = {};
+
+      snapshotData.dailyLogs.forEach(log => {
+        const memberId = log.memberId || 'unknown';
+        const memberName = log.memberName || '알 수 없음';
+
+        if (!memberStats[memberId]) {
+          memberStats[memberId] = {
+            id: memberId,
+            name: memberName,
+            totalCount: 0,
+            activityCount: 0,
+            resultValue: 0,
+            krContributions: {}
+          };
+        }
+
+        const lag = snapshotData.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        const isActivity = lag && lag.type !== 'result';
+        const value = log.resultValue || 0;
+
+        memberStats[memberId].totalCount += value;
+
+        if (isActivity) {
+          memberStats[memberId].activityCount += value;
+        } else if (lag && lag.type === 'result') {
+          const resultVal = lag.valuePerUnit > 0 ? value * lag.valuePerUnit : value;
+          memberStats[memberId].resultValue += resultVal;
+        }
+
+        // KR별 기여도
+        const krId = log.krId;
+        if (krId) {
+          if (!memberStats[memberId].krContributions[krId]) {
+            memberStats[memberId].krContributions[krId] = 0;
+          }
+          memberStats[memberId].krContributions[krId] += value;
+        }
+      });
+
+      // 배열로 변환 및 정렬
+      const memberArray = Object.values(memberStats).sort((a, b) => b.totalCount - a.totalCount);
+
+      container.innerHTML = `
+        <!-- 개인 그로스보드 -->
+        <div class="card">
+          <div class="card-title">👤 개인 그로스보드</div>
+          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">팀원별 활동 현황 및 KR 기여도를 확인하세요</p>
+          ${memberArray.length > 0 ? `
+          <div style="overflow-x: auto;">
+            <table class="kpi-table">
+              <thead>
+                <tr>
+                  <th style="text-align: left; min-width: 100px;">팀원</th>
+                  <th style="text-align: center;">총 활동</th>
+                  <th style="text-align: center;">행동지표</th>
+                  <th style="text-align: right;">성과지표</th>
+                  ${snapshotData.keyResults.map((kr, idx) => `
+                    <th style="text-align: center; color: ${okrColors[idx]}; min-width: 80px;">
+                      ${kr.name}
+                    </th>
+                  `).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${memberArray.map(member => `
+                  <tr>
+                    <td style="font-weight: 600; color: var(--gray-800);">${member.name}</td>
+                    <td style="text-align: center; font-weight: 700; color: var(--primary);">${member.totalCount}건</td>
+                    <td style="text-align: center; color: var(--gray-700);">${member.activityCount}건</td>
+                    <td style="text-align: right; font-weight: 600; color: var(--success);">${formatAmountWithSummary(member.resultValue, '원')}</td>
+                    ${snapshotData.keyResults.map((kr, idx) => {
+                      const krCount = member.krContributions[kr.id] || 0;
+                      return `
+                        <td style="text-align: center;">
+                          ${krCount > 0 ? `
+                            <span style="display: inline-block; padding: 4px 10px; background: ${okrColors[idx]}15; color: ${okrColors[idx]}; border-radius: 12px; font-size: 12px; font-weight: 600;">
+                              ${krCount}건
+                            </span>
+                          ` : '<span style="color: var(--gray-300);">-</span>'}
+                        </td>
+                      `;
+                    }).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          ` : `
+          <div style="text-align: center; padding: 60px 20px; color: var(--gray-400);">
+            <div style="font-size: 48px; margin-bottom: 16px;">👥</div>
+            <div style="font-size: 15px; font-weight: 500;">팀원 활동 데이터가 없습니다</div>
+            <div style="font-size: 13px; margin-top: 8px;">업무 기록을 추가하면 여기에 표시됩니다</div>
+          </div>
+          `}
+        </div>
+      `;
+    }
+
     // 렌더링
     function render() {
+      const container = document.getElementById('content');
+      if (!container || !snapshotData) return;
+
+      if (currentTab === 'team') {
+        renderTeamGrowthboard();
+      } else {
+        renderPersonalGrowthboardTab();
+      }
+    }
+
+    // 팀 그로스보드 렌더링
+    function renderTeamGrowthboard() {
       const container = document.getElementById('content');
       if (!container || !snapshotData) return;
 
@@ -1226,8 +1383,6 @@
             </div>
           </div>
         </div>
-
-        ${renderPersonalGrowthboard()}
       `;
     }
 
