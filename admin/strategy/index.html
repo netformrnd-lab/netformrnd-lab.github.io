@@ -10924,7 +10924,7 @@
               </select>
               <select id="kpiFilterKR" onchange="updateKpiFilter('krId', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
                 <option value="all" ${okrState.kpiFilter.krId === 'all' ? 'selected' : ''}>전체 KR</option>
-                ${okrState.keyResults.map((kr, idx) => `<option value="${kr.id}" ${okrState.kpiFilter.krId === kr.id ? 'selected' : ''}>${okrIcons[idx] || '📊'} ${kr.name}</option>`).join('')}
+                ${okrState.keyResults.map((kr, idx) => `<option value="${kr.id}" ${okrState.kpiFilter.krId === kr.id ? 'selected' : ''}>● ${kr.name}</option>`).join('')}
               </select>
               <select id="kpiFilterStatus" onchange="updateKpiFilter('status', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
                 <option value="all" ${okrState.kpiFilter.status === 'all' ? 'selected' : ''}>전체 상태</option>
@@ -10960,14 +10960,42 @@
                   }
                   // KR 순서대로 정렬
                   filtered = filtered.sort((a, b) => a.krIdx - b.krIdx);
-                  return filtered.length > 0 ? filtered.map(kpi => {
+
+                  if (filtered.length === 0) {
+                    return '<tr><td colspan="6" style="padding: 30px; text-align: center; color: var(--gray-400);">필터 조건에 맞는 KPI가 없습니다</td></tr>';
+                  }
+
+                  // KR별 rowspan 계산
+                  const krGroups = {};
+                  filtered.forEach(kpi => {
+                    const krId = kpi.keyResultId;
+                    if (!krGroups[krId]) krGroups[krId] = [];
+                    krGroups[krId].push(kpi);
+                  });
+
+                  // 이미 렌더링된 KR 추적
+                  const renderedKRs = new Set();
+
+                  return filtered.map((kpi, idx) => {
                     const statusColor = kpi.rate >= 80 ? 'var(--success)' : kpi.rate >= 50 ? 'var(--warning)' : 'var(--danger)';
                     const statusIcon = kpi.rate >= 80 ? '✅' : kpi.rate >= 50 ? '🔄' : '⚠️';
+                    const krId = kpi.keyResultId;
+                    const rowspan = krGroups[krId]?.length || 1;
+                    const showKrCell = !renderedKRs.has(krId);
+
+                    if (showKrCell) {
+                      renderedKRs.add(krId);
+                    }
+
                     return `
                       <tr style="border-bottom: 1px solid var(--gray-100);">
-                        <td style="padding: 12px; text-align: left;">
-                          <span style="padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; background: ${okrColors[kpi.krIdx]}20; color: ${okrColors[kpi.krIdx]}; white-space: nowrap;">${okrIcons[kpi.krIdx] || '📊'} ${kpi.kr?.name || '-'}</span>
+                        ${showKrCell ? `
+                        <td style="padding: 12px; text-align: left; vertical-align: middle; ${rowspan > 1 ? 'border-right: 2px solid ' + okrColors[kpi.krIdx] + ';' : ''}" rowspan="${rowspan}">
+                          <span style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; background: ${okrColors[kpi.krIdx]}15; color: ${okrColors[kpi.krIdx]}; white-space: nowrap;">
+                            <span style="font-size: 10px;">●</span> ${kpi.kr?.name || '-'}
+                          </span>
                         </td>
+                        ` : ''}
                         <td style="padding: 12px; font-weight: 500; color: var(--gray-800);">${statusIcon} ${kpi.name}</td>
                         <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">${kpi.currentValue.toLocaleString()}</td>
                         <td style="padding: 12px; text-align: right; color: var(--gray-500);">${(kpi.targetValue || 0).toLocaleString()} ${kpi.unit || ''}</td>
@@ -10981,7 +11009,7 @@
                         </td>
                       </tr>
                     `;
-                  }).join('') : '<tr><td colspan="6" style="padding: 30px; text-align: center; color: var(--gray-400);">필터 조건에 맞는 KPI가 없습니다</td></tr>';
+                  }).join('');
                 })()}
               </tbody>
             </table>
@@ -11549,13 +11577,15 @@
       const formArea = document.getElementById('workRecordFormArea');
       if (!formArea) return;
 
+      const isResultType = lag.type === 'result';
+
       formArea.innerHTML = `
         <div style="width: 100%;">
           <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid ${okrColors[krIdx]};">
             <span style="font-size: 28px;">✏️</span>
             <div>
               <div style="font-size: 16px; font-weight: 700; color: var(--gray-800);">후행지표 수정</div>
-              <div style="font-size: 11px; color: var(--gray-500);">이름 및 버전 변경</div>
+              <div style="font-size: 11px; color: var(--gray-500);">이름, 유형, 버전 변경</div>
             </div>
           </div>
 
@@ -11564,6 +11594,42 @@
               📝 지표 이름 <span style="color: var(--danger);">*</span>
             </label>
             <input type="text" id="editLagName" value="${lag.name}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+              📊 유형 <span style="color: var(--danger);">*</span>
+            </label>
+            <div style="background: var(--gray-50); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; border-left: 3px solid var(--primary);">
+              <div style="font-size: 11px; color: var(--gray-600); line-height: 1.5;">
+                💡 <strong>활동형</strong>: KR 진척도에 <span style="color: var(--gray-500); font-weight: 600;">반영 안됨</span> (업무 기록용)<br>
+                💡 <strong>성과형</strong>: KR 진척도에 <span style="color: var(--success); font-weight: 600;">반영됨</span> (목표 달성률 계산)
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid ${!isResultType ? okrColors[krIdx] : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; background: ${!isResultType ? okrColors[krIdx] + '10' : 'white'};" onclick="document.getElementById('editLagValuePerUnit').parentElement.style.display='none';">
+                <input type="radio" name="editLagType" value="activity" ${!isResultType ? 'checked' : ''} style="accent-color: ${okrColors[krIdx]};">
+                <div>
+                  <div style="font-size: 13px; font-weight: 600;">📋 활동형</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">행동 횟수 추적 (참고용)</div>
+                </div>
+              </label>
+              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid ${isResultType ? 'var(--success)' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; background: ${isResultType ? 'var(--success-light)' : 'white'};" onclick="document.getElementById('editLagValuePerUnit').parentElement.style.display='block';">
+                <input type="radio" name="editLagType" value="result" ${isResultType ? 'checked' : ''} style="accent-color: var(--success);">
+                <div>
+                  <div style="font-size: 13px; font-weight: 600;">💰 성과형</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">KPI 달성에 반영</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px; display: ${isResultType ? 'block' : 'none'};">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              💵 건당 예상 금액 (원)
+            </label>
+            <input type="number" id="editLagValuePerUnit" value="${lag.valuePerUnit || 0}" min="0" placeholder="예: 100000" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+            <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">※ 0 입력 시 수량 자체가 KPI에 합산됩니다</div>
           </div>
 
           <div style="margin-bottom: 16px;">
@@ -11604,6 +11670,8 @@
       const newName = document.getElementById('editLagName')?.value?.trim();
       const newVersion = document.getElementById('editLagVersion')?.value || 'A';
       const newTarget = parseInt(document.getElementById('editLagTarget')?.value) || 10;
+      const newType = document.querySelector('input[name="editLagType"]:checked')?.value || 'activity';
+      const newValuePerUnit = parseInt(document.getElementById('editLagValuePerUnit')?.value) || 0;
 
       if (!newName) {
         showToast('지표 이름을 입력해주세요', 'error');
@@ -11612,12 +11680,16 @@
 
       const oldName = lag.name;
       const oldVersion = lag.version;
+      const oldType = lag.type;
+      const oldValuePerUnit = lag.valuePerUnit;
 
       try {
         await db.collection('okr_laggingIndicators').doc(lagId).update({
           name: newName,
           version: newVersion,
           target: newTarget,
+          type: newType,
+          valuePerUnit: newType === 'result' ? newValuePerUnit : 0,
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
@@ -11626,7 +11698,9 @@
           id: lagId,
           changes: {
             name: { from: oldName, to: newName },
-            version: { from: oldVersion, to: newVersion }
+            version: { from: oldVersion, to: newVersion },
+            type: { from: oldType, to: newType },
+            valuePerUnit: { from: oldValuePerUnit, to: newValuePerUnit }
           }
         });
 
@@ -11634,6 +11708,8 @@
         lag.name = newName;
         lag.version = newVersion;
         lag.target = newTarget;
+        lag.type = newType;
+        lag.valuePerUnit = newType === 'result' ? newValuePerUnit : 0;
 
         showToast('수정되었습니다', 'success');
 
