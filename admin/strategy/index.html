@@ -837,7 +837,11 @@
           <!-- OKR 트래커 (메인 메뉴로 승격) -->
           <div class="nav-item" data-tab="okr-dashboard" onclick="switchTab('okr-dashboard')">
             <span class="icon">📈</span>
-            <span>그로스보드</span>
+            <span>팀 그로스보드</span>
+          </div>
+          <div class="nav-item" data-tab="okr-personal-dashboard" onclick="switchTab('okr-personal-dashboard')">
+            <span class="icon">👤</span>
+            <span>개인 그로스보드</span>
           </div>
           <div class="nav-item" data-tab="okr-record" onclick="switchTab('okr-record')">
             <span class="icon">📝</span>
@@ -1003,11 +1007,11 @@
         </div>
       </div>
 
-      <!-- OKR 트래커 - 그로스보드 -->
+      <!-- OKR 트래커 - 팀 그로스보드 -->
       <div id="tab-okr-dashboard" class="tab-content">
         <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
           <div>
-            <h1 class="page-title">📈 그로스보드</h1>
+            <h1 class="page-title">📈 팀 그로스보드</h1>
             <p class="page-desc">목표 달성 현황을 한눈에 확인하세요</p>
           </div>
           <button onclick="showGrowthboardExplanation()" style="background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 8px; padding: 8px 14px; font-size: 13px; color: var(--gray-600); cursor: pointer; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='var(--primary-light)'; this.style.borderColor='var(--primary)'; this.style.color='var(--primary)';" onmouseout="this.style.background='var(--gray-100)'; this.style.borderColor='var(--gray-300)'; this.style.color='var(--gray-600)';">
@@ -1015,6 +1019,19 @@
           </button>
         </div>
         <div id="okrDashboardContent">
+          <!-- 동적으로 렌더링 -->
+        </div>
+      </div>
+
+      <!-- OKR 트래커 - 개인 그로스보드 -->
+      <div id="tab-okr-personal-dashboard" class="tab-content">
+        <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px;">
+          <div>
+            <h1 class="page-title">👤 개인 그로스보드</h1>
+            <p class="page-desc">팀원별 활동 현황과 KR 기여도를 확인하세요</p>
+          </div>
+        </div>
+        <div id="okrPersonalDashboardContent">
           <!-- 동적으로 렌더링 -->
         </div>
       </div>
@@ -1785,6 +1802,7 @@
         case 'trendKeywords': renderTrendKeywords(); break;
         // OKR 탭들
         case 'okr-dashboard': renderOkrDashboard(); break;
+        case 'okr-personal-dashboard': renderPersonalGrowthboard(); break;
         case 'okr-record': renderOkrRecord(); break;
         case 'okr-settings': renderOkrSettings(); break;
         case 'okr-experiment': renderOkrExperiment(); break;
@@ -11013,7 +11031,7 @@
         <!-- 헤더 -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
           <div>
-            <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">📈 그로스보드</h2>
+            <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">📈 팀 그로스보드</h2>
             <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">목표 → KR → KPI → 지표</p>
           </div>
           <button onclick="openSecretLinkModal()" style="padding: 10px 18px; font-size: 13px; font-weight: 600; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
@@ -11255,6 +11273,324 @@
           ` : '<div style="color: var(--gray-400); font-size: 13px; padding: 30px; text-align: center;">오늘 기록된 업무가 없습니다<br><span style="font-size: 12px;">업무기록 탭에서 기록해보세요</span></div>'}
         </div>
       `;
+    }
+
+    // 개인 그로스보드 상태
+    let personalDashboardState = {
+      selectedMemberId: null,
+      periodFilter: 'all' // all, thisWeek, thisMonth
+    };
+
+    // 개인 그로스보드 렌더링
+    function renderPersonalGrowthboard() {
+      const container = document.getElementById('okrPersonalDashboardContent');
+      if (!container) return;
+
+      if (!okrState.objective) {
+        container.innerHTML = `
+          <div class="card" style="text-align: center; padding: 60px;">
+            <div style="font-size: 64px; margin-bottom: 16px;">🎯</div>
+            <div style="font-size: 18px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">목표가 설정되지 않았습니다</div>
+            <div style="font-size: 14px; color: var(--gray-500); margin-bottom: 20px;">[목표 설정] 탭에서 먼저 설정해주세요</div>
+            <button class="btn btn-primary" onclick="switchTab('okr-settings')">목표 설정하기</button>
+          </div>
+        `;
+        return;
+      }
+
+      // 게스트 제외한 팀원 목록
+      const teamMembers = (state.teamMembers || []).filter(m => m.role !== 'guest');
+
+      if (teamMembers.length === 0) {
+        container.innerHTML = `
+          <div class="card" style="text-align: center; padding: 60px;">
+            <div style="font-size: 64px; margin-bottom: 16px;">👥</div>
+            <div style="font-size: 18px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">팀원 정보가 없습니다</div>
+            <div style="font-size: 14px; color: var(--gray-500);">운영센터 > 시스템관리 > 팀원관리에서 설정해주세요</div>
+          </div>
+        `;
+        return;
+      }
+
+      // 기간 필터링 로직
+      const getFilteredLogs = () => {
+        let filtered = okrState.dailyLogs;
+        if (personalDashboardState.periodFilter === 'thisWeek') {
+          const today = new Date();
+          const thisMonday = new Date(today.setDate(today.getDate() - today.getDay() + 1));
+          const mondayStr = thisMonday.toISOString().split('T')[0];
+          filtered = filtered.filter(log => log.date >= mondayStr);
+        } else if (personalDashboardState.periodFilter === 'thisMonth') {
+          const today = new Date();
+          const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+          const firstDayStr = firstDay.toISOString().split('T')[0];
+          filtered = filtered.filter(log => log.date >= firstDayStr);
+        }
+        return filtered;
+      };
+
+      const filteredLogs = getFilteredLogs();
+
+      // 팀원별 데이터 집계
+      const memberStats = teamMembers.map(member => {
+        const memberLogs = filteredLogs.filter(log => log.memberId === member.id);
+
+        // 활동형 지표
+        const activityLogs = memberLogs.filter(log => {
+          const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+          return lag && lag.type !== 'result';
+        });
+        const activityCount = activityLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+
+        // 성과형 지표
+        const resultLogs = memberLogs.filter(log => {
+          const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+          return lag && lag.type === 'result';
+        });
+        let resultValue = 0;
+        resultLogs.forEach(log => {
+          const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+          const value = lag?.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+          resultValue += value;
+        });
+
+        // KR별 기여도 계산
+        const krContributions = okrState.keyResults.map((kr, krIdx) => {
+          const krLogs = memberLogs.filter(log => log.krId === kr.id);
+          const krCount = krLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+          return { kr, krIdx, count: krCount };
+        });
+
+        const totalCount = memberLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+
+        return {
+          ...member,
+          activityCount,
+          resultValue,
+          totalCount,
+          krContributions,
+          logsCount: memberLogs.length
+        };
+      });
+
+      // 총 활동량 기준 정렬
+      memberStats.sort((a, b) => b.totalCount - a.totalCount);
+
+      container.innerHTML = `
+        <!-- 헤더 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">👤 개인 그로스보드</h2>
+            <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">팀원별 활동 현황 · KR 기여도</p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <select id="personalPeriodFilter" onchange="updatePersonalPeriodFilter(this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; cursor: pointer; background: white;">
+              <option value="all" ${personalDashboardState.periodFilter === 'all' ? 'selected' : ''}>전체 기간</option>
+              <option value="thisWeek" ${personalDashboardState.periodFilter === 'thisWeek' ? 'selected' : ''}>이번 주</option>
+              <option value="thisMonth" ${personalDashboardState.periodFilter === 'thisMonth' ? 'selected' : ''}>이번 달</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 팀원 요약 테이블 -->
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            📊 팀원별 활동 요약
+          </div>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+              <thead>
+                <tr style="background: var(--gray-50);">
+                  <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200); min-width: 100px;">팀원</th>
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">총 활동</th>
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">행동지표</th>
+                  <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">성과지표</th>
+                  ${okrState.keyResults.map((kr, idx) => `
+                    <th style="padding: 12px; text-align: center; font-weight: 600; color: ${okrColors[idx]}; border-bottom: 2px solid var(--gray-200); min-width: 80px;">
+                      ${kr.name}
+                    </th>
+                  `).join('')}
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200); width: 50px;"></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${memberStats.map(member => `
+                  <tr style="border-bottom: 1px solid var(--gray-100); cursor: pointer;" onclick="selectMemberForDetail('${member.id}')" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
+                    <td style="padding: 12px; font-weight: 600; color: var(--gray-800);">
+                      ${member.name}
+                      ${member.role === 'admin' ? '<span style="font-size: 10px; color: var(--primary); margin-left: 4px;">👑</span>' : ''}
+                    </td>
+                    <td style="padding: 12px; text-align: center; font-weight: 700; color: var(--primary);">${member.totalCount}건</td>
+                    <td style="padding: 12px; text-align: center; color: var(--gray-700);">${member.activityCount}건</td>
+                    <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--success);">${formatAmountWithSummary(member.resultValue, '원')}</td>
+                    ${member.krContributions.map(krc => `
+                      <td style="padding: 12px; text-align: center;">
+                        ${krc.count > 0 ? `
+                          <span style="display: inline-block; padding: 4px 10px; background: ${okrColors[krc.krIdx]}15; color: ${okrColors[krc.krIdx]}; border-radius: 12px; font-size: 12px; font-weight: 600;">
+                            ${krc.count}건
+                          </span>
+                        ` : '<span style="color: var(--gray-300);">-</span>'}
+                      </td>
+                    `).join('')}
+                    <td style="padding: 12px; text-align: center;">
+                      <button onclick="event.stopPropagation(); selectMemberForDetail('${member.id}')" style="padding: 4px 8px; border: 1px solid var(--gray-300); border-radius: 6px; background: white; color: var(--gray-600); font-size: 11px; cursor: pointer;" onmouseover="this.style.background='var(--primary)'; this.style.color='white'; this.style.borderColor='var(--primary)'" onmouseout="this.style.background='white'; this.style.color='var(--gray-600)'; this.style.borderColor='var(--gray-300)'">상세</button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 선택된 팀원 상세 대시보드 -->
+        <div id="memberDetailDashboard">
+          ${personalDashboardState.selectedMemberId ? renderMemberDetailDashboard(personalDashboardState.selectedMemberId, filteredLogs) : `
+            <div class="card" style="text-align: center; padding: 40px;">
+              <div style="font-size: 48px; margin-bottom: 12px;">👆</div>
+              <div style="font-size: 15px; color: var(--gray-600);">위 테이블에서 팀원을 선택하면 상세 현황을 확인할 수 있습니다</div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // 팀원 상세 대시보드 렌더링
+    function renderMemberDetailDashboard(memberId, filteredLogs) {
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+      if (!member) return '';
+
+      const memberLogs = filteredLogs.filter(log => log.memberId === memberId);
+
+      // KR별 상세 분석
+      const krDetails = okrState.keyResults.map((kr, krIdx) => {
+        const krLogs = memberLogs.filter(log => log.krId === kr.id);
+        const kpisForKR = okrState.kpis.filter(k => k.keyResultId === kr.id);
+
+        const kpiDetails = kpisForKR.map(kpi => {
+          const kpiLogs = krLogs.filter(log => log.kpiId === kpi.id);
+          const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+
+          const lagDetails = lagsForKPI.map(lag => {
+            const lagLogs = kpiLogs.filter(log => log.laggingIndicatorId === lag.id);
+            const lagCount = lagLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+            return { lag, count: lagCount, logsCount: lagLogs.length };
+          }).filter(ld => ld.count > 0);
+
+          const kpiCount = kpiLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+          return { kpi, count: kpiCount, lagDetails };
+        }).filter(kd => kd.count > 0);
+
+        const krCount = krLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+        return { kr, krIdx, count: krCount, kpiDetails };
+      }).filter(krd => krd.count > 0);
+
+      // 활동 통계
+      const activityLogs = memberLogs.filter(log => {
+        const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        return lag && lag.type !== 'result';
+      });
+      const activityCount = activityLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0);
+
+      const resultLogs = memberLogs.filter(log => {
+        const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        return lag && lag.type === 'result';
+      });
+      let resultValue = 0;
+      resultLogs.forEach(log => {
+        const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        const value = lag?.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+        resultValue += value;
+      });
+
+      return `
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid var(--gray-200);">
+            <div>
+              <div style="font-size: 18px; font-weight: 700; color: var(--gray-900); display: flex; align-items: center; gap: 8px;">
+                👤 ${member.name}님의 상세 현황
+                ${member.role === 'admin' ? '<span style="font-size: 14px; color: var(--primary);">👑</span>' : ''}
+              </div>
+              <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                ${personalDashboardState.periodFilter === 'all' ? '전체 기간' : personalDashboardState.periodFilter === 'thisWeek' ? '이번 주' : '이번 달'}
+              </div>
+            </div>
+            <button onclick="clearMemberSelection()" style="padding: 8px 16px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; color: var(--gray-600); font-size: 13px; cursor: pointer;">닫기</button>
+          </div>
+
+          <!-- 활동 요약 카드 -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px;">
+            <div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 20px; border-radius: 12px;">
+              <div style="font-size: 13px; opacity: 0.9; margin-bottom: 8px;">총 활동</div>
+              <div style="font-size: 32px; font-weight: 800;">${memberLogs.reduce((sum, log) => sum + (log.resultValue || 0), 0)}건</div>
+            </div>
+            <div style="background: var(--gray-50); border-left: 4px solid var(--gray-400); padding: 20px; border-radius: 12px;">
+              <div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">📋 행동지표</div>
+              <div style="font-size: 28px; font-weight: 700; color: var(--gray-800);">${activityCount}건</div>
+            </div>
+            <div style="background: var(--success-light); border-left: 4px solid var(--success); padding: 20px; border-radius: 12px;">
+              <div style="font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">💰 성과지표</div>
+              <div style="font-size: 20px; font-weight: 700; color: var(--success);">${formatAmountWithSummary(resultValue, '원')}</div>
+            </div>
+          </div>
+
+          <!-- KR별 기여 상세 -->
+          ${krDetails.length > 0 ? `
+            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              📈 KR별 기여 상세
+            </div>
+            ${krDetails.map(krd => `
+              <div style="margin-bottom: 20px; padding: 16px; background: ${okrColors[krd.krIdx]}08; border-radius: 12px; border-left: 4px solid ${okrColors[krd.krIdx]};">
+                <div style="font-size: 15px; font-weight: 700; color: ${okrColors[krd.krIdx]}; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                  <span>${okrIcons[krd.krIdx] || '📊'} ${krd.kr.name}</span>
+                  <span style="font-size: 16px; padding: 4px 12px; background: ${okrColors[krd.krIdx]}20; border-radius: 12px;">${krd.count}건</span>
+                </div>
+                ${krd.kpiDetails.map(kpd => `
+                  <div style="margin-left: 16px; margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px;">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; display: flex; justify-content: space-between;">
+                      <span>● ${kpd.kpi.name}</span>
+                      <span style="color: ${okrColors[krd.krIdx]};">${kpd.count}건</span>
+                    </div>
+                    ${kpd.lagDetails.map(ld => `
+                      <div style="margin-left: 16px; font-size: 12px; color: var(--gray-600); padding: 6px 0; display: flex; justify-content: space-between; border-bottom: 1px solid var(--gray-100);">
+                        <span>${getOkrLagIcon(ld.lag.name)} ${ld.lag.name}</span>
+                        <span style="font-weight: 600; color: var(--gray-700);">${ld.count}건 (${ld.logsCount}회)</span>
+                      </div>
+                    `).join('')}
+                  </div>
+                `).join('')}
+              </div>
+            `).join('')}
+          ` : `
+            <div style="text-align: center; padding: 30px; color: var(--gray-400); font-size: 13px;">
+              아직 기록된 활동이 없습니다
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // 팀원 선택
+    function selectMemberForDetail(memberId) {
+      personalDashboardState.selectedMemberId = memberId;
+      renderPersonalGrowthboard();
+
+      // 상세 대시보드로 스크롤
+      setTimeout(() => {
+        const detailEl = document.getElementById('memberDetailDashboard');
+        if (detailEl) detailEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+
+    // 팀원 선택 해제
+    function clearMemberSelection() {
+      personalDashboardState.selectedMemberId = null;
+      renderPersonalGrowthboard();
+    }
+
+    // 기간 필터 업데이트
+    function updatePersonalPeriodFilter(period) {
+      personalDashboardState.periodFilter = period;
+      renderPersonalGrowthboard();
     }
 
     // OKR 업무기록 렌더링
