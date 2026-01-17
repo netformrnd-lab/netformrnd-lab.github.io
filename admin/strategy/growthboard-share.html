@@ -635,7 +635,7 @@
           </button>
         </div>
         <div class="header-meta">
-          <div class="badge">🔒 읽기 전용</div>
+          <div class="badge" id="modeBadge">🔒 읽기 전용</div>
           <div class="snapshot-date" id="snapshotDate"></div>
         </div>
       </div>
@@ -718,14 +718,14 @@
       return params.get('token');
     }
 
-    // 토큰 검증 및 스냅샷 로드
+    // 토큰 검증 및 실시간 데이터 로드
     async function validateAndLoadSnapshot(token) {
       if (!token) {
         return { valid: false, error: '토큰이 없습니다' };
       }
 
       try {
-        // 스냅샷 링크 조회
+        // 공유 링크 조회
         const snapshot = await db.collection('growthboardShareLinks')
           .where('token', '==', token)
           .get();
@@ -741,6 +741,40 @@
           return { valid: false, error: '비활성화된 링크입니다' };
         }
 
+        // objectiveId가 있으면 실시간 데이터 로드, 없으면 기존 스냅샷 사용 (하위 호환성)
+        let data;
+        if (linkData.objectiveId) {
+          // 실시간 데이터 로드
+          const objectiveDoc = await db.collection('okr_objective').doc(linkData.objectiveId).get();
+          if (!objectiveDoc.exists) {
+            return { valid: false, error: '목표를 찾을 수 없습니다' };
+          }
+
+          const objective = { id: objectiveDoc.id, ...objectiveDoc.data() };
+
+          // KR, KPI, 지표, 로그, 개인목표 실시간 로드
+          const [krSnapshot, kpiSnapshot, lagSnapshot, logSnapshot, personalTargetSnapshot] = await Promise.all([
+            db.collection('okr_keyResults').where('objectiveId', '==', linkData.objectiveId).get(),
+            db.collection('okr_kpis').where('objectiveId', '==', linkData.objectiveId).get(),
+            db.collection('okr_laggingIndicators').where('objectiveId', '==', linkData.objectiveId).get(),
+            db.collection('okr_dailyLogs').where('objectiveId', '==', linkData.objectiveId).get(),
+            db.collection('okr_personalTargets').get()
+          ]);
+
+          data = {
+            objective,
+            keyResults: krSnapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            kpis: kpiSnapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            laggingIndicators: lagSnapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            dailyLogs: logSnapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            personalTargets: personalTargetSnapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            snapshotCreatedAt: new Date().toISOString()  // 실시간 로드 시각
+          };
+        } else {
+          // 기존 스냅샷 데이터 사용 (하위 호환성)
+          data = linkData.snapshotData;
+        }
+
         // 조회수 증가
         await db.collection('growthboardShareLinks').doc(doc.id).update({
           viewCount: firebase.firestore.FieldValue.increment(1),
@@ -749,9 +783,10 @@
 
         return {
           valid: true,
-          data: linkData.snapshotData,
+          data: data,
           createdAt: linkData.createdAt,
-          linkName: linkData.name
+          linkName: linkData.name,
+          isRealtime: !!linkData.objectiveId  // 실시간 여부
         };
       } catch (e) {
         console.error('검증 오류:', e);
@@ -1661,9 +1696,37 @@
       `;
     }
 
+    // 자동 갱신용 전역 변수
+    let autoRefreshInterval = null;
+    let currentToken = null;
+    let isRealtime = false;
+
+    // 데이터 갱신 함수
+    async function refreshData() {
+      if (!currentToken) return;
+
+      try {
+        const result = await validateAndLoadSnapshot(currentToken);
+        if (result.valid) {
+          snapshotData = result.data;
+          render();
+
+          // 마지막 업데이트 시각 표시
+          const dateEl = document.getElementById('snapshotDate');
+          if (dateEl && isRealtime) {
+            const now = new Date();
+            dateEl.textContent = `최종 업데이트: ${now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+          }
+        }
+      } catch (e) {
+        console.error('자동 갱신 실패:', e);
+      }
+    }
+
     // 초기화
     async function init() {
       const token = getTokenFromUrl();
+      currentToken = token;
       const result = await validateAndLoadSnapshot(token);
 
       document.getElementById('loading').style.display = 'none';
@@ -1675,12 +1738,34 @@
       }
 
       snapshotData = result.data;
+      isRealtime = result.isRealtime;
 
-      // 스냅샷 날짜 표시
+      // 배지 업데이트
+      const badgeEl = document.getElementById('modeBadge');
+      if (badgeEl) {
+        if (isRealtime) {
+          badgeEl.textContent = '🔄 실시간 동기화';
+          badgeEl.style.background = 'rgba(255,255,255,0.3)';
+        } else {
+          badgeEl.textContent = '📸 스냅샷';
+          badgeEl.style.background = 'rgba(255,255,255,0.2)';
+        }
+      }
+
+      // 날짜 표시
       const dateEl = document.getElementById('snapshotDate');
-      if (dateEl && result.createdAt) {
-        const date = new Date(result.createdAt);
-        dateEl.textContent = `스냅샷: ${date.toLocaleDateString('ko-KR')} ${date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;
+      if (dateEl) {
+        if (isRealtime) {
+          const now = new Date();
+          dateEl.textContent = `최종 업데이트: ${now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+
+          // 1분마다 자동 갱신
+          autoRefreshInterval = setInterval(refreshData, 60000); // 60초 = 1분
+        } else {
+          // 스냅샷 모드
+          const date = new Date(result.createdAt);
+          dateEl.textContent = `생성일: ${date.toLocaleDateString('ko-KR')} ${date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;
+        }
       }
 
       document.getElementById('app').style.display = 'block';
@@ -1688,6 +1773,13 @@
     }
 
     init();
+
+    // 페이지 언로드 시 타이머 정리
+    window.addEventListener('beforeunload', () => {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+      }
+    });
   </script>
 </body>
 </html>
