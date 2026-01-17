@@ -2080,11 +2080,137 @@
 
     // OKR 기간 전환
     function switchOkrPeriod(period) {
-      document.querySelectorAll('.tab-nav .tab-btn').forEach(btn => {
+      // 탭 활성화 상태 변경
+      document.querySelectorAll('#tab-okr .tab-nav .tab-btn').forEach(btn => {
         btn.classList.remove('active');
       });
       event.currentTarget.classList.add('active');
-      // TODO: 기간별 OKR 데이터 로드
+
+      // 기간 상태 저장
+      okrState.okrPeriod = period;
+
+      // 기간별 OKR 데이터 로드
+      const container = document.getElementById('okrContent');
+      if (!container) return;
+
+      // 기간 정보 표시
+      let periodInfo = '';
+      const today = new Date();
+
+      if (period === 'quarterly') {
+        const quarter = Math.floor(today.getMonth() / 3) + 1;
+        periodInfo = `${today.getFullYear()}년 Q${quarter}`;
+      } else if (period === 'monthly') {
+        periodInfo = `${today.getFullYear()}년 ${today.getMonth() + 1}월`;
+      } else if (period === 'weekly') {
+        const weekNum = Math.ceil((today.getDate()) / 7);
+        periodInfo = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${weekNum}주차`;
+      }
+
+      // OKR 데이터가 없으면 기본 메시지 표시
+      if (!okrState.objective || okrState.keyResults.length === 0) {
+        container.innerHTML = `
+          <div class="card" style="text-align: center; padding: 60px;">
+            <div style="font-size: 64px; margin-bottom: 16px;">📅</div>
+            <div style="font-size: 18px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">${periodInfo}</div>
+            <div style="font-size: 14px; color: var(--gray-500); margin-bottom: 20px;">해당 기간의 OKR 데이터가 없습니다</div>
+            <div style="font-size: 13px; color: var(--gray-400);">그로스보드 탭에서 실시간 OKR 현황을 확인하세요</div>
+          </div>
+        `;
+        return;
+      }
+
+      // 기간별 로그 필터링
+      let filteredLogs = okrState.dailyLogs;
+      const startDate = new Date();
+
+      if (period === 'quarterly') {
+        // 분기별: 현재 분기의 첫날부터
+        const quarter = Math.floor(today.getMonth() / 3);
+        startDate.setMonth(quarter * 3, 1);
+      } else if (period === 'monthly') {
+        // 월별: 현재 월의 첫날부터
+        startDate.setDate(1);
+      } else if (period === 'weekly') {
+        // 주간: 이번 주 월요일부터
+        const dayOfWeek = today.getDay();
+        const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        startDate.setDate(today.getDate() - diff);
+      }
+
+      startDate.setHours(0, 0, 0, 0);
+      const startDateStr = startDate.toISOString().split('T')[0];
+      filteredLogs = okrState.dailyLogs.filter(log => log.date >= startDateStr);
+
+      // KR별 달성률 계산 (필터링된 로그 기준)
+      const krRates = okrState.keyResults.map(kr => {
+        const kpisForKR = okrState.kpis.filter(k => k.keyResultId === kr.id);
+        if (kpisForKR.length === 0) return { ...kr, rate: 0 };
+
+        const rates = kpisForKR.map(kpi => {
+          if (!kpi.targetValue) return 0;
+          const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id && l.type === 'result');
+          const totalValue = lagsForKPI.reduce((sum, lag) => {
+            const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
+            const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+            return sum + (lag.valuePerUnit > 0 ? logSum * lag.valuePerUnit : logSum);
+          }, 0);
+          return Math.min(Math.round((totalValue / kpi.targetValue) * 100), 100);
+        });
+
+        const avgRate = Math.round(rates.reduce((a, b) => a + b, 0) / rates.length);
+        return { ...kr, rate: avgRate };
+      });
+
+      // OKR 콘텐츠 렌더링
+      container.innerHTML = `
+        <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, var(--primary), #8B5CF6); border-radius: 12px; color: white;">
+          <div style="font-size: 14px; font-weight: 600; opacity: 0.9; margin-bottom: 8px;">📅 ${periodInfo}</div>
+          <div style="font-size: 18px; font-weight: 700; line-height: 1.4;">${okrState.objective.name}</div>
+        </div>
+
+        ${krRates.map((kr, idx) => `
+          <div class="okr-objective" style="margin-bottom: 16px;">
+            <div class="okr-objective-title" style="display: flex; align-items: center; justify-content: space-between; padding: 16px; background: ${okrColors[idx]}10; border-left: 4px solid ${okrColors[idx]}; border-radius: 8px; margin-bottom: 12px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span>${okrIcons[idx] || '📊'}</span>
+                <span style="font-weight: 600; color: var(--gray-800);">${kr.name}</span>
+              </div>
+              <span style="padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 700; background: ${okrColors[idx]}20; color: ${okrColors[idx]}">${kr.rate}%</span>
+            </div>
+            ${okrState.kpis.filter(k => k.keyResultId === kr.id).map(kpi => {
+              const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+              const currentValue = lagsForKPI.reduce((sum, lag) => {
+                const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
+                const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+                return sum + (lag.valuePerUnit > 0 ? logSum * lag.valuePerUnit : logSum);
+              }, 0);
+              const kpiRate = kpi.targetValue > 0 ? Math.min(Math.round((currentValue / kpi.targetValue) * 100), 100) : 0;
+
+              return `
+                <div class="okr-key-result" style="margin-bottom: 8px; padding: 12px; background: white; border-radius: 8px; border: 1px solid var(--gray-200);">
+                  <div class="okr-kr-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span class="okr-kr-title" style="font-size: 14px; font-weight: 500; color: var(--gray-700);">${kpi.name}</span>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                      <span style="font-size: 12px; color: var(--gray-500);">${formatAmountWithSummary(currentValue, kpi.unit || '')} / ${formatAmountWithSummary(kpi.targetValue || 0, kpi.unit || '')}</span>
+                      <span class="okr-kr-progress" style="font-weight: 700; color: ${kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)'};">${kpiRate}%</span>
+                    </div>
+                  </div>
+                  <div class="okr-progress-bar" style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
+                    <div class="okr-progress-fill" style="height: 100%; width: ${kpiRate}%; background: ${kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)'}; border-radius: 3px; transition: width 0.5s;"></div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `).join('')}
+
+        <div style="margin-top: 20px; padding: 16px; background: var(--gray-50); border-radius: 8px; text-align: center;">
+          <div style="font-size: 13px; color: var(--gray-500);">💡 자세한 현황은 <a href="#" onclick="switchTab('okr-dashboard'); return false;" style="color: var(--primary); font-weight: 600; text-decoration: none;">그로스보드 탭</a>에서 확인하세요</div>
+        </div>
+      `;
+
+      showToast(`${periodInfo} OKR 데이터를 불러왔습니다`, 'success');
     }
 
     // 사이드바 토글
@@ -6841,7 +6967,22 @@
     }
 
     function filterKPIByMember(memberId) {
-      // TODO: 필터링 구현
+      // 팀원별 KPI 필터링
+      okrState.kpiFilter.memberId = memberId;
+      localStorage.setItem('okrKpiFilter', JSON.stringify(okrState.kpiFilter));
+
+      // OKR 대시보드 재렌더링
+      renderOkrDashboard();
+
+      // 선택된 팀원 정보 표시
+      if (memberId === 'all') {
+        showToast('전체 팀원 KPI를 표시합니다', 'info');
+      } else {
+        const member = (state.teamMembers || []).find(m => m.id === memberId);
+        if (member) {
+          showToast(`${member.name}의 KPI를 표시합니다`, 'info');
+        }
+      }
     }
 
     // ========================================
@@ -10955,8 +11096,10 @@
       kpiFilter: JSON.parse(localStorage.getItem('okrKpiFilter') || JSON.stringify({
         period: 'all',      // all, thisWeek, thisMonth, custom
         krId: 'all',        // all 또는 특정 KR ID
-        status: 'all'       // all, inProgress, completed, behind
+        status: 'all',      // all, inProgress, completed, behind
+        memberId: 'all'     // all 또는 특정 팀원 ID
       })),
+      okrPeriod: 'quarterly',  // quarterly, monthly, weekly
       // 버전 관리 (localStorage 유지)
       versions: JSON.parse(localStorage.getItem('okrVersions') || JSON.stringify([
         { id: 'A', name: 'A', description: '', fixed: true }
@@ -11258,6 +11401,10 @@
                 <option value="inProgress" ${okrState.kpiFilter.status === 'inProgress' ? 'selected' : ''}>🔄 진행 중 (50-79%)</option>
                 <option value="behind" ${okrState.kpiFilter.status === 'behind' ? 'selected' : ''}>⚠️ 미달 (50% 미만)</option>
               </select>
+              <select id="kpiFilterMember" onchange="updateKpiFilter('memberId', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
+                <option value="all" ${okrState.kpiFilter.memberId === 'all' ? 'selected' : ''}>전체 팀원</option>
+                ${(state.teamMembers || []).filter(m => m.role !== 'guest').map(member => `<option value="${member.id}" ${okrState.kpiFilter.memberId === member.id ? 'selected' : ''}>${member.name}${member.role === 'admin' ? ' 👑' : ''}</option>`).join('')}
+              </select>
             </div>
           </div>
           <div style="overflow-x: auto;">
@@ -11284,6 +11431,14 @@
                     if (okrState.kpiFilter.status === 'completed') filtered = filtered.filter(kpi => kpi.rate >= 80);
                     else if (okrState.kpiFilter.status === 'inProgress') filtered = filtered.filter(kpi => kpi.rate >= 50 && kpi.rate < 80);
                     else if (okrState.kpiFilter.status === 'behind') filtered = filtered.filter(kpi => kpi.rate < 50);
+                  }
+                  // 팀원 필터 적용 (주담당 또는 서브담당)
+                  if (okrState.kpiFilter.memberId !== 'all') {
+                    filtered = filtered.filter(kpi => {
+                      const isMainAssignee = kpi.mainAssignee === okrState.kpiFilter.memberId;
+                      const isSubAssignee = (kpi.subAssignees || []).includes(okrState.kpiFilter.memberId);
+                      return isMainAssignee || isSubAssignee;
+                    });
                   }
                   // KR 순서대로 정렬
                   filtered = filtered.sort((a, b) => a.krIdx - b.krIdx);
