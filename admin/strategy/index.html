@@ -6986,6 +6986,157 @@
     }
 
     // ========================================
+    // 개인 목표 설정 (팀 KPI와 별개의 개인 다짐)
+    // ========================================
+
+    // 개인 목표 설정 모달 열기
+    function openPersonalTargetModal(kpiId, memberId) {
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+      if (!kpi || !member) {
+        showToast('KPI 또는 팀원 정보를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      const existingTarget = okrState.personalTargets.find(pt => pt.kpiId === kpiId && pt.memberId === memberId);
+      const currentTargetValue = existingTarget?.targetValue || '';
+
+      showModal(`
+        <div style="padding: 24px; max-width: 500px;">
+          <div style="font-size: 18px; font-weight: 700; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+            🎯 내 목표 설정
+          </div>
+
+          <div style="background: var(--gray-50); padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+            <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">KPI</div>
+            <div style="font-size: 15px; font-weight: 600; color: var(--gray-800); margin-bottom: 12px;">${kpi.name}</div>
+            <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">팀 목표</div>
+            <div style="font-size: 14px; font-weight: 600; color: var(--primary);">${formatAmountWithSummary(kpi.targetValue || 0, kpi.unit || '')}</div>
+          </div>
+
+          <div style="background: linear-gradient(135deg, var(--primary)10, var(--success)10); padding: 16px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid var(--primary);">
+            <div style="font-size: 13px; color: var(--gray-700); margin-bottom: 8px;">💡 개인 목표란?</div>
+            <div style="font-size: 12px; color: var(--gray-600); line-height: 1.6;">
+              팀 KPI와 별개로 <strong>나만의 다짐</strong>입니다.<br>
+              내가 기여하고 싶은 목표를 설정하고 달성해보세요!<br>
+              <span style="color: var(--gray-500);">(팀 KPI 계산에는 영향 없음)</span>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+              ${member.name}님의 목표 *
+            </label>
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <input type="number" id="personalTargetValue" value="${currentTargetValue}" placeholder="300000000" style="flex: 1; padding: 12px 16px; border: 2px solid var(--primary); border-radius: 8px; font-size: 14px; font-family: inherit;">
+              <span style="font-size: 14px; color: var(--gray-600); min-width: 40px;">${kpi.unit || ''}</span>
+            </div>
+            ${currentTargetValue ? `
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 8px;">
+                현재 설정: ${formatAmountWithSummary(currentTargetValue, kpi.unit || '')}
+              </div>
+            ` : ''}
+          </div>
+
+          <div style="display: flex; justify-content: ${existingTarget ? 'space-between' : 'flex-end'}; gap: 12px;">
+            ${existingTarget ? `
+              <button class="btn" style="background: var(--danger-light, #FEE2E2); color: var(--danger);" onclick="deletePersonalTarget('${existingTarget.id}')">
+                목표 삭제
+              </button>
+            ` : ''}
+            <div style="display: flex; gap: 12px;">
+              <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+              <button class="btn btn-primary" onclick="savePersonalTarget('${kpiId}', '${memberId}', '${existingTarget?.id || ''}')">저장</button>
+            </div>
+          </div>
+        </div>
+      `);
+    }
+
+    // 개인 목표 저장
+    async function savePersonalTarget(kpiId, memberId, targetId = '') {
+      const targetValueInput = document.getElementById('personalTargetValue');
+      const targetValue = parseFloat(targetValueInput?.value);
+
+      if (!targetValue || targetValue <= 0) {
+        showToast('목표값을 입력해주세요', 'error');
+        return;
+      }
+
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+
+      if (!kpi || !member) {
+        showToast('데이터를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      const data = {
+        kpiId: kpiId,
+        memberId: memberId,
+        targetValue: targetValue,
+        kpiName: kpi.name,
+        memberName: member.name,
+        unit: kpi.unit || '',
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      try {
+        if (targetId) {
+          // 기존 목표 수정
+          await db.collection('okr_personalTargets').doc(targetId).update(data);
+        } else {
+          // 새 목표 생성
+          data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+          await db.collection('okr_personalTargets').add(data);
+        }
+
+        await loadOkrData();
+        renderPersonalGrowthboard();
+        closeModal();
+        showToast(`내 목표가 ${targetId ? '수정' : '설정'}되었습니다! 🎯`, 'success');
+      } catch (e) {
+        console.error('개인 목표 저장 오류:', e);
+        showToast('저장 실패', 'error');
+      }
+    }
+
+    // 개인 목표 삭제
+    async function deletePersonalTarget(targetId) {
+      if (!confirm('내 목표를 삭제하시겠습니까?')) return;
+
+      try {
+        await db.collection('okr_personalTargets').doc(targetId).delete();
+        await loadOkrData();
+        renderPersonalGrowthboard();
+        closeModal();
+        showToast('내 목표가 삭제되었습니다', 'success');
+      } catch (e) {
+        console.error('개인 목표 삭제 오류:', e);
+        showToast('삭제 실패', 'error');
+      }
+    }
+
+    // 개인 목표 가져오기
+    function getPersonalTarget(kpiId, memberId) {
+      return okrState.personalTargets.find(pt => pt.kpiId === kpiId && pt.memberId === memberId);
+    }
+
+    // 개인 목표 달성률 계산
+    function calcPersonalTargetRate(kpiId, memberId, actualValue) {
+      const personalTarget = getPersonalTarget(kpiId, memberId);
+      if (!personalTarget || !personalTarget.targetValue) return null;
+
+      const rate = Math.min(Math.round((actualValue / personalTarget.targetValue) * 100), 100);
+      return {
+        target: personalTarget.targetValue,
+        actual: actualValue,
+        rate: rate,
+        remaining: Math.max(personalTarget.targetValue - actualValue, 0)
+      };
+    }
+
+    // ========================================
     // 성과분석 시스템 (역순 데이터 확인 + 개인별 성공률)
     // ========================================
     let reviewViewMode = 'summary'; // summary, reverse, member
@@ -11088,6 +11239,7 @@
       laggingIndicators: [],
       dailyLogs: [],
       todayLogs: [],
+      personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
       expandedKRs: [],
       searchQuery: '',
@@ -11170,6 +11322,10 @@
           .get();
         okrState.dailyLogs = logSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         okrState.todayLogs = okrState.dailyLogs.filter(log => log.date === okrToday);
+
+        // 개인 목표 로드
+        const personalTargetSnapshot = await db.collection('okr_personalTargets').get();
+        okrState.personalTargets = personalTargetSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 초기 데이터 없으면 시드
         if (!okrState.objective) {
@@ -11880,12 +12036,52 @@
                   <span>${okrIcons[krd.krIdx] || '📊'} ${krd.kr.name}</span>
                   <span style="font-size: 16px; padding: 4px 12px; background: ${okrColors[krd.krIdx]}20; border-radius: 12px;">${krd.count}건</span>
                 </div>
-                ${krd.kpiDetails.map(kpd => `
-                  <div style="margin-left: 16px; margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px;">
-                    <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; display: flex; justify-content: space-between;">
+                ${krd.kpiDetails.map(kpd => {
+                  // 실제 기여량 계산
+                  const actualValue = kpd.lagDetails.reduce((sum, ld) => {
+                    const lag = ld.lag;
+                    if (lag.type === 'result') {
+                      return sum + (lag.valuePerUnit > 0 ? ld.count * lag.valuePerUnit : ld.count);
+                    }
+                    return sum;
+                  }, 0);
+
+                  // 개인 목표 달성률
+                  const personalTarget = calcPersonalTargetRate(kpd.kpi.id, memberId, actualValue);
+
+                  return `
+                  <div style="margin-left: 16px; margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border: ${personalTarget ? '2px solid var(--primary)20' : '1px solid var(--gray-100)'};">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
                       <span>● ${kpd.kpi.name}</span>
-                      <span style="color: ${okrColors[krd.krIdx]};">${kpd.count}건</span>
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="color: ${okrColors[krd.krIdx]};">${kpd.count}건</span>
+                        <button onclick="openPersonalTargetModal('${kpd.kpi.id}', '${memberId}')" style="padding: 4px 8px; border: 1px solid var(--primary); border-radius: 6px; background: white; color: var(--primary); font-size: 10px; cursor: pointer; font-weight: 600;" onmouseover="this.style.background='var(--primary)'; this.style.color='white'" onmouseout="this.style.background='white'; this.style.color='var(--primary)'" title="내 목표 설정">
+                          🎯 ${personalTarget ? '목표' : '목표설정'}
+                        </button>
+                      </div>
                     </div>
+
+                    ${personalTarget ? `
+                      <div style="background: linear-gradient(135deg, var(--primary)05, var(--success)05); padding: 12px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid var(--primary);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                          <div style="font-size: 11px; color: var(--gray-600);">🎯 내 목표</div>
+                          <div style="font-size: 13px; font-weight: 700; color: var(--primary);">${personalTarget.rate}%</div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--gray-600); margin-bottom: 6px;">
+                          <span>실제 기여: <strong style="color: var(--gray-800);">${formatAmountWithSummary(personalTarget.actual, kpd.kpi.unit || '')}</strong></span>
+                          <span>목표: <strong style="color: var(--primary);">${formatAmountWithSummary(personalTarget.target, kpd.kpi.unit || '')}</strong></span>
+                        </div>
+                        <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden; margin-bottom: 4px;">
+                          <div style="height: 100%; width: ${personalTarget.rate}%; background: ${personalTarget.rate >= 100 ? 'var(--success)' : 'var(--primary)'}; border-radius: 3px; transition: width 0.5s;"></div>
+                        </div>
+                        ${personalTarget.remaining > 0 ? `
+                          <div style="font-size: 10px; color: var(--gray-500); text-align: right;">
+                            ${personalTarget.rate >= 100 ? '🎉 목표 달성!' : `💪 목표까지 ${formatAmountWithSummary(personalTarget.remaining, kpd.kpi.unit || '')} 남음!`}
+                          </div>
+                        ` : '<div style="font-size: 10px; color: var(--success); text-align: right; font-weight: 600;">🎉 축하합니다! 목표를 달성했습니다!</div>'}
+                      </div>
+                    ` : ''}
+
                     ${kpd.lagDetails.map(ld => `
                       <div style="margin-left: 16px; font-size: 12px; color: var(--gray-600); padding: 6px 0; display: flex; justify-content: space-between; border-bottom: 1px solid var(--gray-100);">
                         <span>${getOkrLagIcon(ld.lag.name)} ${ld.lag.name}</span>
@@ -11893,7 +12089,8 @@
                       </div>
                     `).join('')}
                   </div>
-                `).join('')}
+                `;
+                }).join('')}
               </div>
             `).join('')}
           ` : `
