@@ -7249,20 +7249,37 @@
 
             <!-- 연결할 KR -->
             <div>
-              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700);">연결할 KR (Key Result)</label>
-              <select id="meetingKrId" onchange="updateMeetingKpiOptions()" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
-                <option value="">선택 안 함</option>
-                ${krOptionsHtml}
-              </select>
+              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700);">연결할 KR (여러 개 선택 가능)</label>
+              <div style="margin-bottom: 12px;">
+                <label style="display: flex; align-items: center; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 8px; cursor: pointer;">
+                  <input type="radio" name="krSelection" value="all" onchange="toggleKRSelection()" style="margin-right: 8px;" />
+                  <span style="font-weight: 600; color: var(--gray-700);">전체 KR (모든 핵심 결과 논의)</span>
+                </label>
+                <label style="display: flex; align-items: center; padding: 10px; background: var(--gray-50); border-radius: 8px; cursor: pointer;">
+                  <input type="radio" name="krSelection" value="specific" checked onchange="toggleKRSelection()" style="margin-right: 8px;" />
+                  <span style="font-weight: 600; color: var(--gray-700);">특정 KR 선택</span>
+                </label>
+              </div>
+              <div id="krCheckboxContainer" style="padding: 12px; background: white; border: 1px solid var(--gray-300); border-radius: 8px; max-height: 200px; overflow-y: auto;">
+                ${okrState.keyResults.map((k, idx) => `
+                  <label style="display: flex; align-items: center; padding: 8px; margin-bottom: 4px; cursor: pointer; border-radius: 6px; transition: background 0.2s;"
+                         onmouseover="this.style.background='var(--gray-50)'"
+                         onmouseout="this.style.background='white'">
+                    <input type="checkbox" class="kr-checkbox" value="${k.id}" onchange="updateMeetingKpiOptions()"
+                           ${kr && kr.id === k.id ? 'checked' : ''}
+                           style="margin-right: 8px;" />
+                    <span style="font-size: 14px; color: var(--gray-800);">${okrIcons[idx] || '📊'} ${k.name}</span>
+                  </label>
+                `).join('')}
+              </div>
             </div>
 
             <!-- 연결할 KPI (선택) -->
-            <div id="meetingKpiContainer" style="display: ${kpiId ? 'block' : 'none'};">
-              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700);">연결할 KPI (선택)</label>
-              <select id="meetingKpiId" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
-                <option value="">선택 안 함</option>
-                ${kpiOptionsHtml}
-              </select>
+            <div id="meetingKpiContainer" style="display: none;">
+              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700);">연결할 KPI (여러 개 선택 가능)</label>
+              <div id="kpiCheckboxContainer" style="padding: 12px; background: white; border: 1px solid var(--gray-300); border-radius: 8px; max-height: 200px; overflow-y: auto;">
+                <!-- KPI 체크박스가 여기에 동적으로 추가됩니다 -->
+              </div>
             </div>
 
             <!-- 참석자 -->
@@ -7293,21 +7310,57 @@
       `);
     }
 
+    // KR 전체/특정 선택 토글
+    function toggleKRSelection() {
+      const selectionType = document.querySelector('input[name="krSelection"]:checked')?.value;
+      const krCheckboxContainer = document.getElementById('krCheckboxContainer');
+      const kpiContainer = document.getElementById('meetingKpiContainer');
+
+      if (selectionType === 'all') {
+        krCheckboxContainer.style.display = 'none';
+        kpiContainer.style.display = 'none';
+      } else {
+        krCheckboxContainer.style.display = 'block';
+        updateMeetingKpiOptions();
+      }
+    }
+
     // KR 선택 시 KPI 옵션 업데이트
     function updateMeetingKpiOptions() {
-      const krId = document.getElementById('meetingKrId')?.value;
+      const selectedKRIds = Array.from(document.querySelectorAll('.kr-checkbox:checked')).map(cb => cb.value);
       const kpiContainer = document.getElementById('meetingKpiContainer');
-      const kpiSelect = document.getElementById('meetingKpiId');
+      const kpiCheckboxContainer = document.getElementById('kpiCheckboxContainer');
 
-      if (!krId) {
+      if (selectedKRIds.length === 0) {
         kpiContainer.style.display = 'none';
         return;
       }
 
       kpiContainer.style.display = 'block';
-      const kpis = okrState.kpis.filter(k => k.keyResultId === krId);
-      kpiSelect.innerHTML = '<option value="">선택 안 함</option>' +
-        kpis.map(k => `<option value="${k.id}">${k.name}</option>`).join('');
+
+      // 선택된 KR들의 KPI 필터링
+      const kpis = okrState.kpis.filter(k => selectedKRIds.includes(k.keyResultId));
+
+      if (kpis.length === 0) {
+        kpiCheckboxContainer.innerHTML = '<div style="color: var(--gray-500); font-size: 13px; padding: 8px;">선택한 KR에 연결된 KPI가 없습니다</div>';
+        return;
+      }
+
+      kpiCheckboxContainer.innerHTML = kpis.map(kpi => {
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
+        return `
+          <label style="display: flex; align-items: flex-start; padding: 8px; margin-bottom: 4px; cursor: pointer; border-radius: 6px; transition: background 0.2s;"
+                 onmouseover="this.style.background='var(--gray-50)'"
+                 onmouseout="this.style.background='white'">
+            <input type="checkbox" class="kpi-checkbox" value="${kpi.id}" style="margin-right: 8px; margin-top: 2px;" />
+            <div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--gray-800);">${kpi.name}</div>
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 2px;">${okrIcons[krIdx] || '📊'} ${kr?.name || ''}</div>
+            </div>
+          </label>
+        `;
+      }).join('');
     }
 
     // 미팅 저장
@@ -7316,11 +7369,18 @@
       const title = document.getElementById('meetingTitle')?.value.trim();
       const date = document.getElementById('meetingDate')?.value;
       const time = document.getElementById('meetingTime')?.value;
-      const krId = document.getElementById('meetingKrId')?.value;
-      const kpiId = document.getElementById('meetingKpiId')?.value;
       const participantsStr = document.getElementById('meetingParticipants')?.value.trim();
       const preAgenda = document.getElementById('meetingPreAgenda')?.value.trim();
       const preGoals = document.getElementById('meetingPreGoals')?.value.trim();
+
+      // KR 선택 타입 확인
+      const krSelectionType = document.querySelector('input[name="krSelection"]:checked')?.value;
+      const isAllKRs = krSelectionType === 'all';
+
+      // 선택된 KR/KPI 수집
+      const selectedKRIds = isAllKRs ? okrState.keyResults.map(kr => kr.id) :
+        Array.from(document.querySelectorAll('.kr-checkbox:checked')).map(cb => cb.value);
+      const selectedKPIIds = Array.from(document.querySelectorAll('.kpi-checkbox:checked')).map(cb => cb.value);
 
       if (!type || !title || !date) {
         showToast('미팅 타입, 제목, 날짜는 필수입니다', 'error');
@@ -7331,8 +7391,12 @@
 
       const meetingData = {
         objectiveId: okrState.objective?.id || '',
-        krId: krId || null,
-        kpiId: kpiId || null,
+        isAllKRs: isAllKRs,
+        krIds: selectedKRIds,
+        kpiIds: selectedKPIIds,
+        // 하위 호환성을 위해 단일 값도 저장 (첫 번째 값)
+        krId: selectedKRIds.length > 0 ? selectedKRIds[0] : null,
+        kpiId: selectedKPIIds.length > 0 ? selectedKPIIds[0] : null,
         type: type,
         title: title,
         date: date,
@@ -7392,15 +7456,97 @@
 
           <!-- 미팅 정보 -->
           <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
-            ${meeting.participants && meeting.participants.length > 0 ? `
-              <div style="margin-bottom: 12px;">
-                <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px;">참석자</div>
-                <div style="font-size: 14px; color: var(--gray-800);">${meeting.participants.join(', ')}</div>
-              </div>
-            ` : ''}
-            <div style="display: inline-block; padding: 4px 12px; background: ${getStatusColor(meeting.status)}20; color: ${getStatusColor(meeting.status)}; border-radius: 6px; font-size: 12px; font-weight: 600;">
-              ${getStatusLabel(meeting.status)}
-            </div>
+            ${(() => {
+              // 계획된 KR
+              const plannedKRIds = meeting.krIds || [meeting.krId].filter(id => id);
+              const plannedKRs = meeting.isAllKRs
+                ? okrState.keyResults
+                : plannedKRIds.map(krId => okrState.keyResults.find(k => k.id === krId)).filter(kr => kr);
+
+              // 실제 논의된 KR (완료된 경우에만)
+              const actualKRIds = meeting.actualKRIds || plannedKRIds;
+              const actualKRs = meeting.status === MEETING_STATUS.COMPLETED && meeting.actualKRIds
+                ? actualKRIds.map(krId => okrState.keyResults.find(k => k.id === krId)).filter(kr => kr)
+                : plannedKRs;
+
+              // 연결된 KPI 표시
+              const linkedKPIs = (meeting.kpiIds || [meeting.kpiId]).filter(id => id).map(kpiId => okrState.kpis.find(k => k.id === kpiId)).filter(kpi => kpi);
+
+              // 추가된 KR (실제 - 계획)
+              const addedKRs = actualKRs.filter(kr => !plannedKRIds.includes(kr.id));
+              // 제거된 KR (계획 - 실제)
+              const removedKRs = plannedKRs.filter(kr => !actualKRIds.includes(kr.id));
+
+              return `
+                ${meeting.status === MEETING_STATUS.COMPLETED && (addedKRs.length > 0 || removedKRs.length > 0) ? `
+                  <div style="margin-bottom: 16px; padding: 12px; background: #FEF3C7; border-left: 4px solid #F59E0B; border-radius: 8px;">
+                    <div style="font-size: 13px; font-weight: 700; color: #92400E; margin-bottom: 8px;">
+                      ⚡ 계획과 실제 논의가 달랐습니다
+                    </div>
+                    ${addedKRs.length > 0 ? `
+                      <div style="font-size: 12px; color: #78350F; margin-bottom: 4px;">
+                        추가 논의: ${addedKRs.map(kr => {
+                          const krIdx = okrState.keyResults.findIndex(k => k.id === kr.id);
+                          return `${okrIcons[krIdx]} ${kr.name}`;
+                        }).join(', ')}
+                      </div>
+                    ` : ''}
+                    ${removedKRs.length > 0 ? `
+                      <div style="font-size: 12px; color: #78350F;">
+                        논의 안 함: ${removedKRs.map(kr => {
+                          const krIdx = okrState.keyResults.findIndex(k => k.id === kr.id);
+                          return `${okrIcons[krIdx]} ${kr.name}`;
+                        }).join(', ')}
+                      </div>
+                    ` : ''}
+                  </div>
+                ` : ''}
+                ${actualKRs.length > 0 ? `
+                  <div style="margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px;">
+                      ${meeting.status === MEETING_STATUS.COMPLETED ? '실제 논의된 KR' : '연결된 KR'}
+                    </div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                      ${meeting.isAllKRs ? `
+                        <span style="padding: 4px 10px; background: var(--primary); color: white; border-radius: 6px; font-size: 12px; font-weight: 600;">
+                          전체 KR (${actualKRs.length}개)
+                        </span>
+                      ` : actualKRs.map((kr, idx) => {
+                        const krIdx = okrState.keyResults.findIndex(k => k.id === kr.id);
+                        const wasAdded = addedKRs.some(akr => akr.id === kr.id);
+                        return `
+                          <span style="padding: 4px 10px; background: ${okrColors[krIdx]}20; color: ${okrColors[krIdx]}; border-radius: 6px; font-size: 12px; font-weight: 600; ${wasAdded ? 'border: 2px solid #F59E0B;' : ''}">
+                            ${okrIcons[krIdx] || '📊'} ${kr.name}
+                            ${wasAdded ? ' ⚡' : ''}
+                          </span>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+                ${linkedKPIs.length > 0 ? `
+                  <div style="margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px;">연결된 KPI</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                      ${linkedKPIs.map(kpi => `
+                        <span style="padding: 4px 10px; background: var(--gray-100); color: var(--gray-700); border-radius: 6px; font-size: 12px;">
+                          ${kpi.name}
+                        </span>
+                      `).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+                ${meeting.participants && meeting.participants.length > 0 ? `
+                  <div style="margin-bottom: 12px;">
+                    <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 4px;">참석자</div>
+                    <div style="font-size: 14px; color: var(--gray-800);">${meeting.participants.join(', ')}</div>
+                  </div>
+                ` : ''}
+                <div style="display: inline-block; padding: 4px 12px; background: ${getStatusColor(meeting.status)}20; color: ${getStatusColor(meeting.status)}; border-radius: 6px; font-size: 12px; font-weight: 600;">
+                  ${getStatusLabel(meeting.status)}
+                </div>
+              `;
+            })()}
           </div>
 
           <!-- 사전 계획 -->
@@ -7423,6 +7569,46 @@
           <!-- 사후 정리 -->
           <div style="margin-bottom: 24px; padding: 20px; background: #F0FDF4; border-radius: 12px; border: 2px solid #10B981;">
             <h4 style="font-size: 16px; font-weight: 700; margin-bottom: 12px; color: var(--gray-800);">✅ 미팅 후 정리</h4>
+
+            <!-- 실제 논의된 KR -->
+            <div style="margin-bottom: 16px; padding: 14px; background: white; border-radius: 8px; border: 1px solid var(--gray-300);">
+              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700);">
+                📊 실제 논의된 KR (계획과 다를 수 있음)
+              </label>
+              <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 10px;">
+                미팅 중 즉흥적으로 추가 논의된 KR이 있다면 체크하세요
+              </div>
+              <div style="display: grid; gap: 8px; max-height: 200px; overflow-y: auto;">
+                ${(() => {
+                  const plannedKRIds = meeting.krIds || [meeting.krId].filter(id => id);
+                  const actualKRIds = meeting.actualKRIds || plannedKRIds;
+
+                  return okrState.keyResults.map((kr, idx) => {
+                    const wasPlanned = plannedKRIds.includes(kr.id);
+                    const isChecked = actualKRIds.includes(kr.id);
+
+                    return `
+                      <label style="display: flex; align-items: center; padding: 8px; border-radius: 6px; cursor: pointer; background: ${wasPlanned ? '#FEF3C7' : 'white'}; transition: all 0.2s;"
+                             onmouseover="this.style.background='${wasPlanned ? '#FDE68A' : 'var(--gray-50)'}'"
+                             onmouseout="this.style.background='${wasPlanned ? '#FEF3C7' : 'white'}'">
+                        <input type="checkbox" class="actual-kr-checkbox" value="${kr.id}" ${isChecked ? 'checked' : ''}
+                               style="margin-right: 8px;" />
+                        <div style="flex: 1;">
+                          <span style="font-size: 14px; font-weight: 600; color: var(--gray-800);">
+                            ${okrIcons[idx] || '📊'} ${kr.name}
+                          </span>
+                          ${wasPlanned ? `
+                            <span style="margin-left: 8px; padding: 2px 6px; background: #F59E0B; color: white; border-radius: 4px; font-size: 10px; font-weight: 600;">
+                              계획됨
+                            </span>
+                          ` : ''}
+                        </div>
+                      </label>
+                    `;
+                  }).join('');
+                })()}
+              </div>
+            </div>
 
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700);">미팅 요약</label>
@@ -7482,6 +7668,9 @@
       const postDecisionsStr = document.getElementById('postDecisions')?.value.trim();
       const postActionItemsStr = document.getElementById('postActionItems')?.value.trim();
 
+      // 실제 논의된 KR 수집
+      const actualKRIds = Array.from(document.querySelectorAll('.actual-kr-checkbox:checked')).map(cb => cb.value);
+
       const postDecisions = postDecisionsStr ? postDecisionsStr.split('\n').map(d => d.trim()).filter(d => d) : [];
 
       // 액션 아이템 파싱 ([@담당자] 작업내용)
@@ -7503,6 +7692,7 @@
       try {
         await db.collection('okr_meetings').doc(meetingId).update({
           status: MEETING_STATUS.COMPLETED,
+          actualKRIds: actualKRIds,  // 실제 논의된 KR 저장
           postSummary: postSummary || '',
           postDecisions: postDecisions,
           postActionItems: postActionItems,
@@ -7526,6 +7716,9 @@
       const postDecisionsStr = document.getElementById('postDecisions')?.value.trim();
       const postActionItemsStr = document.getElementById('postActionItems')?.value.trim();
 
+      // 실제 논의된 KR 수집
+      const actualKRIds = Array.from(document.querySelectorAll('.actual-kr-checkbox:checked')).map(cb => cb.value);
+
       const postDecisions = postDecisionsStr ? postDecisionsStr.split('\n').map(d => d.trim()).filter(d => d) : [];
 
       const postActionItems = [];
@@ -7545,6 +7738,7 @@
 
       try {
         await db.collection('okr_meetings').doc(meetingId).update({
+          actualKRIds: actualKRIds,  // 실제 논의된 KR 저장
           postSummary: postSummary || '',
           postDecisions: postDecisions,
           postActionItems: postActionItems,
@@ -11980,7 +12174,14 @@
           <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📈 KR 현황</div>
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
             ${krRates.map((kr, idx) => {
-              const krMeetings = okrState.meetings.filter(m => m.krId === kr.id).slice(0, 3);
+              const krMeetings = okrState.meetings.filter(m => {
+                // 완료된 미팅은 actualKRIds 사용, 예정/진행중은 krIds 사용
+                const relevantKRIds = m.status === MEETING_STATUS.COMPLETED && m.actualKRIds
+                  ? m.actualKRIds
+                  : (m.krIds || [m.krId].filter(id => id));
+
+                return m.isAllKRs || relevantKRIds.includes(kr.id);
+              }).slice(0, 3);
               return `
               <div style="padding: 16px; border-radius: 12px; background: var(--gray-50); border-left: 4px solid ${okrColors[idx]};">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;" onclick="switchTab('okr-record')" style="cursor: pointer;">
