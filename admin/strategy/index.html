@@ -13674,6 +13674,9 @@
               style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; color: var(--gray-600); background: var(--gray-50);" />
           </div>
 
+          <!-- A/B 테스트 성과 분석 -->
+          <div id="versionPerformanceAnalysis" style="margin-bottom: 16px;"></div>
+
           <!-- 수량 입력 -->
           <div style="margin-bottom: 16px;">
             <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
@@ -13722,6 +13725,9 @@
           </button>
         </div>
       `;
+
+      // A/B 테스트 성과 분석 표시
+      updateVersionPerformanceAnalysis(lagId);
     }
 
     // 버전 선택
@@ -13752,6 +13758,118 @@
           }
         }
       });
+    }
+
+    // A/B 테스트: 버전별 성과 분석
+    function analyzeVersionPerformance(lagId) {
+      // 해당 활동지표에 대한 모든 로그 가져오기
+      const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+
+      if (logs.length === 0) {
+        return null;
+      }
+
+      // 버전별 통계 계산
+      const versionStats = {};
+
+      okrState.versions.forEach(v => {
+        const versionLogs = logs.filter(l => l.version === v.id);
+        const totalResults = versionLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+        const count = versionLogs.length;
+
+        versionStats[v.id] = {
+          id: v.id,
+          name: v.name,
+          fixed: v.fixed,
+          description: v.description,
+          totalResults: totalResults,
+          count: count,
+          averagePerUse: count > 0 ? totalResults / count : 0
+        };
+      });
+
+      // 가장 효과적인 버전 찾기 (평균 성과가 가장 높은 버전)
+      let bestVersion = null;
+      let bestAverage = -1;
+
+      Object.values(versionStats).forEach(stat => {
+        if (stat.count > 0 && stat.averagePerUse > bestAverage) {
+          bestAverage = stat.averagePerUse;
+          bestVersion = stat.id;
+        }
+      });
+
+      return {
+        versionStats,
+        bestVersion,
+        totalLogs: logs.length
+      };
+    }
+
+    // A/B 테스트 성과 분석 UI 업데이트
+    function updateVersionPerformanceAnalysis(lagId) {
+      const container = document.getElementById('versionPerformanceAnalysis');
+      if (!container) return;
+
+      const analysis = analyzeVersionPerformance(lagId);
+
+      // 데이터가 없으면 표시하지 않음
+      if (!analysis || analysis.totalLogs === 0) {
+        container.innerHTML = '';
+        return;
+      }
+
+      const { versionStats, bestVersion } = analysis;
+
+      // 성과가 있는 버전만 필터링
+      const activeVersions = Object.values(versionStats).filter(v => v.count > 0);
+
+      if (activeVersions.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+
+      // 버전별 성과 카드 생성
+      const statsHTML = okrState.versions.map(v => {
+        const stat = versionStats[v.id];
+        if (stat.count === 0) return ''; // 기록이 없는 버전은 표시하지 않음
+
+        const isBest = v.id === bestVersion;
+        const versionName = v.fixed ? `${v.name}버전` : v.name;
+
+        return `
+          <div style="position: relative; padding: 8px 10px; border: 2px solid ${isBest ? '#10B981' : 'var(--gray-200)'}; border-radius: 8px; background: ${isBest ? '#F0FDF4' : 'white'};">
+            ${isBest ? '<div style="position: absolute; top: -8px; left: 8px; background: #10B981; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;">🏆 최고 성과</div>' : ''}
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: ${isBest ? '6px' : '0'};">
+              <div style="font-size: 12px; font-weight: 700; color: ${isBest ? '#059669' : 'var(--gray-700)'};">${versionName}</div>
+              <div style="font-size: 11px; color: var(--gray-500);">${stat.count}회 사용</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px;">
+              <div style="font-size: 10px; color: var(--gray-500);">총 성과</div>
+              <div style="font-size: 14px; font-weight: 700; color: ${isBest ? '#059669' : 'var(--gray-800)'};">${stat.totalResults.toLocaleString()}</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 2px;">
+              <div style="font-size: 10px; color: var(--gray-500);">평균 성과/회</div>
+              <div style="font-size: 14px; font-weight: 700; color: ${isBest ? '#059669' : 'var(--primary)'};">${stat.averagePerUse.toFixed(1)}</div>
+            </div>
+          </div>
+        `;
+      }).filter(html => html).join('');
+
+      container.innerHTML = `
+        <div style="padding: 12px; background: #F9FAFB; border: 1px solid var(--gray-200); border-radius: 8px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--gray-700);">📊 A/B 테스트 성과 분석</span>
+            <span style="font-size: 10px; color: var(--gray-500);">(총 ${analysis.totalLogs}건 기록)</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px;">
+            ${statsHTML}
+          </div>
+          <div style="font-size: 10px; color: var(--gray-500); margin-top: 8px; text-align: center;">
+            💡 평균 성과가 높을수록 효과적인 방법입니다
+          </div>
+        </div>
+      `;
     }
 
     // 버전 추가
@@ -13835,15 +13953,10 @@
 
       showToast('버전이 추가되었습니다', 'success');
 
-      // 업무기록 폼이 열려있으면 새로고침
-      const formArea = document.getElementById('workRecordFormArea');
-      if (formArea && formArea.innerHTML.includes('버전')) {
-        // 현재 선택된 지표 정보 가져오기
-        const versionInput = document.getElementById('workRecordVersion');
-        if (versionInput) {
-          // 폼을 다시 렌더링하기 위해 이벤트 디스패치
-          window.dispatchEvent(new CustomEvent('versionUpdated'));
-        }
+      // 업무기록 폼이 열려있으면 다시 렌더링
+      if (currentSelectedLag && currentSelectedLag.lagId) {
+        const { krId, kpiId, lagId, krIdx } = currentSelectedLag;
+        selectOkrLag(krId, kpiId, lagId, krIdx);
       }
     }
 
@@ -13922,8 +14035,11 @@
 
       showToast('버전이 수정되었습니다', 'success');
 
-      // 업무기록 폼이 열려있으면 새로고침
-      window.dispatchEvent(new CustomEvent('versionUpdated'));
+      // 업무기록 폼이 열려있으면 다시 렌더링
+      if (currentSelectedLag && currentSelectedLag.lagId) {
+        const { krId, kpiId, lagId, krIdx } = currentSelectedLag;
+        selectOkrLag(krId, kpiId, lagId, krIdx);
+      }
     }
 
     // 버전 삭제
@@ -13944,8 +14060,11 @@
 
       showToast('버전이 삭제되었습니다', 'success');
 
-      // 업무기록 폼이 열려있으면 새로고침
-      window.dispatchEvent(new CustomEvent('versionUpdated'));
+      // 업무기록 폼이 열려있으면 다시 렌더링
+      if (currentSelectedLag && currentSelectedLag.lagId) {
+        const { krId, kpiId, lagId, krIdx } = currentSelectedLag;
+        selectOkrLag(krId, kpiId, lagId, krIdx);
+      }
     }
 
     // 인라인 업무기록 제출
@@ -13981,18 +14100,20 @@
       // 업무 기록
       await recordOkrWork(krId, kpiId, lagId, quantity, memo, attachmentUrls, version);
 
-      // 폼 초기화 (모달 유지)
+      // 폼 입력값만 초기화 (폼 자체는 유지)
       workRecordAttachments = [];
-      const formArea = document.getElementById('workRecordFormArea');
-      if (formArea) {
-        formArea.innerHTML = `
-          <div style="text-align: center; color: var(--success);">
-            <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
-            <div style="font-size: 16px; font-weight: 600;">기록 완료!</div>
-            <div style="font-size: 13px; color: var(--gray-500); margin-top: 8px;">다른 항목을 선택하거나<br>닫기 버튼을 눌러주세요</div>
-          </div>
-        `;
-      }
+      const quantityInput = document.getElementById('workRecordQuantity');
+      const memoInput = document.getElementById('workRecordMemo');
+      const attachmentPreview = document.getElementById('workRecordAttachmentPreview');
+
+      if (quantityInput) quantityInput.value = '1';
+      if (memoInput) memoInput.value = '';
+      if (attachmentPreview) attachmentPreview.innerHTML = '';
+
+      // 성공 메시지를 일시적으로 표시
+      showToast('업무 기록 완료! ✅', 'success');
+
+      // 성과 분석은 recordOkrWork에서 자동으로 갱신됨
     }
 
     // 모달에서 업무 기록 (시간 데이터 포함)
@@ -14412,6 +14533,11 @@
 
         renderOkrDashboard();
         renderOkrRecord();
+
+        // A/B 테스트 성과 분석 갱신 (업무 기록 폼이 열려있는 경우)
+        if (document.getElementById('versionPerformanceAnalysis')) {
+          updateVersionPerformanceAnalysis(lagId);
+        }
 
         // Undo 알림 표시
         const lag = okrState.laggingIndicators.find(l => l.id === lagId);
