@@ -1496,88 +1496,114 @@
               `;
             }
 
-            // KPI별로 그룹화
-            const kpiGroups = {};
-            allLags.forEach(lag => {
-              if (!kpiGroups[lag.kpiId]) {
-                const kpi = snapshotData.kpis.find(k => k.id === lag.kpiId);
-                const kr = snapshotData.keyResults.find(k => k.id === kpi?.keyResultId);
-                const krIdx = snapshotData.keyResults.findIndex(k => k.id === kpi?.keyResultId);
-                kpiGroups[lag.kpiId] = {
-                  kpi,
-                  kr,
-                  krIdx,
-                  lags: []
-                };
-              }
-              kpiGroups[lag.kpiId].lags.push(lag);
+            // KR별로 그룹화
+            const krGroups = {};
+            snapshotData.keyResults.forEach((kr, krIdx) => {
+              krGroups[kr.id] = {
+                kr,
+                krIdx,
+                kpis: []
+              };
             });
 
-            const kpiGroupCards = Object.values(kpiGroups).map(group => {
-              if (!group.kpi) return '';
+            // 각 KR에 해당하는 KPI와 지표 연결
+            snapshotData.kpis.forEach(kpi => {
+              if (krGroups[kpi.keyResultId]) {
+                const kpiLags = allLags.filter(lag => lag.kpiId === kpi.id);
+                if (kpiLags.length > 0) {
+                  krGroups[kpi.keyResultId].kpis.push({
+                    kpi,
+                    lags: kpiLags
+                  });
+                }
+              }
+            });
 
-              return `
-                <div style="padding: 16px; background: var(--gray-50); border-radius: 12px; border-left: 4px solid ${okrColors[group.krIdx] || 'var(--gray-400)'};">
-                  <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
-                    ${group.kpi.name}
-                  </div>
-                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 12px;">
-                    ${group.kr ? `${okrIcons[group.krIdx]} ${group.kr.name}` : ''}
-                  </div>
+            // KR 카드 렌더링
+            const krCards = Object.values(krGroups)
+              .filter(group => group.kpis.length > 0)
+              .map(group => {
+                const { kr, krIdx, kpis } = group;
 
-                  <div style="display: grid; gap: 8px;">
-                    ${group.lags.map(lag => {
-                      const hasTarget = lag.target && lag.target > 0;
-                      const logs = snapshotData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
-                      const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                      const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
-                      const statusColor = achievementRate >= 100 ? 'var(--success)' : achievementRate >= 70 ? 'var(--primary)' : achievementRate >= 40 ? 'var(--warning)' : 'var(--gray-400)';
+                return `
+                  <div style="background: var(--gray-50); border-radius: 16px; overflow: hidden;">
+                    <!-- KR 헤더 -->
+                    <div style="padding: 16px 20px; background: ${okrColors[krIdx]}10; border-bottom: 1px solid ${okrColors[krIdx]}20;">
+                      <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 4px;">
+                        ${kr.name}
+                      </div>
+                      <div style="font-size: 12px; color: ${okrColors[krIdx]}; display: flex; align-items: center; gap: 4px;">
+                        ${okrIcons[krIdx]} ${kr.target || '목표 미설정'}
+                      </div>
+                    </div>
 
-                      return `
-                        <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid ${hasTarget ? statusColor + '40' : 'var(--gray-200)'};">
-                          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                            <div style="flex: 1;">
-                              <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">
-                                ${getLagIcon(lag.name)} ${lag.name}
-                              </div>
-                              <div style="font-size: 10px; color: var(--gray-500); margin-top: 2px;">
-                                ${lag.type === 'result' ? '💰 성과형' : '📋 활동형'}
-                                ${lag.version ? ` · ${lag.version}버전` : ''}
-                              </div>
-                            </div>
-                            ${hasTarget ? `
-                              <div style="padding: 4px 10px; background: ${statusColor}; color: white; border-radius: 8px; font-size: 11px; font-weight: 700;">
-                                ${achievementRate}%
-                              </div>
-                            ` : `
-                              <div style="padding: 4px 10px; background: var(--gray-200); color: var(--gray-600); border-radius: 8px; font-size: 10px; font-weight: 600;">
-                                미설정
-                              </div>
-                            `}
+                    <!-- KPI별 지표 목록 -->
+                    <div style="padding: 16px;">
+                      ${kpis.map(({ kpi, lags }) => `
+                        <div style="background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--gray-200);">
+                          <!-- KPI 헤더 -->
+                          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--gray-100);">
+                            <span style="font-size: 14px;">📊</span>
+                            <span style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${kpi.name}</span>
                           </div>
 
-                          ${hasTarget ? `
-                            <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--gray-600); margin-bottom: 6px;">
-                              <span>목표: <strong style="color: var(--gray-800);">${lag.target}건</strong></span>
-                              <span>현재: <strong style="color: ${statusColor};">${totalCount}건</strong></span>
-                            </div>
-                            <div style="height: 4px; background: var(--gray-200); border-radius: 2px; overflow: hidden;">
-                              <div style="height: 100%; width: ${achievementRate}%; background: ${statusColor}; border-radius: 2px; transition: width 0.5s;"></div>
-                            </div>
-                          ` : `
-                            <div style="font-size: 11px; color: var(--gray-500);">
-                              현재 기록: ${totalCount}건
-                            </div>
-                          `}
-                        </div>
-                      `;
-                    }).join('')}
-                  </div>
-                </div>
-              `;
-            }).join('');
+                          <!-- 지표 목록 -->
+                          <div style="display: flex; flex-direction: column; gap: 10px;">
+                            ${lags.map(lag => {
+                              const hasTarget = lag.target && lag.target > 0;
+                              const logs = snapshotData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
+                              const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                              const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
+                              const statusColor = achievementRate >= 100 ? 'var(--success)' : achievementRate >= 70 ? 'var(--primary)' : achievementRate >= 40 ? 'var(--warning)' : 'var(--gray-400)';
 
-            return `<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;">${kpiGroupCards}</div>`;
+                              return `
+                                <div style="background: var(--gray-50); border-radius: 10px; padding: 14px; border-left: 3px solid ${lag.type === 'result' ? 'var(--success)' : 'var(--primary)'};">
+                                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                                    <div style="flex: 1;">
+                                      <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 4px;">
+                                        ${getLagIcon(lag.name)} ${lag.name}
+                                      </div>
+                                      <div style="font-size: 11px; color: var(--gray-500);">
+                                        ${lag.type === 'result' ? '💰 성과형' : '📋 활동형'}
+                                        ${lag.version ? ` · ${lag.version}버전` : ''}
+                                      </div>
+                                    </div>
+                                    ${hasTarget ? `
+                                      <div style="padding: 4px 12px; background: ${statusColor}; color: white; border-radius: 20px; font-size: 11px; font-weight: 700;">
+                                        ${achievementRate}%
+                                      </div>
+                                    ` : `
+                                      <div style="padding: 4px 12px; background: var(--gray-200); color: var(--gray-600); border-radius: 20px; font-size: 11px; font-weight: 600;">
+                                        미설정
+                                      </div>
+                                    `}
+                                  </div>
+
+                                  ${hasTarget ? `
+                                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--gray-600); margin-bottom: 6px;">
+                                      <span>목표: <strong style="color: var(--gray-800);">${lag.target}건</strong></span>
+                                      <span>현재: <strong style="color: ${statusColor};">${totalCount}건</strong></span>
+                                    </div>
+                                    <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
+                                      <div style="height: 100%; width: ${achievementRate}%; background: ${statusColor}; border-radius: 3px; transition: width 0.5s;"></div>
+                                    </div>
+                                  ` : `
+                                    <div style="font-size: 12px; color: var(--gray-500);">
+                                      현재 기록: <strong style="color: var(--gray-700);">${totalCount}건</strong>
+                                    </div>
+                                  `}
+                                </div>
+                              `;
+                            }).join('')}
+                          </div>
+                        </div>
+                      `).join('')}
+                    </div>
+                  </div>
+                `;
+              }).join('');
+
+            return `<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px;">${krCards}</div>`;
           })()}
         </div>
 
