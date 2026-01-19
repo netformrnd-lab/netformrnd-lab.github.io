@@ -17780,8 +17780,8 @@
     // KR 정보 가져오기
     function getTaskKrInfo(task) {
       if (!task.krId) return null;
-      const kr = okrState.krs.find(k => k.id === task.krId);
-      return kr ? kr.title : null;
+      const kr = okrState.keyResults.find(k => k.id === task.krId);
+      return kr ? kr.name : null;
     }
 
     // 업무 등록 모달 열기
@@ -17792,8 +17792,8 @@
 
       // KR 옵션 생성
       let krOptions = '<option value="">KR 연결 안함</option>';
-      okrState.krs.forEach(kr => {
-        krOptions += `<option value="${kr.id}" ${task.krId === kr.id ? 'selected' : ''}>${kr.title}</option>`;
+      okrState.keyResults.forEach(kr => {
+        krOptions += `<option value="${kr.id}" ${task.krId === kr.id ? 'selected' : ''}>${kr.name}</option>`;
       });
 
       // 담당자 옵션 생성
@@ -17964,17 +17964,33 @@
 
         // 2. 업무기록에 자동 기록 (KR 연결된 경우)
         if (task.krId) {
-          const kr = okrState.krs.find(k => k.id === task.krId);
+          const kr = okrState.keyResults.find(k => k.id === task.krId);
           if (kr) {
-            await db.collection('okrWorkLogs').add({
+            const now = new Date();
+            const registeredTime = formatTime(now);
+
+            const logData = {
+              date: okrToday,
+              memberId: state.currentUser?.uid || 'anonymous',
+              memberName: task.assignee || state.currentUser?.name || '사용자',
               krId: task.krId,
-              krTitle: kr.title,
-              content: `[업무완료] ${task.title}`,
-              description: task.description || '',
-              member: task.assignee || state.loginUser?.name || '',
-              type: 'task_complete',
+              kpiId: null,
+              laggingIndicatorId: null,
+              resultValue: 1,
+              version: 'A',
+              memo: `[업무완료] ${task.title}${task.description ? ' - ' + task.description : ''}`,
+              attachments: [],
+              registeredTime: registeredTime,
+              registeredTimestamp: now.getTime(),
+              taskPlanId: taskId,
               createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
+            };
+
+            const docRef = await db.collection('okr_dailyLogs').add(logData);
+
+            // 로컬 상태 업데이트
+            okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
+            okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
           }
         }
 
