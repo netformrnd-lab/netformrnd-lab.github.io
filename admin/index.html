@@ -9520,8 +9520,25 @@ function viewSellerSettlementDetail(settlementId) {
 
   const modal = document.getElementById('modal');
   const salesItems = settlement.salesItems || [];
-  const withholdingTax = settlement.withholdingTax || Math.round((settlement.marginAmount || 0) * TAX_RATE);
-  const actualPayment = settlement.actualPayment || ((settlement.marginAmount || 0) - withholdingTax);
+
+  // 판매 마진 계산
+  const marginAmount = settlement.marginAmount || 0;
+  const marginTax = settlement.withholdingTax || Math.round(marginAmount * TAX_RATE);
+  const marginActualPayment = settlement.actualPayment || (marginAmount - marginTax);
+
+  // 콘텐츠 제작료 계산
+  const linkedContentFees = (state.contentFeeSettlements || []).filter(f =>
+    f.linkedSettlementId === settlementId ||
+    (f.sellerName === settlement.sellerName && f.dealPeriod === settlement.dealPeriod)
+  );
+  const contentFeeTotal = linkedContentFees.reduce((sum, f) => sum + (Number(f.feeAmount) || 0), 0);
+  const contentFeeTax = linkedContentFees.reduce((sum, f) => sum + (Number(f.withholdingTax) || Math.round((Number(f.feeAmount) || 0) * TAX_RATE)), 0);
+  const contentFeeActualPayment = linkedContentFees.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
+
+  // 총 합계
+  const totalGrossAmount = marginAmount + contentFeeTotal;
+  const totalTax = marginTax + contentFeeTax;
+  const totalActualPayment = marginActualPayment + contentFeeActualPayment;
 
   modal.innerHTML = `
     <div class="modal-content" style="max-width: 700px;">
@@ -9536,110 +9553,146 @@ function viewSellerSettlementDetail(settlementId) {
           <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">${settlement.dealPeriod || '-'}</div>
         </div>
 
-        <!-- 요약 KPI -->
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
-          <div style="background: #eff6ff; padding: 16px; border-radius: 12px; text-align: center;">
-            <div style="font-size: 11px; color: #1d4ed8; margin-bottom: 4px;">판매금액</div>
-            <div style="font-size: 16px; font-weight: 700; color: #1e40af;">${formatNumber(settlement.salesAmount || 0)}원</div>
+        <!-- ========== 1. 판매 마진 섹션 ========== -->
+        <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-size: 14px; font-weight: 700; color: #0369a1; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="background: #0ea5e9; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">1</span>
+            📦 판매 마진
           </div>
-          <div style="background: #f0fdf4; padding: 16px; border-radius: 12px; text-align: center;">
-            <div style="font-size: 11px; color: #166534; margin-bottom: 4px;">마진금액</div>
-            <div style="font-size: 16px; font-weight: 700; color: #059669;">${formatNumber(settlement.marginAmount || 0)}원</div>
-          </div>
-          <div style="background: #fef3c7; padding: 16px; border-radius: 12px; text-align: center;">
-            <div style="font-size: 11px; color: #92400e; margin-bottom: 4px;">${TAX_LABEL}</div>
-            <div style="font-size: 16px; font-weight: 700; color: #b45309;">${formatNumber(withholdingTax)}원</div>
-          </div>
-          <div style="background: #dbeafe; padding: 16px; border-radius: 12px; text-align: center;">
-            <div style="font-size: 11px; color: #1e40af; margin-bottom: 4px;">실지급액</div>
-            <div style="font-size: 18px; font-weight: 800; color: #1e40af;">${formatNumber(actualPayment)}원</div>
-          </div>
-        </div>
 
-        <!-- 상품별 상세 -->
-        ${salesItems.length > 0 ? `
-          <div style="margin-bottom: 20px;">
-            <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">📦 상품별 내역</div>
-            <div style="max-height: 250px; overflow-y: auto; border: 1px solid var(--gray-200); border-radius: 8px;">
-              <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-                <thead>
-                  <tr style="background: var(--gray-50);">
-                    <th style="padding: 10px 8px; text-align: left;">상품명</th>
-                    <th style="padding: 10px 12px; text-align: right; width: 70px;">수량</th>
-                    <th style="padding: 10px 12px; text-align: right; width: 100px;">금액</th>
-                    <th style="padding: 10px 12px; text-align: right; width: 70px;">마진율</th>
-                    <th style="padding: 10px 12px; text-align: right; width: 100px;">마진금액</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${salesItems.map(item => `
-                    <tr style="border-bottom: 1px solid var(--gray-100);">
-                      <td style="padding: 8px;">${item.productName || '-'}</td>
-                      <td style="padding: 8px 12px; text-align: right; width: 70px;">${formatNumber(item.quantity || 0)}개</td>
-                      <td style="padding: 8px 12px; text-align: right; width: 100px;">${formatNumber(item.salesAmount || item.amount || 0)}원</td>
-                      <td style="padding: 8px 12px; text-align: right; width: 70px;">${item.marginRate || 0}%</td>
-                      <td style="padding: 8px 12px; text-align: right; width: 100px; color: #059669; font-weight: 600;">${formatNumber(item.marginAmount || 0)}원</td>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px;">
+            <div style="background: white; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #e0f2fe;">
+              <div style="font-size: 10px; color: #64748b; margin-bottom: 2px;">판매금액</div>
+              <div style="font-size: 14px; font-weight: 700; color: #334155;">${formatNumber(settlement.salesAmount || 0)}원</div>
+            </div>
+            <div style="background: white; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #e0f2fe;">
+              <div style="font-size: 10px; color: #64748b; margin-bottom: 2px;">마진금액</div>
+              <div style="font-size: 14px; font-weight: 700; color: #059669;">${formatNumber(marginAmount)}원</div>
+            </div>
+            <div style="background: white; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #fde68a;">
+              <div style="font-size: 10px; color: #b45309; margin-bottom: 2px;">${TAX_LABEL}</div>
+              <div style="font-size: 14px; font-weight: 700; color: #d97706;">-${formatNumber(marginTax)}원</div>
+            </div>
+            <div style="background: #dbeafe; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #93c5fd;">
+              <div style="font-size: 10px; color: #1e40af; margin-bottom: 2px;">실지급액</div>
+              <div style="font-size: 15px; font-weight: 800; color: #1e40af;">${formatNumber(marginActualPayment)}원</div>
+            </div>
+          </div>
+
+          <!-- 상품별 상세 -->
+          ${salesItems.length > 0 ? `
+            <div style="margin-top: 8px;">
+              <div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">📋 상품별 내역</div>
+              <div style="max-height: 180px; overflow-y: auto; background: white; border: 1px solid #e2e8f0; border-radius: 6px;">
+                <table style="width: 100%; font-size: 11px; border-collapse: collapse;">
+                  <thead>
+                    <tr style="background: #f8fafc;">
+                      <th style="padding: 8px 6px; text-align: left; font-weight: 600;">상품명</th>
+                      <th style="padding: 8px 6px; text-align: center; width: 50px;">수량</th>
+                      <th style="padding: 8px 6px; text-align: right; width: 80px;">금액</th>
+                      <th style="padding: 8px 6px; text-align: center; width: 50px;">마진율</th>
+                      <th style="padding: 8px 6px; text-align: right; width: 80px;">마진금액</th>
                     </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ` : ''}
-
-        <!-- 콘텐츠 제작료 (연결된 것 또는 같은 셀러) -->
-        ${(() => {
-          const linkedContentFees = (state.contentFeeSettlements || []).filter(f =>
-            f.linkedSettlementId === settlementId ||
-            (f.sellerName === settlement.sellerName && f.dealPeriod === settlement.dealPeriod)
-          );
-          const totalContentFee = linkedContentFees.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
-
-          return linkedContentFees.length > 0 ? `
-          <div style="margin-bottom: 20px;">
-            <div style="font-size: 14px; font-weight: 600; color: #86198f; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-              🎬 콘텐츠 제작료
-              <span style="background: #f5d0fe; color: #86198f; padding: 2px 8px; border-radius: 8px; font-size: 11px;">${linkedContentFees.length}건</span>
-              <span style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 8px; font-size: 11px;">${formatNumber(totalContentFee)}원</span>
-            </div>
-            <div style="background: #fdf4ff; border: 1px solid #d8b4fe; border-radius: 8px; padding: 12px;">
-              ${linkedContentFees.map(f => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #e9d5ff;">
-                  <div>
-                    <span style="background: #f5d0fe; color: #86198f; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-right: 8px;">${f.contentType || '기타'}</span>
-                    <span style="font-size: 12px; color: var(--gray-700);">${f.description || '-'}</span>
-                  </div>
-                  <div style="text-align: right;">
-                    <div style="font-size: 13px; font-weight: 600; color: #86198f;">${formatNumber(f.feeAmount || 0)}원</div>
-                    <div style="font-size: 11px; color: #059669;">실지급: ${formatNumber(f.actualPayment || 0)}원</div>
-                  </div>
-                </div>
-              `).join('')}
-              <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 12px; margin-top: 8px; border-top: 2px solid #c026d3;">
-                <div style="font-weight: 600; color: #86198f;">제작료 합계</div>
-                <div style="font-size: 16px; font-weight: 700; color: #059669;">${formatNumber(totalContentFee)}원</div>
+                  </thead>
+                  <tbody>
+                    ${salesItems.map(item => `
+                      <tr style="border-top: 1px solid #f1f5f9;">
+                        <td style="padding: 6px;">${item.productName || '-'}</td>
+                        <td style="padding: 6px; text-align: center;">${formatNumber(item.quantity || 0)}개</td>
+                        <td style="padding: 6px; text-align: right;">${formatNumber(item.salesAmount || item.amount || 0)}원</td>
+                        <td style="padding: 6px; text-align: center;">${item.marginRate || 0}%</td>
+                        <td style="padding: 6px; text-align: right; color: #059669; font-weight: 600;">${formatNumber(item.marginAmount || 0)}원</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
               </div>
             </div>
-          </div>
-          ` : '';
-        })()}
+          ` : ''}
+        </div>
 
-        <!-- 총 정산 금액 (판매 마진 + 콘텐츠 제작료) -->
-        ${(() => {
-          const linkedContentFees = (state.contentFeeSettlements || []).filter(f =>
-            f.linkedSettlementId === settlementId ||
-            (f.sellerName === settlement.sellerName && f.dealPeriod === settlement.dealPeriod)
-          );
-          const totalContentFee = linkedContentFees.reduce((sum, f) => sum + (Number(f.actualPayment) || 0), 0);
-          const grandTotal = actualPayment + totalContentFee;
-
-          return linkedContentFees.length > 0 ? `
-          <div style="background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 12px; padding: 16px; margin-bottom: 20px; text-align: center;">
-            <div style="font-size: 12px; color: rgba(255,255,255,0.8); margin-bottom: 4px;">💰 셀러 총 정산액 (판매마진 + 제작료)</div>
-            <div style="font-size: 24px; font-weight: 800; color: white;">${formatNumber(grandTotal)}원</div>
+        <!-- ========== 2. 콘텐츠 제작료 섹션 ========== -->
+        ${linkedContentFees.length > 0 ? `
+        <div style="background: #fdf4ff; border: 1px solid #e9d5ff; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+          <div style="font-size: 14px; font-weight: 700; color: #86198f; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="background: #a855f7; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">2</span>
+            🎬 콘텐츠 제작료
+            <span style="background: #f5d0fe; color: #86198f; padding: 2px 8px; border-radius: 8px; font-size: 11px; margin-left: auto;">${linkedContentFees.length}건</span>
           </div>
-          ` : '';
-        })()}
+
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px;">
+            <div style="background: white; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #f3e8ff;">
+              <div style="font-size: 10px; color: #64748b; margin-bottom: 2px;">제작료 총액</div>
+              <div style="font-size: 14px; font-weight: 700; color: #7c3aed;">${formatNumber(contentFeeTotal)}원</div>
+            </div>
+            <div style="background: white; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #fde68a;">
+              <div style="font-size: 10px; color: #b45309; margin-bottom: 2px;">${TAX_LABEL}</div>
+              <div style="font-size: 14px; font-weight: 700; color: #d97706;">-${formatNumber(contentFeeTax)}원</div>
+            </div>
+            <div style="background: #f3e8ff; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid #c4b5fd;">
+              <div style="font-size: 10px; color: #6d28d9; margin-bottom: 2px;">실지급액</div>
+              <div style="font-size: 15px; font-weight: 800; color: #7c3aed;">${formatNumber(contentFeeActualPayment)}원</div>
+            </div>
+          </div>
+
+          <!-- 제작료 상세 내역 -->
+          <div style="background: white; border: 1px solid #e9d5ff; border-radius: 6px; overflow: hidden;">
+            ${linkedContentFees.map((f, idx) => {
+              const feeAmount = Number(f.feeAmount) || 0;
+              const feeTax = Number(f.withholdingTax) || Math.round(feeAmount * TAX_RATE);
+              const feeActual = Number(f.actualPayment) || (feeAmount - feeTax);
+              return `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; ${idx > 0 ? 'border-top: 1px solid #f3e8ff;' : ''}">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="background: #f5d0fe; color: #86198f; padding: 2px 8px; border-radius: 4px; font-size: 10px;">${f.contentType || '기타'}</span>
+                  <span style="font-size: 12px; color: var(--gray-700);">${f.description || '-'}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 16px; font-size: 11px;">
+                  <div style="text-align: right;">
+                    <div style="color: #64748b;">제작료</div>
+                    <div style="font-weight: 600; color: #7c3aed;">${formatNumber(feeAmount)}원</div>
+                  </div>
+                  <div style="text-align: right;">
+                    <div style="color: #b45309;">세금</div>
+                    <div style="font-weight: 600; color: #d97706;">-${formatNumber(feeTax)}원</div>
+                  </div>
+                  <div style="text-align: right;">
+                    <div style="color: #059669;">실지급</div>
+                    <div style="font-weight: 700; color: #059669;">${formatNumber(feeActual)}원</div>
+                  </div>
+                </div>
+              </div>
+            `;}).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        <!-- ========== 3. 총 정산 요약 (최종 입금액) ========== -->
+        <div style="background: linear-gradient(135deg, #1e3a5f, #1e40af); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+          <div style="font-size: 13px; color: rgba(255,255,255,0.8); margin-bottom: 16px; text-align: center;">💰 총 정산 내역</div>
+
+          <div style="background: rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: rgba(255,255,255,0.9); font-size: 13px;">📦 판매 마진 실지급액</span>
+              <span style="color: #93c5fd; font-size: 14px; font-weight: 600;">${formatNumber(marginActualPayment)}원</span>
+            </div>
+            ${linkedContentFees.length > 0 ? `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: rgba(255,255,255,0.9); font-size: 13px;">🎬 콘텐츠 제작료 실지급액</span>
+              <span style="color: #d8b4fe; font-size: 14px; font-weight: 600;">${formatNumber(contentFeeActualPayment)}원</span>
+            </div>
+            ` : ''}
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; margin-top: 4px;">
+              <span style="color: rgba(255,255,255,0.7); font-size: 12px;">총 세금 (${TAX_LABEL})</span>
+              <span style="color: #fcd34d; font-size: 12px;">-${formatNumber(totalTax)}원</span>
+            </div>
+          </div>
+
+          <div style="text-align: center;">
+            <div style="font-size: 12px; color: rgba(255,255,255,0.7); margin-bottom: 4px;">🏦 총 입금 예정액</div>
+            <div style="font-size: 32px; font-weight: 800; color: #fbbf24; text-shadow: 0 2px 8px rgba(251,191,36,0.3);">${formatNumber(totalActualPayment)}원</div>
+          </div>
+        </div>
 
         <!-- 버튼 -->
         <div style="display: flex; gap: 12px; justify-content: center;">
