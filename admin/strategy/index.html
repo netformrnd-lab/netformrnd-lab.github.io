@@ -1280,7 +1280,6 @@
       <div id="tab-okr-experiment" class="tab-content">
         <div class="page-header">
           <h1 class="page-title">🔬 실험분석</h1>
-          <p class="page-desc">A/B 테스트 결과를 비교 분석하세요</p>
         </div>
         <div id="okrExperimentContent">
           <!-- 동적으로 렌더링 -->
@@ -14857,16 +14856,218 @@
         return;
       }
 
+      // 전체 실험 현황 분석
+      const experimentSummary = analyzeAllExperiments();
+
       container.innerHTML = `
+        <!-- 실험 현황 요약 대시보드 -->
+        <div class="card" style="background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white; margin-bottom: 20px;">
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px;">
+            <div style="text-align: center;">
+              <div style="font-size: 36px; font-weight: 800;">${experimentSummary.totalKPIs}</div>
+              <div style="font-size: 13px; opacity: 0.9;">총 KPI</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 36px; font-weight: 800;">${experimentSummary.kpisWithMultipleVersions}</div>
+              <div style="font-size: 13px; opacity: 0.9;">실험 중인 KPI</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 36px; font-weight: 800;">${experimentSummary.totalVersions}</div>
+              <div style="font-size: 13px; opacity: 0.9;">총 버전 수</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 36px; font-weight: 800;">${experimentSummary.decisionsNeeded}</div>
+              <div style="font-size: 13px; opacity: 0.9;">판단 필요</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 핵심 인사이트 (판단 필요한 실험이 있을 때만) -->
+        ${experimentSummary.decisionsNeeded > 0 ? `
+        <div class="card" style="background: var(--warning-light); border-left: 4px solid var(--warning); margin-bottom: 20px;">
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <span style="font-size: 24px;">⚠️</span>
+            <div>
+              <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 8px;">판단이 필요한 실험이 있습니다</div>
+              <div style="font-size: 13px; color: var(--gray-600); line-height: 1.6;">
+                ${experimentSummary.decisionsNeeded}개의 KPI에서 충분한 데이터가 쌓여 버전 선택이 가능합니다.<br>
+                아래에서 각 실험 결과를 확인하고 <strong>승자 버전을 선정</strong>하세요.
+              </div>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
+        <!-- 실험별 상세 분석 -->
         <div class="card">
-          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">🔬 A/B 테스트 결과</div>
-          <div style="margin-bottom: 24px;">
-            <select id="okrExperimentKPISelect" onchange="renderOkrExperimentResults()" style="padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; min-width: 250px; cursor: pointer; font-family: inherit;">
-              <option value="">KPI 선택</option>
-              ${okrState.kpis.map(kpi => `<option value="${kpi.id}">${kpi.name}</option>`).join('')}
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); display: flex; align-items: center; gap: 8px;">
+              🔬 실험별 상세 분석
+            </div>
+            <select id="okrExperimentKPISelect" onchange="renderOkrExperimentResults()" style="padding: 10px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; min-width: 250px; cursor: pointer; font-family: inherit;">
+              <option value="">전체 실험 현황 보기</option>
+              ${okrState.kpis.filter(kpi => {
+                const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                return lags.length >= 1;
+              }).map(kpi => {
+                const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                const hasMultiple = lags.length > 1;
+                return `<option value="${kpi.id}">${kpi.name} ${hasMultiple ? '(실험중 ' + lags.length + '개 버전)' : ''}</option>`;
+              }).join('')}
             </select>
           </div>
-          <div id="okrExperimentResults"><div style="color: var(--gray-400);">KPI를 선택해주세요</div></div>
+          <div id="okrExperimentResults">
+            ${renderAllExperimentsOverview()}
+          </div>
+        </div>
+      `;
+    }
+
+    // 전체 실험 현황 분석
+    function analyzeAllExperiments() {
+      const totalKPIs = okrState.kpis.length;
+      let kpisWithMultipleVersions = 0;
+      let totalVersions = 0;
+      let decisionsNeeded = 0;
+
+      okrState.kpis.forEach(kpi => {
+        const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+        totalVersions += lags.length;
+        if (lags.length > 1) {
+          kpisWithMultipleVersions++;
+          // 충분한 데이터가 있는지 확인 (각 버전에 최소 5건 이상)
+          const hasEnoughData = lags.every(lag => {
+            const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
+            return logs.length >= 5;
+          });
+          if (hasEnoughData) decisionsNeeded++;
+        }
+      });
+
+      return { totalKPIs, kpisWithMultipleVersions, totalVersions, decisionsNeeded };
+    }
+
+    // 전체 실험 현황 오버뷰 렌더링
+    function renderAllExperimentsOverview() {
+      const kpisWithExperiments = okrState.kpis.filter(kpi => {
+        const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+        return lags.length >= 1;
+      });
+
+      if (kpisWithExperiments.length === 0) {
+        return `<div style="text-align: center; padding: 40px; color: var(--gray-400);">
+          <div style="font-size: 48px; margin-bottom: 12px;">🔬</div>
+          <div>등록된 지표가 없습니다</div>
+        </div>`;
+      }
+
+      return `
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          ${kpisWithExperiments.map(kpi => {
+            const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+            const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
+            const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+
+            // 각 버전의 성과 계산
+            const versionResults = lags.map(lag => {
+              const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
+              const totalValue = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+              const avgPerLog = logs.length > 0 ? totalValue / logs.length : 0;
+              return { ...lag, totalValue, logCount: logs.length, avgPerLog };
+            }).sort((a, b) => b.avgPerLog - a.avgPerLog);
+
+            const hasMultipleVersions = lags.length > 1;
+            const winner = versionResults[0];
+            const hasEnoughData = versionResults.every(v => v.logCount >= 5);
+            const totalLogs = versionResults.reduce((sum, v) => sum + v.logCount, 0);
+
+            // 실험 상태 결정
+            let status, statusColor, statusIcon;
+            if (!hasMultipleVersions) {
+              status = '단일 버전';
+              statusColor = 'var(--gray-500)';
+              statusIcon = '📊';
+            } else if (totalLogs === 0) {
+              status = '데이터 수집 중';
+              statusColor = 'var(--gray-500)';
+              statusIcon = '⏳';
+            } else if (!hasEnoughData) {
+              status = '데이터 부족';
+              statusColor = 'var(--warning)';
+              statusIcon = '📊';
+            } else {
+              status = '판단 가능';
+              statusColor = 'var(--success)';
+              statusIcon = '✅';
+            }
+
+            return `
+              <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; border-left: 4px solid ${okrColors[krIdx] || 'var(--primary)'};">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                  <div>
+                    <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 4px;">${kpi.name}</div>
+                    <div style="font-size: 12px; color: var(--gray-500);">${kr ? kr.name : ''} · ${lags.length}개 버전</div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 16px;">${statusIcon}</span>
+                    <span style="padding: 4px 12px; background: ${statusColor}15; color: ${statusColor}; border-radius: 12px; font-size: 12px; font-weight: 600;">${status}</span>
+                  </div>
+                </div>
+
+                ${hasMultipleVersions ? `
+                  <!-- 버전 비교 바 -->
+                  <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    ${versionResults.map((v, idx) => {
+                      const maxAvg = Math.max(...versionResults.map(r => r.avgPerLog), 1);
+                      const width = (v.avgPerLog / maxAvg) * 100;
+                      const isWinner = idx === 0 && hasEnoughData && v.avgPerLog > 0;
+                      return `
+                        <div style="flex: 1; background: white; border-radius: 8px; padding: 12px; border: ${isWinner ? '2px solid var(--success)' : '1px solid var(--gray-200)'};">
+                          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-size: 13px; font-weight: 600; color: var(--gray-700);">${v.version || '기본'}버전</span>
+                            ${isWinner ? '<span style="font-size: 12px;">🏆</span>' : ''}
+                          </div>
+                          <div style="height: 8px; background: var(--gray-200); border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+                            <div style="height: 100%; width: ${width}%; background: ${isWinner ? 'var(--success)' : 'var(--primary)'}; border-radius: 4px;"></div>
+                          </div>
+                          <div style="font-size: 12px; color: var(--gray-600);">
+                            평균 <strong style="color: var(--gray-800);">${v.avgPerLog.toFixed(1)}</strong> · ${v.logCount}건
+                          </div>
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
+
+                  ${hasEnoughData && winner.avgPerLog > 0 ? `
+                    <!-- 추천 액션 -->
+                    <div style="background: var(--success-light); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+                      <span style="font-size: 20px;">💡</span>
+                      <div style="flex: 1;">
+                        <div style="font-size: 13px; font-weight: 600; color: var(--success);">추천: ${winner.version || '기본'}버전 채택</div>
+                        <div style="font-size: 12px; color: var(--gray-600);">평균 성과가 ${((winner.avgPerLog / (versionResults[1]?.avgPerLog || 1) - 1) * 100).toFixed(0)}% 더 높습니다</div>
+                      </div>
+                      <button onclick="document.getElementById('okrExperimentKPISelect').value='${kpi.id}'; renderOkrExperimentResults();" style="padding: 8px 16px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">상세 분석</button>
+                    </div>
+                  ` : `
+                    <div style="font-size: 12px; color: var(--gray-500); text-align: center; padding: 8px;">
+                      ${totalLogs === 0 ? '아직 기록된 데이터가 없습니다' : `각 버전당 최소 5건 이상의 데이터가 필요합니다 (현재 총 ${totalLogs}건)`}
+                    </div>
+                  `}
+                ` : `
+                  <!-- 단일 버전 현황 -->
+                  <div style="background: white; border-radius: 8px; padding: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <span style="font-size: 13px; color: var(--gray-600);">${versionResults[0]?.name || '지표'}</span>
+                      <span style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${versionResults[0]?.logCount || 0}건 기록</span>
+                    </div>
+                  </div>
+                  <div style="margin-top: 8px; font-size: 12px; color: var(--gray-500); text-align: center;">
+                    💡 버전을 추가하면 A/B 테스트가 가능합니다
+                  </div>
+                `}
+              </div>
+            `;
+          }).join('')}
         </div>
       `;
     }
@@ -14874,14 +15075,20 @@
     function renderOkrExperimentResults() {
       const kpiId = document.getElementById('okrExperimentKPISelect')?.value;
       const container = document.getElementById('okrExperimentResults');
-      if (!container || !kpiId) {
-        if (container) container.innerHTML = '<div style="color: var(--gray-400);">KPI를 선택해주세요</div>';
+      if (!container) return;
+
+      // KPI 미선택시 전체 현황 표시
+      if (!kpiId) {
+        container.innerHTML = renderAllExperimentsOverview();
         return;
       }
 
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const kr = okrState.keyResults.find(k => k.id === kpi?.keyResultId);
       const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
+
       if (lagsForKPI.length === 0) {
-        container.innerHTML = '<div style="color: var(--gray-400);">지표(버전)가 없습니다</div>';
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--gray-400);">지표(버전)가 없습니다</div>';
         return;
       }
 
@@ -14889,32 +15096,103 @@
         const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
         const totalValue = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
         const avgPerLog = logs.length > 0 ? (totalValue / logs.length) : 0;
-        return { ...lag, totalValue, logCount: logs.length, avgPerLog: avgPerLog.toFixed(2), avgPerLogNum: avgPerLog };
-      }).sort((a, b) => b.avgPerLogNum - a.avgPerLogNum);
 
-      const maxValue = Math.max(...results.map(r => r.avgPerLogNum), 1);
+        // 일별 추이 계산 (최근 7일)
+        const dailyData = {};
+        logs.forEach(log => {
+          const date = log.date || 'unknown';
+          if (!dailyData[date]) dailyData[date] = { count: 0, value: 0 };
+          dailyData[date].count++;
+          dailyData[date].value += log.resultValue || 0;
+        });
+
+        return { ...lag, totalValue, logCount: logs.length, avgPerLog, dailyData };
+      }).sort((a, b) => b.avgPerLog - a.avgPerLog);
+
+      const maxValue = Math.max(...results.map(r => r.avgPerLog), 1);
       const ranks = ['🥇', '🥈', '🥉'];
       const barColors = ['var(--success)', 'var(--primary)', 'var(--warning)', 'var(--gray-400)'];
+      const hasEnoughData = results.every(r => r.logCount >= 5);
+      const totalLogs = results.reduce((sum, r) => sum + r.logCount, 0);
+      const winner = results[0];
+      const runnerUp = results[1];
 
       container.innerHTML = `
-        <div style="display: flex; flex-direction: column; gap: 16px;">
+        <!-- KPI 정보 헤더 -->
+        <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+          <div style="font-size: 18px; font-weight: 700; color: var(--gray-800); margin-bottom: 8px;">${kpi?.name || 'KPI'}</div>
+          <div style="font-size: 13px; color: var(--gray-500);">${kr?.name || ''} · ${results.length}개 버전 실험 중 · 총 ${totalLogs}건 데이터</div>
+        </div>
+
+        <!-- 실험 결과 판정 -->
+        ${results.length > 1 ? `
+          <div style="background: ${hasEnoughData ? 'var(--success-light)' : 'var(--warning-light)'}; border-radius: 12px; padding: 20px; margin-bottom: 20px; border-left: 4px solid ${hasEnoughData ? 'var(--success)' : 'var(--warning)'};">
+            <div style="display: flex; align-items: flex-start; gap: 16px;">
+              <span style="font-size: 32px;">${hasEnoughData ? '🏆' : '⏳'}</span>
+              <div style="flex: 1;">
+                ${hasEnoughData ? `
+                  <div style="font-size: 16px; font-weight: 700; color: var(--success); margin-bottom: 8px;">
+                    실험 결과: ${winner.version || '기본'}버전 승리
+                  </div>
+                  <div style="font-size: 14px; color: var(--gray-700); margin-bottom: 12px;">
+                    ${winner.version || '기본'}버전이 ${runnerUp ? `${runnerUp.version || '기본'}버전 대비 평균 <strong>${((winner.avgPerLog / (runnerUp.avgPerLog || 1) - 1) * 100).toFixed(0)}%</strong> 더 높은 성과를 보였습니다.` : '가장 높은 성과를 보였습니다.'}
+                  </div>
+                  <div style="background: white; border-radius: 8px; padding: 16px;">
+                    <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 12px;">📋 다음 액션 가이드</div>
+                    <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: var(--gray-600); line-height: 1.8;">
+                      <li><strong>${winner.version || '기본'}버전</strong>을 표준 방식으로 채택하세요</li>
+                      <li>다른 버전들은 점진적으로 축소하거나 중단을 검토하세요</li>
+                      <li>채택된 버전을 기반으로 새로운 개선 실험을 설계하세요</li>
+                    </ul>
+                  </div>
+                ` : `
+                  <div style="font-size: 16px; font-weight: 700; color: var(--warning); margin-bottom: 8px;">
+                    데이터 수집 중
+                  </div>
+                  <div style="font-size: 14px; color: var(--gray-700); margin-bottom: 8px;">
+                    신뢰할 수 있는 판단을 위해 각 버전당 최소 5건 이상의 데이터가 필요합니다.
+                  </div>
+                  <div style="font-size: 13px; color: var(--gray-500);">
+                    현재: ${results.map(r => `${r.version || '기본'}버전 ${r.logCount}건`).join(' / ')}
+                  </div>
+                `}
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- 버전별 상세 결과 -->
+        <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px;">버전별 상세 결과</div>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
           ${results.map((r, idx) => `
-            <div style="background: white; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 20px; border: 1px solid var(--gray-100);">
+            <div style="background: white; border-radius: 12px; padding: 20px; display: flex; align-items: center; gap: 20px; border: ${idx === 0 && hasEnoughData ? '2px solid var(--success)' : '1px solid var(--gray-100)'};">
               <div style="font-size: 32px;">${ranks[idx] || '📊'}</div>
               <div style="flex: 1;">
-                <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 4px;">${r.version}버전: ${r.name}</div>
+                <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 4px;">
+                  ${r.version || '기본'}버전: ${r.name}
+                  ${idx === 0 && hasEnoughData ? '<span style="margin-left: 8px; padding: 2px 8px; background: var(--success); color: white; border-radius: 4px; font-size: 11px;">승자</span>' : ''}
+                </div>
                 <div style="font-size: 13px; color: var(--gray-500);">업무 ${r.logCount}건 | 총합 ${r.totalValue}</div>
               </div>
               <div style="flex: 2;">
-                <div style="height: 24px; width: ${(r.avgPerLogNum / maxValue) * 100}%; min-width: 40px; background: ${barColors[idx]}; border-radius: 4px; display: flex; align-items: center; padding-left: 12px; color: white; font-size: 13px; font-weight: 600;">평균 ${r.avgPerLog}</div>
+                <div style="height: 24px; width: ${(r.avgPerLog / maxValue) * 100}%; min-width: 60px; background: ${barColors[idx]}; border-radius: 4px; display: flex; align-items: center; padding-left: 12px; color: white; font-size: 13px; font-weight: 600;">
+                  평균 ${r.avgPerLog.toFixed(2)}
+                </div>
+              </div>
+              <div style="text-align: right; min-width: 80px;">
+                <div style="font-size: 20px; font-weight: 800; color: var(--gray-800);">${r.avgPerLog.toFixed(1)}</div>
+                <div style="font-size: 11px; color: var(--gray-500);">건당 평균</div>
               </div>
             </div>
           `).join('')}
         </div>
-        ${results.length > 1 ? `
-          <div style="margin-top: 20px; padding: 16px; background: var(--success-light, #D1FAE5); border-radius: 8px;">
-            <div style="font-size: 14px; font-weight: 700; color: var(--success); margin-bottom: 8px;">💡 인사이트</div>
-            <div style="font-size: 13px; color: var(--gray-700);">${results[0].version}버전 (${results[0].name})이 가장 효과적입니다.</div>
+
+        ${results.length === 1 ? `
+          <div style="margin-top: 20px; padding: 16px; background: var(--primary-light); border-radius: 8px; text-align: center;">
+            <div style="font-size: 14px; color: var(--primary); margin-bottom: 8px;">💡 A/B 테스트를 시작하세요</div>
+            <div style="font-size: 13px; color: var(--gray-600);">
+              목표설정에서 새로운 버전(B, C 등)을 추가하면 실험을 시작할 수 있습니다.
+            </div>
           </div>
         ` : ''}
       `;
