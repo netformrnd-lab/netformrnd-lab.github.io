@@ -7887,15 +7887,21 @@
               </div>
             </div>
 
-            <!-- 논의 내용 & 미팅 목표 (나란히) -->
+            <!-- 미팅 목표 -->
+            <div>
+              <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">🎯 미팅 목표</label>
+              <textarea id="meetingPreGoals" rows="2" placeholder="달성하고자 하는 목표" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;"></textarea>
+            </div>
+
+            <!-- 요청 받은 것 / 요청한 것 -->
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
               <div>
-                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">📝 논의 내용</label>
-                <textarea id="meetingPreAgenda" rows="3" placeholder="미팅에서 논의할 내용" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;"></textarea>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">📥 내가 요청 받은 것</label>
+                <textarea id="meetingRequestsReceived" rows="3" placeholder="상대방이 나에게 요청한 내용" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;"></textarea>
               </div>
               <div>
-                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">🎯 미팅 목표</label>
-                <textarea id="meetingPreGoals" rows="3" placeholder="달성하고자 하는 목표" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;"></textarea>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">📤 내가 요청한 것</label>
+                <textarea id="meetingRequestsMade" rows="3" placeholder="내가 상대방에게 요청한 내용" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;"></textarea>
               </div>
             </div>
 
@@ -8080,8 +8086,10 @@
       const participantCheckboxes = document.querySelectorAll('.participant-checkbox:checked');
       const participantIds = Array.from(participantCheckboxes).map(cb => cb.value);
       const participants = Array.from(participantCheckboxes).map(cb => cb.dataset.name);
-      const preAgenda = document.getElementById('meetingPreAgenda')?.value.trim();
-      const preGoals = document.getElementById('meetingPreGoals')?.value.trim();
+      const preAgenda = document.getElementById('meetingPreAgenda')?.value.trim() || '';
+      const preGoals = document.getElementById('meetingPreGoals')?.value.trim() || '';
+      const requestsReceived = document.getElementById('meetingRequestsReceived')?.value.trim() || '';
+      const requestsMade = document.getElementById('meetingRequestsMade')?.value.trim() || '';
 
       // 알람 설정 수집
       const reminders = Array.from(document.querySelectorAll('.reminder-checkbox:checked')).map(cb => parseInt(cb.value));
@@ -8116,8 +8124,10 @@
         reminders: reminders,   // 알람 설정 (분 단위)
         participantIds: participantIds, // 참석자 ID 목록 (알림용)
         participants: participants,     // 참석자 이름 목록
-        preAgenda: preAgenda || '',
-        preGoals: preGoals || '',
+        preAgenda: preAgenda,
+        preGoals: preGoals,
+        requestsReceived: requestsReceived,
+        requestsMade: requestsMade,
         preStatus: preAgenda || preGoals ? '준비 완료' : '미작성',
         status: MEETING_STATUS.SCHEDULED,
         postSummary: '',
@@ -8403,33 +8413,13 @@
         return type ? `${type.icon} ${type.name}` : typeId;
       }).join(', ');
 
-      // 연결된 KR
-      const krIds = meeting.krIds || [meeting.krId].filter(id => id);
-      const krs = meeting.isAllKRs
-        ? okrState.keyResults
-        : krIds.map(krId => okrState.keyResults.find(k => k.id === krId)).filter(kr => kr);
-      const krLabels = meeting.isAllKRs
-        ? '전체 KR'
-        : krs.map((kr, idx) => `${okrIcons[okrState.keyResults.findIndex(k => k.id === kr.id)] || '📊'} ${kr.name}`).join(', ');
-
       // 연결된 KPI
       const kpiIds = (meeting.kpiIds || [meeting.kpiId]).filter(id => id);
       const kpis = kpiIds.map(kpiId => okrState.kpis.find(k => k.id === kpiId)).filter(kpi => kpi);
-      const kpiLabels = kpis.map(kpi => kpi.name).join(', ');
+      const kpiLabels = kpis.map(kpi => kpi.name).join(', ') || '-';
 
       // 참석자
       const participants = meeting.participants || [];
-
-      // 알림 설정
-      const reminders = meeting.reminders || [];
-      const reminderLabels = reminders.map(min => {
-        if (min === 0) return '알림 없음';
-        if (min === 10) return '10분 전';
-        if (min === 30) return '30분 전';
-        if (min === 60) return '1시간 전';
-        if (min === 1440) return '1일 전';
-        return `${min}분 전`;
-      }).join(', ');
 
       const printWindow = window.open('', '_blank');
       printWindow.document.write(`
@@ -8437,230 +8427,132 @@
         <html>
         <head>
           <meta charset="UTF-8">
-          <title>미팅 준비 양식 - ${meeting.title}</title>
+          <title>미팅 - ${meeting.title}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-              font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-              padding: 40px;
+              font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+              padding: 24px;
               color: #1F2937;
-              line-height: 1.6;
+              line-height: 1.5;
+              max-width: 100%;
             }
             .header {
               text-align: center;
-              border-bottom: 3px solid #1F2937;
-              padding-bottom: 20px;
-              margin-bottom: 30px;
+              border-bottom: 2px solid #1F2937;
+              padding-bottom: 12px;
+              margin-bottom: 16px;
             }
-            .logo { font-size: 14px; color: #6B7280; margin-bottom: 8px; }
-            .title { font-size: 24px; font-weight: 700; }
-            .meeting-type {
-              display: inline-block;
-              margin-top: 12px;
-              padding: 6px 16px;
-              background: #F3F4F6;
-              border-radius: 20px;
-              font-size: 14px;
-              font-weight: 600;
+            .title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+            .meeting-type { font-size: 12px; color: #6B7280; }
+            .info-row {
+              display: flex;
+              gap: 16px;
+              margin-bottom: 12px;
+              padding: 10px;
+              background: #F9FAFB;
+              border-radius: 6px;
+              font-size: 13px;
             }
-            .info-grid {
-              display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: 20px;
-              margin-bottom: 30px;
-            }
-            .info-box {
-              border: 1px solid #E5E7EB;
-              border-radius: 8px;
-              padding: 16px;
-            }
-            .info-box.full { grid-column: span 2; }
-            .info-label {
-              font-size: 12px;
-              font-weight: 600;
-              color: #6B7280;
-              text-transform: uppercase;
-              margin-bottom: 8px;
-            }
-            .info-value { font-size: 15px; font-weight: 500; }
+            .info-item { display: flex; gap: 6px; }
+            .info-label { font-weight: 600; color: #6B7280; white-space: nowrap; }
+            .info-value { color: #1F2937; }
             .section {
-              margin-bottom: 30px;
+              margin-bottom: 12px;
             }
             .section-title {
-              font-size: 16px;
+              font-size: 13px;
               font-weight: 700;
               color: #1F2937;
-              padding: 10px 0;
-              border-bottom: 2px solid #E5E7EB;
-              margin-bottom: 16px;
+              padding: 6px 0;
+              border-bottom: 1px solid #E5E7EB;
+              margin-bottom: 8px;
             }
             .content-box {
               border: 1px solid #E5E7EB;
-              border-radius: 8px;
-              padding: 16px;
-              min-height: 80px;
+              border-radius: 6px;
+              padding: 10px;
+              min-height: 50px;
               background: #FAFAFA;
+              font-size: 13px;
             }
-            .content-box.large { min-height: 120px; }
             .note-lines {
               border: 1px solid #E5E7EB;
-              border-radius: 8px;
-              padding: 16px;
-              min-height: 200px;
+              border-radius: 6px;
+              padding: 10px;
+              min-height: 180px;
               background: repeating-linear-gradient(
                 transparent,
-                transparent 27px,
-                #E5E7EB 27px,
-                #E5E7EB 28px
+                transparent 23px,
+                #E5E7EB 23px,
+                #E5E7EB 24px
               );
             }
-            .checklist {
-              list-style: none;
-            }
-            .checklist li {
-              padding: 8px 0;
-              border-bottom: 1px solid #F3F4F6;
-              display: flex;
-              align-items: center;
+            .two-col {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
               gap: 12px;
             }
-            .checklist li:last-child { border-bottom: none; }
-            .checkbox {
-              width: 20px;
-              height: 20px;
-              border: 2px solid #D1D5DB;
-              border-radius: 4px;
-              flex-shrink: 0;
-            }
-            .footer {
-              margin-top: 40px;
-              padding-top: 20px;
-              border-top: 1px solid #E5E7EB;
-              display: grid;
-              grid-template-columns: 1fr 1fr 1fr;
-              gap: 30px;
-              text-align: center;
-            }
-            .signature-box {
-              border-bottom: 1px solid #1F2937;
-              padding-bottom: 40px;
-              margin-bottom: 8px;
-            }
-            .signature-label { font-size: 12px; color: #6B7280; }
-            .kr-tag {
-              display: inline-block;
-              padding: 4px 10px;
-              background: #EEF2FF;
-              color: #4F46E5;
+            .request-box {
+              border: 1px solid #E5E7EB;
               border-radius: 6px;
-              font-size: 13px;
-              font-weight: 500;
-              margin: 2px;
+              padding: 10px;
+              min-height: 100px;
+              background: #FAFAFA;
             }
             .print-date {
               text-align: right;
-              font-size: 11px;
+              font-size: 10px;
               color: #9CA3AF;
-              margin-top: 20px;
+              margin-top: 12px;
             }
             @media print {
-              body { padding: 20px; }
-              .note-lines { min-height: 150px; }
+              body { padding: 16px; }
+              @page { margin: 10mm; }
             }
           </style>
         </head>
         <body>
           <div class="header">
-            <div class="logo">NetformRND 전략센터</div>
             <div class="title">${meeting.title}</div>
             <div class="meeting-type">${typeLabels}</div>
           </div>
 
-          <div class="info-grid">
-            <div class="info-box">
-              <div class="info-label">📅 일시</div>
-              <div class="info-value">${meeting.date} ${meeting.time || ''}</div>
-            </div>
-            <div class="info-box">
-              <div class="info-label">👥 참석자</div>
-              <div class="info-value">${participants.length > 0 ? participants.join(', ') : '-'}</div>
-            </div>
-            <div class="info-box full">
-              <div class="info-label">🎯 연결된 KR</div>
-              <div class="info-value">${krLabels || '-'}</div>
-            </div>
-            ${kpis.length > 0 ? `
-            <div class="info-box full">
-              <div class="info-label">📊 연결된 KPI</div>
-              <div class="info-value">${kpiLabels}</div>
-            </div>
-            ` : ''}
+          <div class="info-row">
+            <div class="info-item"><span class="info-label">📅 일시:</span><span class="info-value">${meeting.date} ${meeting.time || ''}</span></div>
+            <div class="info-item"><span class="info-label">👥 참석자:</span><span class="info-value">${participants.length > 0 ? participants.join(', ') : '-'}</span></div>
+            <div class="info-item"><span class="info-label">📊 KPI:</span><span class="info-value">${kpiLabels}</span></div>
           </div>
 
           <div class="section">
-            <div class="section-title">📝 논의 내용 (Agenda)</div>
-            <div class="content-box large">${meeting.preAgenda || '&nbsp;'}</div>
-          </div>
-
-          <div class="section">
-            <div class="section-title">🎯 미팅 목표 (Goals)</div>
+            <div class="section-title">🎯 미팅 목표</div>
             <div class="content-box">${meeting.preGoals || '&nbsp;'}</div>
           </div>
 
           <div class="section">
-            <div class="section-title">✅ 체크리스트</div>
-            <ul class="checklist">
-              <li><span class="checkbox"></span> 미팅 자료 준비 완료</li>
-              <li><span class="checkbox"></span> 참석자 일정 확인</li>
-              <li><span class="checkbox"></span> 회의실/화상회의 링크 준비</li>
-              <li><span class="checkbox"></span> 이전 미팅 액션 아이템 확인</li>
-              <li><span class="checkbox"></span> ________________________________</li>
-            </ul>
-          </div>
-
-          <div class="section">
             <div class="section-title">📋 미팅 노트</div>
-            <div class="note-lines"></div>
+            <div class="note-lines">${meeting.notes || ''}</div>
           </div>
 
-          <div class="section">
-            <div class="section-title">⚡ 액션 아이템 (To-Do)</div>
-            <ul class="checklist">
-              <li><span class="checkbox"></span> ________________________________ (담당: ________)</li>
-              <li><span class="checkbox"></span> ________________________________ (담당: ________)</li>
-              <li><span class="checkbox"></span> ________________________________ (담당: ________)</li>
-              <li><span class="checkbox"></span> ________________________________ (담당: ________)</li>
-              <li><span class="checkbox"></span> ________________________________ (담당: ________)</li>
-            </ul>
-          </div>
-
-          <div class="footer">
-            <div>
-              <div class="signature-box"></div>
-              <div class="signature-label">작성자</div>
+          <div class="two-col">
+            <div class="section">
+              <div class="section-title">📥 내가 요청 받은 것</div>
+              <div class="request-box">${meeting.requestsReceived || '&nbsp;'}</div>
             </div>
-            <div>
-              <div class="signature-box"></div>
-              <div class="signature-label">검토자</div>
-            </div>
-            <div>
-              <div class="signature-box"></div>
-              <div class="signature-label">승인자</div>
+            <div class="section">
+              <div class="section-title">📤 내가 요청한 것</div>
+              <div class="request-box">${meeting.requestsMade || '&nbsp;'}</div>
             </div>
           </div>
 
-          <div class="print-date">출력일: ${new Date().toLocaleDateString('ko-KR')} ${new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</div>
+          <div class="print-date">출력일: ${new Date().toLocaleDateString('ko-KR')}</div>
         </body>
         </html>
       `);
 
       printWindow.document.close();
       printWindow.focus();
-
-      // 약간의 지연 후 인쇄 (스타일 로드 대기)
-      setTimeout(() => {
-        printWindow.print();
-      }, 300);
+      setTimeout(() => { printWindow.print(); }, 300);
     }
 
     // 미팅 수정 모달 열기
@@ -8740,6 +8632,18 @@
             <div>
               <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">🎯 미팅 목표</label>
               <textarea id="editMeetingPreGoals" rows="2" placeholder="달성하고자 하는 목표" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.preGoals || ''}</textarea>
+            </div>
+
+            <!-- 요청 받은 것 / 요청한 것 -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">📥 내가 요청 받은 것</label>
+                <textarea id="editMeetingRequestsReceived" rows="3" placeholder="상대방이 나에게 요청한 내용" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;">${meeting.requestsReceived || ''}</textarea>
+              </div>
+              <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px; color: var(--gray-700); font-size: 13px;">📤 내가 요청한 것</label>
+                <textarea id="editMeetingRequestsMade" rows="3" placeholder="내가 상대방에게 요청한 내용" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; font-size: 13px;">${meeting.requestsMade || ''}</textarea>
+              </div>
             </div>
 
             <!-- 알람 설정 -->
@@ -8824,6 +8728,8 @@
 
       const preAgenda = document.getElementById('editMeetingPreAgenda')?.value.trim();
       const preGoals = document.getElementById('editMeetingPreGoals')?.value.trim();
+      const requestsReceived = document.getElementById('editMeetingRequestsReceived')?.value.trim() || '';
+      const requestsMade = document.getElementById('editMeetingRequestsMade')?.value.trim() || '';
 
       if (types.length === 0 || !title || !date) {
         showToast('미팅 타입, 제목, 날짜는 필수입니다', 'error');
@@ -8842,6 +8748,8 @@
           participants: participants,     // 참석자 이름 목록
           preAgenda: preAgenda || '',
           preGoals: preGoals || '',
+          requestsReceived: requestsReceived,
+          requestsMade: requestsMade,
           preStatus: preAgenda || preGoals ? '준비 완료' : '미작성',
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -14594,7 +14502,10 @@
                       <div onclick="toggleKpiFolderInModal('${kpi.id}')" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; user-select: none;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
                         <div style="display: flex; align-items: center; gap: 8px;">
                           <span id="kpi-arrow-${kpi.id}" style="font-size: 10px; color: var(--gray-500); transition: transform 0.2s;">▼</span>
-                          <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📂 ${kpi.name}</div>
+                          <div>
+                            <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📂 ${kpi.name}</div>
+                            ${kpi.targetValue ? `<div style="font-size: 10px; color: var(--gray-500);">목표: ${kpi.targetValue.toLocaleString()}${kpi.unit || ''}</div>` : ''}
+                          </div>
                           <span style="font-size: 10px; color: var(--gray-400);">📋${activityCount}</span>
                           <span style="font-size: 10px; color: var(--success);">💰${resultCount}</span>
                         </div>
