@@ -869,6 +869,11 @@
         100% { opacity: 0; }
       }
 
+      @keyframes fadeIn {
+        0% { opacity: 0; transform: translateY(-10px); }
+        100% { opacity: 1; transform: translateY(0); }
+      }
+
       table {
         min-width: 700px;
         font-size: 12px;
@@ -13692,7 +13697,8 @@
     // 개인 그로스보드 상태
     let personalDashboardState = {
       selectedMemberId: null,
-      periodFilter: 'all' // all, thisWeek, thisMonth
+      periodFilter: 'all', // all, thisWeek, thisMonth
+      personalGoalsVisible: false // 개인 목표 섹션 토글 상태
     };
 
     // 개인 그로스보드 렌더링
@@ -13790,12 +13796,42 @@
       // 총 활동량 기준 정렬
       memberStats.sort((a, b) => b.totalCount - a.totalCount);
 
+      // 일일 목표 현황 데이터 생성
+      const allLags = okrState.laggingIndicators || [];
+      const kpiGroups = {};
+      allLags.forEach(lag => {
+        if (!kpiGroups[lag.kpiId]) {
+          const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+          const kr = okrState.keyResults.find(k => k.id === kpi?.keyResultId);
+          const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
+          kpiGroups[lag.kpiId] = { kpi, kr, krIdx, lags: [] };
+        }
+        kpiGroups[lag.kpiId].lags.push(lag);
+      });
+
+      // 팀원별 KPI 기여값 계산 (개인 목표 섹션용)
+      const memberKpiValues = {};
+      teamMembers.forEach(member => {
+        memberKpiValues[member.id] = {};
+        okrState.kpis.forEach(kpi => {
+          const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id && l.type === 'result');
+          let value = 0;
+          lagsForKPI.forEach(lag => {
+            const logs = filteredLogs.filter(log => log.laggingIndicatorId === lag.id && log.memberId === member.id);
+            logs.forEach(log => {
+              value += lag.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+            });
+          });
+          memberKpiValues[member.id][kpi.id] = value;
+        });
+      });
+
       container.innerHTML = `
         <!-- 헤더 -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
           <div>
             <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">👤 개인 그로스보드</h2>
-            <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">팀원별 활동 현황 · KR 기여도</p>
+            <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">팀원별 활동 현황 · KR 기여도 · 개인 목표 달성</p>
           </div>
           <div style="display: flex; gap: 8px;">
             <select id="personalPeriodFilter" onchange="updatePersonalPeriodFilter(this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; cursor: pointer; background: white;">
@@ -13855,6 +13891,219 @@
                 `).join('')}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- 일일 목표 현황 -->
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+            📋 일일 목표 현황
+          </div>
+          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">각 지표별 일일 목표 설정 및 달성 현황을 확인하세요</p>
+
+          ${allLags.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+              <div style="font-size: 48px; margin-bottom: 16px;">📋</div>
+              <div style="font-size: 15px; font-weight: 500;">등록된 지표가 없습니다</div>
+            </div>
+          ` : `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px;">
+              ${Object.values(kpiGroups).map(group => {
+                if (!group.kpi) return '';
+                return `
+                  <div style="padding: 16px; background: var(--gray-50); border-radius: 12px; border-left: 4px solid ${okrColors[group.krIdx] || 'var(--gray-400)'};">
+                    <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
+                      ${group.kpi.name}
+                    </div>
+                    <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 12px;">
+                      ${group.kr ? okrIcons[group.krIdx] + ' ' + group.kr.name : ''}
+                    </div>
+
+                    <div style="display: grid; gap: 8px;">
+                      ${group.lags.map(lag => {
+                        const hasTarget = lag.target && lag.target > 0;
+                        const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
+                        const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                        const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
+                        const statusColor = achievementRate >= 100 ? 'var(--success)' : achievementRate >= 70 ? 'var(--primary)' : achievementRate >= 40 ? 'var(--warning)' : 'var(--gray-400)';
+
+                        return `
+                          <div style="background: white; border-radius: 8px; padding: 12px; border: 1px solid ${hasTarget ? statusColor + '40' : 'var(--gray-200)'};">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                              <div style="flex: 1;">
+                                <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">
+                                  ${getOkrLagIcon(lag.name)} ${lag.name}
+                                </div>
+                                <div style="font-size: 10px; color: var(--gray-500); margin-top: 2px;">
+                                  ${lag.type === 'result' ? '💰 성과형' : '📋 활동형'}
+                                  ${lag.version ? ' · ' + lag.version + '버전' : ''}
+                                </div>
+                              </div>
+                              ${hasTarget ? `
+                                <div style="padding: 4px 10px; background: ${statusColor}; color: white; border-radius: 8px; font-size: 11px; font-weight: 700;">
+                                  ${achievementRate}%
+                                </div>
+                              ` : `
+                                <div style="padding: 4px 10px; background: var(--gray-200); color: var(--gray-600); border-radius: 8px; font-size: 10px; font-weight: 600;">
+                                  미설정
+                                </div>
+                              `}
+                            </div>
+
+                            ${hasTarget ? `
+                              <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--gray-600); margin-bottom: 6px;">
+                                <span>목표: <strong style="color: var(--gray-800);">${lag.target}건</strong></span>
+                                <span>현재: <strong style="color: ${statusColor};">${totalCount}건</strong></span>
+                              </div>
+                              <div style="height: 4px; background: var(--gray-200); border-radius: 2px; overflow: hidden;">
+                                <div style="height: 100%; width: ${achievementRate}%; background: ${statusColor}; border-radius: 2px; transition: width 0.5s;"></div>
+                              </div>
+                            ` : `
+                              <div style="font-size: 11px; color: var(--gray-500);">
+                                현재 기록: ${totalCount}건
+                              </div>
+                            `}
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+
+        <!-- 개인 목표 토글 버튼 -->
+        <div style="text-align: center; margin: 24px 0;">
+          <button onclick="togglePersonalGoalsSection()" id="personalGoalsToggleBtn" style="padding: 14px 32px; background: ${personalDashboardState.personalGoalsVisible ? 'linear-gradient(135deg, #6B7280, #9CA3AF)' : 'linear-gradient(135deg, var(--primary), #818CF8)'}; color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3); transition: all 0.3s; display: inline-flex; align-items: center; gap: 10px;">
+            <span>🎯</span>
+            <span>${personalDashboardState.personalGoalsVisible ? '개인 목표 및 진척도 접기' : '개인 목표 및 진척도 보기'}</span>
+            <span style="transition: transform 0.3s; transform: ${personalDashboardState.personalGoalsVisible ? 'rotate(180deg)' : 'none'};">▼</span>
+          </button>
+        </div>
+
+        <!-- 개인 목표 설정 및 진척도 -->
+        <div id="personalGoalsSection" style="display: ${personalDashboardState.personalGoalsVisible ? 'block' : 'none'};">
+          <div class="card" style="margin-bottom: 20px;">
+            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+              🎯 개인 목표 설정 및 진척도
+            </div>
+            <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">팀원별 개인 목표 달성 현황을 확인하고 설정하세요</p>
+
+            ${teamMembers.length > 0 ? teamMembers.map(member => {
+              const memberTargets = (okrState.personalTargets || []).filter(pt => pt.memberId === member.id);
+              const relatedKPIs = okrState.kpis.filter(kpi =>
+                kpi.mainAssignee === member.id ||
+                (kpi.subAssignees && kpi.subAssignees.includes(member.id)) ||
+                memberTargets.some(pt => pt.kpiId === kpi.id)
+              );
+
+              if (relatedKPIs.length === 0 && memberTargets.length === 0) return '';
+
+              return `
+                <div style="margin-bottom: 24px; padding: 20px; background: var(--gray-50); border-radius: 12px; border-left: 4px solid var(--primary);">
+                  <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between;">
+                    <span>👤 ${member.name} ${member.role === 'admin' ? '<span style="font-size: 12px; color: var(--primary);">👑</span>' : ''}</span>
+                  </div>
+
+                  <div style="display: grid; gap: 12px;">
+                    ${relatedKPIs.map(kpi => {
+                      const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+                      const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
+                      const personalTarget = memberTargets.find(pt => pt.kpiId === kpi.id);
+                      const actualValue = memberKpiValues[member.id][kpi.id] || 0;
+
+                      if (!personalTarget) {
+                        return `
+                          <div style="background: white; border-radius: 10px; padding: 16px; border: 1px solid var(--gray-200);">
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                              <div style="flex: 1;">
+                                <div style="font-size: 13px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
+                                  ${kpi.name}
+                                </div>
+                                <div style="font-size: 11px; color: var(--gray-500);">
+                                  ${kr ? okrIcons[krIdx] + ' ' + kr.name : ''}
+                                </div>
+                              </div>
+                              <div style="display: flex; align-items: center; gap: 8px;">
+                                <div style="padding: 4px 12px; background: var(--gray-200); color: var(--gray-600); border-radius: 12px; font-size: 11px; font-weight: 600;">
+                                  미설정
+                                </div>
+                                <button onclick="openPersonalTargetModal('${kpi.id}', '${member.id}')" style="padding: 6px 12px; border: 1px solid var(--primary); border-radius: 8px; background: white; color: var(--primary); font-size: 11px; cursor: pointer; font-weight: 600;" onmouseover="this.style.background='var(--primary)'; this.style.color='white'" onmouseout="this.style.background='white'; this.style.color='var(--primary)'" title="내 목표 설정">
+                                  🎯 목표설정
+                                </button>
+                              </div>
+                            </div>
+                            <div style="font-size: 12px; color: var(--gray-500); margin-top: 8px;">
+                              현재: ${formatAmountWithSummary(actualValue, kpi.unit || '')}
+                            </div>
+                          </div>
+                        `;
+                      } else {
+                        const targetValue = personalTarget.targetValue || 0;
+                        const achievementRate = targetValue > 0 ? Math.round((actualValue / targetValue) * 100) : 0;
+                        const remaining = Math.max(targetValue - actualValue, 0);
+                        const statusColor = achievementRate >= 100 ? 'var(--success)' : achievementRate >= 70 ? 'var(--primary)' : achievementRate >= 40 ? 'var(--warning)' : 'var(--danger)';
+
+                        return `
+                          <div style="background: white; border-radius: 10px; padding: 16px; border: 2px solid ${statusColor}40;">
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+                              <div style="flex: 1;">
+                                <div style="font-size: 13px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
+                                  ${kpi.name}
+                                </div>
+                                <div style="font-size: 11px; color: var(--gray-500);">
+                                  ${kr ? okrIcons[krIdx] + ' ' + kr.name : ''}
+                                </div>
+                              </div>
+                              <div style="display: flex; align-items: center; gap: 8px;">
+                                <div style="padding: 4px 12px; background: ${statusColor}; color: white; border-radius: 12px; font-size: 12px; font-weight: 700;">
+                                  ${achievementRate}%
+                                </div>
+                                <button onclick="openPersonalTargetModal('${kpi.id}', '${member.id}')" style="padding: 6px 12px; border: 1px solid var(--primary); border-radius: 8px; background: white; color: var(--primary); font-size: 11px; cursor: pointer; font-weight: 600;" onmouseover="this.style.background='var(--primary)'; this.style.color='white'" onmouseout="this.style.background='white'; this.style.color='var(--primary)'" title="목표 수정">
+                                  ✏️ 수정
+                                </button>
+                              </div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
+                              <div style="text-align: center; padding: 10px; background: var(--gray-50); border-radius: 8px;">
+                                <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 4px;">목표</div>
+                                <div style="font-size: 13px; font-weight: 600; color: var(--gray-700);">${formatAmountWithSummary(targetValue, kpi.unit || '')}</div>
+                              </div>
+                              <div style="text-align: center; padding: 10px; background: ${statusColor}15; border-radius: 8px;">
+                                <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 4px;">현재</div>
+                                <div style="font-size: 13px; font-weight: 600; color: ${statusColor};">${formatAmountWithSummary(actualValue, kpi.unit || '')}</div>
+                              </div>
+                              <div style="text-align: center; padding: 10px; background: var(--gray-50); border-radius: 8px;">
+                                <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 4px;">남은 목표</div>
+                                <div style="font-size: 13px; font-weight: 600; color: var(--gray-600);">${formatAmountWithSummary(remaining, kpi.unit || '')}</div>
+                              </div>
+                            </div>
+
+                            <div style="height: 8px; background: var(--gray-200); border-radius: 4px; overflow: hidden; margin-bottom: 6px;">
+                              <div style="height: 100%; width: ${Math.min(achievementRate, 100)}%; background: ${statusColor}; border-radius: 4px; transition: width 0.5s;"></div>
+                            </div>
+                            ${achievementRate >= 100 ? `
+                              <div style="font-size: 11px; color: var(--success); text-align: center; font-weight: 600;">🎉 축하합니다! 목표를 달성했습니다!</div>
+                            ` : `
+                              <div style="font-size: 11px; color: var(--gray-500); text-align: center;">💪 목표까지 ${formatAmountWithSummary(remaining, kpi.unit || '')} 남음!</div>
+                            `}
+                          </div>
+                        `;
+                      }
+                    }).join('')}
+                  </div>
+                </div>
+              `;
+            }).join('') : `
+              <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+                <div style="font-size: 48px; margin-bottom: 16px;">🎯</div>
+                <div style="font-size: 15px; font-weight: 500;">개인 목표 데이터가 없습니다</div>
+                <div style="font-size: 13px; margin-top: 8px;">팀원들이 개인 목표를 설정하면 여기에 표시됩니다</div>
+              </div>
+            `}
           </div>
         </div>
 
@@ -14061,6 +14310,32 @@
     function updatePersonalPeriodFilter(period) {
       personalDashboardState.periodFilter = period;
       renderPersonalGrowthboard();
+    }
+
+    // 개인 목표 섹션 토글
+    function togglePersonalGoalsSection() {
+      personalDashboardState.personalGoalsVisible = !personalDashboardState.personalGoalsVisible;
+
+      const section = document.getElementById('personalGoalsSection');
+      const btn = document.getElementById('personalGoalsToggleBtn');
+
+      if (!section || !btn) return;
+
+      if (personalDashboardState.personalGoalsVisible) {
+        section.style.display = 'block';
+        section.style.animation = 'fadeIn 0.3s ease';
+        btn.innerHTML = '<span>🎯</span><span>개인 목표 및 진척도 접기</span><span style="transition: transform 0.3s; transform: rotate(180deg);">▼</span>';
+        btn.style.background = 'linear-gradient(135deg, #6B7280, #9CA3AF)';
+
+        // 섹션으로 스크롤
+        setTimeout(() => {
+          section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+      } else {
+        section.style.display = 'none';
+        btn.innerHTML = '<span>🎯</span><span>개인 목표 및 진척도 보기</span><span style="transition: transform 0.3s;">▼</span>';
+        btn.style.background = 'linear-gradient(135deg, var(--primary), #818CF8)';
+      }
     }
 
     // OKR 업무기록 렌더링
