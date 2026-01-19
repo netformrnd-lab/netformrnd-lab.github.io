@@ -1348,6 +1348,26 @@
       `;
     }
 
+    // 선택된 팀원 ID (전역 상태)
+    let selectedMemberId = null;
+
+    // 팀원 선택 함수
+    function selectMember(memberId) {
+      selectedMemberId = memberId;
+      renderPersonalGrowthboardTab();
+      // 선택된 팀원 섹션으로 스크롤
+      setTimeout(() => {
+        const section = document.getElementById('memberAnalysisSection');
+        if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+
+    // 팀원 선택 해제 함수
+    function clearMemberSelection() {
+      selectedMemberId = null;
+      renderPersonalGrowthboardTab();
+    }
+
     // 개인 그로스보드 탭 렌더링 (독립 탭)
     function renderPersonalGrowthboardTab() {
       const container = document.getElementById('content');
@@ -1429,7 +1449,7 @@
         <!-- 팀원별 활동 현황 -->
         <div class="card">
           <div class="card-title">👤 팀원별 활동 현황</div>
-          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">팀원별 활동 현황 및 KR 기여도를 확인하세요</p>
+          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">팀원을 클릭하면 해당 팀원의 상세 분석을 볼 수 있습니다</p>
           ${memberArray.length > 0 ? `
           <div style="overflow-x: auto;">
             <table class="kpi-table">
@@ -1448,8 +1468,11 @@
               </thead>
               <tbody>
                 ${memberArray.map(member => `
-                  <tr>
-                    <td style="font-weight: 600; color: var(--gray-800);">${member.name}</td>
+                  <tr onclick="selectMember('${member.id}')" style="cursor: pointer; transition: all 0.2s; ${selectedMemberId === member.id ? 'background: var(--primary)10; border-left: 3px solid var(--primary);' : ''}" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='${selectedMemberId === member.id ? 'var(--primary)10' : 'white'}'">
+                    <td style="font-weight: 600; color: var(--gray-800);">
+                      ${selectedMemberId === member.id ? '✓ ' : ''}${member.name}
+                      ${selectedMemberId === member.id ? '<span style="font-size: 10px; color: var(--primary); margin-left: 4px;">선택됨</span>' : ''}
+                    </td>
                     <td style="text-align: center; font-weight: 700; color: var(--primary);">${member.totalCount}건</td>
                     <td style="text-align: center; color: var(--gray-700);">${member.activityCount}건</td>
                     <td style="text-align: right; font-weight: 600; color: var(--success);">${formatAmountWithSummary(member.resultValue, '원')}</td>
@@ -1479,10 +1502,38 @@
           `}
         </div>
 
+        <!-- 선택된 팀원 분석 섹션 -->
+        <div id="memberAnalysisSection">
+        ${(() => {
+          const selectedMember = selectedMemberId ? memberArray.find(m => m.id === selectedMemberId) : null;
+          const memberName = selectedMember ? selectedMember.name : '전체 팀';
+
+          return selectedMemberId ? `
+            <!-- 선택된 팀원 헤더 -->
+            <div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-size: 14px; opacity: 0.9; margin-bottom: 4px;">선택된 팀원</div>
+                  <div style="font-size: 24px; font-weight: 800;">👤 ${memberName}</div>
+                </div>
+                <button onclick="clearMemberSelection()" style="padding: 10px 20px; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; color: white; font-size: 13px; font-weight: 600; cursor: pointer;">
+                  ✕ 선택 해제
+                </button>
+              </div>
+            </div>
+          ` : '';
+        })()}
+
         <!-- 활동형/성과형 비율 요약 -->
         ${(() => {
           const allLags = snapshotData.laggingIndicators || [];
-          const dailyLogs = snapshotData.dailyLogs || [];
+          // 선택된 팀원이 있으면 해당 팀원의 로그만 필터링
+          const dailyLogs = selectedMemberId
+            ? (snapshotData.dailyLogs || []).filter(log => log.memberId === selectedMemberId)
+            : (snapshotData.dailyLogs || []);
+
+          const selectedMember = selectedMemberId ? memberArray.find(m => m.id === selectedMemberId) : null;
+          const memberName = selectedMember ? selectedMember.name + '님의' : '전체';
 
           // 활동형/성과형 지표 분류
           const activityLagIds = allLags.filter(lag => lag.type !== 'result').map(l => l.id);
@@ -1518,8 +1569,8 @@
 
           return `
             <div class="card" style="margin-bottom: 20px;">
-              <div class="card-title">📊 활동형/성과형 비율 분석</div>
-              <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 20px;">업무 기록이 어느 유형에 집중되어 있는지 확인하세요</p>
+              <div class="card-title">📊 ${memberName} 활동형/성과형 비율 분석</div>
+              <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 20px;">${selectedMemberId ? '이 팀원의 업무 기록이 어느 유형에 집중되어 있는지 확인하세요' : '업무 기록이 어느 유형에 집중되어 있는지 확인하세요'}</p>
 
               <!-- 비율 바 -->
               <div style="margin-bottom: 20px;">
@@ -1568,11 +1619,15 @@
           <!-- 활동형 지표 -->
           <div class="card">
             <div class="card-title" style="color: var(--primary);">📋 활동형 지표</div>
-            <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">일일 업무 활동 기록 현황</p>
+            <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">${selectedMemberId ? '선택된 팀원의 활동 기록' : '일일 업무 활동 기록 현황'}</p>
 
             ${(() => {
               const allLags = snapshotData.laggingIndicators || [];
               const activityLags = allLags.filter(lag => lag.type !== 'result');
+              // 선택된 팀원 필터링
+              const filteredLogs = selectedMemberId
+                ? snapshotData.dailyLogs.filter(l => l.memberId === selectedMemberId)
+                : snapshotData.dailyLogs;
 
               if (activityLags.length === 0) {
                 return `
@@ -1608,7 +1663,7 @@
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                       ${group.lags.map(lag => {
                         const hasTarget = lag.target && lag.target > 0;
-                        const logs = snapshotData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
+                        const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
                         const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
                         const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
                         const statusColor = achievementRate >= 100 ? 'var(--success)' : achievementRate >= 70 ? 'var(--primary)' : achievementRate >= 40 ? 'var(--warning)' : 'var(--gray-400)';
@@ -1658,11 +1713,15 @@
           <!-- 성과형 지표 -->
           <div class="card">
             <div class="card-title" style="color: var(--success);">💰 성과형 지표</div>
-            <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">매출/실적 성과 달성 현황</p>
+            <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">${selectedMemberId ? '선택된 팀원의 성과 기록' : '매출/실적 성과 달성 현황'}</p>
 
             ${(() => {
               const allLags = snapshotData.laggingIndicators || [];
               const resultLags = allLags.filter(lag => lag.type === 'result');
+              // 선택된 팀원 필터링
+              const filteredLogs = selectedMemberId
+                ? snapshotData.dailyLogs.filter(l => l.memberId === selectedMemberId)
+                : snapshotData.dailyLogs;
 
               if (resultLags.length === 0) {
                 return `
@@ -1698,7 +1757,7 @@
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                       ${group.lags.map(lag => {
                         const hasTarget = lag.target && lag.target > 0;
-                        const logs = snapshotData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
+                        const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
                         const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
                         const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
                         const statusColor = achievementRate >= 100 ? 'var(--success)' : achievementRate >= 70 ? 'var(--primary)' : achievementRate >= 40 ? 'var(--warning)' : 'var(--gray-400)';
@@ -1745,6 +1804,7 @@
             })()}
           </div>
         </div>
+        </div> <!-- memberAnalysisSection 닫기 -->
 
         <!-- 개인 목표 설정 및 진척도 -->
         <div class="card">
