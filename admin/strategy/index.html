@@ -987,9 +987,27 @@
 
     <!-- 사이드바 -->
     <aside class="sidebar">
-      <div class="logo">
-        <div class="logo-icon">📊</div>
-        <span class="logo-text">전략센터</span>
+      <div class="logo" style="display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="logo-icon">📊</div>
+          <span class="logo-text">전략센터</span>
+        </div>
+        <!-- 알림 아이콘 -->
+        <div id="notificationBell" onclick="toggleNotificationPanel()" style="position: relative; cursor: pointer; padding: 8px; border-radius: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
+          <span style="font-size: 20px;">🔔</span>
+          <span id="notificationBadge" style="display: none; position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; background: #EF4444; color: white; border-radius: 50%; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;">0</span>
+        </div>
+      </div>
+
+      <!-- 알림 패널 -->
+      <div id="notificationPanel" style="display: none; position: absolute; top: 70px; left: 12px; right: 12px; background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); z-index: 200; max-height: 400px; overflow-y: auto;">
+        <div style="padding: 16px; border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center;">
+          <div style="font-size: 15px; font-weight: 700; color: var(--gray-900);">🔔 알림</div>
+          <button onclick="markAllNotificationsRead()" style="font-size: 12px; color: var(--primary); background: none; border: none; cursor: pointer; font-weight: 600;">모두 읽음</button>
+        </div>
+        <div id="notificationList" style="padding: 8px;">
+          <div style="padding: 20px; text-align: center; color: var(--gray-500); font-size: 13px;">알림이 없습니다</div>
+        </div>
       </div>
 
       <nav>
@@ -1766,6 +1784,7 @@
       references: [],
       refCategories: [],
       teamMembers: [],
+      notifications: [],     // 알림 목록
       strategyData: {},
       strategyVersions: [],
       keywords: [],          // 트렌드 키워드
@@ -1926,6 +1945,12 @@
       db.collection('teamMembers').orderBy('name').onSnapshot(snapshot => {
         state.teamMembers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         if (state.currentTab === 'dashboard') renderSalesDashboard();
+      });
+
+      // 알림 데이터
+      db.collection('notifications').orderBy('createdAt', 'desc').limit(50).onSnapshot(snapshot => {
+        state.notifications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        updateNotificationBadge();
       });
 
       // 전략 설정 데이터 (목표치)
@@ -2576,6 +2601,244 @@
         modal.innerHTML = '';
       }
     }
+
+    // ========================================
+    // 알림 센터 기능
+    // ========================================
+
+    // 알림 패널 토글
+    function toggleNotificationPanel() {
+      const panel = document.getElementById('notificationPanel');
+      if (panel) {
+        const isVisible = panel.style.display !== 'none';
+        panel.style.display = isVisible ? 'none' : 'block';
+        if (!isVisible) {
+          renderNotificationList();
+        }
+      }
+    }
+
+    // 알림 뱃지 업데이트
+    function updateNotificationBadge() {
+      const badge = document.getElementById('notificationBadge');
+      const currentUserId = state.currentUser?.id;
+      if (!badge || !currentUserId) return;
+
+      // 현재 사용자에게 온 읽지 않은 알림 수
+      const unreadCount = (state.notifications || []).filter(n =>
+        !n.isRead &&
+        (n.recipientId === currentUserId || n.recipientId === 'all')
+      ).length;
+
+      if (unreadCount > 0) {
+        badge.style.display = 'flex';
+        badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+
+    // 알림 목록 렌더링
+    function renderNotificationList() {
+      const container = document.getElementById('notificationList');
+      if (!container) return;
+
+      const currentUserId = state.currentUser?.id;
+      const myNotifications = (state.notifications || []).filter(n =>
+        n.recipientId === currentUserId || n.recipientId === 'all'
+      );
+
+      if (myNotifications.length === 0) {
+        container.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--gray-500); font-size: 13px;">알림이 없습니다</div>';
+        return;
+      }
+
+      container.innerHTML = myNotifications.map(notif => {
+        const timeAgo = getTimeAgo(notif.createdAt);
+        const isUnread = !notif.isRead;
+
+        return `
+          <div onclick="handleNotificationClick('${notif.id}', '${notif.type || ''}', '${notif.targetId || ''}')"
+               style="padding: 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; transition: background 0.2s;
+                      background: ${isUnread ? 'var(--primary-light)' : 'white'}; border-left: 3px solid ${isUnread ? 'var(--primary)' : 'transparent'};"
+               onmouseover="this.style.background='var(--gray-100)'"
+               onmouseout="this.style.background='${isUnread ? 'var(--primary-light)' : 'white'}'">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <span style="font-size: 18px;">${getNotificationIcon(notif.type)}</span>
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-size: 13px; font-weight: ${isUnread ? '600' : '500'}; color: var(--gray-800); margin-bottom: 4px; line-height: 1.4;">
+                  ${notif.message}
+                </div>
+                <div style="font-size: 11px; color: var(--gray-500);">${timeAgo}</div>
+              </div>
+              ${isUnread ? '<span style="width: 8px; height: 8px; background: var(--primary); border-radius: 50%; flex-shrink: 0;"></span>' : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 알림 아이콘 가져오기
+    function getNotificationIcon(type) {
+      switch (type) {
+        case 'meeting_reminder': return '📅';
+        case 'meeting_invite': return '📬';
+        case 'task_assigned': return '📋';
+        case 'task_completed': return '✅';
+        case 'kpi_update': return '📊';
+        default: return '🔔';
+      }
+    }
+
+    // 시간 포맷팅
+    function getTimeAgo(timestamp) {
+      if (!timestamp) return '';
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      const now = new Date();
+      const diffMs = now - date;
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+
+      if (diffMins < 1) return '방금 전';
+      if (diffMins < 60) return `${diffMins}분 전`;
+      if (diffHours < 24) return `${diffHours}시간 전`;
+      if (diffDays < 7) return `${diffDays}일 전`;
+      return date.toLocaleDateString('ko-KR');
+    }
+
+    // 알림 클릭 처리
+    async function handleNotificationClick(notifId, type, targetId) {
+      // 알림 읽음 처리
+      try {
+        await db.collection('notifications').doc(notifId).update({ isRead: true });
+      } catch (e) {
+        console.error('알림 읽음 처리 오류:', e);
+      }
+
+      // 타입에 따른 동작
+      if (type === 'meeting_reminder' || type === 'meeting_invite') {
+        toggleNotificationPanel();
+        if (targetId) {
+          openMeetingDetailModal(targetId);
+        }
+      }
+    }
+
+    // 모든 알림 읽음 처리
+    async function markAllNotificationsRead() {
+      const currentUserId = state.currentUser?.id;
+      if (!currentUserId) return;
+
+      const myUnreadNotifs = (state.notifications || []).filter(n =>
+        !n.isRead && (n.recipientId === currentUserId || n.recipientId === 'all')
+      );
+
+      try {
+        const batch = db.batch();
+        myUnreadNotifs.forEach(notif => {
+          batch.update(db.collection('notifications').doc(notif.id), { isRead: true });
+        });
+        await batch.commit();
+        showToast('모든 알림을 읽음 처리했습니다', 'success');
+        renderNotificationList();
+      } catch (e) {
+        console.error('알림 읽음 처리 오류:', e);
+      }
+    }
+
+    // 알림 생성 함수
+    async function createNotification(recipientId, type, message, targetId = null) {
+      try {
+        await db.collection('notifications').add({
+          recipientId: recipientId,
+          type: type,
+          message: message,
+          targetId: targetId,
+          isRead: false,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) {
+        console.error('알림 생성 오류:', e);
+      }
+    }
+
+    // 미팅 알림 생성 (미팅 저장 시 호출)
+    async function createMeetingNotifications(meetingData, meetingId) {
+      const participantIds = meetingData.participantIds || [];
+      const meetingTitle = meetingData.title;
+      const meetingDate = meetingData.date;
+      const meetingTime = meetingData.time || '';
+
+      for (const participantId of participantIds) {
+        // 미팅 초대 알림
+        await createNotification(
+          participantId,
+          'meeting_invite',
+          `"${meetingTitle}" 미팅에 초대되었습니다 (${meetingDate} ${meetingTime})`,
+          meetingId
+        );
+      }
+    }
+
+    // 미팅 리마인더 체크 (페이지 로드 시 실행)
+    async function checkMeetingReminders() {
+      const now = new Date();
+      const currentUserId = state.currentUser?.id;
+      if (!currentUserId) return;
+
+      const meetings = okrState.meetings || [];
+
+      for (const meeting of meetings) {
+        if (meeting.status === 'completed') continue;
+
+        const participantIds = meeting.participantIds || [];
+        if (!participantIds.includes(currentUserId)) continue;
+
+        const reminders = meeting.reminders || [60]; // 기본 1시간 전
+        const meetingDateTime = new Date(`${meeting.date}T${meeting.time || '09:00'}`);
+
+        for (const reminderMin of reminders) {
+          if (reminderMin === 0) continue; // 알림 없음
+
+          const reminderTime = new Date(meetingDateTime.getTime() - reminderMin * 60000);
+          const diffMs = reminderTime - now;
+
+          // 알림 시간이 지났고, 미팅 시간은 아직 안 지난 경우
+          if (diffMs < 0 && meetingDateTime > now) {
+            // 이미 생성된 리마인더인지 확인
+            const existingReminder = (state.notifications || []).find(n =>
+              n.type === 'meeting_reminder' &&
+              n.targetId === meeting.id &&
+              n.recipientId === currentUserId &&
+              n.reminderMin === reminderMin
+            );
+
+            if (!existingReminder) {
+              const timeLabel = reminderMin === 10 ? '10분' : reminderMin === 30 ? '30분' : reminderMin === 60 ? '1시간' : reminderMin === 1440 ? '1일' : `${reminderMin}분`;
+              await db.collection('notifications').add({
+                recipientId: currentUserId,
+                type: 'meeting_reminder',
+                message: `"${meeting.title}" 미팅이 ${timeLabel} 후에 시작됩니다`,
+                targetId: meeting.id,
+                reminderMin: reminderMin,
+                isRead: false,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 페이지 외부 클릭 시 알림 패널 닫기
+    document.addEventListener('click', function(e) {
+      const panel = document.getElementById('notificationPanel');
+      const bell = document.getElementById('notificationBell');
+      if (panel && bell && !panel.contains(e.target) && !bell.contains(e.target)) {
+        panel.style.display = 'none';
+      }
+    });
 
     // 범용 모달 열기
     function showModal(content) {
@@ -7571,9 +7834,20 @@
                 <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">시간</label>
                 <input type="time" id="meetingTime" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; font-size: 14px;" />
               </div>
-              <div>
-                <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">참석자</label>
-                <input type="text" id="meetingParticipants" placeholder="김송희, 이채은, 대표님" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; font-size: 14px;" />
+            </div>
+
+            <!-- 참석자 (팀원 선택) -->
+            <div>
+              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">👥 참석자 선택</label>
+              <div id="meetingParticipantsContainer" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                ${(state.teamMembers || []).filter(m => m.role !== 'guest').map(member => `
+                  <label style="display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; background: var(--gray-50); color: var(--gray-600); border: 2px solid transparent; transition: all 0.2s;"
+                         onclick="toggleParticipant(this, '${member.id}', '${member.name}')">
+                    <input type="checkbox" class="participant-checkbox" value="${member.id}" data-name="${member.name}" style="display: none;" />
+                    <span>${member.name}${member.role === 'admin' ? ' 👑' : ''}</span>
+                  </label>
+                `).join('')}
+                ${(state.teamMembers || []).filter(m => m.role !== 'guest').length === 0 ? '<div style="color: var(--gray-500); font-size: 13px; padding: 8px;">등록된 팀원이 없습니다. 운영센터 > 팀원관리에서 추가하세요.</div>' : ''}
               </div>
             </div>
 
@@ -7760,6 +8034,38 @@
       }
     }
 
+    // 참석자 토글
+    function toggleParticipant(label, memberId, memberName) {
+      const checkbox = label.querySelector('input[type="checkbox"]');
+      checkbox.checked = !checkbox.checked;
+
+      if (checkbox.checked) {
+        label.style.background = 'var(--primary-light)';
+        label.style.color = 'var(--primary)';
+        label.style.borderColor = 'var(--primary)';
+      } else {
+        label.style.background = 'var(--gray-50)';
+        label.style.color = 'var(--gray-600)';
+        label.style.borderColor = 'transparent';
+      }
+    }
+
+    // 참석자 토글 (수정 모달용)
+    function toggleEditParticipant(label, memberId, memberName) {
+      const checkbox = label.querySelector('input[type="checkbox"]');
+      checkbox.checked = !checkbox.checked;
+
+      if (checkbox.checked) {
+        label.style.background = 'var(--primary-light)';
+        label.style.color = 'var(--primary)';
+        label.style.borderColor = 'var(--primary)';
+      } else {
+        label.style.background = 'var(--gray-50)';
+        label.style.color = 'var(--gray-600)';
+        label.style.borderColor = 'transparent';
+      }
+    }
+
     // 미팅 저장
     async function saveMeeting(meetingId = null, continueRegistration = false) {
       // 다중 타입 선택
@@ -7767,7 +8073,11 @@
       const title = document.getElementById('meetingTitle')?.value.trim();
       const date = document.getElementById('meetingDate')?.value;
       const time = document.getElementById('meetingTime')?.value;
-      const participantsStr = document.getElementById('meetingParticipants')?.value.trim();
+
+      // 참석자 (체크박스에서 수집)
+      const participantCheckboxes = document.querySelectorAll('.participant-checkbox:checked');
+      const participantIds = Array.from(participantCheckboxes).map(cb => cb.value);
+      const participants = Array.from(participantCheckboxes).map(cb => cb.dataset.name);
       const preAgenda = document.getElementById('meetingPreAgenda')?.value.trim();
       const preGoals = document.getElementById('meetingPreGoals')?.value.trim();
 
@@ -7788,8 +8098,6 @@
         return false;
       }
 
-      const participants = participantsStr ? participantsStr.split(',').map(p => p.trim()).filter(p => p) : [];
-
       const meetingData = {
         objectiveId: okrState.objective?.id || '',
         isAllKRs: isAllKRs,
@@ -7804,7 +8112,8 @@
         date: date,
         time: time || null,
         reminders: reminders,   // 알람 설정 (분 단위)
-        participants: participants,
+        participantIds: participantIds, // 참석자 ID 목록 (알림용)
+        participants: participants,     // 참석자 이름 목록
         preAgenda: preAgenda || '',
         preGoals: preGoals || '',
         preStatus: preAgenda || preGoals ? '준비 완료' : '미작성',
@@ -7822,8 +8131,13 @@
           await db.collection('okr_meetings').doc(meetingId).update(meetingData);
           showToast('미팅이 수정되었습니다', 'success');
         } else {
-          await db.collection('okr_meetings').add(meetingData);
+          const docRef = await db.collection('okr_meetings').add(meetingData);
           showToast('미팅이 등록되었습니다', 'success');
+
+          // 참석자에게 알림 전송
+          if (participantIds.length > 0) {
+            await createMeetingNotifications(meetingData, docRef.id);
+          }
         }
 
         await loadOkrData();
@@ -8119,11 +8433,23 @@
               </div>
             </div>
 
-            <!-- 참석자 -->
+            <!-- 참석자 (팀원 선택) -->
             <div>
-              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">참석자</label>
-              <input type="text" id="editMeetingParticipants" value="${(meeting.participants || []).join(', ')}" placeholder="김송희, 이채은, 대표님" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; font-size: 14px;" />
-              <div style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">쉼표(,)로 구분하여 입력</div>
+              <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">👥 참석자 선택</label>
+              <div id="editMeetingParticipantsContainer" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                ${(state.teamMembers || []).filter(m => m.role !== 'guest').map(member => {
+                  const isSelected = (meeting.participantIds || []).includes(member.id) || (meeting.participants || []).includes(member.name);
+                  return \`
+                    <label style="display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500;
+                                  background: \${isSelected ? 'var(--primary-light)' : 'var(--gray-50)'}; color: \${isSelected ? 'var(--primary)' : 'var(--gray-600)'}; border: 2px solid \${isSelected ? 'var(--primary)' : 'transparent'}; transition: all 0.2s;"
+                           onclick="toggleEditParticipant(this, '\${member.id}', '\${member.name}')">
+                      <input type="checkbox" class="edit-participant-checkbox" value="\${member.id}" data-name="\${member.name}" \${isSelected ? 'checked' : ''} style="display: none;" />
+                      <span>\${member.name}\${member.role === 'admin' ? ' 👑' : ''}</span>
+                    </label>
+                  \`;
+                }).join('')}
+                ${(state.teamMembers || []).filter(m => m.role !== 'guest').length === 0 ? '<div style="color: var(--gray-500); font-size: 13px; padding: 8px;">등록된 팀원이 없습니다.</div>' : ''}
+              </div>
             </div>
 
             <!-- 논의 내용 -->
@@ -8212,7 +8538,12 @@
       const title = document.getElementById('editMeetingTitle')?.value.trim();
       const date = document.getElementById('editMeetingDate')?.value;
       const time = document.getElementById('editMeetingTime')?.value;
-      const participantsStr = document.getElementById('editMeetingParticipants')?.value.trim();
+
+      // 참석자 (체크박스에서 수집)
+      const participantCheckboxes = document.querySelectorAll('.edit-participant-checkbox:checked');
+      const participantIds = Array.from(participantCheckboxes).map(cb => cb.value);
+      const participants = Array.from(participantCheckboxes).map(cb => cb.dataset.name);
+
       const preAgenda = document.getElementById('editMeetingPreAgenda')?.value.trim();
       const preGoals = document.getElementById('editMeetingPreGoals')?.value.trim();
 
@@ -8220,8 +8551,6 @@
         showToast('미팅 타입, 제목, 날짜는 필수입니다', 'error');
         return;
       }
-
-      const participants = participantsStr ? participantsStr.split(',').map(p => p.trim()).filter(p => p) : [];
 
       try {
         await db.collection('okr_meetings').doc(meetingId).update({
@@ -8231,7 +8560,8 @@
           title: title,
           date: date,
           time: time || null,
-          participants: participants,
+          participantIds: participantIds, // 참석자 ID 목록
+          participants: participants,     // 참석자 이름 목록
           preAgenda: preAgenda || '',
           preGoals: preGoals || '',
           preStatus: preAgenda || preGoals ? '준비 완료' : '미작성',
@@ -12616,6 +12946,9 @@
         if (!okrState.objective) {
           await seedOkrInitialData();
         }
+
+        // 미팅 리마인더 체크 (알림 생성)
+        setTimeout(() => checkMeetingReminders(), 1000);
 
       } catch (e) {
         console.error('OKR 데이터 로드 오류:', e);
