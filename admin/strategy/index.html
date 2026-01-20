@@ -1248,7 +1248,18 @@
             <h1 class="page-title">📋 업무 계획</h1>
             <p class="page-desc">해야 할 업무를 등록하고 진행 상황을 관리하세요</p>
           </div>
-          <button class="btn btn-primary" onclick="openTaskPlanModal()">+ 업무 등록</button>
+          <div style="display: flex; gap: 12px; align-items: stretch;">
+            <button class="btn btn-primary" onclick="openTaskPlanModal()" style="height: 48px; padding: 0 20px; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600;">
+              <span style="font-size: 18px;">+</span> 업무 등록
+            </button>
+            <div id="taskPlanQuickSummary" style="background: linear-gradient(135deg, #3B82F6, #1D4ED8); color: white; border-radius: 12px; padding: 8px 20px; display: flex; align-items: center; gap: 16px; height: 48px; box-sizing: border-box;">
+              <div style="font-size: 13px; font-weight: 600;">전체 업무</div>
+              <div style="display: flex; gap: 12px; align-items: center;">
+                <span id="taskPlanQuickTotal" style="font-size: 20px; font-weight: 800;">0</span>
+                <span style="font-size: 11px; opacity: 0.8;">건</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 일일 업무 원칙 안내 -->
@@ -1333,6 +1344,18 @@
           </div>
         </div>
 
+        <!-- 팀원별 필터 탭 -->
+        <div class="card" style="margin-bottom: 12px; padding: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <span style="font-size: 13px; font-weight: 600; color: var(--gray-600);">👤 담당자:</span>
+            <div id="taskPlanMemberTabs" style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button onclick="setTaskPlanMemberFilter('all')" class="task-member-btn active" data-member="all" style="padding: 8px 16px; border: 2px solid var(--primary); border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: 600; background: var(--primary); color: white; transition: all 0.2s;">전체</button>
+              <button onclick="setTaskPlanMemberFilter('unassigned')" class="task-member-btn" data-member="unassigned" style="padding: 8px 16px; border: 2px solid var(--gray-300); border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: 500; background: white; color: var(--gray-600); transition: all 0.2s;">미지정</button>
+              <!-- 팀원 버튼들은 동적으로 추가됨 -->
+            </div>
+          </div>
+        </div>
+
         <!-- 필터 -->
         <div class="card" style="margin-bottom: 20px;">
           <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
@@ -1346,9 +1369,14 @@
               <button onclick="setTaskPlanStatusFilter('done')" class="task-status-btn" data-status="done" style="padding: 8px 16px; border: none; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: 500; background: #DCFCE7; color: #16A34A;">완료</button>
               <button onclick="setTaskPlanStatusFilter('overdue')" class="task-status-btn" data-status="overdue" style="padding: 8px 16px; border: none; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: 500; background: #FEE2E2; color: #DC2626;">지연</button>
             </div>
-            <select id="taskPlanAssigneeFilter" onchange="filterTaskPlan()" style="padding: 10px 16px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 13px; background: white;">
-              <option value="all">모든 담당자</option>
-            </select>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <span style="font-size: 12px; color: var(--gray-500);">그룹:</span>
+              <select id="taskPlanGroupBy" onchange="filterTaskPlan()" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white;">
+                <option value="status">상태별</option>
+                <option value="kr">KR별</option>
+                <option value="assignee">담당자별</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -17595,8 +17623,9 @@
 
     let taskPlanState = {
       tasks: [],
-      filter: { status: 'all', assignee: 'all', search: '' },
-      editingTask: null
+      filter: { status: 'all', assignee: 'all', member: 'all', search: '', groupBy: 'status' },
+      editingTask: null,
+      attachments: [] // 첨부파일 임시 저장
     };
 
     // 업무 계획 렌더링
@@ -17615,6 +17644,7 @@
         });
 
         updateTaskPlanSummary();
+        updateTaskPlanMemberTabs();
         updateTaskPlanAssigneeFilter();
         renderTaskPlanList();
       } catch (error) {
@@ -17647,12 +17677,58 @@
       const doingEl = document.getElementById('taskPlanDoingCount');
       const doneEl = document.getElementById('taskPlanDoneCount');
       const overdueEl = document.getElementById('taskPlanOverdueCount');
+      const quickTotalEl = document.getElementById('taskPlanQuickTotal');
 
       if (totalEl) totalEl.textContent = totalCount + '건';
       if (waitingEl) waitingEl.textContent = waitingCount;
       if (doingEl) doingEl.textContent = doingCount;
       if (doneEl) doneEl.textContent = doneCount;
       if (overdueEl) overdueEl.textContent = overdueCount;
+      if (quickTotalEl) quickTotalEl.textContent = totalCount;
+    }
+
+    // 팀원 탭 버튼 업데이트
+    function updateTaskPlanMemberTabs() {
+      const container = document.getElementById('taskPlanMemberTabs');
+      if (!container) return;
+
+      // 팀원 목록 수집
+      const members = [];
+      if (state.teamMembers && state.teamMembers.length > 0) {
+        state.teamMembers.forEach(m => members.push(m.name));
+      }
+
+      // 업무에서 추가 담당자 수집
+      taskPlanState.tasks.forEach(t => {
+        if (t.assignee && !members.includes(t.assignee)) {
+          members.push(t.assignee);
+        }
+      });
+
+      // 미지정 업무 개수
+      const unassignedCount = taskPlanState.tasks.filter(t => !t.assignee).length;
+
+      let html = `
+        <button onclick="setTaskPlanMemberFilter('all')" class="task-member-btn ${taskPlanState.filter.member === 'all' ? 'active' : ''}" data-member="all" style="padding: 8px 16px; border: 2px solid ${taskPlanState.filter.member === 'all' ? 'var(--primary)' : 'var(--gray-300)'}; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: ${taskPlanState.filter.member === 'all' ? '600' : '500'}; background: ${taskPlanState.filter.member === 'all' ? 'var(--primary)' : 'white'}; color: ${taskPlanState.filter.member === 'all' ? 'white' : 'var(--gray-600)'}; transition: all 0.2s;">전체 (${taskPlanState.tasks.length})</button>
+        <button onclick="setTaskPlanMemberFilter('unassigned')" class="task-member-btn ${taskPlanState.filter.member === 'unassigned' ? 'active' : ''}" data-member="unassigned" style="padding: 8px 16px; border: 2px solid ${taskPlanState.filter.member === 'unassigned' ? '#F59E0B' : 'var(--gray-300)'}; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: ${taskPlanState.filter.member === 'unassigned' ? '600' : '500'}; background: ${taskPlanState.filter.member === 'unassigned' ? '#FEF3C7' : 'white'}; color: ${taskPlanState.filter.member === 'unassigned' ? '#92400E' : 'var(--gray-600)'}; transition: all 0.2s;">미지정 (${unassignedCount})</button>
+      `;
+
+      members.forEach(member => {
+        const count = taskPlanState.tasks.filter(t => t.assignee === member).length;
+        const isActive = taskPlanState.filter.member === member;
+        html += `
+          <button onclick="setTaskPlanMemberFilter('${member}')" class="task-member-btn ${isActive ? 'active' : ''}" data-member="${member}" style="padding: 8px 16px; border: 2px solid ${isActive ? 'var(--primary)' : 'var(--gray-300)'}; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: ${isActive ? '600' : '500'}; background: ${isActive ? 'var(--primary)' : 'white'}; color: ${isActive ? 'white' : 'var(--gray-600)'}; transition: all 0.2s;">${member} (${count})</button>
+        `;
+      });
+
+      container.innerHTML = html;
+    }
+
+    // 팀원 필터 설정
+    function setTaskPlanMemberFilter(member) {
+      taskPlanState.filter.member = member;
+      updateTaskPlanMemberTabs();
+      filterTaskPlan();
     }
 
     // 담당자 필터 옵션 업데이트
@@ -17716,10 +17792,10 @@
     // 업무 계획 필터링
     function filterTaskPlan() {
       const searchEl = document.getElementById('taskPlanSearch');
-      const assigneeEl = document.getElementById('taskPlanAssigneeFilter');
+      const groupByEl = document.getElementById('taskPlanGroupBy');
 
       taskPlanState.filter.search = searchEl ? searchEl.value.toLowerCase() : '';
-      taskPlanState.filter.assignee = assigneeEl ? assigneeEl.value : 'all';
+      taskPlanState.filter.groupBy = groupByEl ? groupByEl.value : 'status';
 
       renderTaskPlanList();
     }
@@ -17729,7 +17805,7 @@
       const container = document.getElementById('taskPlanList');
       if (!container) return;
 
-      const { status, assignee, search } = taskPlanState.filter;
+      const { status, member, search, groupBy } = taskPlanState.filter;
       const now = new Date();
       now.setHours(0, 0, 0, 0);
 
@@ -17745,8 +17821,12 @@
           return false;
         }
 
-        // 담당자 필터
-        if (assignee !== 'all' && task.assignee !== assignee) return false;
+        // 팀원 필터 (member)
+        if (member === 'unassigned') {
+          if (task.assignee) return false;
+        } else if (member !== 'all') {
+          if (task.assignee !== member) return false;
+        }
 
         // 검색 필터
         if (search) {
@@ -17768,33 +17848,84 @@
         return;
       }
 
-      // 상태별 그룹핑 (지연 > 진행중 > 대기 > 완료)
-      const overdueList = [];
-      const doingList = [];
-      const waitingList = [];
-      const doneList = [];
-
-      filtered.forEach(task => {
-        const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
-        if (isOverdue) overdueList.push(task);
-        else if (task.status === 'doing') doingList.push(task);
-        else if (task.status === 'waiting') waitingList.push(task);
-        else if (task.status === 'done') doneList.push(task);
-      });
-
       let html = '';
 
-      if (overdueList.length > 0) {
-        html += renderTaskGroup('🚨 지연', overdueList, '#FEE2E2', '#DC2626');
-      }
-      if (doingList.length > 0) {
-        html += renderTaskGroup('🔄 진행중', doingList, '#DBEAFE', '#1D4ED8');
-      }
-      if (waitingList.length > 0) {
-        html += renderTaskGroup('⏳ 대기', waitingList, 'var(--gray-100)', 'var(--gray-700)');
-      }
-      if (doneList.length > 0) {
-        html += renderTaskGroup('✅ 완료', doneList, '#DCFCE7', '#16A34A');
+      // 그룹화 방식에 따라 렌더링
+      if (groupBy === 'kr') {
+        // KR별 그룹핑
+        const krGroups = {};
+        const noKrList = [];
+
+        filtered.forEach(task => {
+          if (task.krId) {
+            if (!krGroups[task.krId]) krGroups[task.krId] = [];
+            krGroups[task.krId].push(task);
+          } else {
+            noKrList.push(task);
+          }
+        });
+
+        // KR별로 렌더링
+        Object.keys(krGroups).forEach(krId => {
+          const kr = okrState.keyResults.find(k => k.id === krId);
+          const krName = kr ? kr.name : 'KR 정보 없음';
+          html += renderTaskGroupGrid(`🎯 ${krName}`, krGroups[krId], '#EFF6FF', '#1D4ED8');
+        });
+
+        // KR 미연결 업무
+        if (noKrList.length > 0) {
+          html += renderTaskGroupGrid('📋 KR 미연결', noKrList, 'var(--gray-100)', 'var(--gray-600)');
+        }
+      } else if (groupBy === 'assignee') {
+        // 담당자별 그룹핑
+        const assigneeGroups = {};
+        const unassignedList = [];
+
+        filtered.forEach(task => {
+          if (task.assignee) {
+            if (!assigneeGroups[task.assignee]) assigneeGroups[task.assignee] = [];
+            assigneeGroups[task.assignee].push(task);
+          } else {
+            unassignedList.push(task);
+          }
+        });
+
+        // 미지정 먼저 표시
+        if (unassignedList.length > 0) {
+          html += renderTaskGroupGrid('⚠️ 담당자 미지정', unassignedList, '#FEF3C7', '#92400E');
+        }
+
+        // 담당자별로 렌더링
+        Object.keys(assigneeGroups).sort().forEach(assignee => {
+          html += renderTaskGroupGrid(`👤 ${assignee}`, assigneeGroups[assignee], '#F3E8FF', '#7C3AED');
+        });
+      } else {
+        // 상태별 그룹핑 (기본값) - 지연 > 진행중 > 대기 > 완료
+        const overdueList = [];
+        const doingList = [];
+        const waitingList = [];
+        const doneList = [];
+
+        filtered.forEach(task => {
+          const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+          if (isOverdue) overdueList.push(task);
+          else if (task.status === 'doing') doingList.push(task);
+          else if (task.status === 'waiting') waitingList.push(task);
+          else if (task.status === 'done') doneList.push(task);
+        });
+
+        if (overdueList.length > 0) {
+          html += renderTaskGroupGrid('🚨 지연', overdueList, '#FEE2E2', '#DC2626');
+        }
+        if (doingList.length > 0) {
+          html += renderTaskGroupGrid('🔄 진행중', doingList, '#DBEAFE', '#1D4ED8');
+        }
+        if (waitingList.length > 0) {
+          html += renderTaskGroupGrid('⏳ 대기', waitingList, 'var(--gray-100)', 'var(--gray-700)');
+        }
+        if (doneList.length > 0) {
+          html += renderTaskGroupGrid('✅ 완료', doneList, '#DCFCE7', '#16A34A');
+        }
       }
 
       container.innerHTML = html;
@@ -17849,6 +17980,118 @@
       `;
     }
 
+    // 업무 그룹 그리드 렌더링 (가로 4열)
+    function renderTaskGroupGrid(title, tasks, bgColor, textColor) {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+
+      return `
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="font-size: 15px; font-weight: 700; color: ${textColor}; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+            ${title} <span style="background: ${bgColor}; padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: 600;">${tasks.length}</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+            ${tasks.map(task => {
+              const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+              const deadlineText = task.deadline ? formatDeadline(task.deadline) : '';
+              const krInfo = getTaskKrInfo(task);
+              const hasAttachments = task.attachments && task.attachments.length > 0;
+
+              // 상태 배지 색상
+              let statusBadge = '';
+              if (isOverdue) {
+                statusBadge = '<span style="background: #FEE2E2; color: #DC2626; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">지연</span>';
+              } else if (task.status === 'doing') {
+                statusBadge = '<span style="background: #DBEAFE; color: #1D4ED8; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">진행중</span>';
+              } else if (task.status === 'waiting') {
+                statusBadge = '<span style="background: var(--gray-200); color: var(--gray-700); font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">대기</span>';
+              } else if (task.status === 'done') {
+                statusBadge = '<span style="background: #DCFCE7; color: #16A34A; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">완료</span>';
+              }
+
+              return `
+                <div style="background: ${isOverdue ? '#FEF2F2' : 'white'}; border-radius: 12px; padding: 16px; border: 1px solid ${isOverdue ? '#FECACA' : 'var(--gray-200)'}; display: flex; flex-direction: column; min-height: 180px; transition: box-shadow 0.2s, transform 0.2s;"
+                     onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'; this.style.transform='translateY(-2px)';"
+                     onmouseout="this.style.boxShadow='none'; this.style.transform='none';">
+                  <!-- 헤더: 상태 배지 + 액션 버튼 -->
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    ${statusBadge}
+                    <div style="display: flex; gap: 4px;">
+                      <button onclick="editTaskPlan('${task.id}')" style="background: var(--gray-100); border: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; color: var(--gray-600);">수정</button>
+                      <button onclick="deleteTaskPlan('${task.id}')" style="background: #FEE2E2; border: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; color: #DC2626;">삭제</button>
+                    </div>
+                  </div>
+
+                  <!-- 제목 -->
+                  <div style="font-size: 14px; font-weight: 600; color: var(--gray-900); margin-bottom: 6px; line-height: 1.4;">${task.title}</div>
+
+                  <!-- 설명 (최대 2줄) -->
+                  ${task.description ? `<div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px; line-height: 1.5; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">${task.description}</div>` : ''}
+
+                  <!-- 첨부파일 미리보기 -->
+                  ${hasAttachments ? `
+                    <div style="display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap;">
+                      ${task.attachments.slice(0, 3).map(att => {
+                        if (att.type && att.type.startsWith('image/')) {
+                          return `<img src="${att.url}" style="width: 40px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid var(--gray-200);" onclick="viewTaskAttachment('${att.url}')" />`;
+                        } else if (att.type && att.type.startsWith('video/')) {
+                          return `<div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;" onclick="viewTaskAttachment('${att.url}')">🎬</div>`;
+                        }
+                        return `<div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px;">📎</div>`;
+                      }).join('')}
+                      ${task.attachments.length > 3 ? `<div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--gray-500);">+${task.attachments.length - 3}</div>` : ''}
+                    </div>
+                  ` : ''}
+
+                  <!-- KR 정보 -->
+                  ${krInfo ? `<div style="font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 4px 8px; border-radius: 6px; display: inline-block; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">🎯 ${krInfo}</div>` : ''}
+
+                  <!-- 스페이서 -->
+                  <div style="flex: 1;"></div>
+
+                  <!-- 하단: 담당자, 마감일 -->
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 11px;">
+                    ${task.assignee ? `<span style="color: var(--gray-600); display: flex; align-items: center; gap: 3px;">👤 ${task.assignee}</span>` : `<span style="color: #F59E0B; display: flex; align-items: center; gap: 3px;">⚠️ 미지정</span>`}
+                    ${deadlineText ? `<span style="color: ${isOverdue ? '#DC2626' : 'var(--gray-500)'}; display: flex; align-items: center; gap: 3px;">📅 ${deadlineText}</span>` : ''}
+                  </div>
+
+                  <!-- 액션 버튼 -->
+                  <div style="display: flex; gap: 6px;">
+                    ${task.status !== 'done' ? `
+                      ${task.status === 'waiting' ? `<button onclick="updateTaskPlanStatus('${task.id}', 'doing')" style="flex: 1; background: #DBEAFE; color: #1D4ED8; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">시작하기</button>` : ''}
+                      ${task.status === 'doing' ? `<button onclick="completeTaskPlan('${task.id}')" style="flex: 1; background: #DCFCE7; color: #16A34A; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">완료처리</button>` : ''}
+                    ` : `<div style="flex: 1; text-align: center; font-size: 12px; color: #16A34A; font-weight: 600; padding: 8px;">✓ 완료됨</div>`}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+        <style>
+          @media (max-width: 1400px) {
+            #taskPlanList .card > div:last-child {
+              grid-template-columns: repeat(3, 1fr) !important;
+            }
+          }
+          @media (max-width: 1100px) {
+            #taskPlanList .card > div:last-child {
+              grid-template-columns: repeat(2, 1fr) !important;
+            }
+          }
+          @media (max-width: 768px) {
+            #taskPlanList .card > div:last-child {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        </style>
+      `;
+    }
+
+    // 첨부파일 보기
+    function viewTaskAttachment(url) {
+      window.open(url, '_blank');
+    }
+
     // 마감일 포맷
     function formatDeadline(deadline) {
       const date = new Date(deadline);
@@ -17876,6 +18119,9 @@
       const isEdit = !!taskPlanState.editingTask;
       const task = taskPlanState.editingTask || {};
 
+      // 첨부파일 초기화
+      taskPlanState.attachments = task.attachments ? [...task.attachments] : [];
+
       // KR 옵션 생성
       let krOptions = '<option value="">KR 연결 안함</option>';
       okrState.keyResults.forEach(kr => {
@@ -17892,7 +18138,7 @@
 
       const modalHtml = `
         <div id="taskPlanModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;">
-          <div style="background: white; border-radius: 16px; width: 100%; max-width: 500px; max-height: 90vh; overflow-y: auto;">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 600px; max-height: 90vh; overflow-y: auto;">
             <div style="padding: 20px; border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center;">
               <h2 style="font-size: 18px; font-weight: 700;">${isEdit ? '업무 수정' : '새 업무 등록'}</h2>
               <button onclick="closeTaskPlanModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);">×</button>
@@ -17906,6 +18152,28 @@
                 <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">상세 설명</label>
                 <textarea id="taskPlanDesc" placeholder="상세 내용을 입력하세요" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; min-height: 80px; resize: vertical;">${task.description || ''}</textarea>
               </div>
+
+              <!-- 첨부파일 영역 -->
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">📎 첨부파일 (사진/영상)</label>
+                <div id="taskPlanAttachmentArea"
+                     style="border: 2px dashed var(--gray-300); border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; background: var(--gray-50); transition: all 0.2s;"
+                     onclick="document.getElementById('taskPlanFileInput').click()"
+                     ondragover="event.preventDefault(); this.style.borderColor='var(--primary)'; this.style.background='var(--primary-light)';"
+                     ondragleave="this.style.borderColor='var(--gray-300)'; this.style.background='var(--gray-50)';"
+                     ondrop="handleTaskPlanFileDrop(event)">
+                  <div style="font-size: 32px; margin-bottom: 8px;">📷</div>
+                  <div style="font-size: 13px; color: var(--gray-600); margin-bottom: 4px;">클릭하여 파일 선택 또는 드래그 & 드롭</div>
+                  <div style="font-size: 12px; color: var(--gray-400);">Ctrl+V로 클립보드 이미지 붙여넣기 가능</div>
+                </div>
+                <input type="file" id="taskPlanFileInput" multiple accept="image/*,video/*" style="display: none;" onchange="handleTaskPlanFileSelect(event)">
+
+                <!-- 첨부파일 미리보기 -->
+                <div id="taskPlanAttachmentPreview" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
+                  ${taskPlanState.attachments.map((att, idx) => renderAttachmentPreview(att, idx)).join('')}
+                </div>
+              </div>
+
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
                 <div>
                   <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">담당자</label>
@@ -17945,6 +18213,118 @@
       `;
 
       document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 클립보드 붙여넣기 이벤트 등록
+      const modal = document.getElementById('taskPlanModal');
+      modal.addEventListener('paste', handleTaskPlanPaste);
+    }
+
+    // 첨부파일 미리보기 렌더링
+    function renderAttachmentPreview(att, idx) {
+      const isImage = att.type && att.type.startsWith('image/');
+      const isVideo = att.type && att.type.startsWith('video/');
+
+      return `
+        <div style="position: relative; width: 80px; height: 80px; border-radius: 8px; overflow: hidden; border: 1px solid var(--gray-200);">
+          ${isImage ? `<img src="${att.url}" style="width: 100%; height: 100%; object-fit: cover;">` : ''}
+          ${isVideo ? `
+            <div style="width: 100%; height: 100%; background: var(--gray-100); display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 24px;">🎬</span>
+            </div>
+          ` : ''}
+          ${!isImage && !isVideo ? `
+            <div style="width: 100%; height: 100%; background: var(--gray-100); display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 24px;">📎</span>
+            </div>
+          ` : ''}
+          <button onclick="removeTaskPlanAttachment(${idx})" style="position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.6); color: white; border: none; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center;">×</button>
+        </div>
+      `;
+    }
+
+    // 파일 선택 처리
+    function handleTaskPlanFileSelect(event) {
+      const files = event.target.files;
+      processTaskPlanFiles(files);
+    }
+
+    // 드래그 앤 드롭 처리
+    function handleTaskPlanFileDrop(event) {
+      event.preventDefault();
+      const area = document.getElementById('taskPlanAttachmentArea');
+      area.style.borderColor = 'var(--gray-300)';
+      area.style.background = 'var(--gray-50)';
+
+      const files = event.dataTransfer.files;
+      processTaskPlanFiles(files);
+    }
+
+    // 클립보드 붙여넣기 처리
+    function handleTaskPlanPaste(event) {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+
+      for (let item of items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            processTaskPlanFiles([file]);
+          }
+        }
+      }
+    }
+
+    // 파일 처리 (Base64 변환)
+    async function processTaskPlanFiles(files) {
+      for (let file of files) {
+        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+          continue; // 이미지/동영상만 허용
+        }
+
+        // 파일 크기 제한 (10MB)
+        if (file.size > 10 * 1024 * 1024) {
+          alert('파일 크기는 10MB 이하여야 합니다.');
+          continue;
+        }
+
+        try {
+          const base64 = await fileToBase64(file);
+          taskPlanState.attachments.push({
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            url: base64
+          });
+        } catch (error) {
+          console.error('파일 처리 오류:', error);
+        }
+      }
+
+      updateTaskPlanAttachmentPreview();
+    }
+
+    // 파일을 Base64로 변환
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // 첨부파일 미리보기 업데이트
+    function updateTaskPlanAttachmentPreview() {
+      const container = document.getElementById('taskPlanAttachmentPreview');
+      if (!container) return;
+
+      container.innerHTML = taskPlanState.attachments.map((att, idx) => renderAttachmentPreview(att, idx)).join('');
+    }
+
+    // 첨부파일 제거
+    function removeTaskPlanAttachment(idx) {
+      taskPlanState.attachments.splice(idx, 1);
+      updateTaskPlanAttachmentPreview();
     }
 
     // 업무 등록 모달 닫기
@@ -17952,6 +18332,7 @@
       const modal = document.getElementById('taskPlanModal');
       if (modal) modal.remove();
       taskPlanState.editingTask = null;
+      taskPlanState.attachments = [];
     }
 
     // 업무 저장
@@ -17976,6 +18357,7 @@
         deadline,
         krId,
         status,
+        attachments: taskPlanState.attachments,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
 
