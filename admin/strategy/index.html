@@ -8774,7 +8774,12 @@
             <div>
               <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">✔️ 액션 아이템</label>
               <textarea id="postActionItems" rows="3" placeholder="담당자와 작업을 입력하세요 (예: [@김송희] 파트너 전략 재수립)" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.postActionItems && meeting.postActionItems.length > 0 ? meeting.postActionItems.map(a => `[@${a.assignee}] ${a.task}`).join('\n') : ''}</textarea>
-              <div style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">[@담당자] 작업내용 형식으로 입력</div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                <div style="font-size: 11px; color: var(--gray-500);">[@담당자] 작업내용 형식으로 입력</div>
+                <button onclick="registerActionItemsAsTaskPlan('${meetingId}')" style="padding: 6px 12px; border: none; border-radius: 6px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); color: white; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                  📋 업무계획 등록
+                </button>
+              </div>
             </div>
 
             <!-- 요청 받은 것 / 요청한 것 -->
@@ -9245,6 +9250,84 @@
       } catch (error) {
         console.error('미팅 완료 처리 오류:', error);
         showToast('미팅 완료 처리 중 오류가 발생했습니다', 'error');
+      }
+    }
+
+    // 미팅 액션 아이템을 업무계획으로 등록
+    async function registerActionItemsAsTaskPlan(meetingId) {
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
+      if (!meeting) {
+        showToast('미팅 정보를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      // 현재 입력된 액션 아이템 파싱
+      const postActionItemsStr = document.getElementById('postActionItems')?.value.trim();
+      if (!postActionItemsStr) {
+        showToast('등록할 액션 아이템이 없습니다', 'warning');
+        return;
+      }
+
+      const actionItems = [];
+      const lines = postActionItemsStr.split('\n').map(l => l.trim()).filter(l => l);
+      lines.forEach(line => {
+        const match = line.match(/\[@([^\]]+)\]\s*(.+)/);
+        if (match) {
+          actionItems.push({
+            assignee: match[1],
+            task: match[2]
+          });
+        } else if (line) {
+          // [@담당자] 형식이 아닌 경우 담당자 미지정으로 등록
+          actionItems.push({
+            assignee: '',
+            task: line
+          });
+        }
+      });
+
+      if (actionItems.length === 0) {
+        showToast('유효한 액션 아이템이 없습니다', 'warning');
+        return;
+      }
+
+      // 연결할 KR 선택 (미팅에 연결된 KR 사용)
+      const krIds = meeting.krIds || (meeting.krId ? [meeting.krId] : []);
+      const defaultKrId = krIds.length > 0 ? krIds[0] : '';
+
+      // 마감일 기본값: 1주일 후
+      const defaultDeadline = new Date();
+      defaultDeadline.setDate(defaultDeadline.getDate() + 7);
+      const deadlineStr = defaultDeadline.toISOString().split('T')[0];
+
+      try {
+        let registeredCount = 0;
+        for (const item of actionItems) {
+          const taskData = {
+            title: item.task,
+            description: `[미팅: ${meeting.title}] ${meeting.date}에서 도출된 액션 아이템`,
+            assignee: item.assignee || '',
+            deadline: deadlineStr,
+            krId: defaultKrId,
+            status: 'waiting',
+            attachments: [],
+            meetingId: meetingId, // 미팅 연결
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          await db.collection('taskPlans').add(taskData);
+          registeredCount++;
+        }
+
+        showToast(`${registeredCount}개의 업무가 등록되었습니다`, 'success');
+
+        // 업무계획 목록 새로고침
+        await loadTaskPlanData();
+
+      } catch (error) {
+        console.error('업무계획 등록 오류:', error);
+        showToast('업무계획 등록 중 오류가 발생했습니다', 'error');
       }
     }
 
