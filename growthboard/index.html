@@ -497,6 +497,7 @@
         .item-media-box p { font-size: 9px; color: var(--color-text-light); margin-top: 2px; }
         .item-media-box.before-box { border-color: #e74c3c; }
         .item-media-box.after-box { border-color: #27ae60; }
+        .item-media-box.paste-target { border-color: var(--color-accent); box-shadow: 0 0 8px var(--color-accent); }
         .btn-add-item {
             width: 100%; padding: 12px; border: 2px dashed var(--color-border);
             background: transparent; border-radius: 8px; color: var(--color-accent);
@@ -1430,6 +1431,13 @@
 
         function triggerItemMediaUpload(idx, type) {
             currentItemMediaUpload = { idx, type };
+
+            // Highlight selected box
+            document.querySelectorAll('.item-media-box').forEach(b => b.classList.remove('paste-target'));
+            const boxId = type === 'before' ? `itemBefore-${idx}` : type === 'after' ? `itemAfter-${idx}` : `itemSingle-${idx}`;
+            const box = document.getElementById(boxId);
+            if (box) box.classList.add('paste-target');
+
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = 'image/*,video/*';
@@ -1756,17 +1764,51 @@
                     event.preventDefault();
                     const file = items[i].getAsFile();
                     if (file) {
-                        // For card-items type, paste to currently focused item
-                        if (currentCardType === 'card-items' && currentItemMediaUpload.idx !== null) {
-                            const reader = new FileReader();
-                            reader.onload = function(e) {
-                                updateItemMediaPreview(currentItemMediaUpload.idx, currentItemMediaUpload.type, e.target.result);
-                            };
-                            reader.readAsDataURL(file);
-                        } else {
-                            const type = currentEditMode === 'single' ? 'single' : 'before';
-                            processMediaFile(file, type);
-                        }
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            const url = e.target.result;
+
+                            // For card-items type
+                            if (currentCardType === 'card-items') {
+                                // Find active/focused media box or use first item
+                                let targetIdx = currentItemMediaUpload.idx;
+                                let targetType = currentItemMediaUpload.type || 'single';
+
+                                // If no box selected, find first available box
+                                if (targetIdx === null) {
+                                    const firstRow = document.querySelector('#itemsList .item-edit-row');
+                                    if (firstRow) {
+                                        targetIdx = 0;
+                                        const mode = firstRow.dataset.mode || 'single';
+                                        targetType = mode === 'compare' ? 'before' : 'single';
+                                    }
+                                }
+
+                                if (targetIdx !== null) {
+                                    updateItemMediaPreview(targetIdx, targetType, url);
+                                    // Visual feedback
+                                    const box = document.getElementById(targetType === 'before' ? `itemBefore-${targetIdx}` : targetType === 'after' ? `itemAfter-${targetIdx}` : `itemSingle-${targetIdx}`);
+                                    if (box) {
+                                        box.style.transition = 'box-shadow 0.3s';
+                                        box.style.boxShadow = '0 0 10px var(--color-accent)';
+                                        setTimeout(() => box.style.boxShadow = '', 500);
+                                    }
+                                }
+                            } else {
+                                // For non-card-items types
+                                const type = currentEditMode === 'single' ? 'single' : 'before';
+                                if (type === 'single') {
+                                    updatePreview('mediaPreview', url);
+                                    if (!itemData[currentEditingId]) itemData[currentEditingId] = {};
+                                    itemData[currentEditingId].mediaUrl = url;
+                                } else {
+                                    updatePreview('beforePreview', url);
+                                    if (!itemData[currentEditingId]) itemData[currentEditingId] = {};
+                                    itemData[currentEditingId].beforeMedia = url;
+                                }
+                            }
+                        };
+                        reader.readAsDataURL(file);
                     }
                     return;
                 }
