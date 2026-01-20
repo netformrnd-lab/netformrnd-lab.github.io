@@ -491,15 +491,16 @@
             <div class="viewer-content-wrapper">
                 <div class="viewer-single active" id="viewerSingle">
                     <div id="viewerSingleMedia"></div>
+                    <div class="viewer-box-hint" id="singleHint" style="margin-top: 8px;">🔍 클릭하여 크게 보기</div>
                 </div>
                 <div class="viewer-compare" id="viewerCompare">
-                    <div class="viewer-box before" onclick="openFullscreen('before')">
+                    <div class="viewer-box before" onclick="openFullscreen('before', event)">
                         <div class="viewer-box-label">BEFORE</div>
                         <div id="viewerBeforeMedia"></div>
                         <div class="viewer-box-hint">🔍 클릭하여 크게 보기</div>
                     </div>
                     <div class="viewer-arrow">→</div>
-                    <div class="viewer-box after" onclick="openFullscreen('after')">
+                    <div class="viewer-box after" onclick="openFullscreen('after', event)">
                         <div class="viewer-box-label">AFTER</div>
                         <div id="viewerAfterMedia"></div>
                         <div class="viewer-box-hint">🔍 클릭하여 크게 보기</div>
@@ -989,7 +990,16 @@
         let currentEditMode = 'single';
         let currentViewingId = null;
 
-        function saveData() { localStorage.setItem('growthboardData', JSON.stringify(itemData)); }
+        function saveData() {
+            try {
+                localStorage.setItem('growthboardData', JSON.stringify(itemData));
+            } catch (e) {
+                if (e.name === 'QuotaExceededError' || e.code === 22) {
+                    alert('저장 공간이 부족합니다. 일부 미디어를 삭제해주세요.');
+                }
+                console.error('Storage error:', e);
+            }
+        }
 
         // Check if URL is video
         function isVideo(url) {
@@ -998,21 +1008,31 @@
         }
 
         // Create media element
-        function createMediaElement(url, className = 'viewer-media') {
+        function createMediaElement(url, className = 'viewer-media', clickable = false) {
             if (!url) {
                 return `<div class="no-media-placeholder" onclick="openEditFromViewer()"><span>📷</span><p>클릭하여 미디어 추가</p></div>`;
             }
+            const clickHandler = clickable ? ` onclick="openFullscreen('single', event)"` : '';
             if (isVideo(url)) {
-                return `<video class="${className}" src="${url}" autoplay loop muted playsinline></video>`;
+                return `<video class="${className}" src="${url}" autoplay loop muted playsinline${clickHandler}></video>`;
             }
-            return `<img class="${className}" src="${url}" alt="Media">`;
+            return `<img class="${className}" src="${url}" alt="Media"${clickHandler}>`;
         }
 
         // Open View Modal
         function openViewModal(event, id) {
             event.stopPropagation();
-            currentViewingId = id;
             const data = itemData[id] || {};
+
+            // Check if there's any media
+            const hasMedia = data.mediaUrl || data.beforeMedia || data.afterMedia;
+            if (!hasMedia) {
+                // Open edit modal instead if no media
+                openEditModal(event, id);
+                return;
+            }
+
+            currentViewingId = id;
             const mode = data.mode || 'single';
 
             // Update mode toggle
@@ -1039,6 +1059,7 @@
             const singleEl = document.getElementById('viewerSingle');
             const compareEl = document.getElementById('viewerCompare');
             const container = document.getElementById('viewerContainer');
+            const singleHint = document.getElementById('singleHint');
 
             if (mode === 'compare') {
                 singleEl.classList.remove('active');
@@ -1050,7 +1071,10 @@
                 compareEl.classList.remove('active');
                 singleEl.classList.add('active');
                 container.classList.remove('compare-mode');
-                document.getElementById('viewerSingleMedia').innerHTML = createMediaElement(data.mediaUrl);
+                // Single mode: make image clickable for fullscreen
+                document.getElementById('viewerSingleMedia').innerHTML = createMediaElement(data.mediaUrl, 'viewer-media', true);
+                // Show/hide hint based on media presence
+                if (singleHint) singleHint.style.display = data.mediaUrl ? 'block' : 'none';
             }
         }
 
@@ -1075,10 +1099,19 @@
         }
 
         // Fullscreen functions
-        function openFullscreen(type) {
-            event.stopPropagation();
+        function openFullscreen(type, event) {
+            if (event) event.stopPropagation();
             const data = itemData[currentViewingId] || {};
-            let mediaUrl = type === 'before' ? data.beforeMedia : data.afterMedia;
+            let mediaUrl;
+
+            if (type === 'before') {
+                mediaUrl = data.beforeMedia;
+            } else if (type === 'after') {
+                mediaUrl = data.afterMedia;
+            } else if (type === 'single') {
+                mediaUrl = data.mediaUrl;
+            }
+
             if (!mediaUrl) return;
 
             const fullscreenEl = document.getElementById('fullscreenContent');
@@ -1092,6 +1125,7 @@
 
         function closeFullscreen() {
             document.getElementById('fullscreenOverlay').classList.remove('active');
+            document.querySelectorAll('#fullscreenOverlay video').forEach(v => v.pause());
             document.getElementById('fullscreenContent').innerHTML = '';
         }
 
