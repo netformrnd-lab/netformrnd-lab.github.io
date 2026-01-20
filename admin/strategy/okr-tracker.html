@@ -1615,9 +1615,11 @@
                 <div class="record-buttons">
                   ${kpisForKR.map(kpi => {
                     const lagsForKPI = state.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                    const isMoneyUnit = ['원', '달러', '$', '￦'].includes(kpi.unit);
                     return lagsForKPI.map(lag => {
                       const isOutput = lag.type === 'output';
-                      const actionText = isOutput ? '입력' : '+1';
+                      // Input은 항상 +1, Output은 금액이면 "입력", 수량이면 "+1"
+                      const actionText = isOutput ? (isMoneyUnit ? '입력' : '+1') : '+1';
                       const typeIcon = isOutput ? '💰' : '📝';
                       return `
                         <div class="record-btn" onclick="handleRecordClick('${kr.id}', '${kpi.id}', '${lag.id}')">
@@ -1852,46 +1854,61 @@
     // 업무 기록
     // ========================================
 
-    // Input/Output Metrics 타입에 따라 입력 모달 또는 바로 기록
+    // Input/Output Metrics 타입과 KPI 단위에 따라 입력 방식 결정
     function handleRecordClick(krId, kpiId, lagId) {
       const lag = state.laggingIndicators.find(l => l.id === lagId);
+      const kpi = state.kpis.find(k => k.id === kpiId);
 
-      // Output Metric (성과지표): 금액 입력 모달
-      if (lag && lag.type === 'output') {
-        openRecordModal(krId, kpiId, lagId);
-      } else {
-        // Input Metric (활동지표): +1 카운트
+      // Input Metric (활동지표): 항상 +1 카운트
+      if (lag && lag.type === 'input') {
         recordWork(krId, kpiId, lagId, 1);
+        return;
+      }
+
+      // Output Metric (성과지표): KPI 단위에 따라 입력 방식 결정
+      const isMoneyUnit = kpi && ['원', '달러', '$', '￦'].includes(kpi.unit);
+
+      if (isMoneyUnit) {
+        // 금액 단위: 큰 금액 입력 모달
+        openRecordModal(krId, kpiId, lagId, 'amount');
+      } else {
+        // 건수, 곳, 명 등: 간단한 수량 입력
+        openRecordModal(krId, kpiId, lagId, 'count');
       }
     }
 
     // Output Metric (성과지표) 입력 모달 열기
-    function openRecordModal(krId, kpiId, lagId) {
+    function openRecordModal(krId, kpiId, lagId, inputType = 'amount') {
       const kpi = state.kpis.find(k => k.id === kpiId);
       const lag = state.laggingIndicators.find(l => l.id === lagId);
+
+      const isAmount = inputType === 'amount';
+      const title = isAmount ? '💰 성과 기록 (금액)' : '📊 성과 기록 (수량)';
+      const placeholder = isAmount ? '금액을 입력하세요 (예: 50000000)' : '수량을 입력하세요 (예: 1, 2, 3...)';
 
       const modal = document.getElementById('modal');
       modal.className = 'modal show';
       modal.innerHTML = `
         <div class="modal-content" style="max-width: 500px;">
           <div class="modal-header">
-            <div class="modal-title">💰 Output Metric 기록</div>
+            <div class="modal-title">${title}</div>
             <button class="modal-close" onclick="closeModal()">×</button>
           </div>
           <div class="modal-body">
             <div class="form-group">
               <label class="form-label">${kpi?.name || 'KPI'} - ${lag?.name || ''} (${lag?.version || ''}버전)</label>
               <input type="number" class="form-input" id="recordValue"
-                placeholder="금액 또는 수량을 입력하세요" autofocus
+                placeholder="${placeholder}" autofocus
                 style="font-size: 18px; padding: 12px;">
               <div style="margin-top: 8px; font-size: 13px; color: var(--gray-500);">
                 단위: ${kpi?.unit || ''}
+                ${isAmount ? '<br><span style="color: var(--primary);">💡 큰 금액은 콤마 없이 입력하세요 (예: 50000000)</span>' : '<br><span style="color: var(--primary);">💡 1, 2, 3 등 숫자를 입력하세요</span>'}
               </div>
             </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-secondary" onclick="closeModal()">취소</button>
-            <button class="btn btn-primary" onclick="saveRecord('${krId}', '${kpiId}', '${lagId}')">저장</button>
+            <button class="btn btn-primary" onclick="saveRecord('${krId}', '${kpiId}', '${lagId}', '${inputType}')">저장</button>
           </div>
         </div>
       `;
@@ -1909,11 +1926,12 @@
     }
 
     // 모달에서 입력받은 값으로 기록
-    async function saveRecord(krId, kpiId, lagId) {
+    async function saveRecord(krId, kpiId, lagId, inputType = 'amount') {
       const value = parseFloat(document.getElementById('recordValue').value);
 
       if (!value || value <= 0) {
-        showToast('올바른 금액을 입력해주세요');
+        const message = inputType === 'amount' ? '올바른 금액을 입력해주세요' : '올바른 수량을 입력해주세요';
+        showToast(message);
         return;
       }
 
