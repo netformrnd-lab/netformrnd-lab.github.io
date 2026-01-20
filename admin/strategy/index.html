@@ -18323,6 +18323,13 @@
       const now = new Date();
       now.setHours(0, 0, 0, 0);
 
+      // 이번주 마지막 날 계산 (일요일)
+      const endOfWeek = new Date(now);
+      const dayOfWeek = now.getDay();
+      const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+      endOfWeek.setDate(now.getDate() + daysUntilSunday);
+      endOfWeek.setHours(23, 59, 59, 999);
+
       let filtered = taskPlanState.tasks.filter(task => {
         // 상태 필터
         if (status === 'overdue') {
@@ -18363,6 +18370,32 @@
       }
 
       let html = '';
+
+      // === 이번주 마감 업무 (상단 중앙) ===
+      const thisWeekTasks = filtered.filter(task => {
+        if (task.status === 'done') return false;
+        if (!task.deadline) return false;
+        const deadline = new Date(task.deadline);
+        return deadline <= endOfWeek;
+      }).sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
+
+      if (thisWeekTasks.length > 0) {
+        html += `
+          <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 16px; padding: 20px; margin-bottom: 24px; border: 2px solid #F59E0B;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+              <span style="font-size: 24px;">🔥</span>
+              <span style="font-size: 18px; font-weight: 700; color: #92400E;">이번주 마감</span>
+              <span style="background: #DC2626; color: white; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600;">${thisWeekTasks.length}개</span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;">
+              ${thisWeekTasks.map(task => renderTaskCard(task, true)).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      // === 전체 내역 (하단) ===
+      html += `<div style="margin-top: 8px;"><div style="font-size: 16px; font-weight: 700; color: var(--gray-700); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">📋 전체 업무 <span style="font-size: 14px; color: var(--gray-500); font-weight: 400;">${filtered.length}개</span></div></div>`;
 
       // 그룹화 방식에 따라 렌더링
       if (groupBy === 'kr') {
@@ -18445,6 +18478,54 @@
       container.innerHTML = html;
     }
 
+    // 개별 업무 카드 렌더링 (레퍼런스 스타일)
+    function renderTaskCard(task, isCompact = false) {
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+      const deadlineText = task.deadline ? formatDeadline(task.deadline) : '';
+      const krInfo = getTaskKrInfo(task);
+      const hasAttachments = task.attachments && task.attachments.length > 0;
+      const firstImage = hasAttachments ? task.attachments.find(a => a.type && a.type.startsWith('image/')) : null;
+      const firstPdf = hasAttachments ? task.attachments.find(a => a.type === 'application/pdf') : null;
+
+      // 상태 색상
+      let borderColor = 'var(--gray-200)';
+      if (isOverdue) borderColor = '#EF4444';
+      else if (task.status === 'doing') borderColor = '#3B82F6';
+      else if (task.status === 'done') borderColor = '#16A34A';
+
+      return `
+        <div onclick="editTaskPlan('${task.id}')"
+             style="background: white; border-radius: 12px; overflow: hidden; cursor: pointer; transition: all 0.2s;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid ${borderColor}; ${isOverdue ? 'border-width: 2px;' : ''}"
+             onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)';"
+             onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';">
+          ${firstImage ? `
+            <div style="position: relative; width: 100%; height: ${isCompact ? '100px' : '120px'}; background: #F2F4F6;">
+              <img src="${firstImage.url}" style="width: 100%; height: 100%; object-fit: cover;">
+              ${task.attachments.filter(a => a.type && a.type.startsWith('image/')).length > 1 ? `<span style="position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.7); color: white; padding: 2px 6px; border-radius: 8px; font-size: 10px;">+${task.attachments.filter(a => a.type && a.type.startsWith('image/')).length - 1}</span>` : ''}
+            </div>
+          ` : firstPdf ? `
+            <div style="position: relative; width: 100%; height: ${isCompact ? '100px' : '120px'}; background: linear-gradient(135deg, #FEE2E2, #FECACA); display: flex; align-items: center; justify-content: center;">
+              <div style="text-align: center;">
+                <div style="font-size: 32px;">📄</div>
+                <div style="font-size: 10px; color: #DC2626; font-weight: 600;">PDF</div>
+              </div>
+            </div>
+          ` : ''}
+          <div style="padding: 12px;">
+            <div style="font-size: 13px; font-weight: 600; color: var(--gray-900); margin-bottom: 6px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${task.title}</div>
+            ${krInfo ? `<div style="font-size: 10px; color: var(--primary); background: var(--primary-light); padding: 3px 6px; border-radius: 4px; display: inline-block; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">🎯 ${krInfo}</div>` : ''}
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 10px; color: var(--gray-500);">
+              ${task.assignee ? `<span style="display: flex; align-items: center; gap: 2px;">👤 ${task.assignee}</span>` : ''}
+              ${deadlineText ? `<span style="color: ${isOverdue ? '#DC2626' : 'var(--gray-500)'}; display: flex; align-items: center; gap: 2px; ${isOverdue ? 'font-weight: 600;' : ''}">📅 ${deadlineText}</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     // 업무 그룹 렌더링
     function renderTaskGroup(title, tasks, bgColor, textColor) {
       const now = new Date();
@@ -18494,7 +18575,7 @@
       `;
     }
 
-    // 업무 그룹 그리드 렌더링 (가로 4열)
+    // 업무 그룹 그리드 렌더링 (레퍼런스 스타일 카드)
     function renderTaskGroupGrid(title, tasks, bgColor, textColor) {
       const now = new Date();
       now.setHours(0, 0, 0, 0);
@@ -18504,103 +18585,67 @@
           <div style="font-size: 15px; font-weight: 700; color: ${textColor}; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
             ${title} <span style="background: ${bgColor}; padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: 600;">${tasks.length}</span>
           </div>
-          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;">
             ${tasks.map(task => {
               const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
               const deadlineText = task.deadline ? formatDeadline(task.deadline) : '';
               const krInfo = getTaskKrInfo(task);
               const hasAttachments = task.attachments && task.attachments.length > 0;
+              const firstImage = hasAttachments ? task.attachments.find(a => a.type && a.type.startsWith('image/')) : null;
+              const firstPdf = hasAttachments ? task.attachments.find(a => a.type === 'application/pdf') : null;
 
-              // 상태 배지 색상
+              // 상태 색상
+              let borderColor = 'var(--gray-200)';
               let statusBadge = '';
               if (isOverdue) {
-                statusBadge = '<span style="background: #FEE2E2; color: #DC2626; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">지연</span>';
+                borderColor = '#EF4444';
+                statusBadge = '<span style="position: absolute; top: 8px; left: 8px; background: #DC2626; color: white; font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">지연</span>';
               } else if (task.status === 'doing') {
-                statusBadge = '<span style="background: #DBEAFE; color: #1D4ED8; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">진행중</span>';
-              } else if (task.status === 'waiting') {
-                statusBadge = '<span style="background: var(--gray-200); color: var(--gray-700); font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">대기</span>';
+                borderColor = '#3B82F6';
+                statusBadge = '<span style="position: absolute; top: 8px; left: 8px; background: #3B82F6; color: white; font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">진행중</span>';
               } else if (task.status === 'done') {
-                statusBadge = '<span style="background: #DCFCE7; color: #16A34A; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">완료</span>';
+                borderColor = '#16A34A';
+                statusBadge = '<span style="position: absolute; top: 8px; left: 8px; background: #16A34A; color: white; font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">완료</span>';
               }
 
               return `
-                <div style="background: ${isOverdue ? '#FEF2F2' : 'white'}; border-radius: 12px; padding: 16px; border: 1px solid ${isOverdue ? '#FECACA' : 'var(--gray-200)'}; display: flex; flex-direction: column; min-height: 180px; transition: box-shadow 0.2s, transform 0.2s;"
-                     onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'; this.style.transform='translateY(-2px)';"
-                     onmouseout="this.style.boxShadow='none'; this.style.transform='none';">
-                  <!-- 헤더: 상태 배지 + 액션 버튼 -->
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    ${statusBadge}
-                    <div style="display: flex; gap: 4px;">
-                      <button onclick="editTaskPlan('${task.id}')" style="background: var(--gray-100); border: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; color: var(--gray-600);">수정</button>
-                      <button onclick="deleteTaskPlan('${task.id}')" style="background: #FEE2E2; border: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; color: #DC2626;">삭제</button>
+                <div onclick="editTaskPlan('${task.id}')"
+                     style="background: white; border-radius: 12px; overflow: hidden; cursor: pointer; transition: all 0.2s;
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.04); border: 1px solid ${borderColor}; ${isOverdue ? 'border-width: 2px;' : ''}"
+                     onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)';"
+                     onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';">
+                  ${firstImage ? `
+                    <div style="position: relative; width: 100%; height: 120px; background: #F2F4F6;">
+                      <img src="${firstImage.url}" style="width: 100%; height: 100%; object-fit: cover;">
+                      ${statusBadge}
+                      ${task.attachments.filter(a => a.type && a.type.startsWith('image/')).length > 1 ? `<span style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; padding: 2px 6px; border-radius: 8px; font-size: 10px;">+${task.attachments.filter(a => a.type && a.type.startsWith('image/')).length - 1}</span>` : ''}
                     </div>
-                  </div>
-
-                  <!-- 제목 -->
-                  <div style="font-size: 14px; font-weight: 600; color: var(--gray-900); margin-bottom: 6px; line-height: 1.4;">${task.title}</div>
-
-                  <!-- 설명 (최대 2줄) -->
-                  ${task.description ? `<div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px; line-height: 1.5; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">${task.description}</div>` : ''}
-
-                  <!-- 첨부파일 미리보기 -->
-                  ${hasAttachments ? `
-                    <div style="display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap;">
-                      ${task.attachments.slice(0, 3).map(att => {
-                        if (att.type && att.type.startsWith('image/')) {
-                          return `<img src="${att.url}" style="width: 40px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid var(--gray-200);" onclick="viewTaskAttachment('${att.url}')" />`;
-                        } else if (att.type && att.type.startsWith('video/')) {
-                          return `<div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer;" onclick="viewTaskAttachment('${att.url}')">🎬</div>`;
-                        }
-                        return `<div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px;">📎</div>`;
-                      }).join('')}
-                      ${task.attachments.length > 3 ? `<div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--gray-500);">+${task.attachments.length - 3}</div>` : ''}
+                  ` : firstPdf ? `
+                    <div style="position: relative; width: 100%; height: 120px; background: linear-gradient(135deg, #FEE2E2, #FECACA); display: flex; align-items: center; justify-content: center;">
+                      ${statusBadge}
+                      <div style="text-align: center;">
+                        <div style="font-size: 32px;">📄</div>
+                        <div style="font-size: 10px; color: #DC2626; font-weight: 600;">PDF</div>
+                      </div>
                     </div>
-                  ` : ''}
-
-                  <!-- KR 정보 -->
-                  ${krInfo ? `<div style="font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 4px 8px; border-radius: 6px; display: inline-block; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">🎯 ${krInfo}</div>` : ''}
-
-                  <!-- 미팅 연결 정보 -->
-                  ${task.meetingId ? `<div onclick="openMeetingDetailModal('${task.meetingId}')" style="font-size: 11px; color: #7C3AED; background: #F3E8FF; padding: 4px 8px; border-radius: 6px; display: inline-block; margin-bottom: 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;" title="연결된 미팅 보기">📅 미팅에서 생성됨</div>` : ''}
-
-                  <!-- 스페이서 -->
-                  <div style="flex: 1;"></div>
-
-                  <!-- 하단: 담당자, 마감일 -->
-                  <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 11px;">
-                    ${task.assignee ? `<span style="color: var(--gray-600); display: flex; align-items: center; gap: 3px;">👤 ${task.assignee}</span>` : `<span style="color: #F59E0B; display: flex; align-items: center; gap: 3px;">⚠️ 미지정</span>`}
-                    ${deadlineText ? `<span style="color: ${isOverdue ? '#DC2626' : 'var(--gray-500)'}; display: flex; align-items: center; gap: 3px;">📅 ${deadlineText}</span>` : ''}
-                  </div>
-
-                  <!-- 액션 버튼 -->
-                  <div style="display: flex; gap: 6px;">
-                    ${task.status !== 'done' ? `
-                      ${task.status === 'waiting' ? `<button onclick="updateTaskPlanStatus('${task.id}', 'doing')" style="flex: 1; background: #DBEAFE; color: #1D4ED8; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">시작하기</button>` : ''}
-                      ${task.status === 'doing' ? `<button onclick="completeTaskPlan('${task.id}')" style="flex: 1; background: #DCFCE7; color: #16A34A; border: none; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">완료처리</button>` : ''}
-                    ` : `<div style="flex: 1; text-align: center; font-size: 12px; color: #16A34A; font-weight: 600; padding: 8px;">✓ 완료됨</div>`}
+                  ` : `
+                    <div style="position: relative; width: 100%; height: 60px; background: linear-gradient(135deg, ${bgColor}, ${bgColor}); display: flex; align-items: center; justify-content: center;">
+                      ${statusBadge}
+                    </div>
+                  `}
+                  <div style="padding: 12px;">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--gray-900); margin-bottom: 6px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${task.title}</div>
+                    ${krInfo ? `<div style="font-size: 10px; color: var(--primary); background: var(--primary-light); padding: 3px 6px; border-radius: 4px; display: inline-block; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">🎯 ${krInfo}</div>` : ''}
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 10px; color: var(--gray-500);">
+                      ${task.assignee ? `<span style="display: flex; align-items: center; gap: 2px;">👤 ${task.assignee}</span>` : `<span style="color: #F59E0B;">⚠️ 미지정</span>`}
+                      ${deadlineText ? `<span style="color: ${isOverdue ? '#DC2626' : 'var(--gray-500)'}; display: flex; align-items: center; gap: 2px; ${isOverdue ? 'font-weight: 600;' : ''}">📅 ${deadlineText}</span>` : ''}
+                    </div>
                   </div>
                 </div>
               `;
             }).join('')}
           </div>
         </div>
-        <style>
-          @media (max-width: 1400px) {
-            #taskPlanList .card > div:last-child {
-              grid-template-columns: repeat(3, 1fr) !important;
-            }
-          }
-          @media (max-width: 1100px) {
-            #taskPlanList .card > div:last-child {
-              grid-template-columns: repeat(2, 1fr) !important;
-            }
-          }
-          @media (max-width: 768px) {
-            #taskPlanList .card > div:last-child {
-              grid-template-columns: 1fr !important;
-            }
-          }
-        </style>
       `;
     }
 
