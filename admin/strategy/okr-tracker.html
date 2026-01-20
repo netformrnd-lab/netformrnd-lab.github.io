@@ -1601,12 +1601,14 @@
                 <div class="record-buttons">
                   ${kpisForKR.map(kpi => {
                     const lagsForKPI = state.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                    const isMoneyUnit = kpi.unit === '원' || kpi.unit === '달러' || kpi.unit === '$' || kpi.unit === '￦';
+                    const actionText = isMoneyUnit ? '입력' : '+1';
                     return lagsForKPI.map(lag => `
-                      <div class="record-btn" onclick="recordWork('${kr.id}', '${kpi.id}', '${lag.id}')">
+                      <div class="record-btn" onclick="handleRecordClick('${kr.id}', '${kpi.id}', '${lag.id}')">
                         <div class="record-btn-icon">${getIconForLag(lag.name)}</div>
                         <div class="record-btn-name">${lag.name}</div>
                         <div class="record-btn-version">${lag.version}버전</div>
-                        <div class="record-btn-action">+1</div>
+                        <div class="record-btn-action">${actionText}</div>
                       </div>
                     `).join('');
                   }).join('')}
@@ -1812,7 +1814,77 @@
     // ========================================
     // 업무 기록
     // ========================================
-    async function recordWork(krId, kpiId, lagId) {
+
+    // KPI 단위에 따라 입력 모달 또는 바로 기록
+    function handleRecordClick(krId, kpiId, lagId) {
+      const kpi = state.kpis.find(k => k.id === kpiId);
+
+      // 매출액 등 금액 입력이 필요한 경우 모달 띄우기
+      if (kpi && (kpi.unit === '원' || kpi.unit === '달러' || kpi.unit === '$' || kpi.unit === '￦')) {
+        openRecordModal(krId, kpiId, lagId);
+      } else {
+        // 건수 등은 +1로 바로 기록
+        recordWork(krId, kpiId, lagId, 1);
+      }
+    }
+
+    // 매출액 입력 모달 열기
+    function openRecordModal(krId, kpiId, lagId) {
+      const kpi = state.kpis.find(k => k.id === kpiId);
+      const lag = state.laggingIndicators.find(l => l.id === lagId);
+
+      const modal = document.getElementById('modal');
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header">
+            <div class="modal-title">💰 매출액 기록</div>
+            <button class="modal-close" onclick="closeModal()">×</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label">${kpi?.name || 'KPI'} - ${lag?.name || ''} (${lag?.version || ''}버전)</label>
+              <input type="number" class="form-input" id="recordValue"
+                placeholder="금액을 입력하세요" autofocus
+                style="font-size: 18px; padding: 12px;">
+              <div style="margin-top: 8px; font-size: 13px; color: var(--gray-500);">
+                단위: ${kpi?.unit || ''}
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="saveRecord('${krId}', '${kpiId}', '${lagId}')">저장</button>
+          </div>
+        </div>
+      `;
+
+      // Enter 키로 저장
+      setTimeout(() => {
+        const input = document.getElementById('recordValue');
+        input.focus();
+        input.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            saveRecord(krId, kpiId, lagId);
+          }
+        });
+      }, 100);
+    }
+
+    // 모달에서 입력받은 값으로 기록
+    async function saveRecord(krId, kpiId, lagId) {
+      const value = parseFloat(document.getElementById('recordValue').value);
+
+      if (!value || value <= 0) {
+        showToast('올바른 금액을 입력해주세요');
+        return;
+      }
+
+      closeModal();
+      await recordWork(krId, kpiId, lagId, value);
+    }
+
+    async function recordWork(krId, kpiId, lagId, resultValue) {
       try {
         const log = {
           date: today,
@@ -1821,7 +1893,7 @@
           krId,
           kpiId,
           laggingIndicatorId: lagId,
-          resultValue: 1,
+          resultValue: resultValue,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
