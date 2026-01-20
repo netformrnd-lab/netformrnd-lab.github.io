@@ -1407,11 +1407,15 @@
                   const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
                   const kpi = state.kpis.find(k => k.id === log.kpiId);
                   const kr = state.keyResults.find(k => k.id === log.krId);
+                  // 금액인 경우 천단위 콤마 표시
+                  const displayValue = (kpi?.unit === '원' || kpi?.unit === '달러')
+                    ? (log.resultValue || 0).toLocaleString()
+                    : (log.resultValue || 0);
                   return `
                     <div class="pipeline-item">
                       <span>${lag?.name || '업무'}</span>
                       <span class="pipeline-arrow">→</span>
-                      <span class="pipeline-value">+${log.resultValue} ${kpi?.unit || '건'}</span>
+                      <span class="pipeline-value">+${displayValue} ${kpi?.unit || '건'}</span>
                       <span class="pipeline-arrow">→</span>
                       <span>${kr?.name || 'KR'}</span>
                     </div>
@@ -1636,23 +1640,36 @@
         return '<div class="today-summary-empty">아직 기록이 없습니다</div>';
       }
 
-      // 후행지표별 집계
+      // 후행지표별 집계 (KPI 단위 포함)
       const summary = {};
       state.todayLogs.forEach(log => {
         const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        const kpi = state.kpis.find(k => k.id === log.kpiId);
         const key = log.laggingIndicatorId;
         if (!summary[key]) {
-          summary[key] = { name: lag?.name || '업무', version: lag?.version || '', count: 0 };
+          summary[key] = {
+            name: lag?.name || '업무',
+            version: lag?.version || '',
+            total: 0,
+            unit: kpi?.unit || '건'
+          };
         }
-        summary[key].count += log.resultValue || 1;
+        summary[key].total += log.resultValue || 1;
       });
 
-      return Object.values(summary).map(item => `
-        <div class="today-summary-item">
-          <span>${getIconForLag(item.name)}</span>
-          <span>${item.name} (${item.version}버전): ${item.count}건</span>
-        </div>
-      `).join('');
+      return Object.values(summary).map(item => {
+        // 금액인 경우 천단위 콤마 표시
+        const displayValue = (item.unit === '원' || item.unit === '달러')
+          ? item.total.toLocaleString()
+          : item.total;
+
+        return `
+          <div class="today-summary-item">
+            <span>${getIconForLag(item.name)}</span>
+            <span>${item.name} (${item.version}버전): ${displayValue}${item.unit}</span>
+          </div>
+        `;
+      }).join('');
     }
 
     function getIconForLag(name) {
@@ -1713,6 +1730,7 @@
         return;
       }
 
+      const kpi = state.kpis.find(k => k.id === kpiId);
       const lagsForKPI = state.laggingIndicators.filter(l => l.kpiId === kpiId);
 
       if (lagsForKPI.length === 0) {
@@ -1725,7 +1743,7 @@
         const logs = state.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
         const totalValue = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
         const logCount = logs.length;
-        const avgPerLog = logCount > 0 ? (totalValue / logCount).toFixed(2) : 0;
+        const avgPerLog = logCount > 0 ? (totalValue / logCount) : 0;
         return {
           ...lag,
           totalValue,
@@ -1737,23 +1755,29 @@
       const maxValue = Math.max(...results.map(r => r.totalValue), 1);
       const ranks = ['🥇', '🥈', '🥉'];
       const barColors = ['var(--success)', 'var(--primary)', 'var(--warning)', 'var(--gray-400)'];
+      const unit = kpi?.unit || '건';
+      const isMoneyUnit = unit === '원' || unit === '달러';
 
       container.innerHTML = `
         <div class="experiment-results">
-          ${results.map((r, idx) => `
-            <div class="experiment-item">
-              <div class="experiment-rank">${ranks[idx] || '📊'}</div>
-              <div class="experiment-info">
-                <div class="experiment-name">${r.version}버전: ${r.name}</div>
-                <div class="experiment-stats">업무 ${r.logCount}건 | 평균 ${r.avgPerLog}/건</div>
-              </div>
-              <div class="experiment-bar">
-                <div class="experiment-bar-fill" style="width: ${(r.totalValue / maxValue) * 100}%; background: ${barColors[idx]}">
-                  ${r.totalValue}
+          ${results.map((r, idx) => {
+            const displayTotal = isMoneyUnit ? r.totalValue.toLocaleString() : r.totalValue;
+            const displayAvg = isMoneyUnit ? Math.round(r.avgPerLog).toLocaleString() : r.avgPerLog.toFixed(2);
+            return `
+              <div class="experiment-item">
+                <div class="experiment-rank">${ranks[idx] || '📊'}</div>
+                <div class="experiment-info">
+                  <div class="experiment-name">${r.version}버전: ${r.name}</div>
+                  <div class="experiment-stats">업무 ${r.logCount}건 | 평균 ${displayAvg}${unit}/건</div>
+                </div>
+                <div class="experiment-bar">
+                  <div class="experiment-bar-fill" style="width: ${(r.totalValue / maxValue) * 100}%; background: ${barColors[idx]}">
+                    ${displayTotal}${unit}
+                  </div>
                 </div>
               </div>
-            </div>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
 
         ${results.length > 1 ? `
@@ -1761,7 +1785,7 @@
             <div style="font-size: 14px; font-weight: 700; color: var(--success); margin-bottom: 8px;">💡 인사이트</div>
             <div style="font-size: 13px; color: var(--gray-700);">
               ${results[0].version}버전 (${results[0].name})이 가장 효과적입니다.
-              평균 ${results[0].avgPerLog}/건으로 ${results.length > 1 ? results[1].version + '버전 대비 ' + ((results[0].avgPerLog / (results[1].avgPerLog || 1) - 1) * 100).toFixed(0) + '% 높습니다.' : ''}
+              평균 ${isMoneyUnit ? Math.round(results[0].avgPerLog).toLocaleString() : results[0].avgPerLog.toFixed(2)}${unit}/건으로 ${results.length > 1 ? results[1].version + '버전 대비 ' + ((results[0].avgPerLog / (results[1].avgPerLog || 1) - 1) * 100).toFixed(0) + '% 높습니다.' : ''}
             </div>
           </div>
         ` : ''}
