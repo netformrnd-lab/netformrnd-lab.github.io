@@ -57,19 +57,23 @@
             justify-content: center; align-items: center; flex-direction: column;
         }
         .viewer-overlay.active { display: flex; }
-        .viewer-close {
-            position: absolute; top: 12px; right: 12px;
-            background: rgba(255,255,255,0.2); border: none; color: white;
-            width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
-            font-size: 20px; transition: all 0.2s ease; z-index: 5001;
-        }
-        .viewer-close:hover { background: rgba(255,255,255,0.3); }
         .viewer-container {
             background: #1a1a2e; border-radius: 16px; padding: 24px;
             max-width: 600px; width: 90%; max-height: 85vh;
             display: flex; flex-direction: column; align-items: center;
             position: relative; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            transition: max-width 0.3s ease;
         }
+        .viewer-container.compare-mode {
+            max-width: 900px;
+        }
+        .viewer-close {
+            position: absolute; top: 12px; right: 12px;
+            background: rgba(255,255,255,0.15); border: none; color: white;
+            width: 32px; height: 32px; border-radius: 50%; cursor: pointer;
+            font-size: 18px; transition: all 0.2s ease; z-index: 5001;
+        }
+        .viewer-close:hover { background: rgba(255,255,255,0.3); }
         .viewer-mode-toggle {
             display: flex; gap: 6px; margin-bottom: 16px;
         }
@@ -88,20 +92,34 @@
         .viewer-single.active { display: flex; }
         .viewer-single:not(.active) { display: none; }
         .viewer-box {
-            background: rgba(255,255,255,0.05); border-radius: 10px; padding: 12px;
-            max-width: 240px; text-align: center;
+            background: rgba(255,255,255,0.05); border-radius: 10px; padding: 16px;
+            max-width: 380px; text-align: center; cursor: pointer;
+            transition: all 0.2s ease; border: 2px solid transparent;
         }
+        .viewer-box:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); }
         .viewer-box-label {
-            font-size: 10px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 1px; margin-bottom: 8px; padding: 4px 12px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 1px; margin-bottom: 10px; padding: 5px 14px;
             border-radius: 16px; display: inline-block;
         }
         .viewer-box.before .viewer-box-label { background: #e74c3c; color: white; }
         .viewer-box.after .viewer-box-label { background: var(--color-success); color: white; }
         .viewer-media {
-            max-width: 100%; max-height: 40vh; border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            max-width: 100%; max-height: 50vh; border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3); cursor: pointer;
+            transition: transform 0.2s ease;
         }
+        .viewer-media:hover { transform: scale(1.02); }
+        .viewer-box-hint { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 8px; }
+
+        /* Fullscreen Image Overlay */
+        .fullscreen-overlay {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.95); z-index: 6000;
+            justify-content: center; align-items: center; cursor: zoom-out;
+        }
+        .fullscreen-overlay.active { display: flex; }
+        .fullscreen-media { max-width: 95vw; max-height: 95vh; border-radius: 8px; }
         .viewer-arrow { font-size: 28px; color: var(--color-accent); }
         .viewer-title { color: white; font-size: 16px; margin-top: 16px; text-align: center; font-weight: 600; }
         .viewer-description { color: rgba(255,255,255,0.7); font-size: 13px; margin-top: 6px; max-width: 500px; text-align: center; }
@@ -464,8 +482,8 @@
 
     <!-- Media Viewer Modal -->
     <div class="viewer-overlay" id="viewerOverlay">
-        <button class="viewer-close" onclick="closeViewer()">✕</button>
-        <div class="viewer-container">
+        <div class="viewer-container" id="viewerContainer">
+            <button class="viewer-close" onclick="closeViewer()">✕</button>
             <div class="viewer-mode-toggle" id="viewerModeToggle">
                 <button class="viewer-mode-btn" data-mode="single" onclick="switchViewerMode('single')">📷 일반</button>
                 <button class="viewer-mode-btn" data-mode="compare" onclick="switchViewerMode('compare')">⚡ 전/후 비교</button>
@@ -475,14 +493,16 @@
                     <div id="viewerSingleMedia"></div>
                 </div>
                 <div class="viewer-compare" id="viewerCompare">
-                    <div class="viewer-box before">
+                    <div class="viewer-box before" onclick="openFullscreen('before')">
                         <div class="viewer-box-label">BEFORE</div>
                         <div id="viewerBeforeMedia"></div>
+                        <div class="viewer-box-hint">🔍 클릭하여 크게 보기</div>
                     </div>
                     <div class="viewer-arrow">→</div>
-                    <div class="viewer-box after">
+                    <div class="viewer-box after" onclick="openFullscreen('after')">
                         <div class="viewer-box-label">AFTER</div>
                         <div id="viewerAfterMedia"></div>
+                        <div class="viewer-box-hint">🔍 클릭하여 크게 보기</div>
                     </div>
                 </div>
             </div>
@@ -492,6 +512,11 @@
                 <button class="viewer-upload-btn" onclick="openEditFromViewer()">✏️ 미디어 편집하기</button>
             </div>
         </div>
+    </div>
+
+    <!-- Fullscreen Image Overlay -->
+    <div class="fullscreen-overlay" id="fullscreenOverlay" onclick="closeFullscreen()">
+        <div id="fullscreenContent"></div>
     </div>
 
     <!-- Edit Modal -->
@@ -1013,15 +1038,18 @@
         function updateViewerContent(data, mode) {
             const singleEl = document.getElementById('viewerSingle');
             const compareEl = document.getElementById('viewerCompare');
+            const container = document.getElementById('viewerContainer');
 
             if (mode === 'compare') {
                 singleEl.classList.remove('active');
                 compareEl.classList.add('active');
+                container.classList.add('compare-mode');
                 document.getElementById('viewerBeforeMedia').innerHTML = createMediaElement(data.beforeMedia);
                 document.getElementById('viewerAfterMedia').innerHTML = createMediaElement(data.afterMedia);
             } else {
                 compareEl.classList.remove('active');
                 singleEl.classList.add('active');
+                container.classList.remove('compare-mode');
                 document.getElementById('viewerSingleMedia').innerHTML = createMediaElement(data.mediaUrl);
             }
         }
@@ -1042,7 +1070,29 @@
 
         function closeViewer() {
             document.getElementById('viewerOverlay').classList.remove('active');
+            document.getElementById('viewerContainer').classList.remove('compare-mode');
             document.querySelectorAll('#viewerOverlay video').forEach(v => v.pause());
+        }
+
+        // Fullscreen functions
+        function openFullscreen(type) {
+            event.stopPropagation();
+            const data = itemData[currentViewingId] || {};
+            let mediaUrl = type === 'before' ? data.beforeMedia : data.afterMedia;
+            if (!mediaUrl) return;
+
+            const fullscreenEl = document.getElementById('fullscreenContent');
+            if (isVideo(mediaUrl)) {
+                fullscreenEl.innerHTML = `<video class="fullscreen-media" src="${mediaUrl}" autoplay loop muted playsinline controls></video>`;
+            } else {
+                fullscreenEl.innerHTML = `<img class="fullscreen-media" src="${mediaUrl}" alt="Full size">`;
+            }
+            document.getElementById('fullscreenOverlay').classList.add('active');
+        }
+
+        function closeFullscreen() {
+            document.getElementById('fullscreenOverlay').classList.remove('active');
+            document.getElementById('fullscreenContent').innerHTML = '';
         }
 
         function openEditFromViewer() {
@@ -1243,8 +1293,13 @@
         // Keyboard
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
-                if (document.getElementById('viewerOverlay').classList.contains('active')) closeViewer();
-                if (document.getElementById('editModal').classList.contains('active')) closeModal();
+                if (document.getElementById('fullscreenOverlay').classList.contains('active')) {
+                    closeFullscreen();
+                } else if (document.getElementById('viewerOverlay').classList.contains('active')) {
+                    closeViewer();
+                } else if (document.getElementById('editModal').classList.contains('active')) {
+                    closeModal();
+                }
             }
         });
 
