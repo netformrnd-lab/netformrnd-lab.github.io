@@ -1280,6 +1280,11 @@
           </div>
         </div>
 
+        <!-- 마감일 임박 알림 배너 -->
+        <div id="taskDeadlineAlert" style="display: none; margin-bottom: 16px;">
+          <!-- 동적으로 생성됨 -->
+        </div>
+
         <!-- 일일 업무 원칙 안내 -->
         <div id="dailyWorkPrinciple" class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #FEF3C7, #FDE68A); border: 2px solid #F59E0B; border-radius: 16px; padding: 20px;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
@@ -8763,12 +8768,27 @@
 
             <div>
               <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">✔️ 액션 아이템</label>
-              <textarea id="postActionItems" rows="3" placeholder="담당자와 작업을 입력하세요 (예: [@김송희] 파트너 전략 재수립)" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.postActionItems && meeting.postActionItems.length > 0 ? meeting.postActionItems.map(a => `[@${a.assignee}] ${a.task}`).join('\n') : ''}</textarea>
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-                <div style="font-size: 11px; color: var(--gray-500);">[@담당자] 작업내용 형식으로 입력</div>
-                <button onclick="registerActionItemsAsTaskPlan('${meetingId}')" style="padding: 6px 12px; border: none; border-radius: 6px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); color: white; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
-                  📋 업무계획 등록
-                </button>
+              <textarea id="postActionItems" rows="3" placeholder="담당자와 작업을 입력하세요 (예: [@김송희] 파트너 전략 재수립)&#10;한 줄에 하나씩 입력하면 아래에 카드로 표시됩니다"
+                        oninput="parseActionItemsPreview('${meetingId}')"
+                        style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.postActionItems && meeting.postActionItems.length > 0 ? meeting.postActionItems.map(a => `[@${a.assignee}] ${a.task}`).join('\n') : ''}</textarea>
+
+              <!-- 액션 아이템 미리보기 및 설정 영역 -->
+              <div id="actionItemsPreview" style="margin-top: 12px;">
+                <!-- 동적으로 생성됨 -->
+              </div>
+
+              <!-- 일괄 등록 버튼 -->
+              <div id="actionItemsRegisterArea" style="display: none; margin-top: 12px; padding: 12px; background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-radius: 10px; border: 1px solid #93C5FD;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="selectAllActionItems" onchange="toggleAllActionItems()" style="width: 18px; height: 18px; cursor: pointer;">
+                    <label for="selectAllActionItems" style="font-size: 13px; color: var(--gray-700); cursor: pointer;">전체 선택</label>
+                    <span id="selectedActionItemsCount" style="font-size: 12px; color: var(--primary); font-weight: 600;">(0건 선택됨)</span>
+                  </div>
+                  <button onclick="registerSelectedActionItems('${meetingId}')" style="padding: 10px 20px; border: none; border-radius: 8px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); color: white; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    📋 선택 업무 등록
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -8782,6 +8802,11 @@
                 <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">📤 내가 요청한 것</label>
                 <textarea id="postRequestsMade" rows="3" placeholder="내가 상대방에게 요청한 내용" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.requestsMade || ''}</textarea>
               </div>
+            </div>
+
+            <!-- 이 미팅에서 생성된 업무 목록 -->
+            <div id="meetingLinkedTasks" style="margin-top: 20px;">
+              <!-- 동적으로 로드됨 -->
             </div>
           </div>
 
@@ -8797,6 +8822,69 @@
           </div>
         </div>
       `);
+
+      // 기존 액션 아이템이 있으면 자동 파싱하여 미리보기 표시
+      setTimeout(() => {
+        parseActionItemsPreview(meetingId);
+        loadMeetingLinkedTasks(meetingId);
+      }, 100);
+    }
+
+    // 미팅에서 생성된 업무 목록 로드
+    async function loadMeetingLinkedTasks(meetingId) {
+      const container = document.getElementById('meetingLinkedTasks');
+      if (!container) return;
+
+      // taskPlanState에서 연결된 업무 찾기
+      const linkedTasks = taskPlanState.tasks.filter(t => t.meetingId === meetingId);
+
+      if (linkedTasks.length === 0) {
+        container.innerHTML = '';
+        return;
+      }
+
+      // 상태별 카운트
+      const waitingCount = linkedTasks.filter(t => t.status === 'waiting').length;
+      const doingCount = linkedTasks.filter(t => t.status === 'doing').length;
+      const doneCount = linkedTasks.filter(t => t.status === 'done').length;
+
+      let html = `
+        <div style="background: linear-gradient(135deg, #F3E8FF, #E9D5FF); border-radius: 12px; padding: 16px; border: 1px solid #C4B5FD;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="font-weight: 700; color: #7C3AED; font-size: 14px;">📋 이 미팅에서 생성된 업무 (${linkedTasks.length}건)</div>
+            <div style="display: flex; gap: 8px; font-size: 11px;">
+              <span style="background: var(--gray-200); padding: 2px 8px; border-radius: 10px;">대기 ${waitingCount}</span>
+              <span style="background: #DBEAFE; color: #1D4ED8; padding: 2px 8px; border-radius: 10px;">진행 ${doingCount}</span>
+              <span style="background: #DCFCE7; color: #16A34A; padding: 2px 8px; border-radius: 10px;">완료 ${doneCount}</span>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+            ${linkedTasks.map(task => {
+              const statusColor = task.status === 'done' ? '#16A34A' : task.status === 'doing' ? '#1D4ED8' : 'var(--gray-600)';
+              const statusBg = task.status === 'done' ? '#DCFCE7' : task.status === 'doing' ? '#DBEAFE' : 'var(--gray-100)';
+              const statusText = task.status === 'done' ? '완료' : task.status === 'doing' ? '진행중' : '대기';
+
+              return `
+                <div style="background: white; border-radius: 8px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;">
+                  <div style="flex: 1;">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${task.title}</div>
+                    <div style="font-size: 11px; color: var(--gray-500); margin-top: 2px;">
+                      ${task.assignee ? `👤 ${task.assignee}` : '⚠️ 미지정'}
+                      ${task.deadline ? ` · 📅 ${task.deadline}` : ''}
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 10px; padding: 2px 8px; border-radius: 10px; background: ${statusBg}; color: ${statusColor}; font-weight: 600;">${statusText}</span>
+                    <button onclick="switchTab('task-plan'); setTimeout(() => { document.getElementById('taskPlanSearch').value = '${task.title.replace(/'/g, "\\'")}'; filterTaskPlan(); }, 300);" style="background: var(--gray-100); border: none; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; color: var(--gray-600);">보기</button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+
+      container.innerHTML = html;
     }
 
     // 미팅 인쇄 기능
@@ -9311,6 +9399,214 @@
         }
 
         showToast(`${registeredCount}개의 업무가 등록되었습니다`, 'success');
+
+        // 업무계획 목록 새로고침
+        await loadTaskPlanData();
+
+      } catch (error) {
+        console.error('업무계획 등록 오류:', error);
+        showToast('업무계획 등록 중 오류가 발생했습니다', 'error');
+      }
+    }
+
+    // 액션 아이템 실시간 파싱 및 미리보기
+    let actionItemsData = []; // 파싱된 액션 아이템 데이터
+
+    function parseActionItemsPreview(meetingId) {
+      const textarea = document.getElementById('postActionItems');
+      const previewContainer = document.getElementById('actionItemsPreview');
+      const registerArea = document.getElementById('actionItemsRegisterArea');
+      if (!textarea || !previewContainer) return;
+
+      const text = textarea.value.trim();
+      if (!text) {
+        previewContainer.innerHTML = '';
+        if (registerArea) registerArea.style.display = 'none';
+        actionItemsData = [];
+        return;
+      }
+
+      // 기존 미팅 정보 가져오기
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
+      const krIds = meeting ? (meeting.krIds || (meeting.krId ? [meeting.krId] : [])) : [];
+      const defaultKrId = krIds.length > 0 ? krIds[0] : '';
+
+      // 기본 마감일: 1주일 후
+      const defaultDeadline = new Date();
+      defaultDeadline.setDate(defaultDeadline.getDate() + 7);
+      const deadlineStr = defaultDeadline.toISOString().split('T')[0];
+
+      // 줄별로 파싱
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+      actionItemsData = lines.map((line, idx) => {
+        const match = line.match(/\[@([^\]]+)\]\s*(.+)/);
+        // 기존 데이터가 있으면 유지
+        const existing = actionItemsData[idx] || {};
+        return {
+          id: idx,
+          assignee: match ? match[1] : (existing.assignee || ''),
+          task: match ? match[2] : line,
+          deadline: existing.deadline || deadlineStr,
+          krId: existing.krId !== undefined ? existing.krId : defaultKrId,
+          selected: existing.selected !== undefined ? existing.selected : true
+        };
+      });
+
+      // 담당자 옵션 생성
+      let assigneeOptionsHtml = '<option value="">미지정</option>';
+      if (state.teamMembers && state.teamMembers.length > 0) {
+        state.teamMembers.forEach(member => {
+          assigneeOptionsHtml += `<option value="${member.name}">${member.name}</option>`;
+        });
+      }
+
+      // KR 옵션 생성
+      let krOptionsHtml = '<option value="">KR 미연결</option>';
+      okrState.keyResults.forEach(kr => {
+        krOptionsHtml += `<option value="${kr.id}">${kr.name}</option>`;
+      });
+
+      // 카드 HTML 생성
+      let html = '';
+      actionItemsData.forEach((item, idx) => {
+        html += `
+          <div class="action-item-card" style="background: white; border: 1px solid var(--gray-200); border-radius: 10px; padding: 12px; margin-bottom: 8px; ${item.selected ? 'border-left: 3px solid var(--primary);' : 'opacity: 0.6;'}">
+            <div style="display: flex; gap: 10px; align-items: flex-start;">
+              <input type="checkbox" class="action-item-check" data-idx="${idx}" ${item.selected ? 'checked' : ''} onchange="updateActionItemSelection(${idx})" style="width: 18px; height: 18px; margin-top: 2px; cursor: pointer;">
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 8px;">${item.task}</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+                  <div>
+                    <label style="font-size: 11px; color: var(--gray-500); display: block; margin-bottom: 4px;">👤 담당자</label>
+                    <select onchange="updateActionItemData(${idx}, 'assignee', this.value)" style="width: 100%; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
+                      ${assigneeOptionsHtml.replace(`value="${item.assignee}"`, `value="${item.assignee}" selected`)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style="font-size: 11px; color: var(--gray-500); display: block; margin-bottom: 4px;">📅 마감일</label>
+                    <input type="date" value="${item.deadline}" onchange="updateActionItemData(${idx}, 'deadline', this.value)" style="width: 100%; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px;">
+                  </div>
+                  <div>
+                    <label style="font-size: 11px; color: var(--gray-500); display: block; margin-bottom: 4px;">🎯 KR 연결</label>
+                    <select onchange="updateActionItemData(${idx}, 'krId', this.value)" style="width: 100%; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
+                      ${krOptionsHtml.replace(`value="${item.krId}"`, `value="${item.krId}" selected`)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+
+      previewContainer.innerHTML = html;
+      if (registerArea) registerArea.style.display = actionItemsData.length > 0 ? 'block' : 'none';
+      updateSelectedActionItemsCount();
+    }
+
+    // 액션 아이템 데이터 업데이트
+    function updateActionItemData(idx, field, value) {
+      if (actionItemsData[idx]) {
+        actionItemsData[idx][field] = value;
+      }
+    }
+
+    // 액션 아이템 선택 상태 업데이트
+    function updateActionItemSelection(idx) {
+      if (actionItemsData[idx]) {
+        actionItemsData[idx].selected = !actionItemsData[idx].selected;
+        // 카드 스타일 업데이트
+        const cards = document.querySelectorAll('.action-item-card');
+        if (cards[idx]) {
+          cards[idx].style.borderLeft = actionItemsData[idx].selected ? '3px solid var(--primary)' : '1px solid var(--gray-200)';
+          cards[idx].style.opacity = actionItemsData[idx].selected ? '1' : '0.6';
+        }
+        updateSelectedActionItemsCount();
+      }
+    }
+
+    // 전체 선택/해제
+    function toggleAllActionItems() {
+      const selectAll = document.getElementById('selectAllActionItems');
+      const isChecked = selectAll ? selectAll.checked : false;
+
+      actionItemsData.forEach((item, idx) => {
+        item.selected = isChecked;
+      });
+
+      // 체크박스 및 카드 스타일 업데이트
+      const checkboxes = document.querySelectorAll('.action-item-check');
+      const cards = document.querySelectorAll('.action-item-card');
+      checkboxes.forEach((cb, idx) => {
+        cb.checked = isChecked;
+        if (cards[idx]) {
+          cards[idx].style.borderLeft = isChecked ? '3px solid var(--primary)' : '1px solid var(--gray-200)';
+          cards[idx].style.opacity = isChecked ? '1' : '0.6';
+        }
+      });
+
+      updateSelectedActionItemsCount();
+    }
+
+    // 선택된 아이템 개수 업데이트
+    function updateSelectedActionItemsCount() {
+      const countEl = document.getElementById('selectedActionItemsCount');
+      const selectedCount = actionItemsData.filter(item => item.selected).length;
+      if (countEl) {
+        countEl.textContent = `(${selectedCount}건 선택됨)`;
+      }
+
+      // 전체 선택 체크박스 상태 업데이트
+      const selectAll = document.getElementById('selectAllActionItems');
+      if (selectAll) {
+        selectAll.checked = selectedCount === actionItemsData.length && actionItemsData.length > 0;
+      }
+    }
+
+    // 선택된 액션 아이템만 업무계획으로 등록
+    async function registerSelectedActionItems(meetingId) {
+      const selectedItems = actionItemsData.filter(item => item.selected);
+
+      if (selectedItems.length === 0) {
+        showToast('등록할 업무를 선택해주세요', 'warning');
+        return;
+      }
+
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
+      if (!meeting) {
+        showToast('미팅 정보를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      try {
+        let registeredCount = 0;
+        for (const item of selectedItems) {
+          const taskData = {
+            title: item.task,
+            description: `[미팅: ${meeting.title}] ${meeting.date}에서 도출된 액션 아이템`,
+            assignee: item.assignee || '',
+            deadline: item.deadline,
+            krId: item.krId || '',
+            status: 'waiting',
+            attachments: [],
+            meetingId: meetingId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          await db.collection('taskPlans').add(taskData);
+          registeredCount++;
+        }
+
+        showToast(`${registeredCount}개의 업무가 등록되었습니다`, 'success');
+
+        // 등록된 항목 선택 해제 및 표시 업데이트
+        selectedItems.forEach(item => {
+          item.selected = false;
+        });
+
+        // 미리보기 업데이트
+        parseActionItemsPreview(meetingId);
 
         // 업무계획 목록 새로고침
         await loadTaskPlanData();
@@ -17756,6 +18052,107 @@
       if (doneEl) doneEl.textContent = doneCount;
       if (overdueEl) overdueEl.textContent = overdueCount;
       if (quickTotalEl) quickTotalEl.textContent = totalCount;
+
+      // 마감일 임박 알림 업데이트
+      updateTaskDeadlineAlert();
+    }
+
+    // 마감일 임박 알림 업데이트
+    function updateTaskDeadlineAlert() {
+      const container = document.getElementById('taskDeadlineAlert');
+      if (!container) return;
+
+      const tasks = taskPlanState.tasks;
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+
+      // 오늘, 내일, 지연된 업무 분류
+      const overdueTasks = [];
+      const todayTasks = [];
+      const tomorrowTasks = [];
+
+      tasks.forEach(task => {
+        if (task.status === 'done' || !task.deadline) return;
+
+        const deadline = new Date(task.deadline);
+        deadline.setHours(0, 0, 0, 0);
+        const diffDays = Math.ceil((deadline - now) / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 0) {
+          overdueTasks.push({ ...task, daysOverdue: Math.abs(diffDays) });
+        } else if (diffDays === 0) {
+          todayTasks.push(task);
+        } else if (diffDays === 1) {
+          tomorrowTasks.push(task);
+        }
+      });
+
+      // 알림이 없으면 숨김
+      if (overdueTasks.length === 0 && todayTasks.length === 0 && tomorrowTasks.length === 0) {
+        container.style.display = 'none';
+        return;
+      }
+
+      let html = '';
+
+      // 지연된 업무 (빨간색)
+      if (overdueTasks.length > 0) {
+        html += `
+          <div style="background: linear-gradient(135deg, #FEE2E2, #FECACA); border: 1px solid #F87171; border-radius: 12px; padding: 14px 16px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">🚨</span>
+              <div style="flex: 1;">
+                <div style="font-weight: 700; color: #DC2626; font-size: 14px;">지연된 업무 ${overdueTasks.length}건</div>
+                <div style="font-size: 12px; color: #991B1B; margin-top: 2px;">
+                  ${overdueTasks.slice(0, 3).map(t => `${t.title} (${t.daysOverdue}일 지남)`).join(' · ')}
+                  ${overdueTasks.length > 3 ? ` 외 ${overdueTasks.length - 3}건` : ''}
+                </div>
+              </div>
+              <button onclick="setTaskPlanStatusFilter('overdue')" style="padding: 6px 12px; border: none; border-radius: 8px; background: #DC2626; color: white; font-size: 12px; font-weight: 600; cursor: pointer;">확인</button>
+            </div>
+          </div>
+        `;
+      }
+
+      // 오늘 마감 (주황색)
+      if (todayTasks.length > 0) {
+        html += `
+          <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border: 1px solid #F59E0B; border-radius: 12px; padding: 14px 16px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">⏰</span>
+              <div style="flex: 1;">
+                <div style="font-weight: 700; color: #D97706; font-size: 14px;">오늘 마감 ${todayTasks.length}건</div>
+                <div style="font-size: 12px; color: #92400E; margin-top: 2px;">
+                  ${todayTasks.slice(0, 3).map(t => t.title).join(' · ')}
+                  ${todayTasks.length > 3 ? ` 외 ${todayTasks.length - 3}건` : ''}
+                </div>
+              </div>
+              <button onclick="setTaskPlanStatusFilter('all'); document.getElementById('taskPlanSearch').value=''; filterTaskPlan();" style="padding: 6px 12px; border: none; border-radius: 8px; background: #D97706; color: white; font-size: 12px; font-weight: 600; cursor: pointer;">확인</button>
+            </div>
+          </div>
+        `;
+      }
+
+      // 내일 마감 (파란색)
+      if (tomorrowTasks.length > 0) {
+        html += `
+          <div style="background: linear-gradient(135deg, #DBEAFE, #BFDBFE); border: 1px solid #3B82F6; border-radius: 12px; padding: 14px 16px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">📅</span>
+              <div style="flex: 1;">
+                <div style="font-weight: 700; color: #1D4ED8; font-size: 14px;">내일 마감 ${tomorrowTasks.length}건</div>
+                <div style="font-size: 12px; color: #1E40AF; margin-top: 2px;">
+                  ${tomorrowTasks.slice(0, 3).map(t => t.title).join(' · ')}
+                  ${tomorrowTasks.length > 3 ? ` 외 ${tomorrowTasks.length - 3}건` : ''}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+      container.style.display = 'block';
     }
 
     // 팀원 탭 버튼 업데이트
@@ -18117,6 +18514,9 @@
                   <!-- KR 정보 -->
                   ${krInfo ? `<div style="font-size: 11px; color: var(--primary); background: var(--primary-light); padding: 4px 8px; border-radius: 6px; display: inline-block; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;">🎯 ${krInfo}</div>` : ''}
 
+                  <!-- 미팅 연결 정보 -->
+                  ${task.meetingId ? `<div onclick="openMeetingDetailModal('${task.meetingId}')" style="font-size: 11px; color: #7C3AED; background: #F3E8FF; padding: 4px 8px; border-radius: 6px; display: inline-block; margin-bottom: 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;" title="연결된 미팅 보기">📅 미팅에서 생성됨</div>` : ''}
+
                   <!-- 스페이서 -->
                   <div style="flex: 1;"></div>
 
@@ -18345,36 +18745,54 @@
       }
     }
 
-    // 파일 처리 (Base64 변환)
+    // 파일 처리 (Firebase Storage 업로드)
     async function processTaskPlanFiles(files) {
+      const uploadingToast = showToast('파일 업로드 중...', 'info', 0);
+
       for (let file of files) {
         if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
           continue; // 이미지/동영상만 허용
         }
 
-        // 파일 크기 제한 (10MB)
-        if (file.size > 10 * 1024 * 1024) {
-          alert('파일 크기는 10MB 이하여야 합니다.');
+        // 파일 크기 제한 (50MB for Storage)
+        if (file.size > 50 * 1024 * 1024) {
+          alert('파일 크기는 50MB 이하여야 합니다.');
           continue;
         }
 
         try {
-          const base64 = await fileToBase64(file);
+          // Firebase Storage에 업로드 (gs://moyeora-deal-manager.firebasestorage.app/어드민)
+          const timestamp = Date.now();
+          const fileName = `어드민/taskPlans/${timestamp}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+          const storageRef = firebase.storage().ref();
+          const fileRef = storageRef.child(fileName);
+
+          await fileRef.put(file);
+          const downloadUrl = await fileRef.getDownloadURL();
+
           taskPlanState.attachments.push({
             name: file.name,
             type: file.type,
             size: file.size,
-            url: base64
+            url: downloadUrl,
+            storagePath: fileName
           });
         } catch (error) {
-          console.error('파일 처리 오류:', error);
+          console.error('파일 업로드 오류:', error);
+          showToast('파일 업로드 실패', 'error');
         }
       }
 
+      // 업로드 완료 토스트 제거
+      if (uploadingToast && uploadingToast.remove) {
+        uploadingToast.remove();
+      }
+
       updateTaskPlanAttachmentPreview();
+      showToast('파일 업로드 완료', 'success');
     }
 
-    // 파일을 Base64로 변환
+    // 파일을 Base64로 변환 (미리보기용)
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
