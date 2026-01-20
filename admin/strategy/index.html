@@ -1843,7 +1843,7 @@
                   <div style="font-size: 12px; color: #B45309; margin-top: 4px;">JPG, PNG, GIF, PDF (최대 10개)</div>
                 </div>
                 <div id="refPasteArea" style="background: #E8F3FF; border: 2px dashed #3B82F6; border-radius: 10px; padding: 16px; text-align: center; margin-top: 12px; cursor: text;" tabindex="0" onpaste="handleRefPaste(event)" onclick="this.focus()">
-                  <div style="font-size: 13px; color: #1D4ED8; font-weight: 600;">📋 캡처 이미지 붙여넣기</div>
+                  <div style="font-size: 13px; color: #1D4ED8; font-weight: 600;">📋 이미지/PDF 붙여넣기</div>
                   <div style="font-size: 11px; color: #3B82F6; margin-top: 4px;">여기를 클릭 후 Ctrl+V (또는 Cmd+V)</div>
                 </div>
                 <div id="refImagesPreview" style="display: none; margin-top: 12px;"></div>
@@ -4056,7 +4056,7 @@
       }
     }
 
-    // 클립보드 붙여넣기 처리
+    // 클립보드 붙여넣기 처리 (이미지 + PDF 지원)
     async function handleRefPaste(event) {
       event.preventDefault();
 
@@ -4064,6 +4064,7 @@
       if (!clipboardData) return;
 
       const items = clipboardData.items;
+      const files = clipboardData.files; // 파일 탐색기에서 복사한 경우
       const maxImages = 10;
       const currentCount = refUploadedImages.length;
 
@@ -4076,16 +4077,23 @@
       const btn = document.getElementById('btnSaveRef');
       if (btn) btn.disabled = true;
 
+      // 1. DataTransferItemList에서 이미지/PDF 처리
       for (const item of items) {
-        if (item.type.indexOf('image') !== -1) {
-          if (refUploadedImages.length >= maxImages) break;
+        if (refUploadedImages.length >= maxImages) break;
 
+        // 이미지 또는 PDF 처리
+        const isImage = item.type.indexOf('image') !== -1;
+        const isPdf = item.type === 'application/pdf';
+
+        if (isImage || isPdf) {
           const file = item.getAsFile();
           if (file) {
             const result = await processRefImage(file);
             if (result) {
-              // 붙여넣기한 이미지는 파일명 자동 생성
-              result.name = `캡처_${new Date().toISOString().slice(0,19).replace(/[-:T]/g,'')}.png`;
+              // 붙여넣기한 이미지는 파일명 자동 생성 (PDF는 원래 파일명 유지)
+              if (!result.isPdf) {
+                result.name = `캡처_${new Date().toISOString().slice(0,19).replace(/[-:T]/g,'')}.png`;
+              }
               refUploadedImages.push(result);
               addedCount++;
             }
@@ -4093,11 +4101,33 @@
         }
       }
 
+      // 2. 파일 탐색기에서 복사한 파일 처리 (브라우저 지원시)
+      if (files && files.length > 0 && addedCount === 0) {
+        for (const file of files) {
+          if (refUploadedImages.length >= maxImages) break;
+          const result = await processRefImage(file);
+          if (result) {
+            refUploadedImages.push(result);
+            addedCount++;
+          }
+        }
+      }
+
       if (addedCount > 0) {
         renderRefImagesPreview();
-        showToast(`${addedCount}장 붙여넣기 완료`, 'success');
+        const pdfCount = refUploadedImages.filter(f => f.isPdf).length;
+        const imgCount = refUploadedImages.filter(f => !f.isPdf).length;
+        let msg = '';
+        if (pdfCount > 0 && imgCount > 0) {
+          msg = `이미지 ${imgCount}장, PDF ${pdfCount}개 추가됨`;
+        } else if (pdfCount > 0) {
+          msg = `PDF ${pdfCount}개 추가됨`;
+        } else {
+          msg = `${addedCount}장 붙여넣기 완료`;
+        }
+        showToast(msg, 'success');
       } else {
-        showToast('붙여넣을 이미지가 없습니다', 'warning');
+        showToast('붙여넣을 이미지/PDF가 없습니다', 'warning');
       }
 
       if (btn) btn.disabled = false;
@@ -16510,7 +16540,7 @@
                  ondrop="handleWorkRecordDrop(event)">
               <div style="font-size: 32px; margin-bottom: 8px;">📤</div>
               <div style="font-size: 13px; color: var(--gray-600);">파일을 드래그하거나 클릭하여 업로드</div>
-              <div style="font-size: 11px; color: var(--gray-400); margin-top: 4px;">이미지 캡처 후 Ctrl+V로 바로 붙여넣기 가능</div>
+              <div style="font-size: 11px; color: var(--gray-400); margin-top: 4px;">이미지/PDF 파일 Ctrl+V로 바로 붙여넣기 가능</div>
             </div>
             <input type="file" id="workRecordFileInput" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.hwp" style="display: none;" onchange="handleWorkRecordFileSelect(event)" />
 
@@ -16570,18 +16600,34 @@
       }
     }
 
-    // 이미지 붙여넣기 처리
+    // 파일 붙여넣기 처리 (이미지 + PDF 등 모든 파일 지원)
     function handleWorkRecordPaste(event) {
-      const items = event.clipboardData?.items;
-      if (!items) return;
+      const clipboardData = event.clipboardData;
+      if (!clipboardData) return;
 
+      const items = clipboardData.items;
+      const files = clipboardData.files;
+      let processed = false;
+
+      // 1. DataTransferItemList에서 파일 처리
       for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith('image/')) {
+        const item = items[i];
+        // 이미지, PDF, 기타 파일 타입 모두 처리
+        if (item.type.startsWith('image/') || item.type === 'application/pdf' || item.kind === 'file') {
           event.preventDefault();
-          const file = items[i].getAsFile();
+          const file = item.getAsFile();
           if (file) {
             addWorkRecordAttachment(file);
+            processed = true;
           }
+        }
+      }
+
+      // 2. 파일 탐색기에서 복사한 파일 처리
+      if (!processed && files && files.length > 0) {
+        event.preventDefault();
+        for (const file of files) {
+          addWorkRecordAttachment(file);
         }
       }
     }
@@ -18626,7 +18672,7 @@
 
               <!-- 첨부파일 영역 -->
               <div style="margin-bottom: 16px;">
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">📎 첨부파일 (사진/영상)</label>
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">📎 첨부파일 (사진/영상/PDF)</label>
                 <div id="taskPlanAttachmentArea"
                      style="border: 2px dashed var(--gray-300); border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; background: var(--gray-50); transition: all 0.2s;"
                      onclick="document.getElementById('taskPlanFileInput').click()"
@@ -18635,9 +18681,9 @@
                      ondrop="handleTaskPlanFileDrop(event)">
                   <div style="font-size: 32px; margin-bottom: 8px;">📷</div>
                   <div style="font-size: 13px; color: var(--gray-600); margin-bottom: 4px;">클릭하여 파일 선택 또는 드래그 & 드롭</div>
-                  <div style="font-size: 12px; color: var(--gray-400);">Ctrl+V로 클립보드 이미지 붙여넣기 가능</div>
+                  <div style="font-size: 12px; color: var(--gray-400);">Ctrl+V로 이미지/PDF 붙여넣기 가능</div>
                 </div>
-                <input type="file" id="taskPlanFileInput" multiple accept="image/*,video/*" style="display: none;" onchange="handleTaskPlanFileSelect(event)">
+                <input type="file" id="taskPlanFileInput" multiple accept="image/*,video/*,.pdf,application/pdf" style="display: none;" onchange="handleTaskPlanFileSelect(event)">
 
                 <!-- 첨부파일 미리보기 -->
                 <div id="taskPlanAttachmentPreview" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
@@ -18694,16 +18740,23 @@
     function renderAttachmentPreview(att, idx) {
       const isImage = att.type && att.type.startsWith('image/');
       const isVideo = att.type && att.type.startsWith('video/');
+      const isPdf = att.type === 'application/pdf';
 
       return `
-        <div style="position: relative; width: 80px; height: 80px; border-radius: 8px; overflow: hidden; border: 1px solid var(--gray-200);">
+        <div style="position: relative; width: 80px; height: 80px; border-radius: 8px; overflow: hidden; border: 1px solid ${isPdf ? '#EF4444' : 'var(--gray-200)'};">
           ${isImage ? `<img src="${att.url}" style="width: 100%; height: 100%; object-fit: cover;">` : ''}
           ${isVideo ? `
             <div style="width: 100%; height: 100%; background: var(--gray-100); display: flex; align-items: center; justify-content: center;">
               <span style="font-size: 24px;">🎬</span>
             </div>
           ` : ''}
-          ${!isImage && !isVideo ? `
+          ${isPdf ? `
+            <div style="width: 100%; height: 100%; background: linear-gradient(135deg, #FEE2E2, #FECACA); display: flex; flex-direction: column; align-items: center; justify-content: center;">
+              <span style="font-size: 24px;">📄</span>
+              <span style="font-size: 9px; color: #DC2626; font-weight: 600;">PDF</span>
+            </div>
+          ` : ''}
+          ${!isImage && !isVideo && !isPdf ? `
             <div style="width: 100%; height: 100%; background: var(--gray-100); display: flex; align-items: center; justify-content: center;">
               <span style="font-size: 24px;">📎</span>
             </div>
@@ -18730,28 +18783,47 @@
       processTaskPlanFiles(files);
     }
 
-    // 클립보드 붙여넣기 처리
+    // 클립보드 붙여넣기 처리 (이미지, 동영상, PDF 지원)
     function handleTaskPlanPaste(event) {
-      const items = event.clipboardData?.items;
-      if (!items) return;
+      const clipboardData = event.clipboardData;
+      if (!clipboardData) return;
 
+      const items = clipboardData.items;
+      const files = clipboardData.files;
+      const filesToProcess = [];
+
+      // 1. DataTransferItemList에서 파일 처리
       for (let item of items) {
-        if (item.type.startsWith('image/')) {
+        if (item.type.startsWith('image/') || item.type.startsWith('video/') || item.type === 'application/pdf' || item.kind === 'file') {
           const file = item.getAsFile();
           if (file) {
-            processTaskPlanFiles([file]);
+            filesToProcess.push(file);
           }
         }
       }
+
+      // 2. 파일 탐색기에서 복사한 파일 처리
+      if (filesToProcess.length === 0 && files && files.length > 0) {
+        for (const file of files) {
+          filesToProcess.push(file);
+        }
+      }
+
+      if (filesToProcess.length > 0) {
+        processTaskPlanFiles(filesToProcess);
+      }
     }
 
-    // 파일 처리 (Firebase Storage 업로드)
+    // 파일 처리 (Firebase Storage 업로드) - 이미지, 동영상, PDF 지원
     async function processTaskPlanFiles(files) {
       const uploadingToast = showToast('파일 업로드 중...', 'info', 0);
+      const allowedTypes = ['image/', 'video/', 'application/pdf'];
 
       for (let file of files) {
-        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
-          continue; // 이미지/동영상만 허용
+        // 이미지, 동영상, PDF 허용
+        const isAllowed = allowedTypes.some(type => file.type.startsWith(type) || file.type === type);
+        if (!isAllowed) {
+          continue;
         }
 
         // 파일 크기 제한 (50MB for Storage)
