@@ -8763,12 +8763,27 @@
 
             <div>
               <label style="display: block; font-weight: 600; margin-bottom: 8px; color: var(--gray-700); font-size: 14px;">✔️ 액션 아이템</label>
-              <textarea id="postActionItems" rows="3" placeholder="담당자와 작업을 입력하세요 (예: [@김송희] 파트너 전략 재수립)" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.postActionItems && meeting.postActionItems.length > 0 ? meeting.postActionItems.map(a => `[@${a.assignee}] ${a.task}`).join('\n') : ''}</textarea>
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-                <div style="font-size: 11px; color: var(--gray-500);">[@담당자] 작업내용 형식으로 입력</div>
-                <button onclick="registerActionItemsAsTaskPlan('${meetingId}')" style="padding: 6px 12px; border: none; border-radius: 6px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); color: white; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
-                  📋 업무계획 등록
-                </button>
+              <textarea id="postActionItems" rows="3" placeholder="담당자와 작업을 입력하세요 (예: [@김송희] 파트너 전략 재수립)&#10;한 줄에 하나씩 입력하면 아래에 카드로 표시됩니다"
+                        oninput="parseActionItemsPreview('${meetingId}')"
+                        style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-200); border-radius: 10px; resize: vertical; font-size: 14px; line-height: 1.6;">${meeting.postActionItems && meeting.postActionItems.length > 0 ? meeting.postActionItems.map(a => `[@${a.assignee}] ${a.task}`).join('\n') : ''}</textarea>
+
+              <!-- 액션 아이템 미리보기 및 설정 영역 -->
+              <div id="actionItemsPreview" style="margin-top: 12px;">
+                <!-- 동적으로 생성됨 -->
+              </div>
+
+              <!-- 일괄 등록 버튼 -->
+              <div id="actionItemsRegisterArea" style="display: none; margin-top: 12px; padding: 12px; background: linear-gradient(135deg, #EFF6FF, #DBEAFE); border-radius: 10px; border: 1px solid #93C5FD;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="selectAllActionItems" onchange="toggleAllActionItems()" style="width: 18px; height: 18px; cursor: pointer;">
+                    <label for="selectAllActionItems" style="font-size: 13px; color: var(--gray-700); cursor: pointer;">전체 선택</label>
+                    <span id="selectedActionItemsCount" style="font-size: 12px; color: var(--primary); font-weight: 600;">(0건 선택됨)</span>
+                  </div>
+                  <button onclick="registerSelectedActionItems('${meetingId}')" style="padding: 10px 20px; border: none; border-radius: 8px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); color: white; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    📋 선택 업무 등록
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -8797,6 +8812,11 @@
           </div>
         </div>
       `);
+
+      // 기존 액션 아이템이 있으면 자동 파싱하여 미리보기 표시
+      setTimeout(() => {
+        parseActionItemsPreview(meetingId);
+      }, 100);
     }
 
     // 미팅 인쇄 기능
@@ -9311,6 +9331,214 @@
         }
 
         showToast(`${registeredCount}개의 업무가 등록되었습니다`, 'success');
+
+        // 업무계획 목록 새로고침
+        await loadTaskPlanData();
+
+      } catch (error) {
+        console.error('업무계획 등록 오류:', error);
+        showToast('업무계획 등록 중 오류가 발생했습니다', 'error');
+      }
+    }
+
+    // 액션 아이템 실시간 파싱 및 미리보기
+    let actionItemsData = []; // 파싱된 액션 아이템 데이터
+
+    function parseActionItemsPreview(meetingId) {
+      const textarea = document.getElementById('postActionItems');
+      const previewContainer = document.getElementById('actionItemsPreview');
+      const registerArea = document.getElementById('actionItemsRegisterArea');
+      if (!textarea || !previewContainer) return;
+
+      const text = textarea.value.trim();
+      if (!text) {
+        previewContainer.innerHTML = '';
+        if (registerArea) registerArea.style.display = 'none';
+        actionItemsData = [];
+        return;
+      }
+
+      // 기존 미팅 정보 가져오기
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
+      const krIds = meeting ? (meeting.krIds || (meeting.krId ? [meeting.krId] : [])) : [];
+      const defaultKrId = krIds.length > 0 ? krIds[0] : '';
+
+      // 기본 마감일: 1주일 후
+      const defaultDeadline = new Date();
+      defaultDeadline.setDate(defaultDeadline.getDate() + 7);
+      const deadlineStr = defaultDeadline.toISOString().split('T')[0];
+
+      // 줄별로 파싱
+      const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+      actionItemsData = lines.map((line, idx) => {
+        const match = line.match(/\[@([^\]]+)\]\s*(.+)/);
+        // 기존 데이터가 있으면 유지
+        const existing = actionItemsData[idx] || {};
+        return {
+          id: idx,
+          assignee: match ? match[1] : (existing.assignee || ''),
+          task: match ? match[2] : line,
+          deadline: existing.deadline || deadlineStr,
+          krId: existing.krId !== undefined ? existing.krId : defaultKrId,
+          selected: existing.selected !== undefined ? existing.selected : true
+        };
+      });
+
+      // 담당자 옵션 생성
+      let assigneeOptionsHtml = '<option value="">미지정</option>';
+      if (state.teamMembers && state.teamMembers.length > 0) {
+        state.teamMembers.forEach(member => {
+          assigneeOptionsHtml += `<option value="${member.name}">${member.name}</option>`;
+        });
+      }
+
+      // KR 옵션 생성
+      let krOptionsHtml = '<option value="">KR 미연결</option>';
+      okrState.keyResults.forEach(kr => {
+        krOptionsHtml += `<option value="${kr.id}">${kr.name}</option>`;
+      });
+
+      // 카드 HTML 생성
+      let html = '';
+      actionItemsData.forEach((item, idx) => {
+        html += `
+          <div class="action-item-card" style="background: white; border: 1px solid var(--gray-200); border-radius: 10px; padding: 12px; margin-bottom: 8px; ${item.selected ? 'border-left: 3px solid var(--primary);' : 'opacity: 0.6;'}">
+            <div style="display: flex; gap: 10px; align-items: flex-start;">
+              <input type="checkbox" class="action-item-check" data-idx="${idx}" ${item.selected ? 'checked' : ''} onchange="updateActionItemSelection(${idx})" style="width: 18px; height: 18px; margin-top: 2px; cursor: pointer;">
+              <div style="flex: 1;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 8px;">${item.task}</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+                  <div>
+                    <label style="font-size: 11px; color: var(--gray-500); display: block; margin-bottom: 4px;">👤 담당자</label>
+                    <select onchange="updateActionItemData(${idx}, 'assignee', this.value)" style="width: 100%; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
+                      ${assigneeOptionsHtml.replace(`value="${item.assignee}"`, `value="${item.assignee}" selected`)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style="font-size: 11px; color: var(--gray-500); display: block; margin-bottom: 4px;">📅 마감일</label>
+                    <input type="date" value="${item.deadline}" onchange="updateActionItemData(${idx}, 'deadline', this.value)" style="width: 100%; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px;">
+                  </div>
+                  <div>
+                    <label style="font-size: 11px; color: var(--gray-500); display: block; margin-bottom: 4px;">🎯 KR 연결</label>
+                    <select onchange="updateActionItemData(${idx}, 'krId', this.value)" style="width: 100%; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
+                      ${krOptionsHtml.replace(`value="${item.krId}"`, `value="${item.krId}" selected`)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+
+      previewContainer.innerHTML = html;
+      if (registerArea) registerArea.style.display = actionItemsData.length > 0 ? 'block' : 'none';
+      updateSelectedActionItemsCount();
+    }
+
+    // 액션 아이템 데이터 업데이트
+    function updateActionItemData(idx, field, value) {
+      if (actionItemsData[idx]) {
+        actionItemsData[idx][field] = value;
+      }
+    }
+
+    // 액션 아이템 선택 상태 업데이트
+    function updateActionItemSelection(idx) {
+      if (actionItemsData[idx]) {
+        actionItemsData[idx].selected = !actionItemsData[idx].selected;
+        // 카드 스타일 업데이트
+        const cards = document.querySelectorAll('.action-item-card');
+        if (cards[idx]) {
+          cards[idx].style.borderLeft = actionItemsData[idx].selected ? '3px solid var(--primary)' : '1px solid var(--gray-200)';
+          cards[idx].style.opacity = actionItemsData[idx].selected ? '1' : '0.6';
+        }
+        updateSelectedActionItemsCount();
+      }
+    }
+
+    // 전체 선택/해제
+    function toggleAllActionItems() {
+      const selectAll = document.getElementById('selectAllActionItems');
+      const isChecked = selectAll ? selectAll.checked : false;
+
+      actionItemsData.forEach((item, idx) => {
+        item.selected = isChecked;
+      });
+
+      // 체크박스 및 카드 스타일 업데이트
+      const checkboxes = document.querySelectorAll('.action-item-check');
+      const cards = document.querySelectorAll('.action-item-card');
+      checkboxes.forEach((cb, idx) => {
+        cb.checked = isChecked;
+        if (cards[idx]) {
+          cards[idx].style.borderLeft = isChecked ? '3px solid var(--primary)' : '1px solid var(--gray-200)';
+          cards[idx].style.opacity = isChecked ? '1' : '0.6';
+        }
+      });
+
+      updateSelectedActionItemsCount();
+    }
+
+    // 선택된 아이템 개수 업데이트
+    function updateSelectedActionItemsCount() {
+      const countEl = document.getElementById('selectedActionItemsCount');
+      const selectedCount = actionItemsData.filter(item => item.selected).length;
+      if (countEl) {
+        countEl.textContent = `(${selectedCount}건 선택됨)`;
+      }
+
+      // 전체 선택 체크박스 상태 업데이트
+      const selectAll = document.getElementById('selectAllActionItems');
+      if (selectAll) {
+        selectAll.checked = selectedCount === actionItemsData.length && actionItemsData.length > 0;
+      }
+    }
+
+    // 선택된 액션 아이템만 업무계획으로 등록
+    async function registerSelectedActionItems(meetingId) {
+      const selectedItems = actionItemsData.filter(item => item.selected);
+
+      if (selectedItems.length === 0) {
+        showToast('등록할 업무를 선택해주세요', 'warning');
+        return;
+      }
+
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
+      if (!meeting) {
+        showToast('미팅 정보를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      try {
+        let registeredCount = 0;
+        for (const item of selectedItems) {
+          const taskData = {
+            title: item.task,
+            description: `[미팅: ${meeting.title}] ${meeting.date}에서 도출된 액션 아이템`,
+            assignee: item.assignee || '',
+            deadline: item.deadline,
+            krId: item.krId || '',
+            status: 'waiting',
+            attachments: [],
+            meetingId: meetingId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          await db.collection('taskPlans').add(taskData);
+          registeredCount++;
+        }
+
+        showToast(`${registeredCount}개의 업무가 등록되었습니다`, 'success');
+
+        // 등록된 항목 선택 해제 및 표시 업데이트
+        selectedItems.forEach(item => {
+          item.selected = false;
+        });
+
+        // 미리보기 업데이트
+        parseActionItemsPreview(meetingId);
 
         // 업무계획 목록 새로고침
         await loadTaskPlanData();
