@@ -1397,12 +1397,18 @@
         // Firestore에서 데이터 로드
         async function loadDataFromFirestore() {
             try {
+                console.log('loadDataFromFirestore 시작, shareToken:', shareToken);
+
                 // 공유 토큰이 있으면 해당 데이터 로드
                 if (shareToken) {
+                    console.log('공유 토큰으로 데이터 로드 시도...');
+
                     const snapshot = await db.collection(SHARE_COLLECTION)
                         .where('token', '==', shareToken)
                         .where('isActive', '==', true)
                         .get();
+
+                    console.log('공유 링크 조회 결과:', snapshot.empty ? '없음' : '있음');
 
                     if (snapshot.empty) {
                         showToast('유효하지 않은 공유 링크입니다');
@@ -1411,22 +1417,34 @@
 
                     const linkDoc = snapshot.docs[0];
                     const linkData = linkDoc.data();
+                    console.log('공유 링크 데이터:', linkData);
 
                     // 조회수 증가
-                    await linkDoc.ref.update({
-                        viewCount: firebase.firestore.FieldValue.increment(1),
-                        lastViewedAt: new Date().toISOString()
-                    });
+                    try {
+                        await linkDoc.ref.update({
+                            viewCount: firebase.firestore.FieldValue.increment(1),
+                            lastViewedAt: new Date().toISOString()
+                        });
+                    } catch (updateError) {
+                        console.warn('조회수 업데이트 실패:', updateError);
+                    }
 
                     // 실시간 데이터 로드 (docId가 있으면)
                     if (linkData.docId) {
+                        console.log('docId로 메인 데이터 로드:', linkData.docId);
                         const mainDoc = await db.collection('growthboardReportData').doc(linkData.docId).get();
+                        console.log('메인 데이터 존재:', mainDoc.exists);
                         if (mainDoc.exists) {
                             itemData = mainDoc.data().data || {};
+                            console.log('로드된 itemData 키:', Object.keys(itemData));
+                        } else {
+                            console.warn('메인 데이터 문서가 존재하지 않음');
+                            showToast('아직 저장된 콘텐츠가 없습니다');
                         }
                     } else if (linkData.snapshotData) {
                         // 스냅샷 데이터 사용 (하위 호환)
                         itemData = linkData.snapshotData || {};
+                        console.log('스냅샷 데이터 사용');
                     }
                 } else {
                     // 일반 모드: 메인 데이터 로드
@@ -1500,18 +1518,25 @@
         async function saveDataToFirestore() {
             try {
                 showToast('저장 중... (미디어 업로드)');
+                console.log('저장 시작, itemData 키:', Object.keys(itemData));
+                console.log('itemData 내용:', JSON.stringify(itemData).substring(0, 500));
 
                 // base64 미디어를 Storage URL로 변환
                 const processedData = await processMediaForStorage(itemData);
+                console.log('미디어 처리 완료, processedData 키:', Object.keys(processedData));
 
                 // 변환된 URL을 itemData에 반영
                 itemData = processedData;
 
-                await db.collection('growthboardReportData').doc(GROWTHBOARD_DOC_ID).set({
+                const savePayload = {
                     data: processedData,
                     updatedAt: new Date().toISOString()
-                }, { merge: true });
+                };
+                console.log('Firestore에 저장할 데이터 키:', Object.keys(savePayload.data));
 
+                await db.collection('growthboardReportData').doc(GROWTHBOARD_DOC_ID).set(savePayload, { merge: true });
+
+                console.log('Firestore 저장 완료!');
                 showToast('저장 완료!');
             } catch (error) {
                 console.error('Firestore 저장 오류:', error);
@@ -2542,17 +2567,19 @@
             const generateBtn = document.getElementById('generateShareBtn');
             const shareActions = document.getElementById('shareActions');
 
-            // 기존 공유 링크 확인
+            // 기존 공유 링크 확인 (인덱스 없이 단순 쿼리)
             try {
                 const existingLinks = await db.collection(SHARE_COLLECTION)
                     .where('docId', '==', GROWTHBOARD_DOC_ID)
                     .where('isActive', '==', true)
-                    .orderBy('createdAt', 'desc')
-                    .limit(1)
                     .get();
 
                 if (!existingLinks.empty) {
-                    const linkData = existingLinks.docs[0].data();
+                    // 클라이언트에서 최신순 정렬
+                    const sortedDocs = existingLinks.docs.sort((a, b) =>
+                        (b.data().createdAt || '').localeCompare(a.data().createdAt || '')
+                    );
+                    const linkData = sortedDocs[0].data();
                     const shareUrl = window.location.origin + '/growthboard/?token=' + linkData.token;
                     shareLinkInput.value = shareUrl;
                     generateBtn.style.display = 'none';
@@ -2608,9 +2635,16 @@
         // 상세 보기 모달 (큰단락 + 하위 구조)
         function openDetailModal(event, id) {
             event.stopPropagation();
+            console.log('openDetailModal 호출, id:', id);
+            console.log('itemData[id]:', itemData[id]);
+            console.log('전체 itemData 키:', Object.keys(itemData));
+
             const data = itemData[id] || {};
             const item = document.querySelector(`[data-id="${id}"]`);
-            if (!item) return;
+            if (!item) {
+                console.log('item 요소를 찾을 수 없음');
+                return;
+            }
 
             // 부모 섹션 정보 가져오기
             const section = item.closest('.section');
