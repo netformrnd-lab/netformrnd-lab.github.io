@@ -1397,12 +1397,18 @@
         // Firestore에서 데이터 로드
         async function loadDataFromFirestore() {
             try {
+                console.log('loadDataFromFirestore 시작, shareToken:', shareToken);
+
                 // 공유 토큰이 있으면 해당 데이터 로드
                 if (shareToken) {
+                    console.log('공유 토큰으로 데이터 로드 시도...');
+
                     const snapshot = await db.collection(SHARE_COLLECTION)
                         .where('token', '==', shareToken)
                         .where('isActive', '==', true)
                         .get();
+
+                    console.log('공유 링크 조회 결과:', snapshot.empty ? '없음' : '있음');
 
                     if (snapshot.empty) {
                         showToast('유효하지 않은 공유 링크입니다');
@@ -1411,22 +1417,34 @@
 
                     const linkDoc = snapshot.docs[0];
                     const linkData = linkDoc.data();
+                    console.log('공유 링크 데이터:', linkData);
 
                     // 조회수 증가
-                    await linkDoc.ref.update({
-                        viewCount: firebase.firestore.FieldValue.increment(1),
-                        lastViewedAt: new Date().toISOString()
-                    });
+                    try {
+                        await linkDoc.ref.update({
+                            viewCount: firebase.firestore.FieldValue.increment(1),
+                            lastViewedAt: new Date().toISOString()
+                        });
+                    } catch (updateError) {
+                        console.warn('조회수 업데이트 실패:', updateError);
+                    }
 
                     // 실시간 데이터 로드 (docId가 있으면)
                     if (linkData.docId) {
+                        console.log('docId로 메인 데이터 로드:', linkData.docId);
                         const mainDoc = await db.collection('growthboardReportData').doc(linkData.docId).get();
+                        console.log('메인 데이터 존재:', mainDoc.exists);
                         if (mainDoc.exists) {
                             itemData = mainDoc.data().data || {};
+                            console.log('로드된 itemData 키:', Object.keys(itemData));
+                        } else {
+                            console.warn('메인 데이터 문서가 존재하지 않음');
+                            showToast('아직 저장된 콘텐츠가 없습니다');
                         }
                     } else if (linkData.snapshotData) {
                         // 스냅샷 데이터 사용 (하위 호환)
                         itemData = linkData.snapshotData || {};
+                        console.log('스냅샷 데이터 사용');
                     }
                 } else {
                     // 일반 모드: 메인 데이터 로드
