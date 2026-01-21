@@ -7,6 +7,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <style>
         :root {
             --color-primary: #1a2b4a;
@@ -764,16 +767,19 @@
     <!-- 공유 링크 모달 -->
     <div class="share-modal-overlay" id="shareModalOverlay">
         <div class="share-modal">
-            <h3>🔗 공유 링크 생성</h3>
+            <h3>🔗 공유 링크</h3>
             <p>아래 링크를 공유하면 현재 편집한 내용을 다른 사람이 볼 수 있습니다.</p>
             <div class="share-info">
                 <div class="share-info-item"><span>👁</span> 읽기 전용으로 공유됩니다</div>
-                <div class="share-info-item"><span>🔄</span> 추가 편집 시 자동으로 반영됩니다</div>
-                <div class="share-info-item"><span>💾</span> 브라우저 저장소 기반 (같은 도메인 내)</div>
+                <div class="share-info-item"><span>🔄</span> 추가 편집 시 실시간 반영됩니다</div>
+                <div class="share-info-item"><span>🔐</span> 링크를 아는 사람만 접근 가능</div>
             </div>
             <div class="share-link-box">
-                <input type="text" id="shareLinkInput" readonly>
-                <button onclick="copyShareLink()">복사</button>
+                <input type="text" id="shareLinkInput" readonly placeholder="공유 링크가 여기에 표시됩니다">
+                <div id="shareActions" style="display: none; gap: 6px;">
+                    <button onclick="copyShareLink()">복사</button>
+                </div>
+                <button id="generateShareBtn" onclick="generateNewShareLink()" style="display: block;">생성</button>
             </div>
             <button class="share-modal-close" onclick="closeShareModal()">닫기</button>
         </div>
@@ -1316,25 +1322,145 @@
     </section>
 
     <script>
-        let itemData = JSON.parse(localStorage.getItem('growthboardData') || '{}');
+        // Firebase 초기화
+        const firebaseConfig = {
+            apiKey: "AIzaSyAQf_Cu9wMji5QsMBQns5eg6nOD_vmrZMs",
+            authDomain: "moyeora-deal-manager.firebaseapp.com",
+            projectId: "moyeora-deal-manager",
+            storageBucket: "moyeora-deal-manager.firebasestorage.app",
+            messagingSenderId: "527148187832",
+            appId: "1:527148187832:web:dc35b0413a7157db34744d"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // 문서 ID (고정 - 단일 growthboard 데이터)
+        const GROWTHBOARD_DOC_ID = 'main-growthboard';
+        const SHARE_COLLECTION = 'growthboardReportShareLinks';
+
+        let itemData = {};
         let currentEditingId = null;
         let currentEditMode = 'single';
         let currentViewingId = null;
-        let isPresentationMode = new URLSearchParams(window.location.search).get('view') === 'presentation';
+        let shareToken = new URLSearchParams(window.location.search).get('token');
+        let isPresentationMode = new URLSearchParams(window.location.search).get('view') === 'presentation' || shareToken;
 
         // Apply presentation mode
         if (isPresentationMode) {
             document.body.classList.add('presentation-mode');
         }
 
-        function saveData() {
+        // Firestore에서 데이터 로드
+        async function loadDataFromFirestore() {
             try {
-                localStorage.setItem('growthboardData', JSON.stringify(itemData));
-            } catch (e) {
-                if (e.name === 'QuotaExceededError' || e.code === 22) {
-                    alert('저장 공간이 부족합니다. 일부 미디어를 삭제해주세요.');
+                // 공유 토큰이 있으면 해당 데이터 로드
+                if (shareToken) {
+                    const snapshot = await db.collection(SHARE_COLLECTION)
+                        .where('token', '==', shareToken)
+                        .where('isActive', '==', true)
+                        .get();
+
+                    if (snapshot.empty) {
+                        showToast('유효하지 않은 공유 링크입니다');
+                        return;
+                    }
+
+                    const linkDoc = snapshot.docs[0];
+                    const linkData = linkDoc.data();
+
+                    // 조회수 증가
+                    await linkDoc.ref.update({
+                        viewCount: firebase.firestore.FieldValue.increment(1),
+                        lastViewedAt: new Date().toISOString()
+                    });
+
+                    // 실시간 데이터 로드 (docId가 있으면)
+                    if (linkData.docId) {
+                        const mainDoc = await db.collection('growthboardReportData').doc(linkData.docId).get();
+                        if (mainDoc.exists) {
+                            itemData = mainDoc.data().data || {};
+                        }
+                    } else if (linkData.snapshotData) {
+                        // 스냅샷 데이터 사용 (하위 호환)
+                        itemData = linkData.snapshotData || {};
+                    }
+                } else {
+                    // 일반 모드: 메인 데이터 로드
+                    const doc = await db.collection('growthboardReportData').doc(GROWTHBOARD_DOC_ID).get();
+                    if (doc.exists) {
+                        itemData = doc.data().data || {};
+                    } else {
+                        // localStorage에서 마이그레이션
+                        const localData = localStorage.getItem('growthboardData');
+                        if (localData) {
+                            itemData = JSON.parse(localData);
+                            await saveDataToFirestore(); // Firestore에 저장
+                        }
+                    }
                 }
-                console.error('Storage error:', e);
+
+                restoreSavedContent();
+                updateViewButtons();
+            } catch (error) {
+                console.error('Firestore 로드 오류:', error);
+                // 오프라인 fallback: localStorage
+                const localData = localStorage.getItem('growthboardData');
+                if (localData) {
+                    itemData = JSON.parse(localData);
+                    restoreSavedContent();
+                    updateViewButtons();
+                }
+            }
+        }
+
+        // Firestore에 데이터 저장
+        async function saveDataToFirestore() {
+            try {
+                await db.collection('growthboardReportData').doc(GROWTHBOARD_DOC_ID).set({
+                    data: itemData,
+                    updatedAt: new Date().toISOString()
+                }, { merge: true });
+
+                // localStorage 백업
+                localStorage.setItem('growthboardData', JSON.stringify(itemData));
+            } catch (error) {
+                console.error('Firestore 저장 오류:', error);
+                // 오프라인 fallback
+                localStorage.setItem('growthboardData', JSON.stringify(itemData));
+            }
+        }
+
+        function saveData() {
+            saveDataToFirestore();
+        }
+
+        // 토큰 생성
+        function generateToken() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+            let token = '';
+            for (let i = 0; i < 24; i++) {
+                token += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return token;
+        }
+
+        // 공유 링크 생성
+        async function createShareLink() {
+            try {
+                const token = generateToken();
+
+                await db.collection(SHARE_COLLECTION).add({
+                    token: token,
+                    docId: GROWTHBOARD_DOC_ID,
+                    isActive: true,
+                    createdAt: new Date().toISOString(),
+                    viewCount: 0
+                });
+
+                return token;
+            } catch (error) {
+                console.error('공유 링크 생성 오류:', error);
+                throw error;
             }
         }
 
@@ -2121,7 +2247,7 @@
 
             updateViewButtons();
             closeModal();
-            alert('저장되었습니다!');
+            showToast('저장되었습니다!');
         }
 
         // Show single item media in viewer
@@ -2296,16 +2422,14 @@
             });
         }
 
-        // Init
-        restoreSavedContent();
-        updateViewButtons();
-
-        // Show presentation mode notice
-        if (isPresentationMode) {
-            console.log('Presentation mode active - edit features disabled');
-            // 프레젠테이션 모드에서는 편집 버튼 숨기기
-            document.getElementById('topActionBar').classList.add('hidden');
-        }
+        // Init - Firestore에서 데이터 로드
+        loadDataFromFirestore().then(() => {
+            // 프레젠테이션/공유 모드에서는 편집 버튼 숨기기
+            if (isPresentationMode) {
+                console.log('Presentation mode active - edit features disabled');
+                document.getElementById('topActionBar').classList.add('hidden');
+            }
+        });
 
         // Toast 알림
         function showToast(message) {
@@ -2316,17 +2440,64 @@
         }
 
         // 편집 완료
-        function completeEditing() {
-            saveData();
+        async function completeEditing() {
+            await saveDataToFirestore();
             showToast('편집 내용이 저장되었습니다!');
         }
 
         // 공유 링크 모달
-        function openShareModal() {
-            saveData(); // 먼저 저장
-            const shareUrl = window.location.origin + '/growthboard/?view=presentation';
-            document.getElementById('shareLinkInput').value = shareUrl;
+        async function openShareModal() {
+            await saveDataToFirestore(); // 먼저 저장
+
+            const shareLinkInput = document.getElementById('shareLinkInput');
+            const generateBtn = document.getElementById('generateShareBtn');
+            const shareActions = document.getElementById('shareActions');
+
+            // 기존 공유 링크 확인
+            try {
+                const existingLinks = await db.collection(SHARE_COLLECTION)
+                    .where('docId', '==', GROWTHBOARD_DOC_ID)
+                    .where('isActive', '==', true)
+                    .orderBy('createdAt', 'desc')
+                    .limit(1)
+                    .get();
+
+                if (!existingLinks.empty) {
+                    const linkData = existingLinks.docs[0].data();
+                    const shareUrl = window.location.origin + '/growthboard/?token=' + linkData.token;
+                    shareLinkInput.value = shareUrl;
+                    generateBtn.style.display = 'none';
+                    shareActions.style.display = 'flex';
+                } else {
+                    shareLinkInput.value = '새 공유 링크를 생성하세요';
+                    generateBtn.style.display = 'block';
+                    shareActions.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('기존 링크 조회 오류:', error);
+                shareLinkInput.value = '새 공유 링크를 생성하세요';
+                generateBtn.style.display = 'block';
+                shareActions.style.display = 'none';
+            }
+
             document.getElementById('shareModalOverlay').classList.add('active');
+        }
+
+        // 새 공유 링크 생성
+        async function generateNewShareLink() {
+            try {
+                const token = await createShareLink();
+                const shareUrl = window.location.origin + '/growthboard/?token=' + token;
+
+                document.getElementById('shareLinkInput').value = shareUrl;
+                document.getElementById('generateShareBtn').style.display = 'none';
+                document.getElementById('shareActions').style.display = 'flex';
+
+                showToast('공유 링크가 생성되었습니다!');
+            } catch (error) {
+                console.error('링크 생성 오류:', error);
+                showToast('링크 생성에 실패했습니다');
+            }
         }
 
         function closeShareModal() {
@@ -2384,28 +2555,61 @@
                 `;
             }
 
-            // 아이템 목록 표시
+            // 아이템 목록 표시 (기존 스타일: 카드 + Before/After 이미지)
             if (data.items && data.items.length > 0) {
-                content += '<div class="detail-section"><div class="detail-section-header"><span class="detail-section-title">세부 항목</span></div>';
                 data.items.forEach((i, idx) => {
                     const hasMedia = i.mediaUrl || i.beforeMedia || i.afterMedia;
+                    const mode = i.mode || 'single';
+
                     content += `
-                        <div class="detail-item" ${hasMedia ? `onclick="showItemMediaInDetail('${id}', ${idx})"` : ''}>
-                            <span class="detail-item-icon">${i.emoji || '📌'}</span>
-                            <div class="detail-item-content">
-                                <div class="detail-item-title">${escapeHtml(i.title || '')}</div>
-                                <div class="detail-item-desc">${escapeHtml(i.desc || '')}</div>
+                        <div class="detail-section" style="margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                <span style="font-size: 28px; background: rgba(255,255,255,0.1); padding: 8px; border-radius: 8px;">${i.emoji || '📌'}</span>
+                                <div>
+                                    <div style="color: white; font-size: 17px; font-weight: 600;">${escapeHtml(i.title || '')}</div>
+                                    <div style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 2px;">${escapeHtml(i.desc || '')}</div>
+                                </div>
                             </div>
-                            ${hasMedia ? '<span style="color: var(--color-accent);">📷</span>' : ''}
-                        </div>
                     `;
+
+                    // 미디어 표시 (Before/After 또는 Single)
+                    if (hasMedia) {
+                        if (mode === 'compare' && (i.beforeMedia || i.afterMedia)) {
+                            content += `
+                                <div style="display: flex; gap: 16px; align-items: center; justify-content: center; flex-wrap: wrap;">
+                                    ${i.beforeMedia ? `
+                                        <div class="detail-media-box before" onclick="openItemFullscreen('${id}', ${idx}, 'before', event)" style="flex: 1; min-width: 200px; max-width: 350px;">
+                                            <div class="detail-media-label">BEFORE</div>
+                                            ${createMediaElement(i.beforeMedia, 'detail-media-img', false)}
+                                        </div>
+                                    ` : ''}
+                                    <div style="font-size: 28px; color: var(--color-accent);">→</div>
+                                    ${i.afterMedia ? `
+                                        <div class="detail-media-box after" onclick="openItemFullscreen('${id}', ${idx}, 'after', event)" style="flex: 1; min-width: 200px; max-width: 350px;">
+                                            <div class="detail-media-label">AFTER</div>
+                                            ${createMediaElement(i.afterMedia, 'detail-media-img', false)}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        } else if (i.mediaUrl) {
+                            content += `
+                                <div style="text-align: center;">
+                                    <div class="detail-media-box" onclick="openItemFullscreen('${id}', ${idx}, 'single', event)" style="display: inline-block;">
+                                        ${createMediaElement(i.mediaUrl, 'detail-media-img', false)}
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+
+                    content += `</div>`;
                 });
-                content += '</div>';
             }
 
-            // 미디어 표시
+            // 카드 레벨 미디어 표시 (아이템이 없는 경우)
             const hasCardMedia = data.mediaUrl || data.beforeMedia || data.afterMedia;
-            if (hasCardMedia) {
+            if (hasCardMedia && (!data.items || data.items.length === 0)) {
                 content += '<div class="detail-media-section">';
                 if (data.mode === 'compare') {
                     if (data.beforeMedia) {
