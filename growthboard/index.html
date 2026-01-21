@@ -10,6 +10,7 @@
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
     <style>
         :root {
             --color-primary: #1a2b4a;
@@ -1333,10 +1334,53 @@
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+        const storage = firebase.storage();
 
         // 문서 ID (고정 - 단일 growthboard 데이터)
         const GROWTHBOARD_DOC_ID = 'main-growthboard';
         const SHARE_COLLECTION = 'growthboardReportShareLinks';
+
+        // Firebase Storage에 미디어 업로드
+        async function uploadMediaToStorage(file, path) {
+            try {
+                const storageRef = storage.ref().child(path);
+                const snapshot = await storageRef.put(file);
+                const downloadUrl = await snapshot.ref.getDownloadURL();
+                return downloadUrl;
+            } catch (error) {
+                console.error('Storage 업로드 오류:', error);
+                throw error;
+            }
+        }
+
+        // base64를 Blob으로 변환
+        function base64ToBlob(base64, mimeType) {
+            const byteCharacters = atob(base64.split(',')[1]);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            return new Blob([byteArray], { type: mimeType });
+        }
+
+        // 미디어 URL이 base64인지 확인
+        function isBase64(str) {
+            return str && str.startsWith('data:');
+        }
+
+        // base64 미디어를 Storage에 업로드하고 URL로 변환
+        async function convertBase64ToStorageUrl(base64Url, cardId, fieldName) {
+            if (!isBase64(base64Url)) return base64Url;
+
+            const mimeMatch = base64Url.match(/data:([^;]+);/);
+            const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+            const ext = mimeType.split('/')[1] || 'jpg';
+            const blob = base64ToBlob(base64Url, mimeType);
+            const path = `growthboard/${GROWTHBOARD_DOC_ID}/${cardId}_${fieldName}_${Date.now()}.${ext}`;
+
+            return await uploadMediaToStorage(blob, path);
+        }
 
         let itemData = {};
         let currentEditingId = null;
@@ -1414,19 +1458,64 @@
         }
 
         // Firestore에 데이터 저장
+        // base64 미디어를 Storage URL로 변환 (저장 전)
+        async function processMediaForStorage(data) {
+            const processedData = JSON.parse(JSON.stringify(data)); // deep copy
+
+            for (const cardId of Object.keys(processedData)) {
+                const cardData = processedData[cardId];
+                if (!cardData) continue;
+
+                // 카드 레벨 미디어 변환
+                if (isBase64(cardData.mediaUrl)) {
+                    cardData.mediaUrl = await convertBase64ToStorageUrl(cardData.mediaUrl, cardId, 'media');
+                }
+                if (isBase64(cardData.beforeMedia)) {
+                    cardData.beforeMedia = await convertBase64ToStorageUrl(cardData.beforeMedia, cardId, 'before');
+                }
+                if (isBase64(cardData.afterMedia)) {
+                    cardData.afterMedia = await convertBase64ToStorageUrl(cardData.afterMedia, cardId, 'after');
+                }
+
+                // 아이템 레벨 미디어 변환
+                if (cardData.items && Array.isArray(cardData.items)) {
+                    for (let i = 0; i < cardData.items.length; i++) {
+                        const item = cardData.items[i];
+                        if (isBase64(item.mediaUrl)) {
+                            item.mediaUrl = await convertBase64ToStorageUrl(item.mediaUrl, `${cardId}_item${i}`, 'media');
+                        }
+                        if (isBase64(item.beforeMedia)) {
+                            item.beforeMedia = await convertBase64ToStorageUrl(item.beforeMedia, `${cardId}_item${i}`, 'before');
+                        }
+                        if (isBase64(item.afterMedia)) {
+                            item.afterMedia = await convertBase64ToStorageUrl(item.afterMedia, `${cardId}_item${i}`, 'after');
+                        }
+                    }
+                }
+            }
+
+            return processedData;
+        }
+
         async function saveDataToFirestore() {
             try {
+                showToast('저장 중... (미디어 업로드)');
+
+                // base64 미디어를 Storage URL로 변환
+                const processedData = await processMediaForStorage(itemData);
+
+                // 변환된 URL을 itemData에 반영
+                itemData = processedData;
+
                 await db.collection('growthboardReportData').doc(GROWTHBOARD_DOC_ID).set({
-                    data: itemData,
+                    data: processedData,
                     updatedAt: new Date().toISOString()
                 }, { merge: true });
 
-                // localStorage 백업
-                localStorage.setItem('growthboardData', JSON.stringify(itemData));
+                showToast('저장 완료!');
             } catch (error) {
                 console.error('Firestore 저장 오류:', error);
-                // 오프라인 fallback
-                localStorage.setItem('growthboardData', JSON.stringify(itemData));
+                showToast('저장 실패: ' + error.message);
             }
         }
 
