@@ -2060,6 +2060,11 @@
                 <span class="item-icon">📋</span>주문 현황
                 <span style="margin-left: auto; background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px; font-size: 10px;">파트너용</span>
               </div>
+              <!-- 회의록/메모 메뉴 (노타빌리티 연동) -->
+              <div class="menu-item" data-tab="meetingNotes" onclick="switchTab('meetingNotes')" style="margin-left: 8px; border-left: 2px solid #8b5cf6; padding-left: 16px;">
+                <span class="item-icon">📝</span>회의록/메모
+                <span style="margin-left: auto; background: #ede9fe; color: #7c3aed; padding: 2px 6px; border-radius: 4px; font-size: 10px;">Notability</span>
+              </div>
             </div>
           </div>
 
@@ -7434,6 +7439,8 @@ function render() {
     case 'pendingDocuments': renderPendingDocuments(); break;
     case 'settlementIssues': renderSettlementIssues(); break;
     case 'dataErrors': renderDataErrors(); break;
+    // 회의록/메모 (노타빌리티 연동)
+    case 'meetingNotes': renderMeetingNotes(); break;
     // CRM 센터는 별도 페이지로 분리됨 (/admin/crm/)
   }
 
@@ -34725,6 +34732,679 @@ function copySupplierOnboardingLink(supplierId) {
   }).catch(err => {
     // 폴백: 프롬프트로 링크 표시
     prompt('아래 링크를 복사하세요:', link);
+  });
+}
+
+// ========== 회의록/메모 관리 (노타빌리티 연동) ==========
+
+// 회의록 상태 초기화
+if (!state.meetingNotes) {
+  state.meetingNotes = [];
+}
+
+// 구글 드라이브 API 설정 (Firestore에서 로드)
+let GOOGLE_DRIVE_CONFIG = {
+  clientId: '',
+  apiKey: '',
+  appId: '',
+  scope: 'https://www.googleapis.com/auth/drive.readonly',
+  pickerLoaded: false,
+  oauthToken: null
+};
+
+// Firestore에서 Google API 설정 로드
+async function loadGoogleDriveConfig() {
+  try {
+    const doc = await db.collection('settings').doc('googleDrive').get();
+    if (doc.exists) {
+      const data = doc.data();
+      GOOGLE_DRIVE_CONFIG.clientId = data.clientId || '';
+      GOOGLE_DRIVE_CONFIG.apiKey = data.apiKey || '';
+      GOOGLE_DRIVE_CONFIG.appId = data.appId || '';
+    }
+  } catch (error) {
+    console.log('Google Drive 설정 로드 실패:', error);
+  }
+}
+
+// 회의록/메모 렌더링
+function renderMeetingNotes() {
+  const app = document.getElementById('app');
+  const notes = state.meetingNotes || [];
+
+  // 카테고리별 분류
+  const categories = {
+    meeting: notes.filter(n => n.category === 'meeting'),
+    memo: notes.filter(n => n.category === 'memo'),
+    idea: notes.filter(n => n.category === 'idea'),
+    other: notes.filter(n => !n.category || n.category === 'other')
+  };
+
+  app.innerHTML = `
+    <div style="padding: 24px; max-width: 1400px; margin: 0 auto;">
+      <!-- 헤더 -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+        <div>
+          <h1 style="font-size: 24px; font-weight: 700; color: var(--gray-900); margin: 0;">
+            📝 회의록/메모
+          </h1>
+          <p style="color: var(--gray-500); font-size: 14px; margin-top: 4px;">
+            노타빌리티에서 작성한 노트를 구글 드라이브를 통해 관리합니다
+          </p>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button onclick="openGDriveNotabilityPicker()" style="display: flex; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, #4285f4, #34a853); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; box-shadow: 0 2px 8px rgba(66, 133, 244, 0.3);">
+            <svg width="20" height="20" viewBox="0 0 87.3 78" fill="white">
+              <path d="M6.6 66.85L0 78h30.7l6.6-11.15z"/>
+              <path d="M43.65 0L0 78h13.2l43.65-78z"/>
+              <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z"/>
+            </svg>
+            구글 드라이브에서 가져오기
+          </button>
+          <button onclick="openAddMeetingNoteModal()" style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">
+            + 직접 추가
+          </button>
+        </div>
+      </div>
+
+      <!-- 구글 드라이브 연동 안내 카드 -->
+      <div style="background: linear-gradient(135deg, #ede9fe, #fae8ff); border-radius: 16px; padding: 20px; margin-bottom: 24px; border: 1px solid #c4b5fd;">
+        <div style="display: flex; gap: 16px; align-items: flex-start;">
+          <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #8b5cf6, #a855f7); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+            <span style="font-size: 24px;">📱</span>
+          </div>
+          <div style="flex: 1;">
+            <h3 style="font-size: 16px; font-weight: 600; color: #5b21b6; margin: 0 0 8px 0;">노타빌리티 연동 방법</h3>
+            <ol style="margin: 0; padding-left: 20px; color: #6b21a8; font-size: 14px; line-height: 1.8;">
+              <li><strong>노타빌리티 앱</strong>에서 설정 → 자동 백업 → Google Drive 선택</li>
+              <li>백업 폴더를 지정하고 <strong>PDF 형식</strong>으로 자동 백업 설정</li>
+              <li>위의 <strong>"구글 드라이브에서 가져오기"</strong> 버튼으로 노트를 가져오세요</li>
+            </ol>
+          </div>
+          <button onclick="this.parentElement.parentElement.style.display='none'" style="background: none; border: none; color: #9333ea; cursor: pointer; font-size: 20px; padding: 0; line-height: 1;">×</button>
+        </div>
+      </div>
+
+      <!-- 통계 카드 -->
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 40px; height: 40px; background: #dbeafe; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 20px;">📋</span>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--gray-500);">회의록</div>
+              <div style="font-size: 24px; font-weight: 700; color: #2563eb;">${categories.meeting.length}</div>
+            </div>
+          </div>
+        </div>
+        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 40px; height: 40px; background: #fef3c7; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 20px;">📝</span>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--gray-500);">메모</div>
+              <div style="font-size: 24px; font-weight: 700; color: #d97706;">${categories.memo.length}</div>
+            </div>
+          </div>
+        </div>
+        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 40px; height: 40px; background: #dcfce7; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 20px;">💡</span>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--gray-500);">아이디어</div>
+              <div style="font-size: 24px; font-weight: 700; color: #16a34a;">${categories.idea.length}</div>
+            </div>
+          </div>
+        </div>
+        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 40px; height: 40px; background: #f3e8ff; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 20px;">📄</span>
+            </div>
+            <div>
+              <div style="font-size: 12px; color: var(--gray-500);">전체</div>
+              <div style="font-size: 24px; font-weight: 700; color: #7c3aed;">${notes.length}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 필터 탭 -->
+      <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--gray-200); padding-bottom: 12px;">
+        <button onclick="filterMeetingNotes('all')" class="note-filter-btn active" data-filter="all" style="padding: 8px 16px; border: none; background: var(--primary); color: white; border-radius: 20px; cursor: pointer; font-size: 13px;">전체 (${notes.length})</button>
+        <button onclick="filterMeetingNotes('meeting')" class="note-filter-btn" data-filter="meeting" style="padding: 8px 16px; border: 1px solid var(--gray-300); background: white; color: var(--gray-600); border-radius: 20px; cursor: pointer; font-size: 13px;">회의록 (${categories.meeting.length})</button>
+        <button onclick="filterMeetingNotes('memo')" class="note-filter-btn" data-filter="memo" style="padding: 8px 16px; border: 1px solid var(--gray-300); background: white; color: var(--gray-600); border-radius: 20px; cursor: pointer; font-size: 13px;">메모 (${categories.memo.length})</button>
+        <button onclick="filterMeetingNotes('idea')" class="note-filter-btn" data-filter="idea" style="padding: 8px 16px; border: 1px solid var(--gray-300); background: white; color: var(--gray-600); border-radius: 20px; cursor: pointer; font-size: 13px;">아이디어 (${categories.idea.length})</button>
+      </div>
+
+      <!-- 노트 목록 -->
+      <div id="meeting-notes-list">
+        ${notes.length === 0 ? `
+          <div style="text-align: center; padding: 60px 20px; background: white; border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+            <div style="font-size: 64px; margin-bottom: 16px;">📝</div>
+            <h3 style="color: var(--gray-700); margin: 0 0 8px 0;">아직 노트가 없습니다</h3>
+            <p style="color: var(--gray-500); margin: 0 0 24px 0;">노타빌리티에서 작성한 노트를 구글 드라이브를 통해 가져오세요</p>
+            <div style="display: flex; gap: 12px; justify-content: center;">
+              <button onclick="openGDriveNotabilityPicker()" style="padding: 12px 24px; background: linear-gradient(135deg, #4285f4, #34a853); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                구글 드라이브에서 가져오기
+              </button>
+              <button onclick="openAddMeetingNoteModal()" style="padding: 12px 24px; background: white; color: var(--primary); border: 2px solid var(--primary); border-radius: 8px; cursor: pointer; font-weight: 600;">
+                직접 추가
+              </button>
+            </div>
+          </div>
+        ` : `
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;">
+            ${notes.map(note => renderMeetingNoteCard(note)).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+// 회의록 카드 렌더링
+function renderMeetingNoteCard(note) {
+  const categoryConfig = {
+    meeting: { icon: '📋', label: '회의록', color: '#2563eb', bg: '#dbeafe' },
+    memo: { icon: '📝', label: '메모', color: '#d97706', bg: '#fef3c7' },
+    idea: { icon: '💡', label: '아이디어', color: '#16a34a', bg: '#dcfce7' },
+    other: { icon: '📄', label: '기타', color: '#6b7280', bg: '#f3f4f6' }
+  };
+
+  const cat = categoryConfig[note.category] || categoryConfig.other;
+  const date = note.createdAt ? new Date(note.createdAt).toLocaleDateString('ko-KR') : '-';
+
+  return `
+    <div class="note-card" data-category="${note.category || 'other'}" style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: all 0.2s; cursor: pointer;" onclick="openMeetingNoteDetail('${note.id}')" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 16px rgba(0,0,0,0.1)'" onmouseout="this.style.transform='none'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.06)'">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+        <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: ${cat.bg}; color: ${cat.color}; border-radius: 12px; font-size: 12px; font-weight: 500;">
+          ${cat.icon} ${cat.label}
+        </span>
+        <span style="font-size: 12px; color: var(--gray-400);">${date}</span>
+      </div>
+      <h3 style="font-size: 16px; font-weight: 600; color: var(--gray-800); margin: 0 0 8px 0; line-height: 1.4;">${note.title || '제목 없음'}</h3>
+      <p style="font-size: 13px; color: var(--gray-500); margin: 0; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${note.summary || note.content?.substring(0, 100) || '내용 없음'}</p>
+      ${note.gdriveLink ? `
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-100); display: flex; align-items: center; gap: 8px;">
+          <svg width="16" height="16" viewBox="0 0 87.3 78" style="flex-shrink: 0;">
+            <path d="M6.6 66.85L0 78h30.7l6.6-11.15z" fill="#0066da"/>
+            <path d="M43.65 0L0 78h13.2l43.65-78z" fill="#00ac47"/>
+            <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z" fill="#ffba00"/>
+          </svg>
+          <span style="font-size: 11px; color: var(--gray-400);">구글 드라이브 연결됨</span>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// 필터링
+function filterMeetingNotes(filter) {
+  // 버튼 상태 업데이트
+  document.querySelectorAll('.note-filter-btn').forEach(btn => {
+    if (btn.dataset.filter === filter) {
+      btn.style.background = 'var(--primary)';
+      btn.style.color = 'white';
+      btn.style.border = 'none';
+      btn.classList.add('active');
+    } else {
+      btn.style.background = 'white';
+      btn.style.color = 'var(--gray-600)';
+      btn.style.border = '1px solid var(--gray-300)';
+      btn.classList.remove('active');
+    }
+  });
+
+  // 카드 필터링
+  document.querySelectorAll('.note-card').forEach(card => {
+    if (filter === 'all' || card.dataset.category === filter) {
+      card.style.display = 'block';
+    } else {
+      card.style.display = 'none';
+    }
+  });
+}
+
+// 구글 드라이브에서 노타빌리티 파일 가져오기
+function openGDriveNotabilityPicker() {
+  // 구글 드라이브 API 키가 설정되지 않은 경우 설정 안내
+  if (!GOOGLE_DRIVE_CONFIG.clientId || !GOOGLE_DRIVE_CONFIG.apiKey) {
+    openGDriveSetupModal();
+    return;
+  }
+
+  // Google API 로드 및 Picker 실행
+  loadGoogleAPIs();
+}
+
+// Google API 설정 모달 (API 키 미설정 시)
+function openGDriveSetupModal() {
+  const modal = document.createElement('div');
+  modal.id = 'gdrive-setup-modal';
+  modal.innerHTML = `
+    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+      <div style="background: white; border-radius: 16px; width: 90%; max-width: 600px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
+        <div style="padding: 24px; border-bottom: 1px solid var(--gray-200);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h2 style="font-size: 18px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px;">
+              <svg width="24" height="24" viewBox="0 0 87.3 78">
+                <path d="M6.6 66.85L0 78h30.7l6.6-11.15z" fill="#0066da"/>
+                <path d="M43.65 0L0 78h13.2l43.65-78z" fill="#00ac47"/>
+                <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z" fill="#ffba00"/>
+              </svg>
+              Google Drive API 설정
+            </h2>
+            <button onclick="this.closest('#gdrive-setup-modal').remove()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);">×</button>
+          </div>
+        </div>
+        <div style="padding: 24px;">
+          <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border: 1px solid #fcd34d; border-radius: 12px; padding: 16px; margin-bottom: 24px;">
+            <p style="margin: 0; font-size: 13px; color: #92400e; line-height: 1.6;">
+              <strong>자동 연동을 위해 Google Cloud Console에서 API 키를 발급받아야 합니다.</strong>
+            </p>
+          </div>
+
+          <div style="background: #f8fafc; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+            <h4 style="margin: 0 0 16px 0; color: var(--gray-700); font-size: 14px;">📋 설정 방법</h4>
+            <ol style="margin: 0; padding-left: 20px; color: var(--gray-600); font-size: 13px; line-height: 2;">
+              <li><a href="https://console.cloud.google.com/" target="_blank" style="color: #2563eb;">Google Cloud Console</a> 접속</li>
+              <li>새 프로젝트 생성 또는 기존 프로젝트 선택</li>
+              <li><strong>API 및 서비스 → 라이브러리</strong>에서 "Google Drive API"와 "Google Picker API" 활성화</li>
+              <li><strong>API 및 서비스 → 사용자 인증 정보</strong>에서:
+                <ul style="margin: 8px 0; padding-left: 20px;">
+                  <li><strong>API 키</strong> 생성</li>
+                  <li><strong>OAuth 2.0 클라이언트 ID</strong> 생성 (웹 애플리케이션 유형)</li>
+                </ul>
+              </li>
+              <li>OAuth 동의 화면 설정 (테스트 사용자로 본인 이메일 추가)</li>
+            </ol>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">API 키 *</label>
+            <input type="text" id="gdrive-api-key" placeholder="AIza..." value="${GOOGLE_DRIVE_CONFIG.apiKey}" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box; font-family: monospace;">
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">OAuth 클라이언트 ID *</label>
+            <input type="text" id="gdrive-client-id" placeholder="123456789-xxx.apps.googleusercontent.com" value="${GOOGLE_DRIVE_CONFIG.clientId}" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box; font-family: monospace;">
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">App ID (프로젝트 번호)</label>
+            <input type="text" id="gdrive-app-id" placeholder="123456789" value="${GOOGLE_DRIVE_CONFIG.appId}" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box; font-family: monospace;">
+            <p style="margin: 4px 0 0 0; font-size: 11px; color: var(--gray-400);">Google Cloud Console → 프로젝트 설정에서 확인</p>
+          </div>
+        </div>
+        <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; justify-content: flex-end; gap: 12px; border-radius: 0 0 16px 16px;">
+          <button onclick="this.closest('#gdrive-setup-modal').remove()" style="padding: 10px 20px; background: white; color: var(--gray-700); border: 1px solid var(--gray-300); border-radius: 8px; cursor: pointer; font-weight: 500;">취소</button>
+          <button onclick="saveGDriveConfig()" style="padding: 10px 20px; background: linear-gradient(135deg, #4285f4, #34a853); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">저장 후 연동</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+// Google Drive API 설정 저장
+async function saveGDriveConfig() {
+  const apiKey = document.getElementById('gdrive-api-key').value.trim();
+  const clientId = document.getElementById('gdrive-client-id').value.trim();
+  const appId = document.getElementById('gdrive-app-id').value.trim();
+
+  if (!apiKey || !clientId) {
+    showToast('API 키와 클라이언트 ID를 입력해주세요.');
+    return;
+  }
+
+  try {
+    // Firestore에 설정 저장
+    await db.collection('settings').doc('googleDrive').set({
+      apiKey,
+      clientId,
+      appId,
+      updatedAt: new Date().toISOString()
+    });
+
+    // 로컬 설정 업데이트
+    GOOGLE_DRIVE_CONFIG.apiKey = apiKey;
+    GOOGLE_DRIVE_CONFIG.clientId = clientId;
+    GOOGLE_DRIVE_CONFIG.appId = appId;
+
+    document.getElementById('gdrive-setup-modal')?.remove();
+    showToast('✓ Google Drive API 설정이 저장되었습니다.');
+
+    // 바로 Picker 열기
+    loadGoogleAPIs();
+  } catch (error) {
+    console.error('설정 저장 실패:', error);
+    showToast('설정 저장 중 오류가 발생했습니다.');
+  }
+}
+
+// Google API 스크립트 로드
+function loadGoogleAPIs() {
+  // 이미 로드되어 있으면 바로 실행
+  if (window.gapi && GOOGLE_DRIVE_CONFIG.pickerLoaded) {
+    handleAuthClick();
+    return;
+  }
+
+  // Google API 스크립트 로드
+  const script = document.createElement('script');
+  script.src = 'https://apis.google.com/js/api.js';
+  script.onload = () => {
+    gapi.load('client:auth2:picker', initGoogleClient);
+  };
+  document.head.appendChild(script);
+}
+
+// Google Client 초기화
+async function initGoogleClient() {
+  try {
+    await gapi.client.init({
+      apiKey: GOOGLE_DRIVE_CONFIG.apiKey,
+      clientId: GOOGLE_DRIVE_CONFIG.clientId,
+      discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+      scope: GOOGLE_DRIVE_CONFIG.scope
+    });
+
+    GOOGLE_DRIVE_CONFIG.pickerLoaded = true;
+    handleAuthClick();
+  } catch (error) {
+    console.error('Google API 초기화 실패:', error);
+    showToast('Google API 초기화에 실패했습니다. API 키를 확인해주세요.');
+  }
+}
+
+// Google 로그인 처리
+function handleAuthClick() {
+  const authInstance = gapi.auth2.getAuthInstance();
+
+  if (authInstance.isSignedIn.get()) {
+    GOOGLE_DRIVE_CONFIG.oauthToken = authInstance.currentUser.get().getAuthResponse().access_token;
+    createPicker();
+  } else {
+    authInstance.signIn().then(() => {
+      GOOGLE_DRIVE_CONFIG.oauthToken = authInstance.currentUser.get().getAuthResponse().access_token;
+      createPicker();
+    }).catch(error => {
+      console.error('로그인 실패:', error);
+      showToast('Google 로그인에 실패했습니다.');
+    });
+  }
+}
+
+// Google Picker 생성
+function createPicker() {
+  if (!GOOGLE_DRIVE_CONFIG.oauthToken) {
+    showToast('인증이 필요합니다.');
+    return;
+  }
+
+  const docsView = new google.picker.DocsView()
+    .setIncludeFolders(true)
+    .setMimeTypes('application/pdf,image/png,image/jpeg,application/vnd.google-apps.document')
+    .setSelectFolderEnabled(false);
+
+  const picker = new google.picker.PickerBuilder()
+    .addView(docsView)
+    .addView(new google.picker.DocsUploadView())
+    .setOAuthToken(GOOGLE_DRIVE_CONFIG.oauthToken)
+    .setDeveloperKey(GOOGLE_DRIVE_CONFIG.apiKey)
+    .setCallback(pickerCallback)
+    .setTitle('노타빌리티 노트 선택')
+    .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+    .build();
+
+  picker.setVisible(true);
+}
+
+// Picker 콜백 처리
+async function pickerCallback(data) {
+  if (data.action === google.picker.Action.PICKED) {
+    const files = data.docs;
+    showToast(`${files.length}개 파일을 가져오는 중...`);
+
+    for (const file of files) {
+      await savePickedFile(file);
+    }
+
+    renderMeetingNotes();
+    showToast(`✓ ${files.length}개 노트를 가져왔습니다.`);
+  }
+}
+
+// 선택된 파일 저장
+async function savePickedFile(file) {
+  try {
+    const noteData = {
+      title: file.name.replace(/\.[^/.]+$/, ''), // 확장자 제거
+      category: detectCategory(file.name),
+      gdriveLink: file.url,
+      gdriveFileId: file.id,
+      gdriveMimeType: file.mimeType,
+      gdriveIconUrl: file.iconUrl,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      source: 'google-drive'
+    };
+
+    const docRef = await db.collection('meetingNotes').add(noteData);
+
+    if (!state.meetingNotes) state.meetingNotes = [];
+    state.meetingNotes.unshift({ id: docRef.id, ...noteData });
+  } catch (error) {
+    console.error('파일 저장 실패:', error);
+  }
+}
+
+// 파일명으로 카테고리 자동 감지
+function detectCategory(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.includes('회의') || lower.includes('meeting') || lower.includes('미팅')) return 'meeting';
+  if (lower.includes('아이디어') || lower.includes('idea') || lower.includes('기획')) return 'idea';
+  if (lower.includes('메모') || lower.includes('memo') || lower.includes('note')) return 'memo';
+  return 'other';
+}
+
+// 직접 추가 모달
+function openAddMeetingNoteModal() {
+  const modal = document.createElement('div');
+  modal.id = 'add-note-modal';
+  modal.innerHTML = `
+    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+      <div style="background: white; border-radius: 16px; width: 90%; max-width: 600px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
+        <div style="padding: 24px; border-bottom: 1px solid var(--gray-200);">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h2 style="font-size: 18px; font-weight: 700; margin: 0;">📝 새 노트 추가</h2>
+            <button onclick="this.closest('#add-note-modal').remove()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);">×</button>
+          </div>
+        </div>
+        <div style="padding: 24px;">
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">제목 *</label>
+            <input type="text" id="new-note-title" placeholder="노트 제목" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">카테고리</label>
+            <select id="new-note-category" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <option value="meeting">📋 회의록</option>
+              <option value="memo">📝 메모</option>
+              <option value="idea">💡 아이디어</option>
+              <option value="other">📄 기타</option>
+            </select>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">내용</label>
+            <textarea id="new-note-content" placeholder="노트 내용을 입력하세요..." rows="8" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; resize: vertical; box-sizing: border-box;"></textarea>
+          </div>
+        </div>
+        <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; justify-content: flex-end; gap: 12px; border-radius: 0 0 16px 16px;">
+          <button onclick="this.closest('#add-note-modal').remove()" style="padding: 10px 20px; background: white; color: var(--gray-700); border: 1px solid var(--gray-300); border-radius: 8px; cursor: pointer; font-weight: 500;">취소</button>
+          <button onclick="saveNewNote()" style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">저장</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+// 새 노트 저장
+async function saveNewNote() {
+  const title = document.getElementById('new-note-title').value.trim();
+  const category = document.getElementById('new-note-category').value;
+  const content = document.getElementById('new-note-content').value.trim();
+
+  if (!title) {
+    showToast('제목을 입력해주세요.');
+    return;
+  }
+
+  try {
+    const noteData = {
+      title,
+      category,
+      content,
+      summary: content.substring(0, 200),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      source: 'manual'
+    };
+
+    const docRef = await db.collection('meetingNotes').add(noteData);
+
+    if (!state.meetingNotes) state.meetingNotes = [];
+    state.meetingNotes.unshift({ id: docRef.id, ...noteData });
+
+    document.getElementById('add-note-modal')?.remove();
+    renderMeetingNotes();
+    showToast('✓ 노트가 저장되었습니다.');
+  } catch (error) {
+    console.error('노트 저장 실패:', error);
+    showToast('저장 중 오류가 발생했습니다.');
+  }
+}
+
+// 노트 상세 보기
+function openMeetingNoteDetail(noteId) {
+  const note = state.meetingNotes?.find(n => n.id === noteId);
+  if (!note) return;
+
+  const categoryConfig = {
+    meeting: { icon: '📋', label: '회의록', color: '#2563eb' },
+    memo: { icon: '📝', label: '메모', color: '#d97706' },
+    idea: { icon: '💡', label: '아이디어', color: '#16a34a' },
+    other: { icon: '📄', label: '기타', color: '#6b7280' }
+  };
+
+  const cat = categoryConfig[note.category] || categoryConfig.other;
+  const date = note.createdAt ? new Date(note.createdAt).toLocaleString('ko-KR') : '-';
+
+  const modal = document.createElement('div');
+  modal.id = 'note-detail-modal';
+  modal.innerHTML = `
+    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+      <div style="background: white; border-radius: 16px; width: 90%; max-width: 700px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
+        <div style="padding: 24px; border-bottom: 1px solid var(--gray-200);">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+              <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--gray-100); color: ${cat.color}; border-radius: 12px; font-size: 12px; font-weight: 500; margin-bottom: 8px;">
+                ${cat.icon} ${cat.label}
+              </span>
+              <h2 style="font-size: 20px; font-weight: 700; margin: 8px 0 0 0;">${note.title}</h2>
+              <p style="font-size: 12px; color: var(--gray-400); margin-top: 4px;">${date}</p>
+            </div>
+            <button onclick="this.closest('#note-detail-modal').remove()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);">×</button>
+          </div>
+        </div>
+        <div style="padding: 24px;">
+          ${note.gdriveLink ? `
+            <a href="${note.gdriveLink}" target="_blank" style="display: flex; align-items: center; gap: 12px; padding: 16px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; margin-bottom: 20px; text-decoration: none;">
+              <svg width="32" height="32" viewBox="0 0 87.3 78">
+                <path d="M6.6 66.85L0 78h30.7l6.6-11.15z" fill="#0066da"/>
+                <path d="M43.65 0L0 78h13.2l43.65-78z" fill="#00ac47"/>
+                <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z" fill="#ffba00"/>
+              </svg>
+              <div>
+                <div style="font-weight: 600; color: #0369a1;">구글 드라이브에서 열기</div>
+                <div style="font-size: 12px; color: #0284c7;">${note.gdriveLink}</div>
+              </div>
+            </a>
+          ` : ''}
+          ${note.fileUrl ? `
+            <a href="${note.fileUrl}" target="_blank" style="display: flex; align-items: center; gap: 12px; padding: 16px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 12px; margin-bottom: 20px; text-decoration: none;">
+              <span style="font-size: 32px;">📎</span>
+              <div>
+                <div style="font-weight: 600; color: #92400e;">첨부 파일 열기</div>
+                <div style="font-size: 12px; color: #b45309;">${note.fileName || '파일 보기'}</div>
+              </div>
+            </a>
+          ` : ''}
+          ${note.content ? `
+            <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; white-space: pre-wrap; line-height: 1.8; color: var(--gray-700);">${note.content}</div>
+          ` : note.summary ? `
+            <div style="background: var(--gray-50); border-radius: 12px; padding: 20px; white-space: pre-wrap; line-height: 1.8; color: var(--gray-700);">${note.summary}</div>
+          ` : ''}
+        </div>
+        <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; justify-content: space-between; border-radius: 0 0 16px 16px;">
+          <button onclick="deleteMeetingNote('${note.id}')" style="padding: 10px 16px; background: white; color: #dc2626; border: 1px solid #fecaca; border-radius: 8px; cursor: pointer; font-weight: 500;">삭제</button>
+          <button onclick="this.closest('#note-detail-modal').remove()" style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600;">닫기</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+// 노트 삭제
+async function deleteMeetingNote(noteId) {
+  if (!confirm('이 노트를 삭제하시겠습니까?')) return;
+
+  try {
+    await db.collection('meetingNotes').doc(noteId).delete();
+    state.meetingNotes = state.meetingNotes.filter(n => n.id !== noteId);
+    document.getElementById('note-detail-modal')?.remove();
+    renderMeetingNotes();
+    showToast('✓ 노트가 삭제되었습니다.');
+  } catch (error) {
+    console.error('삭제 실패:', error);
+    showToast('삭제 중 오류가 발생했습니다.');
+  }
+}
+
+// Firestore에서 회의록 데이터 로드
+async function loadMeetingNotes() {
+  try {
+    // Google Drive 설정 먼저 로드
+    await loadGoogleDriveConfig();
+
+    const snapshot = await db.collection('meetingNotes').orderBy('createdAt', 'desc').get();
+    state.meetingNotes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error('회의록 로드 실패:', error);
+    state.meetingNotes = [];
+  }
+}
+
+// 앱 초기화 시 회의록 로드 추가
+const originalLoadAllData = window.loadAllData;
+if (originalLoadAllData) {
+  window.loadAllData = async function() {
+    await originalLoadAllData();
+    await loadMeetingNotes();
+  };
+} else {
+  // 초기화 시 바로 로드
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(loadMeetingNotes, 2000);
   });
 }
 
