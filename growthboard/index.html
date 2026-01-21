@@ -743,9 +743,17 @@
         .detail-media-box.before .detail-media-label { background: #e74c3c; color: white; }
         .detail-media-box.after .detail-media-label { background: var(--color-success); color: white; }
         .detail-media-img {
-            max-width: 350px; max-height: 250px; border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            width: 280px; height: 180px; object-fit: cover; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3); cursor: pointer;
+            transition: transform 0.2s ease;
         }
+        .detail-media-img:hover { transform: scale(1.02); }
+        .detail-media-img.video { object-fit: contain; background: #000; }
+
+        /* 소분류 클릭 스타일 */
+        .sub-section-title { cursor: pointer; transition: all 0.2s ease; }
+        .sub-section-title:hover { color: var(--color-accent); }
+        body.presentation-mode .sub-section-title { cursor: pointer; }
         .toast {
             position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
             background: #333; color: white; padding: 12px 24px; border-radius: 8px;
@@ -798,6 +806,18 @@
 
     <!-- Toast 알림 -->
     <div class="toast" id="toast"></div>
+
+    <!-- 로딩 오버레이 -->
+    <div id="loadingOverlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 9999; justify-content: center; align-items: center; flex-direction: column;">
+        <div style="background: white; padding: 32px 48px; border-radius: 16px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.3);">
+            <div style="width: 50px; height: 50px; border: 4px solid #e0e0e0; border-top-color: var(--color-accent); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 16px;"></div>
+            <div id="loadingText" style="font-size: 16px; font-weight: 600; color: var(--color-primary);">저장 중...</div>
+            <div id="loadingSubText" style="font-size: 13px; color: var(--color-text-light); margin-top: 4px;">미디어를 업로드하고 있습니다</div>
+        </div>
+    </div>
+    <style>
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
 
     <!-- Media Viewer Modal -->
     <div class="viewer-overlay" id="viewerOverlay">
@@ -1515,15 +1535,28 @@
             return processedData;
         }
 
+        // 로딩 표시
+        function showLoading(show, text = '저장 중...', subText = '미디어를 업로드하고 있습니다') {
+            const overlay = document.getElementById('loadingOverlay');
+            if (show) {
+                document.getElementById('loadingText').textContent = text;
+                document.getElementById('loadingSubText').textContent = subText;
+                overlay.style.display = 'flex';
+            } else {
+                overlay.style.display = 'none';
+            }
+        }
+
         async function saveDataToFirestore() {
             try {
-                showToast('저장 중... (미디어 업로드)');
+                showLoading(true, '저장 중...', '미디어를 업로드하고 있습니다');
                 console.log('저장 시작, itemData 키:', Object.keys(itemData));
-                console.log('itemData 내용:', JSON.stringify(itemData).substring(0, 500));
 
                 // base64 미디어를 Storage URL로 변환
                 const processedData = await processMediaForStorage(itemData);
                 console.log('미디어 처리 완료, processedData 키:', Object.keys(processedData));
+
+                showLoading(true, '저장 중...', 'Firestore에 데이터 저장 중');
 
                 // 변환된 URL을 itemData에 반영
                 itemData = processedData;
@@ -1532,13 +1565,14 @@
                     data: processedData,
                     updatedAt: new Date().toISOString()
                 };
-                console.log('Firestore에 저장할 데이터 키:', Object.keys(savePayload.data));
 
                 await db.collection('growthboardReportData').doc(GROWTHBOARD_DOC_ID).set(savePayload, { merge: true });
 
+                showLoading(false);
                 console.log('Firestore 저장 완료!');
                 showToast('저장 완료!');
             } catch (error) {
+                showLoading(false);
                 console.error('Firestore 저장 오류:', error);
                 showToast('저장 실패: ' + error.message);
             }
@@ -2542,6 +2576,29 @@
             if (isPresentationMode) {
                 console.log('Presentation mode active - edit features disabled');
                 document.getElementById('topActionBar').classList.add('hidden');
+
+                // 카드 클릭 시 상세보기 열기 (presentation mode)
+                document.querySelectorAll('.clickable-item').forEach(item => {
+                    item.addEventListener('click', (e) => {
+                        const id = item.dataset.id;
+                        console.log('카드 클릭:', id);
+                        if (id) {
+                            openDetailModal(e, id);
+                        }
+                    });
+                });
+
+                // 소분류(2-1, 2-2 등) 클릭 시 전체 카드 표시
+                document.querySelectorAll('.sub-section-title').forEach(title => {
+                    title.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const subSection = title.closest('.sub-section');
+                        if (subSection) {
+                            openSubSectionModal(subSection);
+                        }
+                    });
+                });
+                console.log('카드/소분류 클릭 이벤트 등록 완료');
             }
         });
 
@@ -2732,20 +2789,39 @@
 
             // 카드 레벨 미디어 표시 (아이템이 없는 경우)
             const hasCardMedia = data.mediaUrl || data.beforeMedia || data.afterMedia;
-            if (hasCardMedia && (!data.items || data.items.length === 0)) {
-                content += '<div class="detail-media-section">';
+            if (hasCardMedia) {
+                content += '<div class="detail-section" style="margin-bottom: 20px;">';
+
+                // 타이틀과 설명 표시
+                if (data.title || data.description) {
+                    content += `
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                            <span style="font-size: 28px; background: rgba(255,255,255,0.1); padding: 8px; border-radius: 8px;">📸</span>
+                            <div>
+                                ${data.title ? `<div style="color: white; font-size: 17px; font-weight: 600;">${escapeHtml(data.title)}</div>` : ''}
+                                ${data.description ? `<div style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 2px;">${escapeHtml(data.description)}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // 미디어 표시
+                content += '<div style="display: flex; gap: 16px; align-items: center; justify-content: center; flex-wrap: wrap;">';
                 if (data.mode === 'compare') {
                     if (data.beforeMedia) {
                         content += `
-                            <div class="detail-media-box before" onclick="openFullscreenFromDetail('${id}', 'before')">
+                            <div class="detail-media-box before" onclick="openFullscreenFromDetail('${id}', 'before')" style="flex: 1; min-width: 200px; max-width: 400px;">
                                 <div class="detail-media-label">BEFORE</div>
                                 ${createMediaElement(data.beforeMedia, 'detail-media-img', false)}
                             </div>
                         `;
                     }
+                    if (data.beforeMedia && data.afterMedia) {
+                        content += '<div style="font-size: 28px; color: var(--color-accent);">→</div>';
+                    }
                     if (data.afterMedia) {
                         content += `
-                            <div class="detail-media-box after" onclick="openFullscreenFromDetail('${id}', 'after')">
+                            <div class="detail-media-box after" onclick="openFullscreenFromDetail('${id}', 'after')" style="flex: 1; min-width: 200px; max-width: 400px;">
                                 <div class="detail-media-label">AFTER</div>
                                 ${createMediaElement(data.afterMedia, 'detail-media-img', false)}
                             </div>
@@ -2753,12 +2829,12 @@
                     }
                 } else if (data.mediaUrl) {
                     content += `
-                        <div class="detail-media-box" onclick="openFullscreenFromDetail('${id}', 'single')">
+                        <div class="detail-media-box" onclick="openFullscreenFromDetail('${id}', 'single')" style="max-width: 600px;">
                             ${createMediaElement(data.mediaUrl, 'detail-media-img', false)}
                         </div>
                     `;
                 }
-                content += '</div>';
+                content += '</div></div>';
             }
 
             document.getElementById('detailModalContent').innerHTML = content;
@@ -2772,6 +2848,140 @@
         function closeDetailModal() {
             document.getElementById('detailModalOverlay').classList.remove('active');
             document.querySelectorAll('#detailModalOverlay video').forEach(v => v.pause());
+        }
+
+        // 소분류 전체 카드 표시 모달
+        function openSubSectionModal(subSection) {
+            const titleEl = subSection.querySelector('.sub-section-title');
+            const subTitle = titleEl ? titleEl.textContent.trim() : '';
+
+            // 부모 섹션 정보
+            const section = subSection.closest('.section');
+            const sectionHeader = section ? section.querySelector('.section-header') : null;
+            const sectionNumber = sectionHeader ? sectionHeader.querySelector('.section-number')?.textContent : '';
+            const sectionTitle = sectionHeader ? sectionHeader.querySelector('.section-title')?.textContent : '';
+
+            document.getElementById('detailModalTitle').textContent = subTitle;
+            document.getElementById('detailModalDesc').textContent = sectionTitle || '';
+
+            // 해당 소분류 내의 모든 카드 찾기
+            const cards = subSection.querySelectorAll('.clickable-item');
+            let content = '';
+
+            // 섹션 헤더
+            content += `
+                <div class="detail-section" style="margin-bottom: 24px;">
+                    <div class="detail-section-header">
+                        ${sectionNumber ? `<span class="detail-section-badge">${sectionNumber}</span>` : ''}
+                        <span class="detail-section-title">${sectionTitle}</span>
+                    </div>
+                    <p style="color: rgba(255,255,255,0.6); font-size: 14px;">${subTitle}</p>
+                </div>
+            `;
+
+            // 각 카드 표시
+            cards.forEach(card => {
+                const cardId = card.dataset.id;
+                const data = itemData[cardId] || {};
+                const cardTitleEl = card.querySelector('.card-title');
+                const cardTitle = cardTitleEl ? cardTitleEl.textContent.trim() : data.title || '';
+
+                content += `<div class="detail-section" style="margin-bottom: 24px; border-left: 3px solid var(--color-accent); padding-left: 16px;">`;
+                content += `<div style="color: var(--color-accent); font-size: 14px; font-weight: 600; margin-bottom: 12px;">${cardTitle}</div>`;
+
+                // 아이템 표시
+                if (data.items && data.items.length > 0) {
+                    data.items.forEach((item, idx) => {
+                        const hasMedia = item.mediaUrl || item.beforeMedia || item.afterMedia;
+                        const mode = item.mode || 'single';
+
+                        content += `
+                            <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px;">
+                                <div style="flex: 1;">
+                                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                                        <span style="font-size: 20px;">${item.emoji || '📌'}</span>
+                                        <div style="color: white; font-size: 15px; font-weight: 600;">${escapeHtml(item.title || '')}</div>
+                                    </div>
+                                    <div style="color: rgba(255,255,255,0.6); font-size: 13px;">${escapeHtml(item.desc || '')}</div>
+                                </div>
+                        `;
+
+                        // 미디어 썸네일
+                        if (hasMedia) {
+                            if (mode === 'compare' && (item.beforeMedia || item.afterMedia)) {
+                                content += `
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        ${item.beforeMedia ? `
+                                            <div class="detail-media-box before" onclick="openItemFullscreen('${cardId}', ${idx}, 'before', event)" style="padding: 8px;">
+                                                <div class="detail-media-label" style="font-size: 9px; padding: 2px 6px;">BEFORE</div>
+                                                ${createMediaElement(item.beforeMedia, 'detail-media-img', false)}
+                                            </div>
+                                        ` : ''}
+                                        <span style="color: var(--color-accent);">→</span>
+                                        ${item.afterMedia ? `
+                                            <div class="detail-media-box after" onclick="openItemFullscreen('${cardId}', ${idx}, 'after', event)" style="padding: 8px;">
+                                                <div class="detail-media-label" style="font-size: 9px; padding: 2px 6px;">AFTER</div>
+                                                ${createMediaElement(item.afterMedia, 'detail-media-img', false)}
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `;
+                            } else if (item.mediaUrl) {
+                                content += `
+                                    <div class="detail-media-box" onclick="openItemFullscreen('${cardId}', ${idx}, 'single', event)" style="padding: 8px;">
+                                        ${createMediaElement(item.mediaUrl, 'detail-media-img', false)}
+                                    </div>
+                                `;
+                            }
+                        }
+
+                        content += `</div>`;
+                    });
+                }
+
+                // 카드 레벨 미디어
+                const hasCardMedia = data.mediaUrl || data.beforeMedia || data.afterMedia;
+                if (hasCardMedia) {
+                    content += `<div style="display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 12px;">`;
+                    if (data.mode === 'compare') {
+                        if (data.beforeMedia) {
+                            content += `
+                                <div class="detail-media-box before" onclick="openFullscreenFromDetail('${cardId}', 'before')" style="padding: 8px;">
+                                    <div class="detail-media-label">BEFORE</div>
+                                    ${createMediaElement(data.beforeMedia, 'detail-media-img', false)}
+                                </div>
+                            `;
+                        }
+                        if (data.beforeMedia && data.afterMedia) {
+                            content += '<span style="font-size: 24px; color: var(--color-accent);">→</span>';
+                        }
+                        if (data.afterMedia) {
+                            content += `
+                                <div class="detail-media-box after" onclick="openFullscreenFromDetail('${cardId}', 'after')" style="padding: 8px;">
+                                    <div class="detail-media-label">AFTER</div>
+                                    ${createMediaElement(data.afterMedia, 'detail-media-img', false)}
+                                </div>
+                            `;
+                        }
+                    } else if (data.mediaUrl) {
+                        content += `
+                            <div class="detail-media-box" onclick="openFullscreenFromDetail('${cardId}', 'single')" style="padding: 8px;">
+                                ${createMediaElement(data.mediaUrl, 'detail-media-img', false)}
+                            </div>
+                        `;
+                    }
+                    content += `</div>`;
+                }
+
+                content += `</div>`;
+            });
+
+            document.getElementById('detailModalContent').innerHTML = content;
+            document.getElementById('detailModalOverlay').classList.add('active');
+
+            setTimeout(() => {
+                document.querySelectorAll('#detailModalOverlay video').forEach(v => v.play().catch(() => {}));
+            }, 100);
         }
 
         function showItemMediaInDetail(cardId, itemIdx) {
