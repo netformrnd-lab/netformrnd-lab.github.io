@@ -743,9 +743,17 @@
         .detail-media-box.before .detail-media-label { background: #e74c3c; color: white; }
         .detail-media-box.after .detail-media-label { background: var(--color-success); color: white; }
         .detail-media-img {
-            max-width: 350px; max-height: 250px; border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            width: 280px; height: 180px; object-fit: cover; border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3); cursor: pointer;
+            transition: transform 0.2s ease;
         }
+        .detail-media-img:hover { transform: scale(1.02); }
+        .detail-media-img.video { object-fit: contain; background: #000; }
+
+        /* 소분류 클릭 스타일 */
+        .sub-section-title { cursor: pointer; transition: all 0.2s ease; }
+        .sub-section-title:hover { color: var(--color-accent); }
+        body.presentation-mode .sub-section-title { cursor: pointer; }
         .toast {
             position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
             background: #333; color: white; padding: 12px 24px; border-radius: 8px;
@@ -2579,7 +2587,18 @@
                         }
                     });
                 });
-                console.log('카드 클릭 이벤트 등록 완료');
+
+                // 소분류(2-1, 2-2 등) 클릭 시 전체 카드 표시
+                document.querySelectorAll('.sub-section-title').forEach(title => {
+                    title.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const subSection = title.closest('.sub-section');
+                        if (subSection) {
+                            openSubSectionModal(subSection);
+                        }
+                    });
+                });
+                console.log('카드/소분류 클릭 이벤트 등록 완료');
             }
         });
 
@@ -2829,6 +2848,140 @@
         function closeDetailModal() {
             document.getElementById('detailModalOverlay').classList.remove('active');
             document.querySelectorAll('#detailModalOverlay video').forEach(v => v.pause());
+        }
+
+        // 소분류 전체 카드 표시 모달
+        function openSubSectionModal(subSection) {
+            const titleEl = subSection.querySelector('.sub-section-title');
+            const subTitle = titleEl ? titleEl.textContent.trim() : '';
+
+            // 부모 섹션 정보
+            const section = subSection.closest('.section');
+            const sectionHeader = section ? section.querySelector('.section-header') : null;
+            const sectionNumber = sectionHeader ? sectionHeader.querySelector('.section-number')?.textContent : '';
+            const sectionTitle = sectionHeader ? sectionHeader.querySelector('.section-title')?.textContent : '';
+
+            document.getElementById('detailModalTitle').textContent = subTitle;
+            document.getElementById('detailModalDesc').textContent = sectionTitle || '';
+
+            // 해당 소분류 내의 모든 카드 찾기
+            const cards = subSection.querySelectorAll('.clickable-item');
+            let content = '';
+
+            // 섹션 헤더
+            content += `
+                <div class="detail-section" style="margin-bottom: 24px;">
+                    <div class="detail-section-header">
+                        ${sectionNumber ? `<span class="detail-section-badge">${sectionNumber}</span>` : ''}
+                        <span class="detail-section-title">${sectionTitle}</span>
+                    </div>
+                    <p style="color: rgba(255,255,255,0.6); font-size: 14px;">${subTitle}</p>
+                </div>
+            `;
+
+            // 각 카드 표시
+            cards.forEach(card => {
+                const cardId = card.dataset.id;
+                const data = itemData[cardId] || {};
+                const cardTitleEl = card.querySelector('.card-title');
+                const cardTitle = cardTitleEl ? cardTitleEl.textContent.trim() : data.title || '';
+
+                content += `<div class="detail-section" style="margin-bottom: 24px; border-left: 3px solid var(--color-accent); padding-left: 16px;">`;
+                content += `<div style="color: var(--color-accent); font-size: 14px; font-weight: 600; margin-bottom: 12px;">${cardTitle}</div>`;
+
+                // 아이템 표시
+                if (data.items && data.items.length > 0) {
+                    data.items.forEach((item, idx) => {
+                        const hasMedia = item.mediaUrl || item.beforeMedia || item.afterMedia;
+                        const mode = item.mode || 'single';
+
+                        content += `
+                            <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px;">
+                                <div style="flex: 1;">
+                                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                                        <span style="font-size: 20px;">${item.emoji || '📌'}</span>
+                                        <div style="color: white; font-size: 15px; font-weight: 600;">${escapeHtml(item.title || '')}</div>
+                                    </div>
+                                    <div style="color: rgba(255,255,255,0.6); font-size: 13px;">${escapeHtml(item.desc || '')}</div>
+                                </div>
+                        `;
+
+                        // 미디어 썸네일
+                        if (hasMedia) {
+                            if (mode === 'compare' && (item.beforeMedia || item.afterMedia)) {
+                                content += `
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        ${item.beforeMedia ? `
+                                            <div class="detail-media-box before" onclick="openItemFullscreen('${cardId}', ${idx}, 'before', event)" style="padding: 8px;">
+                                                <div class="detail-media-label" style="font-size: 9px; padding: 2px 6px;">BEFORE</div>
+                                                ${createMediaElement(item.beforeMedia, 'detail-media-img', false)}
+                                            </div>
+                                        ` : ''}
+                                        <span style="color: var(--color-accent);">→</span>
+                                        ${item.afterMedia ? `
+                                            <div class="detail-media-box after" onclick="openItemFullscreen('${cardId}', ${idx}, 'after', event)" style="padding: 8px;">
+                                                <div class="detail-media-label" style="font-size: 9px; padding: 2px 6px;">AFTER</div>
+                                                ${createMediaElement(item.afterMedia, 'detail-media-img', false)}
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `;
+                            } else if (item.mediaUrl) {
+                                content += `
+                                    <div class="detail-media-box" onclick="openItemFullscreen('${cardId}', ${idx}, 'single', event)" style="padding: 8px;">
+                                        ${createMediaElement(item.mediaUrl, 'detail-media-img', false)}
+                                    </div>
+                                `;
+                            }
+                        }
+
+                        content += `</div>`;
+                    });
+                }
+
+                // 카드 레벨 미디어
+                const hasCardMedia = data.mediaUrl || data.beforeMedia || data.afterMedia;
+                if (hasCardMedia) {
+                    content += `<div style="display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 12px;">`;
+                    if (data.mode === 'compare') {
+                        if (data.beforeMedia) {
+                            content += `
+                                <div class="detail-media-box before" onclick="openFullscreenFromDetail('${cardId}', 'before')" style="padding: 8px;">
+                                    <div class="detail-media-label">BEFORE</div>
+                                    ${createMediaElement(data.beforeMedia, 'detail-media-img', false)}
+                                </div>
+                            `;
+                        }
+                        if (data.beforeMedia && data.afterMedia) {
+                            content += '<span style="font-size: 24px; color: var(--color-accent);">→</span>';
+                        }
+                        if (data.afterMedia) {
+                            content += `
+                                <div class="detail-media-box after" onclick="openFullscreenFromDetail('${cardId}', 'after')" style="padding: 8px;">
+                                    <div class="detail-media-label">AFTER</div>
+                                    ${createMediaElement(data.afterMedia, 'detail-media-img', false)}
+                                </div>
+                            `;
+                        }
+                    } else if (data.mediaUrl) {
+                        content += `
+                            <div class="detail-media-box" onclick="openFullscreenFromDetail('${cardId}', 'single')" style="padding: 8px;">
+                                ${createMediaElement(data.mediaUrl, 'detail-media-img', false)}
+                            </div>
+                        `;
+                    }
+                    content += `</div>`;
+                }
+
+                content += `</div>`;
+            });
+
+            document.getElementById('detailModalContent').innerHTML = content;
+            document.getElementById('detailModalOverlay').classList.add('active');
+
+            setTimeout(() => {
+                document.querySelectorAll('#detailModalOverlay video').forEach(v => v.play().catch(() => {}));
+            }, 100);
         }
 
         function showItemMediaInDetail(cardId, itemIdx) {
