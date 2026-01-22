@@ -836,6 +836,9 @@
         </div>
     </div>
 
+    <!-- SheetJS for Excel -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
@@ -963,9 +966,16 @@
                 errors.push('상품정보 등록 옵션을 선택해주세요 (지금하기/나중에하기)');
             }
 
-            // 지금하기 선택 시 엑셀 파일 필수
-            if (productOption === 'now' && !uploadedFiles['file-excel']) {
-                errors.push('상품정보 엑셀 파일을 첨부해주세요');
+            // 지금하기 선택 시 - 엑셀 업로드 또는 직접입력 확인
+            if (productOption === 'now') {
+                if (currentInputTab === 'excel' && !uploadedFiles['file-excel']) {
+                    errors.push('상품정보 엑셀 파일을 첨부해주세요');
+                } else if (currentInputTab === 'direct') {
+                    const products = getDirectInputData();
+                    if (products.length === 0) {
+                        errors.push('상품 정보를 1개 이상 입력해주세요');
+                    }
+                }
             }
 
             // 사업자등록증 필수
@@ -1001,13 +1011,28 @@
                     submittedAt: new Date().toISOString()
                 };
 
-                // 상품정보 엑셀 업로드 (지금하기 선택 시)
-                if (productOption === 'now' && uploadedFiles['file-excel']) {
-                    const excelUrl = await uploadFile(
-                        uploadedFiles['file-excel'],
-                        `supplier-onboarding/${timestamp}/product-info-${uploadedFiles['file-excel'].name}`
+                // 상품정보 처리 (지금하기 선택 시)
+                if (productOption === 'now') {
+                    if (currentInputTab === 'excel' && uploadedFiles['file-excel']) {
+                        const excelUrl = await uploadFile(
+                            uploadedFiles['file-excel'],
+                            `supplier-onboarding/${timestamp}/product-info-${uploadedFiles['file-excel'].name}`
+                        );
+                        docData.productInfoExcel = excelUrl;
+                        docData.inputMethod = 'excel';
+                    } else if (currentInputTab === 'direct') {
+                        docData.productInfoDirect = getDirectInputData();
+                        docData.inputMethod = 'direct';
+                    }
+                }
+
+                // Q&A 파일 업로드 (선택)
+                if (uploadedFiles['file-qna']) {
+                    const qnaUrl = await uploadFile(
+                        uploadedFiles['file-qna'],
+                        `supplier-onboarding/${timestamp}/qna-data-${uploadedFiles['file-qna'].name}`
                     );
-                    docData.productInfoExcel = excelUrl;
+                    docData.qnaFile = qnaUrl;
                 }
 
                 // 사업자등록증 업로드
@@ -1060,6 +1085,110 @@
                 submitBtn.textContent = '서류 제출하기';
                 alert('제출 중 오류가 발생했습니다. 다시 시도해주세요.');
             }
+        }
+
+        // 입력 방식 탭 전환
+        let currentInputTab = 'excel';
+        function switchInputTab(tab) {
+            currentInputTab = tab;
+            document.querySelectorAll('.input-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.input-content').forEach(c => c.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById('tab-' + tab).classList.add('active');
+        }
+
+        // 엑셀 양식 다운로드
+        function downloadTemplate() {
+            const headers = ['상품명(SKU)', '정가(소비자가)', '공동구매가', '공구판매가', '공급가/수수료율'];
+            const example = ['예: 유기농 사과 1kg', '25000', '19900', '17900', '12000 또는 30%'];
+
+            const ws = XLSX.utils.aoa_to_sheet([headers, example]);
+            ws['!cols'] = [{ wch: 25 }, { wch: 15 }, { wch: 12 }, { wch: 12 }, { wch: 15 }];
+
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, '상품정보');
+
+            // Q&A 시트 추가
+            const qnaHeaders = ['질문', '답변'];
+            const qnaExample = ['예: 유통기한이 어떻게 되나요?', '제조일로부터 6개월입니다.'];
+            const wsQna = XLSX.utils.aoa_to_sheet([qnaHeaders, qnaExample]);
+            wsQna['!cols'] = [{ wch: 40 }, { wch: 50 }];
+            XLSX.utils.book_append_sheet(wb, wsQna, 'Q&A');
+
+            XLSX.writeFile(wb, '모여라딜_상품정보_양식.xlsx');
+            showToast('✓ 양식이 다운로드되었습니다');
+        }
+
+        // 상품 입력 폼 추가
+        let productCount = 1;
+        function addProductEntry() {
+            productCount++;
+            const form = document.getElementById('productForm');
+            const entry = document.createElement('div');
+            entry.className = 'product-entry';
+            entry.dataset.index = productCount - 1;
+            entry.innerHTML = `
+                <div class="product-entry-header">
+                    <span class="product-entry-title">상품 ${productCount}</span>
+                    <button type="button" class="product-entry-remove" onclick="removeProductEntry(this)">×</button>
+                </div>
+                <div class="form-row full">
+                    <div class="form-group">
+                        <label class="form-label">상품명 (SKU)</label>
+                        <input type="text" class="form-input" name="productName" placeholder="예: 유기농 사과 1kg">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">정가 (소비자가)</label>
+                        <input type="text" class="form-input" name="retailPrice" placeholder="예: 25,000">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">공동구매가</label>
+                        <input type="text" class="form-input" name="groupPrice" placeholder="예: 19,900">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">공구판매가</label>
+                        <input type="text" class="form-input" name="dealPrice" placeholder="예: 17,900">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">공급가/수수료율</label>
+                        <input type="text" class="form-input" name="supplyPrice" placeholder="예: 12,000 또는 30%">
+                    </div>
+                </div>
+            `;
+            form.appendChild(entry);
+        }
+
+        function removeProductEntry(btn) {
+            btn.closest('.product-entry').remove();
+            updateProductNumbers();
+        }
+
+        function updateProductNumbers() {
+            document.querySelectorAll('.product-entry').forEach((entry, i) => {
+                entry.querySelector('.product-entry-title').textContent = '상품 ' + (i + 1);
+            });
+            productCount = document.querySelectorAll('.product-entry').length;
+        }
+
+        // 직접 입력 데이터 수집
+        function getDirectInputData() {
+            const products = [];
+            document.querySelectorAll('.product-entry').forEach(entry => {
+                const product = {
+                    name: entry.querySelector('[name="productName"]').value,
+                    retailPrice: entry.querySelector('[name="retailPrice"]').value,
+                    groupPrice: entry.querySelector('[name="groupPrice"]').value,
+                    dealPrice: entry.querySelector('[name="dealPrice"]').value,
+                    supplyPrice: entry.querySelector('[name="supplyPrice"]').value
+                };
+                if (product.name) products.push(product);
+            });
+            return products;
         }
 
         function showToast(message) {
