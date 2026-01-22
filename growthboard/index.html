@@ -556,8 +556,13 @@
         .desc-edit-header {
             display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
         }
-        .desc-edit-title {
+        .desc-title-input {
             flex: 1; font-weight: 600; font-size: 13px; color: var(--color-text);
+            padding: 8px 12px; border: 1px solid var(--color-border); border-radius: 6px;
+            background: white;
+        }
+        .desc-title-input:focus {
+            border-color: var(--color-accent); outline: none;
         }
         .desc-edit-delete {
             width: 32px; height: 32px; border: none; background: #fee2e2;
@@ -1644,7 +1649,7 @@
         }
 
         function saveData() {
-            saveDataToFirestore();
+            return saveDataToFirestore();
         }
 
         // 토큰 생성
@@ -1979,7 +1984,7 @@
         function renderItemsEditor(items) {
             const container = document.getElementById('itemsList');
             container.innerHTML = items.map((item, idx) => `
-                <div class="item-edit-row" data-idx="${idx}">
+                <div class="item-edit-row" data-idx="${idx}" data-mode="${item.mode || 'single'}">
                     <div class="item-edit-header">
                         <input type="text" class="item-edit-emoji" value="${item.emoji || '📌'}" maxlength="2">
                         <div class="item-edit-fields">
@@ -1998,14 +2003,14 @@
                         </div>
                         <div class="item-media-uploads" id="itemMedia-${idx}">
                             ${item.mode === 'compare' ? `
-                                <div class="item-media-box before-box" onclick="triggerItemMediaUpload(${idx}, 'before')" id="itemBefore-${idx}">
+                                <div class="item-media-box before-box" onclick="triggerItemMediaUpload(${idx}, 'before')" id="itemBefore-${idx}" data-media-url="${item.beforeMedia || ''}">
                                     ${item.beforeMedia ? createItemMediaPreview(item.beforeMedia) : '<span>🔴</span><p>Before</p>'}
                                 </div>
-                                <div class="item-media-box after-box" onclick="triggerItemMediaUpload(${idx}, 'after')" id="itemAfter-${idx}">
+                                <div class="item-media-box after-box" onclick="triggerItemMediaUpload(${idx}, 'after')" id="itemAfter-${idx}" data-media-url="${item.afterMedia || ''}">
                                     ${item.afterMedia ? createItemMediaPreview(item.afterMedia) : '<span>🟢</span><p>After</p>'}
                                 </div>
                             ` : `
-                                <div class="item-media-box" onclick="triggerItemMediaUpload(${idx}, 'single')" id="itemSingle-${idx}">
+                                <div class="item-media-box" onclick="triggerItemMediaUpload(${idx}, 'single')" id="itemSingle-${idx}" data-media-url="${item.mediaUrl || ''}">
                                     ${item.mediaUrl ? createItemMediaPreview(item.mediaUrl) : '<span>📷</span><p>클릭하여 업로드</p>'}
                                 </div>
                             `}
@@ -2134,7 +2139,7 @@
                         </div>
                     </div>
                     <div class="item-media-uploads" id="itemMedia-${idx}">
-                        <div class="item-media-box" onclick="triggerItemMediaUpload(${idx}, 'single')" id="itemSingle-${idx}">
+                        <div class="item-media-box" onclick="triggerItemMediaUpload(${idx}, 'single')" id="itemSingle-${idx}" data-media-url="">
                             <span>📷</span><p>클릭하여 업로드</p>
                         </div>
                     </div>
@@ -2219,7 +2224,7 @@
             container.innerHTML = descriptions.map((desc, idx) => `
                 <div class="desc-edit-row" data-idx="${idx}" data-mode="${desc.mode || 'single'}">
                     <div class="desc-edit-header">
-                        <span class="desc-edit-title">설명 ${idx + 1}</span>
+                        <input type="text" class="desc-title-input" value="${escapeHtml(desc.title || `설명 ${idx + 1}`)}" placeholder="설명 제목">
                         <button type="button" class="desc-edit-delete" onclick="deleteDescription(${idx})">🗑</button>
                     </div>
                     <div class="desc-media-section">
@@ -2340,7 +2345,7 @@
             newRow.dataset.mode = 'single';
             newRow.innerHTML = `
                 <div class="desc-edit-header">
-                    <span class="desc-edit-title">설명 ${idx + 1}</span>
+                    <input type="text" class="desc-title-input" value="설명 ${idx + 1}" placeholder="설명 제목">
                     <button type="button" class="desc-edit-delete" onclick="deleteDescription(${idx})">🗑</button>
                 </div>
                 <div class="desc-media-section">
@@ -2360,7 +2365,7 @@
                 <textarea class="desc-text-area" placeholder="설명을 입력하세요"></textarea>
             `;
             container.appendChild(newRow);
-            newRow.querySelector('.desc-text-area').focus();
+            newRow.querySelector('.desc-title-input').focus();
         }
 
         function deleteDescription(idx) {
@@ -2370,7 +2375,6 @@
                 // Re-index all rows
                 document.querySelectorAll('#descriptionsList .desc-edit-row').forEach((row, i) => {
                     row.dataset.idx = i;
-                    row.querySelector('.desc-edit-title').textContent = `설명 ${i + 1}`;
                     const deleteBtn = row.querySelector('.desc-edit-delete');
                     if (deleteBtn) deleteBtn.onclick = () => deleteDescription(i);
 
@@ -2417,6 +2421,7 @@
                 const afterBox = document.getElementById(`descAfter-${idx}`);
 
                 descriptions.push({
+                    title: row.querySelector('.desc-title-input')?.value || `설명 ${idx + 1}`,
                     mode: mode,
                     text: row.querySelector('.desc-text-area')?.value || '',
                     mediaUrl: singleBox?.dataset?.mediaUrl || '',
@@ -2673,7 +2678,7 @@
             }
         });
 
-        function saveChanges() {
+        async function saveChanges() {
             if (!currentEditingId) return;
             const newTitle = document.getElementById('editTitle').value;
             const newDesc = document.getElementById('editDescription').value;
@@ -2682,6 +2687,7 @@
             let editedItems = null;
             if (currentCardType === 'card-items') {
                 editedItems = getEditedItems();
+                console.log('수집된 items:', editedItems);
             }
 
             // Get descriptions if pipeline type
@@ -2698,7 +2704,11 @@
                 ...(editedItems && { items: editedItems }),
                 ...(editedDescriptions && { descriptions: editedDescriptions })
             };
-            saveData();
+
+            console.log('저장할 데이터:', itemData[currentEditingId]);
+
+            // Firebase 저장 완료까지 대기
+            await saveData();
 
             // Update DOM element content directly
             const item = document.querySelector(`[data-id="${currentEditingId}"]`);
@@ -2752,7 +2762,7 @@
 
             updateViewButtons();
             closeModal();
-            showToast('저장되었습니다!');
+            // Toast는 saveDataToFirestore에서 표시됨
         }
 
         // Show single item media in viewer
@@ -3107,7 +3117,7 @@
                             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                                 <span style="font-size: 28px; background: rgba(255,255,255,0.1); padding: 8px; border-radius: 8px;">📝</span>
                                 <div>
-                                    <div style="color: white; font-size: 17px; font-weight: 600;">설명 ${idx + 1}</div>
+                                    <div style="color: white; font-size: 17px; font-weight: 600;">${escapeHtml(desc.title || `설명 ${idx + 1}`)}</div>
                                     ${desc.text ? `<div style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 2px; white-space: pre-wrap;">${escapeHtml(desc.text)}</div>` : ''}
                                 </div>
                             </div>
