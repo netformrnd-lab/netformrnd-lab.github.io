@@ -546,6 +546,65 @@
         }
         .btn-add-item:hover { border-color: var(--color-accent); background: var(--color-accent-light); }
 
+        /* Descriptions Editor - Multiple Descriptions Support */
+        .descriptions-list { margin-bottom: 12px; }
+        .desc-edit-row {
+            padding: 16px; background: #f8f9fa; border-radius: 10px;
+            margin-bottom: 12px; border: 1px solid var(--color-border);
+        }
+        .desc-edit-row:hover { border-color: var(--color-accent); }
+        .desc-edit-header {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+        }
+        .desc-title-input {
+            flex: 1; font-weight: 600; font-size: 13px; color: var(--color-text);
+            padding: 8px 12px; border: 1px solid var(--color-border); border-radius: 6px;
+            background: white;
+        }
+        .desc-title-input:focus {
+            border-color: var(--color-accent); outline: none;
+        }
+        .desc-edit-delete {
+            width: 32px; height: 32px; border: none; background: #fee2e2;
+            color: #dc2626; border-radius: 6px; cursor: pointer; font-size: 14px;
+        }
+        .desc-edit-delete:hover { background: #fecaca; }
+        .desc-media-section {
+            background: white; border-radius: 8px; padding: 12px;
+            border: 1px solid var(--color-border); margin-bottom: 12px;
+        }
+        .desc-media-header {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+        }
+        .desc-media-label { font-size: 12px; font-weight: 600; color: var(--color-text); }
+        .desc-mode-toggle { display: flex; gap: 4px; margin-left: auto; }
+        .desc-mode-btn {
+            padding: 4px 10px; font-size: 10px; border-radius: 12px;
+            border: 1px solid var(--color-border); background: white;
+            cursor: pointer; transition: all 0.2s ease;
+        }
+        .desc-mode-btn.active { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+        .desc-media-uploads { display: flex; gap: 8px; }
+        .desc-media-box {
+            flex: 1; height: 100px; border: 2px dashed var(--color-border);
+            border-radius: 6px; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; cursor: pointer;
+            transition: all 0.2s ease; overflow: hidden; background: #fafbfc;
+        }
+        .desc-media-box:hover { border-color: var(--color-accent); background: var(--color-accent-light); }
+        .desc-media-box img, .desc-media-box video { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .desc-media-box span { font-size: 18px; }
+        .desc-media-box p { font-size: 9px; color: var(--color-text-light); margin-top: 2px; }
+        .desc-media-box.before-box { border-color: #e74c3c; }
+        .desc-media-box.after-box { border-color: #27ae60; }
+        .desc-media-box.paste-target { border-color: var(--color-accent); box-shadow: 0 0 8px var(--color-accent); }
+        .desc-text-area {
+            width: 100%; padding: 12px; border: 1px solid var(--color-border);
+            border-radius: 6px; font-size: 14px; resize: vertical; min-height: 60px;
+            box-sizing: border-box;
+        }
+        .desc-text-area:focus { border-color: var(--color-accent); outline: none; }
+
         /* Presentation Mode (Hide Edit Buttons) */
         body.presentation-mode .item-buttons,
         body.presentation-mode .modal-overlay,
@@ -932,9 +991,16 @@
                     <label>제목</label>
                     <input type="text" id="editTitle" placeholder="제목을 입력하세요">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="singleDescriptionSection">
                     <label>설명</label>
                     <textarea id="editDescription" placeholder="설명을 입력하세요"></textarea>
+                </div>
+
+                <!-- 다중 설명 편집 섹션 (파이프라인용) -->
+                <div class="form-group" id="descriptionsEditSection" style="display: none;">
+                    <label>📝 설명 블록 <span style="font-size: 11px; color: var(--color-text-light);">(각 설명별로 이미지/영상 첨부 가능)</span></label>
+                    <div id="descriptionsList" class="descriptions-list"></div>
+                    <button type="button" class="btn-add-item" onclick="addNewDescription()">+ 설명 추가</button>
                 </div>
 
                 <!-- 항목 편집 섹션 (각 항목별 미디어 지원) -->
@@ -1774,6 +1840,29 @@
             document.getElementById('fullscreenOverlay').classList.add('active');
         }
 
+        function openDescFullscreen(cardId, descIdx, type, event) {
+            if (event) event.stopPropagation();
+            const data = itemData[cardId] || {};
+            const descriptions = data.descriptions || [];
+            const desc = descriptions[descIdx];
+            if (!desc) return;
+
+            let mediaUrl;
+            if (type === 'before') mediaUrl = desc.beforeMedia;
+            else if (type === 'after') mediaUrl = desc.afterMedia;
+            else mediaUrl = desc.mediaUrl;
+
+            if (!mediaUrl) return;
+
+            const fullscreenEl = document.getElementById('fullscreenContent');
+            if (isVideo(mediaUrl)) {
+                fullscreenEl.innerHTML = `<video class="fullscreen-media" src="${mediaUrl}" autoplay loop muted playsinline controls></video>`;
+            } else {
+                fullscreenEl.innerHTML = `<img class="fullscreen-media" src="${mediaUrl}" alt="Full size">`;
+            }
+            document.getElementById('fullscreenOverlay').classList.add('active');
+        }
+
         function closeItemViewer() {
             document.getElementById('itemViewerOverlay').classList.remove('active');
             document.querySelectorAll('#itemViewerOverlay video').forEach(v => v.pause());
@@ -2127,6 +2216,222 @@
             return items.filter(i => i.title.trim());
         }
 
+        // Multiple Descriptions Support
+        let currentDescMediaUpload = { idx: null, type: null };
+
+        function renderDescriptionsEditor(descriptions) {
+            const container = document.getElementById('descriptionsList');
+            container.innerHTML = descriptions.map((desc, idx) => `
+                <div class="desc-edit-row" data-idx="${idx}" data-mode="${desc.mode || 'single'}">
+                    <div class="desc-edit-header">
+                        <input type="text" class="desc-title-input" value="${escapeHtml(desc.title || `설명 ${idx + 1}`)}" placeholder="설명 제목">
+                        <button type="button" class="desc-edit-delete" onclick="deleteDescription(${idx})">🗑</button>
+                    </div>
+                    <div class="desc-media-section">
+                        <div class="desc-media-header">
+                            <span class="desc-media-label">📷 미디어</span>
+                            <div class="desc-mode-toggle">
+                                <button type="button" class="desc-mode-btn ${(desc.mode || 'single') === 'single' ? 'active' : ''}" onclick="switchDescMode(${idx}, 'single')">일반</button>
+                                <button type="button" class="desc-mode-btn ${desc.mode === 'compare' ? 'active' : ''}" onclick="switchDescMode(${idx}, 'compare')">전/후비교</button>
+                            </div>
+                        </div>
+                        <div class="desc-media-uploads" id="descMedia-${idx}">
+                            ${desc.mode === 'compare' ? `
+                                <div class="desc-media-box before-box" onclick="triggerDescMediaUpload(${idx}, 'before')" id="descBefore-${idx}" data-media-url="${desc.beforeMedia || ''}">
+                                    ${desc.beforeMedia ? createDescMediaPreview(desc.beforeMedia) : '<span>🔴</span><p>Before</p>'}
+                                </div>
+                                <div class="desc-media-box after-box" onclick="triggerDescMediaUpload(${idx}, 'after')" id="descAfter-${idx}" data-media-url="${desc.afterMedia || ''}">
+                                    ${desc.afterMedia ? createDescMediaPreview(desc.afterMedia) : '<span>🟢</span><p>After</p>'}
+                                </div>
+                            ` : `
+                                <div class="desc-media-box" onclick="triggerDescMediaUpload(${idx}, 'single')" id="descSingle-${idx}" data-media-url="${desc.mediaUrl || ''}">
+                                    ${desc.mediaUrl ? createDescMediaPreview(desc.mediaUrl) : '<span>📷</span><p>클릭하여 업로드</p>'}
+                                </div>
+                            `}
+                        </div>
+                    </div>
+                    <textarea class="desc-text-area" placeholder="설명을 입력하세요">${escapeHtml(desc.text || '')}</textarea>
+                </div>
+            `).join('');
+        }
+
+        function createDescMediaPreview(url) {
+            if (!url) return '<span>📷</span><p>업로드</p>';
+            if (isVideo(url)) {
+                return `<video src="${url}" muted style="max-width:100%;max-height:100%;"></video>`;
+            }
+            return `<img src="${url}" style="max-width:100%;max-height:100%;">`;
+        }
+
+        function triggerDescMediaUpload(idx, type) {
+            currentDescMediaUpload = { idx, type };
+
+            document.querySelectorAll('.desc-media-box').forEach(b => b.classList.remove('paste-target'));
+            const boxId = type === 'before' ? `descBefore-${idx}` : type === 'after' ? `descAfter-${idx}` : `descSingle-${idx}`;
+            const box = document.getElementById(boxId);
+            if (box) box.classList.add('paste-target');
+
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*,video/*';
+            input.onchange = (e) => handleDescMediaUpload(e, idx, type);
+            input.click();
+        }
+
+        function handleDescMediaUpload(event, idx, type) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const url = e.target.result;
+                updateDescMediaPreview(idx, type, url);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function updateDescMediaPreview(idx, type, url) {
+            let boxId;
+            if (type === 'before') boxId = `descBefore-${idx}`;
+            else if (type === 'after') boxId = `descAfter-${idx}`;
+            else boxId = `descSingle-${idx}`;
+
+            const box = document.getElementById(boxId);
+            if (box) {
+                box.innerHTML = createDescMediaPreview(url);
+                box.dataset.mediaUrl = url;
+            }
+        }
+
+        function switchDescMode(idx, mode) {
+            const row = document.querySelector(`.desc-edit-row[data-idx="${idx}"]`);
+            if (!row) return;
+
+            row.dataset.mode = mode;
+
+            row.querySelectorAll('.desc-mode-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.textContent.includes(mode === 'single' ? '일반' : '전/후'));
+            });
+
+            const currentSingle = document.getElementById(`descSingle-${idx}`)?.dataset?.mediaUrl || '';
+            const currentBefore = document.getElementById(`descBefore-${idx}`)?.dataset?.mediaUrl || '';
+            const currentAfter = document.getElementById(`descAfter-${idx}`)?.dataset?.mediaUrl || '';
+
+            const uploadsContainer = document.getElementById(`descMedia-${idx}`);
+            if (mode === 'compare') {
+                uploadsContainer.innerHTML = `
+                    <div class="desc-media-box before-box" onclick="triggerDescMediaUpload(${idx}, 'before')" id="descBefore-${idx}" data-media-url="${currentBefore}">
+                        ${currentBefore ? createDescMediaPreview(currentBefore) : '<span>🔴</span><p>Before</p>'}
+                    </div>
+                    <div class="desc-media-box after-box" onclick="triggerDescMediaUpload(${idx}, 'after')" id="descAfter-${idx}" data-media-url="${currentAfter}">
+                        ${currentAfter ? createDescMediaPreview(currentAfter) : '<span>🟢</span><p>After</p>'}
+                    </div>
+                `;
+            } else {
+                uploadsContainer.innerHTML = `
+                    <div class="desc-media-box" onclick="triggerDescMediaUpload(${idx}, 'single')" id="descSingle-${idx}" data-media-url="${currentSingle}">
+                        ${currentSingle ? createDescMediaPreview(currentSingle) : '<span>📷</span><p>클릭하여 업로드</p>'}
+                    </div>
+                `;
+            }
+        }
+
+        function addNewDescription() {
+            const container = document.getElementById('descriptionsList');
+            const idx = container.children.length;
+            const newRow = document.createElement('div');
+            newRow.className = 'desc-edit-row';
+            newRow.dataset.idx = idx;
+            newRow.dataset.mode = 'single';
+            newRow.innerHTML = `
+                <div class="desc-edit-header">
+                    <input type="text" class="desc-title-input" value="설명 ${idx + 1}" placeholder="설명 제목">
+                    <button type="button" class="desc-edit-delete" onclick="deleteDescription(${idx})">🗑</button>
+                </div>
+                <div class="desc-media-section">
+                    <div class="desc-media-header">
+                        <span class="desc-media-label">📷 미디어</span>
+                        <div class="desc-mode-toggle">
+                            <button type="button" class="desc-mode-btn active" onclick="switchDescMode(${idx}, 'single')">일반</button>
+                            <button type="button" class="desc-mode-btn" onclick="switchDescMode(${idx}, 'compare')">전/후비교</button>
+                        </div>
+                    </div>
+                    <div class="desc-media-uploads" id="descMedia-${idx}">
+                        <div class="desc-media-box" onclick="triggerDescMediaUpload(${idx}, 'single')" id="descSingle-${idx}">
+                            <span>📷</span><p>클릭하여 업로드</p>
+                        </div>
+                    </div>
+                </div>
+                <textarea class="desc-text-area" placeholder="설명을 입력하세요"></textarea>
+            `;
+            container.appendChild(newRow);
+            newRow.querySelector('.desc-title-input').focus();
+        }
+
+        function deleteDescription(idx) {
+            const rows = document.querySelectorAll('#descriptionsList .desc-edit-row');
+            if (rows.length > 1) {
+                rows[idx]?.remove();
+                // Re-index all rows
+                document.querySelectorAll('#descriptionsList .desc-edit-row').forEach((row, i) => {
+                    row.dataset.idx = i;
+                    const deleteBtn = row.querySelector('.desc-edit-delete');
+                    if (deleteBtn) deleteBtn.onclick = () => deleteDescription(i);
+
+                    const mediaUploads = row.querySelector('.desc-media-uploads');
+                    if (mediaUploads) mediaUploads.id = `descMedia-${i}`;
+
+                    const singleBox = row.querySelector('[id^="descSingle-"]');
+                    if (singleBox) {
+                        singleBox.id = `descSingle-${i}`;
+                        singleBox.onclick = () => triggerDescMediaUpload(i, 'single');
+                    }
+                    const beforeBox = row.querySelector('[id^="descBefore-"]');
+                    if (beforeBox) {
+                        beforeBox.id = `descBefore-${i}`;
+                        beforeBox.onclick = () => triggerDescMediaUpload(i, 'before');
+                    }
+                    const afterBox = row.querySelector('[id^="descAfter-"]');
+                    if (afterBox) {
+                        afterBox.id = `descAfter-${i}`;
+                        afterBox.onclick = () => triggerDescMediaUpload(i, 'after');
+                    }
+
+                    row.querySelectorAll('.desc-mode-btn').forEach(btn => {
+                        if (btn.textContent.includes('일반')) {
+                            btn.onclick = () => switchDescMode(i, 'single');
+                        } else {
+                            btn.onclick = () => switchDescMode(i, 'compare');
+                        }
+                    });
+                });
+            } else {
+                alert('최소 1개의 설명이 필요합니다.');
+            }
+        }
+
+        function getEditedDescriptions() {
+            const descriptions = [];
+            document.querySelectorAll('#descriptionsList .desc-edit-row').forEach(row => {
+                const idx = parseInt(row.dataset.idx);
+                const mode = row.dataset.mode || 'single';
+
+                const singleBox = document.getElementById(`descSingle-${idx}`);
+                const beforeBox = document.getElementById(`descBefore-${idx}`);
+                const afterBox = document.getElementById(`descAfter-${idx}`);
+
+                descriptions.push({
+                    title: row.querySelector('.desc-title-input')?.value || `설명 ${idx + 1}`,
+                    mode: mode,
+                    text: row.querySelector('.desc-text-area')?.value || '',
+                    mediaUrl: singleBox?.dataset?.mediaUrl || '',
+                    beforeMedia: beforeBox?.dataset?.mediaUrl || '',
+                    afterMedia: afterBox?.dataset?.mediaUrl || ''
+                });
+            });
+            return descriptions;
+        }
+
         let currentCardType = 'unknown';
 
         // Open Edit Modal
@@ -2190,8 +2495,13 @@
 
             // Handle items section for card-items type
             const itemsSection = document.getElementById('itemsEditSection');
+            const descriptionsSection = document.getElementById('descriptionsEditSection');
+            const singleDescSection = document.getElementById('singleDescriptionSection');
+
             if (currentCardType === 'card-items' && item) {
                 itemsSection.style.display = 'block';
+                descriptionsSection.style.display = 'none';
+                singleDescSection.style.display = 'block';
                 // Hide card-level media upload for card-items type (use per-item media instead)
                 document.getElementById('singleUpload').style.display = 'none';
                 document.getElementById('compareUpload').style.display = 'none';
@@ -2199,8 +2509,24 @@
 
                 const items = data.items && data.items.length > 0 ? data.items : getCardItems(item, data);
                 renderItemsEditor(items.length ? items : [{ emoji: '📌', title: '', desc: '', mode: 'single' }]);
+            } else if (currentCardType === 'pipeline') {
+                // Pipeline type uses multiple descriptions
+                itemsSection.style.display = 'none';
+                descriptionsSection.style.display = 'block';
+                singleDescSection.style.display = 'none';
+                document.querySelector('.mode-selector').style.display = 'none';
+                document.getElementById('singleUpload').style.display = 'none';
+                document.getElementById('compareUpload').style.display = 'none';
+
+                // Load existing descriptions or create default
+                const descriptions = data.descriptions && data.descriptions.length > 0
+                    ? data.descriptions
+                    : [{ mode: currentEditMode, text: currentDesc, mediaUrl: data.mediaUrl || '', beforeMedia: data.beforeMedia || '', afterMedia: data.afterMedia || '' }];
+                renderDescriptionsEditor(descriptions);
             } else {
                 itemsSection.style.display = 'none';
+                descriptionsSection.style.display = 'none';
+                singleDescSection.style.display = 'block';
                 document.querySelector('.mode-selector').style.display = 'flex';
             }
 
@@ -2306,6 +2632,31 @@
                                         setTimeout(() => box.style.boxShadow = '', 500);
                                     }
                                 }
+                            } else if (currentCardType === 'pipeline') {
+                                // For pipeline type - paste to descriptions
+                                let targetIdx = currentDescMediaUpload.idx;
+                                let targetType = currentDescMediaUpload.type || 'single';
+
+                                // If no box selected, find first available box
+                                if (targetIdx === null) {
+                                    const firstRow = document.querySelector('#descriptionsList .desc-edit-row');
+                                    if (firstRow) {
+                                        targetIdx = 0;
+                                        const mode = firstRow.dataset.mode || 'single';
+                                        targetType = mode === 'compare' ? 'before' : 'single';
+                                    }
+                                }
+
+                                if (targetIdx !== null) {
+                                    updateDescMediaPreview(targetIdx, targetType, url);
+                                    // Visual feedback
+                                    const box = document.getElementById(targetType === 'before' ? `descBefore-${targetIdx}` : targetType === 'after' ? `descAfter-${targetIdx}` : `descSingle-${targetIdx}`);
+                                    if (box) {
+                                        box.style.transition = 'box-shadow 0.3s';
+                                        box.style.boxShadow = '0 0 10px var(--color-accent)';
+                                        setTimeout(() => box.style.boxShadow = '', 500);
+                                    }
+                                }
                             } else {
                                 // For non-card-items types
                                 const type = currentEditMode === 'single' ? 'single' : 'before';
@@ -2338,12 +2689,19 @@
                 editedItems = getEditedItems();
             }
 
+            // Get descriptions if pipeline type
+            let editedDescriptions = null;
+            if (currentCardType === 'pipeline') {
+                editedDescriptions = getEditedDescriptions();
+            }
+
             itemData[currentEditingId] = {
                 ...itemData[currentEditingId],
                 mode: currentEditMode,
                 title: newTitle,
                 description: newDesc,
-                ...(editedItems && { items: editedItems })
+                ...(editedItems && { items: editedItems }),
+                ...(editedDescriptions && { descriptions: editedDescriptions })
             };
             saveData();
 
@@ -2466,6 +2824,10 @@
                     let hasMedia = data && (data.mediaUrl || data.beforeMedia || data.afterMedia);
                     if (!hasMedia && data?.items) {
                         hasMedia = data.items.some(i => i.mediaUrl || i.beforeMedia || i.afterMedia);
+                    }
+                    // Check descriptions-level media for pipeline type
+                    if (!hasMedia && data?.descriptions) {
+                        hasMedia = data.descriptions.some(d => d.mediaUrl || d.beforeMedia || d.afterMedia);
                     }
 
                     viewBtn.classList.toggle('no-media', !hasMedia);
@@ -2737,6 +3099,58 @@
                         ${subSectionTitle ? `<p style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: -8px;">${subSectionTitle}</p>` : ''}
                     </div>
                 `;
+            }
+
+            // 다중 설명 표시 (파이프라인 타입)
+            if (data.descriptions && data.descriptions.length > 0) {
+                data.descriptions.forEach((desc, idx) => {
+                    const hasMedia = desc.mediaUrl || desc.beforeMedia || desc.afterMedia;
+                    const mode = desc.mode || 'single';
+
+                    content += `
+                        <div class="detail-section" style="margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                <span style="font-size: 28px; background: rgba(255,255,255,0.1); padding: 8px; border-radius: 8px;">📝</span>
+                                <div>
+                                    <div style="color: white; font-size: 17px; font-weight: 600;">${escapeHtml(desc.title || `설명 ${idx + 1}`)}</div>
+                                    ${desc.text ? `<div style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 2px; white-space: pre-wrap;">${escapeHtml(desc.text)}</div>` : ''}
+                                </div>
+                            </div>
+                    `;
+
+                    // 미디어 표시 (Before/After 또는 Single)
+                    if (hasMedia) {
+                        if (mode === 'compare' && (desc.beforeMedia || desc.afterMedia)) {
+                            content += `
+                                <div style="display: flex; gap: 16px; align-items: center; justify-content: center; flex-wrap: wrap;">
+                                    ${desc.beforeMedia ? `
+                                        <div class="detail-media-box before" onclick="openDescFullscreen('${id}', ${idx}, 'before', event)" style="flex: 1; min-width: 200px; max-width: 350px;">
+                                            <div class="detail-media-label">BEFORE</div>
+                                            ${createMediaElement(desc.beforeMedia, 'detail-media-img', false)}
+                                        </div>
+                                    ` : ''}
+                                    <div style="font-size: 28px; color: var(--color-accent);">→</div>
+                                    ${desc.afterMedia ? `
+                                        <div class="detail-media-box after" onclick="openDescFullscreen('${id}', ${idx}, 'after', event)" style="flex: 1; min-width: 200px; max-width: 350px;">
+                                            <div class="detail-media-label">AFTER</div>
+                                            ${createMediaElement(desc.afterMedia, 'detail-media-img', false)}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                        } else if (desc.mediaUrl) {
+                            content += `
+                                <div style="text-align: center;">
+                                    <div class="detail-media-box" onclick="openDescFullscreen('${id}', ${idx}, 'single', event)" style="display: inline-block;">
+                                        ${createMediaElement(desc.mediaUrl, 'detail-media-img', false)}
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+
+                    content += `</div>`;
+                });
             }
 
             // 아이템 목록 표시 (기존 스타일: 카드 + Before/After 이미지)

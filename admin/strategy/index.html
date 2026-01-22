@@ -1046,6 +1046,11 @@
             <span class="icon">📝</span>
             <span>업무기록</span>
           </div>
+          <div class="nav-item" data-tab="meeting-notes" onclick="switchTab('meeting-notes')">
+            <span class="icon">📓</span>
+            <span>회의록/메모</span>
+            <span style="margin-left: auto; background: #ede9fe; color: #7c3aed; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 600;">Notability</span>
+          </div>
         </div>
 
         <div class="nav-section">
@@ -1438,6 +1443,13 @@
           <div id="okrTodaySummary">
             <div style="color: var(--gray-400); font-size: 13px;">아직 기록이 없습니다</div>
           </div>
+        </div>
+      </div>
+
+      <!-- 회의록/메모 (노타빌리티 연동) -->
+      <div id="tab-meeting-notes" class="tab-content">
+        <div id="meetingNotesContent">
+          <!-- 동적으로 렌더링 -->
         </div>
       </div>
 
@@ -2266,6 +2278,8 @@
         case 'okr-experiment': renderOkrExperiment(); break;
         case 'meeting-history': renderMeetingHistory(); break;
         case 'change-logs': renderChangeLogs(); break;
+        // 회의록/메모 (노타빌리티 연동)
+        case 'meeting-notes': renderMeetingNotes(); break;
       }
     }
 
@@ -14074,6 +14088,414 @@
       return '✅';
     }
 
+    // 회의용 뷰 메뉴 토글
+    function toggleMeetingViewMenu() {
+      const menu = document.getElementById('meetingViewMenu');
+      if (menu) {
+        menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+      }
+    }
+
+    // 외부 클릭시 메뉴 닫기
+    document.addEventListener('click', function(e) {
+      const menu = document.getElementById('meetingViewMenu');
+      if (menu && !e.target.closest('#meetingViewMenu') && !e.target.closest('[onclick*="toggleMeetingViewMenu"]')) {
+        menu.style.display = 'none';
+      }
+    });
+
+    // KPI Metrics 행 토글
+    function toggleKpiMetricsRow(kpiId) {
+      const row = document.getElementById(`kpi-metrics-row-${kpiId}`);
+      const icon = document.getElementById(`kpi-expand-icon-${kpiId}`);
+      if (row) {
+        const isHidden = row.style.display === 'none';
+        row.style.display = isHidden ? 'table-row' : 'none';
+        if (icon) {
+          icon.style.transform = isHidden ? 'rotate(90deg)' : 'rotate(0deg)';
+        }
+      }
+    }
+
+    // 마인드맵 뷰 상태
+    let kpiMindmapVisible = false;
+
+    // 마인드맵 뷰 토글
+    function toggleKpiMindmapView() {
+      kpiMindmapVisible = !kpiMindmapVisible;
+      const mindmapContainer = document.getElementById('kpiMindmapContainer');
+      if (mindmapContainer) {
+        mindmapContainer.style.display = kpiMindmapVisible ? 'block' : 'none';
+        if (kpiMindmapVisible) {
+          renderKpiMindmap();
+        }
+      }
+    }
+
+    // 마인드맵 렌더링
+    function renderKpiMindmap() {
+      const container = document.getElementById('kpiMindmapContent');
+      if (!container || !okrState.objective) return;
+
+      const oRate = calcOkrObjectiveRate();
+
+      container.innerHTML = `
+        <div class="kpi-mindmap" style="padding: 20px; overflow-x: auto;">
+          <!-- 목표 (중앙) -->
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 30px;">
+            <!-- Objective -->
+            <div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 24px 40px; border-radius: 20px; text-align: center; box-shadow: 0 8px 32px rgba(99, 102, 241, 0.3); max-width: 600px;">
+              <div style="font-size: 12px; opacity: 0.8; margin-bottom: 8px;">🎯 목표</div>
+              <div style="font-size: 18px; font-weight: 700; margin-bottom: 12px;">${okrState.objective.name}</div>
+              <div style="font-size: 36px; font-weight: 800;">${oRate}%</div>
+            </div>
+
+            <!-- 연결선 -->
+            <div style="width: 4px; height: 40px; background: linear-gradient(to bottom, var(--primary), var(--gray-300));"></div>
+
+            <!-- 메인 KPI들 -->
+            <div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; width: 100%;">
+              ${okrState.keyResults.map((kr, krIdx) => {
+                const krRate = calcOkrKRRate(kr.id);
+                const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
+
+                return `
+                  <div style="flex: 1; min-width: 280px; max-width: 400px;">
+                    <!-- 메인 KPI -->
+                    <div style="background: ${okrColors[krIdx]}15; border: 2px solid ${okrColors[krIdx]}; border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 20px;">
+                      <div style="font-size: 11px; color: ${okrColors[krIdx]}; font-weight: 600; margin-bottom: 6px;">메인 KPI ${krIdx + 1}</div>
+                      <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); margin-bottom: 8px;">${okrIcons[krIdx]} ${kr.name}</div>
+                      <div style="font-size: 24px; font-weight: 800; color: ${okrColors[krIdx]};">${krRate}%</div>
+                    </div>
+
+                    <!-- 연결선 -->
+                    <div style="display: flex; justify-content: center; margin-bottom: 16px;">
+                      <div style="width: 2px; height: 30px; background: ${okrColors[krIdx]};"></div>
+                    </div>
+
+                    <!-- 서브 KPI들 -->
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                      ${kpisForKR.map(kpi => {
+                        const kpiRate = calcOkrKPIRate(kpi.id);
+                        const metricsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                        const inputMetrics = metricsForKPI.filter(l => l.type !== 'output');
+                        const outputMetrics = metricsForKPI.filter(l => l.type === 'output');
+                        const statusColor = kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)';
+
+                        return `
+                          <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px; border-left: 4px solid ${okrColors[krIdx]};">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                              <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📌 ${kpi.name}</div>
+                              <span style="font-size: 12px; font-weight: 700; color: ${statusColor};">${kpiRate}%</span>
+                            </div>
+
+                            <!-- Input/Output Metrics -->
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
+                              <!-- Input Metrics -->
+                              <div style="background: var(--gray-50); border-radius: 8px; padding: 10px;">
+                                <div style="font-size: 10px; font-weight: 600; color: var(--gray-500); margin-bottom: 6px;">📥 Input (${inputMetrics.length})</div>
+                                ${inputMetrics.slice(0, 3).map(m => {
+                                  const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                                  const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                  return `
+                                    <div style="font-size: 11px; color: var(--gray-600); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                      <span title="A/B 버전: ${m.version || 'A'}">[${m.version || 'A'}] ${m.name.length > 10 ? m.name.substring(0, 10) + '...' : m.name}</span>
+                                      <span style="font-weight: 600;">${total}</span>
+                                    </div>
+                                  `;
+                                }).join('')}
+                                ${inputMetrics.length > 3 ? `<div style="font-size: 10px; color: var(--gray-400);">+${inputMetrics.length - 3}개 더</div>` : ''}
+                                ${inputMetrics.length === 0 ? `<div style="font-size: 10px; color: var(--gray-400);">-</div>` : ''}
+                              </div>
+
+                              <!-- Output Metrics -->
+                              <div style="background: var(--success-light); border-radius: 8px; padding: 10px;">
+                                <div style="font-size: 10px; font-weight: 600; color: var(--success); margin-bottom: 6px;">📤 Output (${outputMetrics.length})</div>
+                                ${outputMetrics.slice(0, 3).map(m => {
+                                  const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                                  const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                  return `
+                                    <div style="font-size: 11px; color: var(--gray-700); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                      <span title="A/B 버전: ${m.version || 'A'}">[${m.version || 'A'}] ${m.name.length > 10 ? m.name.substring(0, 10) + '...' : m.name}</span>
+                                      <span style="font-weight: 700; color: var(--success);">${formatKoreanAmount(total) || total}</span>
+                                    </div>
+                                  `;
+                                }).join('')}
+                                ${outputMetrics.length > 3 ? `<div style="font-size: 10px; color: var(--gray-500);">+${outputMetrics.length - 3}개 더</div>` : ''}
+                                ${outputMetrics.length === 0 ? `<div style="font-size: 10px; color: var(--gray-400);">-</div>` : ''}
+                              </div>
+                            </div>
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // 회의용 프레젠테이션 뷰 열기
+    function openKpiMeetingPresentation() {
+      // 새 창에서 회의용 뷰 열기
+      const presentationWindow = window.open('', 'KPI_Meeting_View', 'width=1400,height=900,scrollbars=yes');
+
+      if (!presentationWindow) {
+        showToast('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.', 'error');
+        return;
+      }
+
+      const oRate = calcOkrObjectiveRate();
+
+      presentationWindow.document.write(`
+        <!DOCTYPE html>
+        <html lang="ko">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>KPI 회의용 뷰 - ${okrState.objective?.name || '목표'}</title>
+          <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+          <style>
+            :root {
+              --primary: #6366F1;
+              --success: #10B981;
+              --warning: #F59E0B;
+              --danger: #EF4444;
+              --gray-50: #f9fafb;
+              --gray-100: #f2f4f6;
+              --gray-200: #e5e8eb;
+              --gray-300: #d1d6db;
+              --gray-400: #b0b8c1;
+              --gray-500: #8b95a1;
+              --gray-600: #6b7684;
+              --gray-700: #4e5968;
+              --gray-800: #333d4b;
+              --gray-900: #191f28;
+            }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+              background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+              min-height: 100vh;
+              color: white;
+              padding: 40px;
+            }
+            .header {
+              text-align: center;
+              margin-bottom: 40px;
+            }
+            .header h1 {
+              font-size: 32px;
+              font-weight: 800;
+              margin-bottom: 16px;
+            }
+            .header .rate {
+              font-size: 72px;
+              font-weight: 900;
+              background: linear-gradient(135deg, #6366F1, #8B5CF6);
+              -webkit-background-clip: text;
+              -webkit-text-fill-color: transparent;
+            }
+            .kr-grid {
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+              gap: 24px;
+              margin-bottom: 40px;
+            }
+            .kr-card {
+              background: rgba(255, 255, 255, 0.05);
+              border-radius: 20px;
+              padding: 24px;
+              backdrop-filter: blur(10px);
+              border: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            .kr-header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 20px;
+              padding-bottom: 16px;
+              border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            .kr-name {
+              font-size: 16px;
+              font-weight: 700;
+            }
+            .kr-rate {
+              font-size: 28px;
+              font-weight: 800;
+            }
+            .kpi-item {
+              background: rgba(255, 255, 255, 0.03);
+              border-radius: 12px;
+              padding: 16px;
+              margin-bottom: 12px;
+            }
+            .kpi-header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-bottom: 12px;
+            }
+            .kpi-name {
+              font-size: 14px;
+              font-weight: 600;
+            }
+            .kpi-rate {
+              font-size: 18px;
+              font-weight: 700;
+            }
+            .metrics-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 12px;
+            }
+            .metric-section {
+              background: rgba(255, 255, 255, 0.05);
+              border-radius: 10px;
+              padding: 12px;
+            }
+            .metric-section.input { border-left: 3px solid #64748b; }
+            .metric-section.output { border-left: 3px solid #10B981; }
+            .metric-label {
+              font-size: 11px;
+              font-weight: 600;
+              margin-bottom: 8px;
+              opacity: 0.8;
+            }
+            .metric-item {
+              font-size: 12px;
+              padding: 6px 0;
+              border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+              display: flex;
+              justify-content: space-between;
+            }
+            .metric-item:last-child { border-bottom: none; }
+            .metric-value { font-weight: 700; }
+            .metric-version { font-size: 10px; opacity: 0.6; }
+            .footer {
+              text-align: center;
+              padding-top: 20px;
+              border-top: 1px solid rgba(255, 255, 255, 0.1);
+              font-size: 13px;
+              opacity: 0.6;
+            }
+            .color-0 { color: #8B5CF6; }
+            .color-1 { color: #06B6D4; }
+            .color-2 { color: #10B981; }
+            .color-3 { color: #F59E0B; }
+            .progress-bar {
+              height: 8px;
+              background: rgba(255, 255, 255, 0.1);
+              border-radius: 4px;
+              overflow: hidden;
+              margin-top: 8px;
+            }
+            .progress-fill {
+              height: 100%;
+              border-radius: 4px;
+              transition: width 0.5s;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>🎯 ${okrState.objective?.name || '목표'}</h1>
+            <div class="rate">${oRate}%</div>
+            <p style="margin-top: 12px; opacity: 0.7;">${okrState.objective?.startDate || ''} ~ ${okrState.objective?.endDate || ''}</p>
+          </div>
+
+          <div class="kr-grid">
+            ${okrState.keyResults.map((kr, krIdx) => {
+              const krRate = calcOkrKRRate(kr.id);
+              const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
+              const colors = ['#8B5CF6', '#06B6D4', '#10B981', '#F59E0B'];
+              const icons = ['💰', '👥', '📱', '📢'];
+
+              return `
+                <div class="kr-card" style="border-top: 4px solid ${colors[krIdx]};">
+                  <div class="kr-header">
+                    <div class="kr-name">${icons[krIdx]} ${kr.name}</div>
+                    <div class="kr-rate" style="color: ${colors[krIdx]};">${krRate}%</div>
+                  </div>
+
+                  ${kpisForKR.map(kpi => {
+                    const kpiRate = calcOkrKPIRate(kpi.id);
+                    const metricsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                    const inputMetrics = metricsForKPI.filter(l => l.type !== 'output');
+                    const outputMetrics = metricsForKPI.filter(l => l.type === 'output');
+                    const statusColor = kpiRate >= 80 ? '#10B981' : kpiRate >= 50 ? '#F59E0B' : '#EF4444';
+
+                    return `
+                      <div class="kpi-item">
+                        <div class="kpi-header">
+                          <div class="kpi-name">📌 ${kpi.name}</div>
+                          <div class="kpi-rate" style="color: ${statusColor};">${kpiRate}%</div>
+                        </div>
+                        <div class="progress-bar">
+                          <div class="progress-fill" style="width: ${Math.min(kpiRate, 100)}%; background: ${statusColor};"></div>
+                        </div>
+
+                        <div class="metrics-grid" style="margin-top: 16px;">
+                          <div class="metric-section input">
+                            <div class="metric-label">📥 Input Metrics (${inputMetrics.length})</div>
+                            ${inputMetrics.length > 0 ? inputMetrics.map(m => {
+                              const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                              const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                              return `
+                                <div class="metric-item">
+                                  <span><span class="metric-version">[${m.version || 'A'}]</span> ${m.name}</span>
+                                  <span class="metric-value">${total.toLocaleString()}</span>
+                                </div>
+                              `;
+                            }).join('') : '<div style="font-size: 11px; opacity: 0.5;">없음</div>'}
+                          </div>
+                          <div class="metric-section output">
+                            <div class="metric-label" style="color: #10B981;">📤 Output Metrics (${outputMetrics.length})</div>
+                            ${outputMetrics.length > 0 ? outputMetrics.map(m => {
+                              const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                              const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                              return `
+                                <div class="metric-item">
+                                  <span><span class="metric-version">[${m.version || 'A'}]</span> ${m.name}</span>
+                                  <span class="metric-value" style="color: #10B981;">${formatKoreanAmount(total) || total.toLocaleString()}</span>
+                                </div>
+                              `;
+                            }).join('') : '<div style="font-size: 11px; opacity: 0.5;">없음</div>'}
+                          </div>
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <div class="footer">
+            마지막 업데이트: ${new Date().toLocaleString('ko-KR')} | 전략센터 KPI 회의용 뷰
+          </div>
+
+          <scr` + `ipt>
+            function formatKoreanAmount(num) {
+              if (!num || num === 0) return '';
+              const absNum = Math.abs(num);
+              if (absNum >= 100000000) return (absNum / 100000000).toFixed(1) + '억';
+              if (absNum >= 10000000) return (absNum / 10000000).toFixed(1) + '천만';
+              if (absNum >= 1000000) return (absNum / 1000000).toFixed(1) + '백만';
+              if (absNum >= 10000) return (absNum / 10000).toFixed(1) + '만';
+              return num.toLocaleString();
+            }
+          </scr` + `ipt>
+        </body>
+        </html>
+      `);
+      presentationWindow.document.close();
+    }
+
     // OKR 대시보드 렌더링
     function renderOkrDashboard() {
       const container = document.getElementById('okrDashboardContent');
@@ -14107,7 +14529,23 @@
             <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">📈 팀 그로스보드</h2>
             <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">목표 → 메인 KPI → 서브 KPI → Input/Output Metrics</p>
           </div>
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button onclick="toggleKpiMindmapView()" style="padding: 10px 18px; font-size: 13px; font-weight: 600; background: #F59E0B; color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+              🗺️ 마인드맵 보기
+            </button>
+            <div style="position: relative; display: inline-block;">
+              <button onclick="toggleMeetingViewMenu()" style="padding: 10px 18px; font-size: 13px; font-weight: 600; background: #8B5CF6; color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                📺 회의용 뷰 ▾
+              </button>
+              <div id="meetingViewMenu" style="display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; background: white; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); z-index: 100; min-width: 180px; overflow: hidden;">
+                <div onclick="openKpiMeetingPresentation(); toggleMeetingViewMenu();" style="padding: 12px 16px; cursor: pointer; font-size: 13px; color: var(--gray-700); border-bottom: 1px solid var(--gray-100);" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
+                  🪟 팝업으로 열기
+                </div>
+                <a href="kpi-meeting-view.html" target="_blank" style="display: block; padding: 12px 16px; cursor: pointer; font-size: 13px; color: var(--gray-700); text-decoration: none;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
+                  🔗 새 탭에서 열기
+                </a>
+              </div>
+            </div>
             <button onclick="openMeetingModal()" style="padding: 10px 18px; font-size: 13px; font-weight: 600; background: #10B981; color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
               📅 미팅 등록
             </button>
@@ -14139,6 +14577,21 @@
           <div style="font-size: 48px; font-weight: 800; margin-bottom: 12px;">${oRate}%</div>
           <div style="height: 12px; background: rgba(255,255,255,0.2); border-radius: 6px; overflow: hidden;">
             <div style="height: 100%; width: ${Math.min(oRate, 100)}%; background: white; border-radius: 6px; transition: width 0.5s;"></div>
+          </div>
+        </div>
+
+        <!-- 마인드맵 뷰 컨테이너 (토글) -->
+        <div id="kpiMindmapContainer" style="display: none; margin-bottom: 20px;">
+          <div class="card" style="padding: 0; overflow: hidden;">
+            <div style="background: linear-gradient(135deg, #F59E0B, #D97706); color: white; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center;">
+              <div style="font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🗺️ KPI 마인드맵 뷰</div>
+              <div style="display: flex; gap: 8px;">
+                <button onclick="toggleKpiMindmapView()" style="padding: 8px 16px; font-size: 12px; font-weight: 600; background: rgba(255,255,255,0.2); color: white; border: none; border-radius: 6px; cursor: pointer;">
+                  ✕ 닫기
+                </button>
+              </div>
+            </div>
+            <div id="kpiMindmapContent" style="background: var(--gray-50);"></div>
           </div>
         </div>
 
@@ -14253,45 +14706,48 @@
                     return '<tr><td colspan="7" style="padding: 30px; text-align: center; color: var(--gray-400);">필터 조건에 맞는 KPI가 없습니다</td></tr>';
                   }
 
-                  // KR별 rowspan 계산
-                  const krGroups = {};
+                  // KR별 그룹 추적 (첫 번째 KPI인지 확인용)
+                  const krFirstKPI = {};
                   filtered.forEach(kpi => {
-                    const krId = kpi.keyResultId;
-                    if (!krGroups[krId]) krGroups[krId] = [];
-                    krGroups[krId].push(kpi);
+                    if (!krFirstKPI[kpi.keyResultId]) {
+                      krFirstKPI[kpi.keyResultId] = kpi.id;
+                    }
                   });
-
-                  // 이미 렌더링된 KR 추적
-                  const renderedKRs = new Set();
 
                   return filtered.map((kpi, idx) => {
                     const statusColor = kpi.rate >= 80 ? 'var(--success)' : kpi.rate >= 50 ? 'var(--warning)' : 'var(--danger)';
-                    const krId = kpi.keyResultId;
-                    const rowspan = krGroups[krId]?.length || 1;
-                    const showKrCell = !renderedKRs.has(krId);
+                    const isFirstInKR = krFirstKPI[kpi.keyResultId] === kpi.id;
 
-                    if (showKrCell) {
-                      renderedKRs.add(krId);
-                    }
+                    // Input/Output Metrics 가져오기
+                    const metricsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                    const inputMetrics = metricsForKPI.filter(l => l.type !== 'output');
+                    const outputMetrics = metricsForKPI.filter(l => l.type === 'output');
+                    const hasMetrics = metricsForKPI.length > 0;
 
                     return `
-                      <tr style="border-bottom: 1px solid var(--gray-100);">
-                        ${showKrCell ? `
-                        <td style="padding: 12px; text-align: left; vertical-align: middle; background: ${okrColors[kpi.krIdx]}10;" rowspan="${rowspan}">
+                      <tr style="border-bottom: 1px solid var(--gray-100); cursor: ${hasMetrics ? 'pointer' : 'default'};" onclick="${hasMetrics ? `toggleKpiMetricsRow('${kpi.id}')` : ''}">
+                        <td style="padding: 12px; text-align: left; vertical-align: middle; background: ${okrColors[kpi.krIdx]}10; ${!isFirstInKR ? 'border-top: none;' : ''}">
+                          ${isFirstInKR ? `
                           <span style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; background: ${okrColors[kpi.krIdx]}20; color: ${okrColors[kpi.krIdx]}; white-space: nowrap;">
                             <span style="font-size: 10px;">●</span> ${kpi.kr?.name || '-'}
                           </span>
+                          ` : `<span style="font-size: 10px; color: ${okrColors[kpi.krIdx]}; opacity: 0.5;">└</span>`}
                         </td>
-                        ` : ''}
                         <td style="padding: 12px; font-weight: 500; color: var(--gray-800);">
-                          <div><span style="color: ${statusColor}; font-size: 10px;">●</span> ${kpi.name}</div>
-                          ${kpi.mainAssigneeName || (kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0) ? `
-                            <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">
-                              ${kpi.mainAssigneeName ? `⭐ ${kpi.mainAssigneeName}` : ''}
-                              ${kpi.mainAssigneeName && kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0 ? ' · ' : ''}
-                              ${kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0 ? `📌 ${kpi.subAssigneeNames.join(', ')}` : ''}
+                          <div style="display: flex; align-items: center; gap: 8px;">
+                            ${hasMetrics ? `<span id="kpi-expand-icon-${kpi.id}" style="font-size: 12px; color: var(--gray-400); transition: transform 0.2s;">▶</span>` : ''}
+                            <div>
+                              <div><span style="color: ${statusColor}; font-size: 10px;">●</span> ${kpi.name}</div>
+                              ${kpi.mainAssigneeName || (kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0) ? `
+                                <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">
+                                  ${kpi.mainAssigneeName ? `⭐ ${kpi.mainAssigneeName}` : ''}
+                                  ${kpi.mainAssigneeName && kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0 ? ' · ' : ''}
+                                  ${kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0 ? `📌 ${kpi.subAssigneeNames.join(', ')}` : ''}
+                                </div>
+                              ` : ''}
+                              ${hasMetrics ? `<div style="font-size: 10px; color: var(--gray-400); margin-top: 2px;">📥 Input: ${inputMetrics.length}개 · 📤 Output: ${outputMetrics.length}개</div>` : ''}
                             </div>
-                          ` : ''}
+                          </div>
                         </td>
                         <td style="padding: 12px; text-align: right; color: var(--gray-500);">${formatAmountWithSummary(kpi.targetValue || 0, kpi.unit || '')}</td>
                         <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">${formatAmountWithSummary(kpi.currentValue, kpi.unit || '')}</td>
@@ -14303,8 +14759,73 @@
                             <div style="height: 100%; width: ${Math.min(kpi.rate, 100)}%; background: ${statusColor}; border-radius: 3px;"></div>
                           </div>
                         </td>
-                        <td style="padding: 12px; text-align: center;">
+                        <td style="padding: 12px; text-align: center;" onclick="event.stopPropagation()">
                           <button onclick="showEditKPIModal('${kpi.id}')" style="padding: 4px 8px; border: 1px solid var(--gray-300); border-radius: 6px; background: white; color: var(--gray-600); font-size: 11px; cursor: pointer;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='white'" title="KPI 편집">✏️</button>
+                        </td>
+                      </tr>
+                      <!-- Input/Output Metrics 확장 행 -->
+                      <tr id="kpi-metrics-row-${kpi.id}" style="display: none; background: var(--gray-50);">
+                        <td colspan="7" style="padding: 0;">
+                          <div style="padding: 16px 24px; border-left: 3px solid ${okrColors[kpi.krIdx]};">
+                            ${hasMetrics ? `
+                              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                <!-- Input Metrics -->
+                                <div>
+                                  <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                                    📥 Input Metrics (활동 지표)
+                                    <span style="font-size: 10px; padding: 2px 6px; background: var(--gray-200); border-radius: 8px;">${inputMetrics.length}개</span>
+                                  </div>
+                                  ${inputMetrics.length > 0 ? inputMetrics.map(metric => {
+                                    const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === metric.id);
+                                    const totalValue = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                    const versionLabel = metric.version ? `[${metric.version}]` : '';
+                                    return `
+                                      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--gray-200);">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                          <span style="font-size: 14px;">${getOkrLagIcon(metric.name)}</span>
+                                          <div>
+                                            <div style="font-size: 12px; font-weight: 500;">${versionLabel} ${metric.name}</div>
+                                            <div style="font-size: 10px; color: var(--gray-400);">A/B 테스트 버전: ${metric.version || 'A'}</div>
+                                          </div>
+                                        </div>
+                                        <div style="text-align: right;">
+                                          <div style="font-size: 13px; font-weight: 600; color: var(--gray-700);">${totalValue.toLocaleString()}${metric.unit || '건'}</div>
+                                          <div style="font-size: 10px; color: var(--gray-400);">${logs.length}회 기록</div>
+                                        </div>
+                                      </div>
+                                    `;
+                                  }).join('') : '<div style="font-size: 12px; color: var(--gray-400); padding: 12px; text-align: center;">등록된 Input Metrics가 없습니다</div>'}
+                                </div>
+                                <!-- Output Metrics -->
+                                <div>
+                                  <div style="font-size: 12px; font-weight: 600; color: var(--success); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                                    📤 Output Metrics (성과 지표)
+                                    <span style="font-size: 10px; padding: 2px 6px; background: var(--success-light); color: var(--success); border-radius: 8px;">${outputMetrics.length}개</span>
+                                  </div>
+                                  ${outputMetrics.length > 0 ? outputMetrics.map(metric => {
+                                    const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === metric.id);
+                                    const totalValue = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                    const versionLabel = metric.version ? `[${metric.version}]` : '';
+                                    return `
+                                      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--success-light); border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--success);">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                          <span style="font-size: 14px;">${getOkrLagIcon(metric.name)}</span>
+                                          <div>
+                                            <div style="font-size: 12px; font-weight: 500; color: var(--gray-800);">${versionLabel} ${metric.name}</div>
+                                            <div style="font-size: 10px; color: var(--gray-500);">A/B 테스트 버전: ${metric.version || 'A'}</div>
+                                          </div>
+                                        </div>
+                                        <div style="text-align: right;">
+                                          <div style="font-size: 13px; font-weight: 700; color: var(--success);">${formatAmountWithSummary(totalValue, metric.unit || '')}</div>
+                                          <div style="font-size: 10px; color: var(--gray-500);">${logs.length}회 기록</div>
+                                        </div>
+                                      </div>
+                                    `;
+                                  }).join('') : '<div style="font-size: 12px; color: var(--gray-400); padding: 12px; text-align: center;">등록된 Output Metrics가 없습니다</div>'}
+                                </div>
+                              </div>
+                            ` : '<div style="font-size: 12px; color: var(--gray-400); padding: 12px; text-align: center;">등록된 Metrics가 없습니다</div>'}
+                          </div>
                         </td>
                       </tr>
                     `;
@@ -15447,8 +15968,11 @@
                             const typeBadge = isResult
                               ? '<span style="position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%); font-size: 8px; padding: 1px 4px; background: var(--success); color: white; border-radius: 4px;">💰성과</span>'
                               : '<span style="position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%); font-size: 8px; padding: 1px 4px; background: var(--gray-400); color: white; border-radius: 4px;">📋활동</span>';
+                            const tooltipText = lag.description
+                              ? `${isResult ? '성과형: KPI에 반영됨' : '활동형: 참고용'}\n\n📋 완료기준: ${lag.description}`
+                              : (isResult ? '성과형: KPI에 반영됨' : '활동형: 참고용');
                             return `
-                              <div id="lag-btn-${lag.id}" style="background: white; border: 2px solid ${isResult ? 'var(--success-light)' : 'var(--gray-200)'}; border-radius: 8px; padding: 10px 6px 18px; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'" onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='${isResult ? 'var(--success-light)' : 'var(--gray-200)'}'" ${isResult ? 'title="성과형: KPI에 반영됨"' : 'title="활동형: 참고용"'}>
+                              <div id="lag-btn-${lag.id}" style="background: white; border: 2px solid ${isResult ? 'var(--success-light)' : 'var(--gray-200)'}; border-radius: 8px; padding: 10px 6px 18px; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;" onmouseover="this.style.borderColor='${okrColors[krIdx]}'" onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='${isResult ? 'var(--success-light)' : 'var(--gray-200)'}'" title="${tooltipText.replace(/"/g, '&quot;')}">
                                 <div onclick="event.stopPropagation(); showEditLagForm('${lag.id}')" style="position: absolute; top: 2px; left: 2px; font-size: 10px; color: var(--gray-400); cursor: pointer; padding: 2px;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--gray-400)'" title="수정">✏️</div>
                                 <div style="position: absolute; top: 2px; right: 2px; font-size: 10px; opacity: ${isFavorite ? 1 : 0.3};">⭐</div>
                                 <div onclick="selectLagForRecord('${kr.id}', '${kpi.id}', '${lag.id}', ${krIdx})" style="font-size: 20px; margin-bottom: 4px;">${getOkrLagIcon(lag.name)}</div>
@@ -15567,7 +16091,7 @@
             </label>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
               <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s;" onclick="this.querySelector('input').checked=true; this.style.borderColor='var(--primary)'; this.style.background='var(--primary-light)'; this.parentElement.children[1].style.borderColor='var(--gray-200)'; this.parentElement.children[1].style.background='white'; document.getElementById('newLagValuePerUnit').parentElement.style.display='none';">
-                <input type="radio" name="newLagType" value="activity" checked style="display: none;">
+                <input type="radio" name="newLagType" value="input" checked style="display: none;">
                 <span style="font-size: 18px;">📋</span>
                 <div>
                   <div style="font-size: 13px; font-weight: 600;">활동형</div>
@@ -15575,7 +16099,7 @@
                 </div>
               </label>
               <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s; background: white;" onclick="this.querySelector('input').checked=true; this.style.borderColor='var(--success)'; this.style.background='var(--success-light)'; this.parentElement.children[0].style.borderColor='var(--gray-200)'; this.parentElement.children[0].style.background='white'; document.getElementById('newLagValuePerUnit').parentElement.style.display='block';">
-                <input type="radio" name="newLagType" value="result" style="display: none;">
+                <input type="radio" name="newLagType" value="output" style="display: none;">
                 <span style="font-size: 18px;">💰</span>
                 <div>
                   <div style="font-size: 13px; font-weight: 600;">성과형</div>
@@ -15590,6 +16114,13 @@
               📝 Metric 이름 <span style="color: var(--danger);">*</span>
             </label>
             <input type="text" id="newLagName" placeholder="예: SNS 마케팅" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;" />
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              📋 완료 기준 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
+            </label>
+            <textarea id="newLagDescription" placeholder="예: 9개 카테고리 전체 메시지 정립 완료 시" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box; resize: vertical; min-height: 60px;"></textarea>
           </div>
 
           <div style="margin-bottom: 16px; display: none;">
@@ -15629,6 +16160,7 @@
     // 지표 추가 실행
     async function addNewLaggingIndicator(krId, kpiId, krIdx) {
       const name = document.getElementById('newLagName')?.value?.trim();
+      const description = document.getElementById('newLagDescription')?.value?.trim() || '';
       const version = document.getElementById('newLagVersion')?.value || 'A';
       const typeRadio = document.querySelector('input[name="newLagType"]:checked');
       const lagType = typeRadio?.value || 'input';
@@ -15644,6 +16176,7 @@
         const newLag = {
           kpiId,
           name,
+          description,
           version,
           target: 10,
           type: lagType, // 'input' 또는 'output'
@@ -15735,6 +16268,13 @@
           </div>
 
           <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              📋 완료 기준 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
+            </label>
+            <textarea id="editLagDescription" placeholder="예: 9개 카테고리 전체 메시지 정립 완료 시" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box; resize: vertical; min-height: 60px;">${lag.description || ''}</textarea>
+          </div>
+
+          <div style="margin-bottom: 16px;">
             <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
               📊 유형 <span style="color: var(--danger);">*</span>
             </label>
@@ -15746,14 +16286,14 @@
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
               <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid ${!isResultType ? okrColors[krIdx] : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; background: ${!isResultType ? okrColors[krIdx] + '10' : 'white'};" onclick="document.getElementById('editLagValuePerUnit').parentElement.style.display='none';">
-                <input type="radio" name="editLagType" value="activity" ${!isResultType ? 'checked' : ''} style="accent-color: ${okrColors[krIdx]};">
+                <input type="radio" name="editLagType" value="input" ${!isResultType ? 'checked' : ''} style="accent-color: ${okrColors[krIdx]};">
                 <div>
                   <div style="font-size: 13px; font-weight: 600;">📋 활동형</div>
                   <div style="font-size: 10px; color: var(--gray-500);">행동 횟수 추적 (참고용)</div>
                 </div>
               </label>
               <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid ${isResultType ? 'var(--success)' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; background: ${isResultType ? 'var(--success-light)' : 'white'};" onclick="document.getElementById('editLagValuePerUnit').parentElement.style.display='block';">
-                <input type="radio" name="editLagType" value="result" ${isResultType ? 'checked' : ''} style="accent-color: var(--success);">
+                <input type="radio" name="editLagType" value="output" ${isResultType ? 'checked' : ''} style="accent-color: var(--success);">
                 <div>
                   <div style="font-size: 13px; font-weight: 600;">💰 성과형</div>
                   <div style="font-size: 10px; color: var(--gray-500);">KPI 달성에 반영</div>
@@ -15816,6 +16356,7 @@
       if (!lag) return;
 
       const newName = document.getElementById('editLagName')?.value?.trim();
+      const newDescription = document.getElementById('editLagDescription')?.value?.trim() || '';
       const newVersion = document.getElementById('editLagVersion')?.value || 'A';
       const newTarget = parseInt(document.getElementById('editLagTarget')?.value) || 10;
       const newType = document.querySelector('input[name="editLagType"]:checked')?.value || 'input';
@@ -15828,6 +16369,7 @@
       }
 
       const oldName = lag.name;
+      const oldDescription = lag.description;
       const oldVersion = lag.version;
       const oldType = lag.type;
       const oldValuePerUnit = lag.valuePerUnit;
@@ -15835,6 +16377,7 @@
       try {
         await db.collection('okr_laggingIndicators').doc(lagId).update({
           name: newName,
+          description: newDescription,
           version: newVersion,
           target: newTarget,
           type: newType,
@@ -15848,6 +16391,7 @@
           id: lagId,
           changes: {
             name: { from: oldName, to: newName },
+            description: { from: oldDescription, to: newDescription },
             version: { from: oldVersion, to: newVersion },
             type: { from: oldType, to: newType },
             valuePerUnit: { from: oldValuePerUnit, to: newValuePerUnit }
@@ -15856,6 +16400,7 @@
 
         // 로컬 상태 업데이트
         lag.name = newName;
+        lag.description = newDescription;
         lag.version = newVersion;
         lag.target = newTarget;
         lag.type = newType;
@@ -16061,7 +16606,7 @@
       formArea.innerHTML = `
         <div style="width: 100%;">
           <!-- 헤더 -->
-          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid ${okrColors[krIdx]};">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: ${lag.description ? '12px' : '20px'}; padding-bottom: 16px; border-bottom: 2px solid ${okrColors[krIdx]};">
             <span style="font-size: 28px;">${getOkrLagIcon(lag.name)}</span>
             <div>
               <div style="font-size: 16px; font-weight: 700; color: var(--gray-800);">${lag.name}</div>
@@ -16069,6 +16614,13 @@
               <div style="font-size: 10px; color: var(--gray-400); margin-top: 2px;">${isInputMetric ? '📋 Input Metric' : '💰 Output Metric'} · KPI 단위: ${kpi.unit || '-'}</div>
             </div>
           </div>
+          ${lag.description ? `
+          <!-- 완료 기준 -->
+          <div style="margin-bottom: 16px; padding: 10px 12px; background: var(--gray-50); border-left: 3px solid ${okrColors[krIdx]}; border-radius: 0 8px 8px 0;">
+            <div style="font-size: 11px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">📋 완료 기준</div>
+            <div style="font-size: 12px; color: var(--gray-700); line-height: 1.4;">${lag.description}</div>
+          </div>
+          ` : ''}
 
           <!-- 버전 선택 -->
           <div style="margin-bottom: 16px;">
@@ -19293,6 +19845,527 @@
       }
     }
 
+    // ========== 회의록/메모 관리 (노타빌리티 연동) ==========
+
+    // 회의록 상태 초기화
+    let meetingNotesState = {
+      notes: [],
+      filter: 'all'
+    };
+
+    // 구글 드라이브 API 설정
+    let GOOGLE_DRIVE_CONFIG = {
+      clientId: '',
+      apiKey: '',
+      appId: '',
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      pickerLoaded: false,
+      oauthToken: null
+    };
+
+    // Firestore에서 Google API 설정 로드
+    async function loadGoogleDriveConfig() {
+      try {
+        const doc = await db.collection('settings').doc('googleDrive').get();
+        if (doc.exists) {
+          const data = doc.data();
+          GOOGLE_DRIVE_CONFIG.clientId = data.clientId || '';
+          GOOGLE_DRIVE_CONFIG.apiKey = data.apiKey || '';
+          GOOGLE_DRIVE_CONFIG.appId = data.appId || '';
+        }
+      } catch (error) {
+        console.log('Google Drive 설정 로드 실패:', error);
+      }
+    }
+
+    // 회의록/메모 렌더링
+    function renderMeetingNotes() {
+      const container = document.getElementById('meetingNotesContent');
+      if (!container) return;
+
+      const notes = meetingNotesState.notes || [];
+      const categories = {
+        meeting: notes.filter(n => n.category === 'meeting'),
+        memo: notes.filter(n => n.category === 'memo'),
+        idea: notes.filter(n => n.category === 'idea'),
+        other: notes.filter(n => !n.category || n.category === 'other')
+      };
+
+      container.innerHTML = `
+        <div class="page-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+          <div>
+            <h1 class="page-title">📓 회의록/메모</h1>
+            <p class="page-desc">노타빌리티에서 작성한 노트를 구글 드라이브를 통해 관리합니다</p>
+          </div>
+          <div style="display: flex; gap: 12px;">
+            <button onclick="openGDriveNotabilityPicker()" class="btn" style="display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #4285f4, #34a853); color: white;">
+              <svg width="18" height="18" viewBox="0 0 87.3 78" fill="white">
+                <path d="M6.6 66.85L0 78h30.7l6.6-11.15z"/>
+                <path d="M43.65 0L0 78h13.2l43.65-78z"/>
+                <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z"/>
+              </svg>
+              구글 드라이브에서 가져오기
+            </button>
+            <button onclick="openAddMeetingNoteModal()" class="btn btn-primary">+ 직접 추가</button>
+          </div>
+        </div>
+
+        <!-- 구글 드라이브 연동 안내 -->
+        <div style="background: linear-gradient(135deg, #ede9fe, #fae8ff); border-radius: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid #c4b5fd;">
+          <div style="display: flex; gap: 12px; align-items: flex-start;">
+            <span style="font-size: 24px;">📱</span>
+            <div style="flex: 1;">
+              <h4 style="margin: 0 0 8px 0; color: #5b21b6; font-size: 14px;">노타빌리티 연동 방법</h4>
+              <ol style="margin: 0; padding-left: 16px; color: #6b21a8; font-size: 13px; line-height: 1.6;">
+                <li>노타빌리티 앱 → 설정 → 자동 백업 → Google Drive</li>
+                <li>PDF 형식으로 백업 설정</li>
+                <li>"구글 드라이브에서 가져오기" 버튼 클릭</li>
+              </ol>
+            </div>
+            <button onclick="this.parentElement.parentElement.style.display='none'" style="background: none; border: none; color: #9333ea; cursor: pointer; font-size: 18px;">×</button>
+          </div>
+        </div>
+
+        <!-- 통계 카드 -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+          <div style="background: white; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-sm);">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">📋</span>
+              <div>
+                <div style="font-size: 11px; color: var(--gray-500);">회의록</div>
+                <div style="font-size: 20px; font-weight: 700; color: #2563eb;">${categories.meeting.length}</div>
+              </div>
+            </div>
+          </div>
+          <div style="background: white; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-sm);">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">📝</span>
+              <div>
+                <div style="font-size: 11px; color: var(--gray-500);">메모</div>
+                <div style="font-size: 20px; font-weight: 700; color: #d97706;">${categories.memo.length}</div>
+              </div>
+            </div>
+          </div>
+          <div style="background: white; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-sm);">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">💡</span>
+              <div>
+                <div style="font-size: 11px; color: var(--gray-500);">아이디어</div>
+                <div style="font-size: 20px; font-weight: 700; color: #16a34a;">${categories.idea.length}</div>
+              </div>
+            </div>
+          </div>
+          <div style="background: white; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-sm);">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px;">📄</span>
+              <div>
+                <div style="font-size: 11px; color: var(--gray-500);">전체</div>
+                <div style="font-size: 20px; font-weight: 700; color: #7c3aed;">${notes.length}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 필터 -->
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+          <button onclick="filterNotes('all')" class="note-filter-btn ${meetingNotesState.filter === 'all' ? 'active' : ''}" data-filter="all" style="padding: 6px 14px; border: 1px solid var(--gray-300); background: ${meetingNotesState.filter === 'all' ? 'var(--primary)' : 'white'}; color: ${meetingNotesState.filter === 'all' ? 'white' : 'var(--gray-600)'}; border-radius: 16px; cursor: pointer; font-size: 12px;">전체 (${notes.length})</button>
+          <button onclick="filterNotes('meeting')" class="note-filter-btn ${meetingNotesState.filter === 'meeting' ? 'active' : ''}" data-filter="meeting" style="padding: 6px 14px; border: 1px solid var(--gray-300); background: ${meetingNotesState.filter === 'meeting' ? 'var(--primary)' : 'white'}; color: ${meetingNotesState.filter === 'meeting' ? 'white' : 'var(--gray-600)'}; border-radius: 16px; cursor: pointer; font-size: 12px;">회의록 (${categories.meeting.length})</button>
+          <button onclick="filterNotes('memo')" class="note-filter-btn ${meetingNotesState.filter === 'memo' ? 'active' : ''}" data-filter="memo" style="padding: 6px 14px; border: 1px solid var(--gray-300); background: ${meetingNotesState.filter === 'memo' ? 'var(--primary)' : 'white'}; color: ${meetingNotesState.filter === 'memo' ? 'white' : 'var(--gray-600)'}; border-radius: 16px; cursor: pointer; font-size: 12px;">메모 (${categories.memo.length})</button>
+          <button onclick="filterNotes('idea')" class="note-filter-btn ${meetingNotesState.filter === 'idea' ? 'active' : ''}" data-filter="idea" style="padding: 6px 14px; border: 1px solid var(--gray-300); background: ${meetingNotesState.filter === 'idea' ? 'var(--primary)' : 'white'}; color: ${meetingNotesState.filter === 'idea' ? 'white' : 'var(--gray-600)'}; border-radius: 16px; cursor: pointer; font-size: 12px;">아이디어 (${categories.idea.length})</button>
+        </div>
+
+        <!-- 노트 목록 -->
+        <div id="meeting-notes-list">
+          ${notes.length === 0 ? `
+            <div style="text-align: center; padding: 48px 20px; background: white; border-radius: 12px; box-shadow: var(--shadow-sm);">
+              <div style="font-size: 48px; margin-bottom: 12px;">📓</div>
+              <h3 style="color: var(--gray-700); margin: 0 0 8px 0;">아직 노트가 없습니다</h3>
+              <p style="color: var(--gray-500); margin: 0 0 20px 0;">노타빌리티에서 작성한 노트를 구글 드라이브를 통해 가져오세요</p>
+              <div style="display: flex; gap: 12px; justify-content: center;">
+                <button onclick="openGDriveNotabilityPicker()" class="btn" style="background: linear-gradient(135deg, #4285f4, #34a853); color: white;">
+                  구글 드라이브에서 가져오기
+                </button>
+                <button onclick="openAddMeetingNoteModal()" class="btn btn-outline">직접 추가</button>
+              </div>
+            </div>
+          ` : `
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
+              ${notes.filter(n => meetingNotesState.filter === 'all' || n.category === meetingNotesState.filter).map(note => renderNoteCard(note)).join('')}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // 노트 카드 렌더링
+    function renderNoteCard(note) {
+      const catConfig = {
+        meeting: { icon: '📋', label: '회의록', color: '#2563eb', bg: '#dbeafe' },
+        memo: { icon: '📝', label: '메모', color: '#d97706', bg: '#fef3c7' },
+        idea: { icon: '💡', label: '아이디어', color: '#16a34a', bg: '#dcfce7' },
+        other: { icon: '📄', label: '기타', color: '#6b7280', bg: '#f3f4f6' }
+      };
+      const cat = catConfig[note.category] || catConfig.other;
+      const date = note.createdAt ? new Date(note.createdAt).toLocaleDateString('ko-KR') : '-';
+
+      return `
+        <div class="note-card" data-category="${note.category || 'other'}" style="background: white; border-radius: 12px; padding: 16px; box-shadow: var(--shadow-sm); cursor: pointer; transition: all 0.2s;" onclick="openNoteDetail('${note.id}')" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='var(--shadow-md)'" onmouseout="this.style.transform='none'; this.style.boxShadow='var(--shadow-sm)'">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+            <span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; background: ${cat.bg}; color: ${cat.color}; border-radius: 10px; font-size: 11px; font-weight: 500;">
+              ${cat.icon} ${cat.label}
+            </span>
+            <span style="font-size: 11px; color: var(--gray-400);">${date}</span>
+          </div>
+          <h4 style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin: 0 0 6px 0; line-height: 1.4;">${note.title || '제목 없음'}</h4>
+          <p style="font-size: 12px; color: var(--gray-500); margin: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${note.summary || note.content?.substring(0, 80) || '내용 없음'}</p>
+          ${note.gdriveLink ? `
+            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--gray-100); display: flex; align-items: center; gap: 6px;">
+              <svg width="14" height="14" viewBox="0 0 87.3 78">
+                <path d="M6.6 66.85L0 78h30.7l6.6-11.15z" fill="#0066da"/>
+                <path d="M43.65 0L0 78h13.2l43.65-78z" fill="#00ac47"/>
+                <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z" fill="#ffba00"/>
+              </svg>
+              <span style="font-size: 10px; color: var(--gray-400);">Google Drive</span>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    // 필터링
+    function filterNotes(filter) {
+      meetingNotesState.filter = filter;
+      renderMeetingNotes();
+    }
+
+    // 구글 드라이브 Picker 열기
+    function openGDriveNotabilityPicker() {
+      if (!GOOGLE_DRIVE_CONFIG.clientId || !GOOGLE_DRIVE_CONFIG.apiKey) {
+        openGDriveSetupModal();
+        return;
+      }
+      loadGoogleAPIs();
+    }
+
+    // Google API 설정 모달
+    function openGDriveSetupModal() {
+      const modal = document.createElement('div');
+      modal.id = 'gdrive-setup-modal';
+      modal.innerHTML = `
+        <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 550px; max-height: 90vh; overflow-y: auto;" onclick="event.stopPropagation()">
+            <div style="padding: 20px; border-bottom: 1px solid var(--gray-200);">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="font-size: 16px; font-weight: 700; margin: 0;">Google Drive API 설정</h2>
+                <button onclick="this.closest('#gdrive-setup-modal').remove()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">×</button>
+              </div>
+            </div>
+            <div style="padding: 20px;">
+              <div style="background: #fef3c7; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
+                <p style="margin: 0; font-size: 12px; color: #92400e;"><strong>Google Cloud Console에서 API 키를 발급받아야 합니다.</strong></p>
+              </div>
+              <div style="background: #f8fafc; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                <h4 style="margin: 0 0 12px 0; font-size: 13px;">📋 설정 방법</h4>
+                <ol style="margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.8; color: var(--gray-600);">
+                  <li><a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a> 접속</li>
+                  <li>프로젝트 생성 후 "Google Drive API", "Google Picker API" 활성화</li>
+                  <li>API 키 및 OAuth 클라이언트 ID 생성</li>
+                </ol>
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">API 키 *</label>
+                <input type="text" id="gdrive-api-key" placeholder="AIza..." value="${GOOGLE_DRIVE_CONFIG.apiKey}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">OAuth 클라이언트 ID *</label>
+                <input type="text" id="gdrive-client-id" placeholder="xxx.apps.googleusercontent.com" value="${GOOGLE_DRIVE_CONFIG.clientId}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">App ID</label>
+                <input type="text" id="gdrive-app-id" placeholder="123456789" value="${GOOGLE_DRIVE_CONFIG.appId}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+              </div>
+            </div>
+            <div style="padding: 16px 20px; background: var(--gray-50); display: flex; justify-content: flex-end; gap: 10px;">
+              <button onclick="this.closest('#gdrive-setup-modal').remove()" class="btn btn-outline">취소</button>
+              <button onclick="saveGDriveConfig()" class="btn" style="background: linear-gradient(135deg, #4285f4, #34a853); color: white;">저장 후 연동</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    // Google Drive 설정 저장
+    async function saveGDriveConfig() {
+      const apiKey = document.getElementById('gdrive-api-key').value.trim();
+      const clientId = document.getElementById('gdrive-client-id').value.trim();
+      const appId = document.getElementById('gdrive-app-id').value.trim();
+
+      if (!apiKey || !clientId) {
+        alert('API 키와 클라이언트 ID를 입력해주세요.');
+        return;
+      }
+
+      try {
+        await db.collection('settings').doc('googleDrive').set({
+          apiKey, clientId, appId, updatedAt: new Date().toISOString()
+        });
+        GOOGLE_DRIVE_CONFIG.apiKey = apiKey;
+        GOOGLE_DRIVE_CONFIG.clientId = clientId;
+        GOOGLE_DRIVE_CONFIG.appId = appId;
+        document.getElementById('gdrive-setup-modal')?.remove();
+        showToast('✓ 설정이 저장되었습니다.');
+        loadGoogleAPIs();
+      } catch (error) {
+        console.error('설정 저장 실패:', error);
+        alert('설정 저장 중 오류가 발생했습니다.');
+      }
+    }
+
+    // Google API 로드
+    function loadGoogleAPIs() {
+      if (window.gapi && GOOGLE_DRIVE_CONFIG.pickerLoaded) {
+        handleAuthClick();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://apis.google.com/js/api.js';
+      script.onload = () => gapi.load('client:auth2:picker', initGoogleClient);
+      document.head.appendChild(script);
+    }
+
+    // Google Client 초기화
+    async function initGoogleClient() {
+      try {
+        await gapi.client.init({
+          apiKey: GOOGLE_DRIVE_CONFIG.apiKey,
+          clientId: GOOGLE_DRIVE_CONFIG.clientId,
+          discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
+          scope: GOOGLE_DRIVE_CONFIG.scope
+        });
+        GOOGLE_DRIVE_CONFIG.pickerLoaded = true;
+        handleAuthClick();
+      } catch (error) {
+        console.error('Google API 초기화 실패:', error);
+        alert('Google API 초기화에 실패했습니다. API 키를 확인해주세요.');
+      }
+    }
+
+    // Google 로그인
+    function handleAuthClick() {
+      const authInstance = gapi.auth2.getAuthInstance();
+      if (authInstance.isSignedIn.get()) {
+        GOOGLE_DRIVE_CONFIG.oauthToken = authInstance.currentUser.get().getAuthResponse().access_token;
+        createPicker();
+      } else {
+        authInstance.signIn().then(() => {
+          GOOGLE_DRIVE_CONFIG.oauthToken = authInstance.currentUser.get().getAuthResponse().access_token;
+          createPicker();
+        }).catch(err => alert('Google 로그인에 실패했습니다.'));
+      }
+    }
+
+    // Google Picker 생성
+    function createPicker() {
+      const docsView = new google.picker.DocsView()
+        .setIncludeFolders(true)
+        .setMimeTypes('application/pdf,image/png,image/jpeg,application/vnd.google-apps.document');
+
+      const picker = new google.picker.PickerBuilder()
+        .addView(docsView)
+        .setOAuthToken(GOOGLE_DRIVE_CONFIG.oauthToken)
+        .setDeveloperKey(GOOGLE_DRIVE_CONFIG.apiKey)
+        .setCallback(pickerCallback)
+        .setTitle('노타빌리티 노트 선택')
+        .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+        .build();
+      picker.setVisible(true);
+    }
+
+    // Picker 콜백
+    async function pickerCallback(data) {
+      if (data.action === google.picker.Action.PICKED) {
+        const files = data.docs;
+        showToast(`${files.length}개 파일을 가져오는 중...`);
+        for (const file of files) {
+          await savePickedFile(file);
+        }
+        renderMeetingNotes();
+        showToast(`✓ ${files.length}개 노트를 가져왔습니다.`);
+      }
+    }
+
+    // 파일 저장
+    async function savePickedFile(file) {
+      try {
+        const noteData = {
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          category: detectCategory(file.name),
+          gdriveLink: file.url,
+          gdriveFileId: file.id,
+          createdAt: new Date().toISOString(),
+          source: 'google-drive'
+        };
+        const docRef = await db.collection('meetingNotes').add(noteData);
+        meetingNotesState.notes.unshift({ id: docRef.id, ...noteData });
+      } catch (error) {
+        console.error('파일 저장 실패:', error);
+      }
+    }
+
+    // 카테고리 감지
+    function detectCategory(filename) {
+      const lower = filename.toLowerCase();
+      if (lower.includes('회의') || lower.includes('meeting')) return 'meeting';
+      if (lower.includes('아이디어') || lower.includes('idea')) return 'idea';
+      if (lower.includes('메모') || lower.includes('memo')) return 'memo';
+      return 'other';
+    }
+
+    // 직접 추가 모달
+    function openAddMeetingNoteModal() {
+      const modal = document.createElement('div');
+      modal.id = 'add-note-modal';
+      modal.innerHTML = `
+        <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 500px;" onclick="event.stopPropagation()">
+            <div style="padding: 20px; border-bottom: 1px solid var(--gray-200);">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="font-size: 16px; font-weight: 700; margin: 0;">📝 새 노트 추가</h2>
+                <button onclick="this.closest('#add-note-modal').remove()" style="background: none; border: none; font-size: 20px; cursor: pointer;">×</button>
+              </div>
+            </div>
+            <div style="padding: 20px;">
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">제목 *</label>
+                <input type="text" id="new-note-title" placeholder="노트 제목" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; box-sizing: border-box;">
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">카테고리</label>
+                <select id="new-note-category" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; box-sizing: border-box;">
+                  <option value="meeting">📋 회의록</option>
+                  <option value="memo">📝 메모</option>
+                  <option value="idea">💡 아이디어</option>
+                  <option value="other">📄 기타</option>
+                </select>
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">내용</label>
+                <textarea id="new-note-content" rows="6" placeholder="노트 내용..." style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; resize: vertical; box-sizing: border-box;"></textarea>
+              </div>
+            </div>
+            <div style="padding: 16px 20px; background: var(--gray-50); display: flex; justify-content: flex-end; gap: 10px;">
+              <button onclick="this.closest('#add-note-modal').remove()" class="btn btn-outline">취소</button>
+              <button onclick="saveNewNote()" class="btn btn-primary">저장</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    // 새 노트 저장
+    async function saveNewNote() {
+      const title = document.getElementById('new-note-title').value.trim();
+      const category = document.getElementById('new-note-category').value;
+      const content = document.getElementById('new-note-content').value.trim();
+
+      if (!title) { alert('제목을 입력해주세요.'); return; }
+
+      try {
+        const noteData = {
+          title, category, content,
+          summary: content.substring(0, 200),
+          createdAt: new Date().toISOString(),
+          source: 'manual'
+        };
+        const docRef = await db.collection('meetingNotes').add(noteData);
+        meetingNotesState.notes.unshift({ id: docRef.id, ...noteData });
+        document.getElementById('add-note-modal')?.remove();
+        renderMeetingNotes();
+        showToast('✓ 노트가 저장되었습니다.');
+      } catch (error) {
+        console.error('저장 실패:', error);
+        alert('저장 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 노트 상세 보기
+    function openNoteDetail(noteId) {
+      const note = meetingNotesState.notes.find(n => n.id === noteId);
+      if (!note) return;
+
+      const catConfig = {
+        meeting: { icon: '📋', label: '회의록', color: '#2563eb' },
+        memo: { icon: '📝', label: '메모', color: '#d97706' },
+        idea: { icon: '💡', label: '아이디어', color: '#16a34a' },
+        other: { icon: '📄', label: '기타', color: '#6b7280' }
+      };
+      const cat = catConfig[note.category] || catConfig.other;
+      const date = note.createdAt ? new Date(note.createdAt).toLocaleString('ko-KR') : '-';
+
+      const modal = document.createElement('div');
+      modal.id = 'note-detail-modal';
+      modal.innerHTML = `
+        <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;" onclick="event.stopPropagation()">
+            <div style="padding: 20px; border-bottom: 1px solid var(--gray-200);">
+              <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--gray-100); color: ${cat.color}; border-radius: 10px; font-size: 11px; margin-bottom: 8px;">${cat.icon} ${cat.label}</span>
+              <h2 style="font-size: 18px; font-weight: 700; margin: 8px 0 4px 0;">${note.title}</h2>
+              <p style="font-size: 11px; color: var(--gray-400); margin: 0;">${date}</p>
+            </div>
+            <div style="padding: 20px;">
+              ${note.gdriveLink ? `
+                <a href="${note.gdriveLink}" target="_blank" style="display: flex; align-items: center; gap: 10px; padding: 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; margin-bottom: 16px; text-decoration: none;">
+                  <svg width="24" height="24" viewBox="0 0 87.3 78">
+                    <path d="M6.6 66.85L0 78h30.7l6.6-11.15z" fill="#0066da"/>
+                    <path d="M43.65 0L0 78h13.2l43.65-78z" fill="#00ac47"/>
+                    <path d="M87.3 66.85L56.6 0H43.4l30.7 78h13.2z" fill="#ffba00"/>
+                  </svg>
+                  <div>
+                    <div style="font-weight: 600; color: #0369a1; font-size: 13px;">구글 드라이브에서 열기</div>
+                  </div>
+                </a>
+              ` : ''}
+              ${note.content ? `<div style="background: var(--gray-50); border-radius: 10px; padding: 16px; white-space: pre-wrap; line-height: 1.7; font-size: 13px;">${note.content}</div>` : ''}
+            </div>
+            <div style="padding: 16px 20px; background: var(--gray-50); display: flex; justify-content: space-between;">
+              <button onclick="deleteNote('${note.id}')" style="padding: 8px 16px; background: white; color: #dc2626; border: 1px solid #fecaca; border-radius: 8px; cursor: pointer; font-size: 13px;">삭제</button>
+              <button onclick="this.closest('#note-detail-modal').remove()" class="btn btn-primary">닫기</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    // 노트 삭제
+    async function deleteNote(noteId) {
+      if (!confirm('이 노트를 삭제하시겠습니까?')) return;
+      try {
+        await db.collection('meetingNotes').doc(noteId).delete();
+        meetingNotesState.notes = meetingNotesState.notes.filter(n => n.id !== noteId);
+        document.getElementById('note-detail-modal')?.remove();
+        renderMeetingNotes();
+        showToast('✓ 노트가 삭제되었습니다.');
+      } catch (error) {
+        console.error('삭제 실패:', error);
+        alert('삭제 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 회의록 데이터 로드
+    async function loadMeetingNotes() {
+      try {
+        await loadGoogleDriveConfig();
+        const snapshot = await db.collection('meetingNotes').orderBy('createdAt', 'desc').get();
+        meetingNotesState.notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      } catch (error) {
+        console.error('회의록 로드 실패:', error);
+        meetingNotesState.notes = [];
+      }
+    }
+
     // 초기화
     document.addEventListener('DOMContentLoaded', () => {
       loadAdminPassword();
@@ -19302,6 +20375,11 @@
       setTimeout(() => {
         loadOkrData();
       }, 500);
+
+      // 회의록 데이터 로드
+      setTimeout(() => {
+        loadMeetingNotes();
+      }, 1000);
 
       // 마감 업무 알림 배지 업데이트
       setTimeout(() => {
