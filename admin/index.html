@@ -10211,13 +10211,24 @@ async function toggleSellerSettlementComplete(settlementId) {
   const settlement = state.sellerSettlements?.find(s => s.id === settlementId);
   if (!settlement) return;
 
+  const isCompleting = !settlement.isCompleted; // 완료로 변경하는지 여부
+
   try {
     await db.collection('sellerSettlements').doc(settlementId).update({
-      isCompleted: !settlement.isCompleted,
-      completedAt: !settlement.isCompleted ? new Date().toISOString() : null,
+      isCompleted: isCompleting,
+      completedAt: isCompleting ? new Date().toISOString() : null,
       updatedAt: new Date().toISOString()
     });
-    showToast(settlement.isCompleted ? '정산 대기로 변경되었습니다' : '정산 완료 처리되었습니다');
+
+    // ★ KPI 자동 연동: 정산 완료 시 Output Metrics에 자동 기록
+    if (isCompleting) {
+      await syncSettlementToKPI('seller', settlement);
+    } else {
+      // 정산 취소 시 해당 기록 삭제
+      await removeSettlementFromKPI('seller', settlementId);
+    }
+
+    showToast(settlement.isCompleted ? '정산 대기로 변경되었습니다' : '정산 완료 처리되었습니다 (KPI 자동 반영)');
     closeModal();
   } catch (e) {
     console.error(e);
@@ -10231,17 +10242,103 @@ async function toggleSupplierSettlementComplete(settlementId) {
   const settlement = state.supplierSettlements?.find(s => s.id === settlementId);
   if (!settlement) return;
 
+  const isCompleting = !settlement.isCompleted;
+
   try {
     await db.collection('supplierSettlements').doc(settlementId).update({
-      isCompleted: !settlement.isCompleted,
-      completedAt: !settlement.isCompleted ? new Date().toISOString() : null,
+      isCompleted: isCompleting,
+      completedAt: isCompleting ? new Date().toISOString() : null,
       updatedAt: new Date().toISOString()
     });
-    showToast(settlement.isCompleted ? '정산 대기로 변경되었습니다' : '정산 완료 처리되었습니다');
+
+    // ★ KPI 자동 연동: 정산 완료 시 Output Metrics에 자동 기록
+    if (isCompleting) {
+      await syncSettlementToKPI('supplier', settlement);
+    } else {
+      await removeSettlementFromKPI('supplier', settlementId);
+    }
+
+    showToast(settlement.isCompleted ? '정산 대기로 변경되었습니다' : '정산 완료 처리되었습니다 (KPI 자동 반영)');
     closeModal();
   } catch (e) {
     console.error(e);
     showToast('상태 변경에 실패했습니다');
+  }
+}
+
+// ★ 정산→KPI 자동 연동 함수
+async function syncSettlementToKPI(type, settlement) {
+  try {
+    // 1. linkedToSettlement 필드가 있는 Output Metrics 찾기
+    const metricsSnapshot = await db.collection('okr_laggingIndicators')
+      .where('linkedToSettlement', '==', type)
+      .where('type', '==', 'output')
+      .limit(1)
+      .get();
+
+    if (metricsSnapshot.empty) {
+      console.log(`KPI 연동 스킵: linkedToSettlement="${type}"인 Output Metrics 없음`);
+      return;
+    }
+
+    const metric = { id: metricsSnapshot.docs[0].id, ...metricsSnapshot.docs[0].data() };
+
+    // 2. 해당 Metrics의 KPI 정보 가져오기
+    const kpiSnapshot = await db.collection('okr_kpis').doc(metric.kpiId).get();
+    if (!kpiSnapshot.exists) return;
+    const kpi = { id: kpiSnapshot.id, ...kpiSnapshot.data() };
+
+    // 3. 정산 금액 계산
+    const amount = type === 'seller'
+      ? Number(settlement.salesAmount || 0)  // 셀러: 판매액
+      : Number(settlement.totalAmount || 0); // 공급사: 총액
+
+    // 4. okr_dailyLogs에 자동 기록
+    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+
+    await db.collection('okr_dailyLogs').add({
+      date: today,
+      memberId: 'system_auto',
+      memberName: '정산 자동연동',
+      krId: kpi.keyResultId,
+      kpiId: metric.kpiId,
+      laggingIndicatorId: metric.id,
+      resultValue: amount,
+      version: 'A',
+      memo: `[자동] ${settlement.sellerName || settlement.supplierName || ''} - ${settlement.dealPeriod || ''} 정산완료`,
+      attachments: [],
+      registeredTime: now.toTimeString().slice(0, 5),
+      registeredTimestamp: now.getTime(),
+      source: 'settlement_auto',  // 자동 연동 표시
+      sourceType: type,
+      sourceId: settlement.id,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(`✅ KPI 자동 연동 완료: ${type} 정산 ${amount.toLocaleString()}원`);
+  } catch (e) {
+    console.error('KPI 자동 연동 오류:', e);
+  }
+}
+
+// ★ 정산 취소 시 KPI 기록 삭제
+async function removeSettlementFromKPI(type, settlementId) {
+  try {
+    const logsSnapshot = await db.collection('okr_dailyLogs')
+      .where('source', '==', 'settlement_auto')
+      .where('sourceType', '==', type)
+      .where('sourceId', '==', settlementId)
+      .get();
+
+    if (!logsSnapshot.empty) {
+      const batch = db.batch();
+      logsSnapshot.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      console.log(`✅ KPI 연동 기록 삭제 완료: ${logsSnapshot.size}건`);
+    }
+  } catch (e) {
+    console.error('KPI 연동 기록 삭제 오류:', e);
   }
 }
 
