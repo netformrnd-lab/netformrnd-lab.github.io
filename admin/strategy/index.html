@@ -3086,11 +3086,16 @@
     // 알림 아이콘 가져오기
     function getNotificationIcon(type) {
       switch (type) {
-        case 'meeting_reminder': return '📅';
-        case 'meeting_invite': return '📬';
+        case 'meeting_reminder': return '⏰';
+        case 'meeting_invite': return '📅';
         case 'task_assigned': return '📋';
         case 'task_completed': return '✅';
         case 'kpi_update': return '📊';
+        case 'kpi_achieved': return '🎉';
+        case 'kpi_deadline': return '⏰';
+        case 'kr_milestone': return '🏆';
+        case 'team_activity': return '👤';
+        case 'settlement_sync': return '💰';
         default: return '🔔';
       }
     }
@@ -3244,6 +3249,176 @@
         panel.style.display = 'none';
       }
     });
+
+    // ========================================
+    // KPI/OKR 알림 시스템
+    // ========================================
+
+    // KPI 목표 달성 알림 생성 (달성률이 100%에 도달했을 때)
+    async function checkAndNotifyKPIAchievement(kpiId, previousRate) {
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      if (!kpi) return;
+
+      const currentRate = parseFloat(calcOkrKPIRate(kpiId));
+
+      // 이전에 100% 미만이었다가 100% 이상 달성한 경우
+      if (previousRate < 100 && currentRate >= 100) {
+        const kr = okrState.keyResults.find(kr => kr.id === kpi.krId);
+        const krName = kr?.name || '메인 KPI';
+
+        // 팀 전체에게 알림 전송 (전략센터 팀원들)
+        const teamMembers = state.employees.filter(e =>
+          e.center === '전략센터' && e.id !== state.currentUser?.id
+        );
+
+        for (const member of teamMembers) {
+          await createNotification(
+            member.id,
+            'kpi_achieved',
+            `🎉 "${kpi.name}" 서브KPI가 목표를 달성했습니다! (${currentRate}%)`,
+            kpiId
+          );
+        }
+
+        // 자신에게도 달성 알림
+        if (state.currentUser?.id) {
+          await createNotification(
+            state.currentUser.id,
+            'kpi_achieved',
+            `🎉 축하합니다! "${kpi.name}" 서브KPI 목표를 달성했습니다! (${currentRate}%)`,
+            kpiId
+          );
+        }
+      }
+    }
+
+    // 팀 활동 알림 생성 (동료가 업무를 기록했을 때)
+    async function notifyTeamActivity(lagId, quantity, memberName) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      // 같은 KPI를 담당하는 팀원들에게만 알림
+      const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+      if (!kpi) return;
+
+      // 전략센터 팀원들 (본인 제외)
+      const teamMembers = state.employees.filter(e =>
+        e.center === '전략센터' && e.id !== state.currentUser?.id
+      );
+
+      const quantityText = quantity > 1 ? ` ${quantity}건` : '';
+
+      for (const member of teamMembers) {
+        await createNotification(
+          member.id,
+          'team_activity',
+          `👤 ${memberName}님이 "${lag.name}"${quantityText}을 기록했습니다`,
+          lag.kpiId
+        );
+      }
+    }
+
+    // KPI 마감일 임박 알림 체크 (페이지 로드 시 실행)
+    async function checkKPIDeadlineNotifications() {
+      const currentUserId = state.currentUser?.id;
+      if (!currentUserId) return;
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      for (const kpi of okrState.kpis) {
+        if (!kpi.dueDate) continue;
+
+        const dueDate = new Date(kpi.dueDate);
+        dueDate.setHours(0, 0, 0, 0);
+
+        const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+
+        // 3일 전, 1일 전 알림
+        const notifyDays = [3, 1];
+
+        for (const days of notifyDays) {
+          if (diffDays === days) {
+            // 이미 생성된 알림인지 확인
+            const existingNotif = (state.notifications || []).find(n =>
+              n.type === 'kpi_deadline' &&
+              n.targetId === kpi.id &&
+              n.recipientId === currentUserId &&
+              n.daysRemaining === days
+            );
+
+            if (!existingNotif) {
+              const currentRate = parseFloat(calcOkrKPIRate(kpi.id));
+              const dayLabel = days === 1 ? '내일' : `${days}일 후`;
+
+              await db.collection('notifications').add({
+                recipientId: currentUserId,
+                type: 'kpi_deadline',
+                message: `⏰ "${kpi.name}" 서브KPI 마감이 ${dayLabel}입니다 (현재 달성률: ${currentRate}%)`,
+                targetId: kpi.id,
+                daysRemaining: days,
+                isRead: false,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 메인 KPI 달성률 알림 체크 (메인 KPI 50%, 80%, 100% 달성 시)
+    async function checkKRMilestoneNotifications(krId) {
+      const kr = okrState.keyResults.find(k => k.id === krId);
+      if (!kr) return;
+
+      const currentRate = parseFloat(calcOkrKRRate(krId));
+      const milestones = [50, 80, 100];
+
+      for (const milestone of milestones) {
+        // 마일스톤 도달 확인
+        if (currentRate >= milestone) {
+          // 이미 알림 생성되었는지 확인
+          const existingNotif = (state.notifications || []).find(n =>
+            n.type === 'kr_milestone' &&
+            n.targetId === krId &&
+            n.milestone === milestone
+          );
+
+          if (!existingNotif) {
+            // 전략센터 팀원 전체에게 알림
+            const teamMembers = state.employees.filter(e => e.center === '전략센터');
+
+            const emoji = milestone === 100 ? '🎉' : milestone === 80 ? '🔥' : '💪';
+
+            for (const member of teamMembers) {
+              await db.collection('notifications').add({
+                recipientId: member.id,
+                type: 'kr_milestone',
+                message: `${emoji} "${kr.name}" 메인KPI가 ${milestone}%를 달성했습니다!`,
+                targetId: krId,
+                milestone: milestone,
+                isRead: false,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 알림 아이콘 매핑 업데이트
+    function getNotificationIconUpdated(type) {
+      switch(type) {
+        case 'meeting_invite': return '📅';
+        case 'meeting_reminder': return '⏰';
+        case 'kpi_achieved': return '🎉';
+        case 'kpi_deadline': return '⏰';
+        case 'kr_milestone': return '🏆';
+        case 'team_activity': return '👤';
+        case 'settlement_sync': return '💰';
+        default: return '🔔';
+      }
+    }
 
     // 범용 모달 열기
     function showModal(content) {
@@ -13959,6 +14134,9 @@
         // 미팅 리마인더 체크 (알림 생성)
         setTimeout(() => checkMeetingReminders(), 1000);
 
+        // KPI 마감일 알림 체크
+        setTimeout(() => checkKPIDeadlineNotifications(), 1500);
+
       } catch (e) {
         console.error('OKR 데이터 로드 오류:', e);
       }
@@ -14040,14 +14218,16 @@
     function calcOkrObjectiveRate() {
       if (okrState.keyResults.length === 0) return 0;
       const rates = okrState.keyResults.map(kr => calcOkrKRRate(kr.id));
-      return Math.round(rates.reduce((a, b) => a + b, 0) / rates.length);
+      // 팀 그로스보드: 소수 셋째자리까지
+      return (rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(3);
     }
 
     function calcOkrKRRate(krId) {
       const kpisForKR = okrState.kpis.filter(k => k.keyResultId === krId);
       if (kpisForKR.length === 0) return 0;
-      const rates = kpisForKR.map(kpi => calcOkrKPIRate(kpi.id));
-      return Math.round(rates.reduce((a, b) => a + b, 0) / rates.length);
+      const rates = kpisForKR.map(kpi => parseFloat(calcOkrKPIRate(kpi.id)));
+      // 메인 KPI: 소수 둘째자리까지
+      return (rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(2);
     }
 
     function calcOkrKPIRate(kpiId) {
@@ -14068,7 +14248,8 @@
         return sum + logSum;
       }, 0);
 
-      return Math.min(Math.round((totalValue / kpi.targetValue) * 100), 100);
+      // 서브 KPI: 소수 둘째자리까지
+      return Math.min((totalValue / kpi.targetValue) * 100, 100).toFixed(2);
     }
 
     // 활동형 지표 통계 계산
@@ -17641,6 +17822,25 @@
         const quantityText = quantity > 1 ? ` (${quantity}건)` : '';
         const versionText = ` [${versionName}]`;
         showUndoNotification(`${lag?.name || '업무'}${versionText}${quantityText}`);
+
+        // ===== KPI 알림 시스템 트리거 =====
+        // 1. 기록 전 달성률 (로컬 상태 업데이트 전에 계산됨)
+        const prevRate = parseFloat(calcOkrKPIRate(kpiId));
+
+        // 2. KPI 목표 달성 체크 (Output 지표인 경우에만)
+        if (lag?.type === 'output') {
+          // 로컬 상태 업데이트 후 현재 달성률 계산
+          setTimeout(async () => {
+            await checkAndNotifyKPIAchievement(kpiId, prevRate);
+            // 메인 KPI 마일스톤 체크
+            await checkKRMilestoneNotifications(krId);
+          }, 500);
+        }
+
+        // 3. 팀 활동 알림 (성과형 지표인 경우에만 - 노이즈 방지)
+        if (lag?.type === 'output' && state.currentUser?.name) {
+          await notifyTeamActivity(lagId, quantity, state.currentUser.name);
+        }
       } catch (e) {
         console.error('기록 오류:', e);
         showToast('기록 실패', 'error');
