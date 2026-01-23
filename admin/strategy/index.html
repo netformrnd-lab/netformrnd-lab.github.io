@@ -2138,9 +2138,11 @@
         state.supplierSettlements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       });
 
-      // 팀원 데이터 (영업현황용)
+      // 팀원 데이터 (영업현황용) - 관리자와 매니저만 표시
       db.collection('teamMembers').orderBy('name').onSnapshot(snapshot => {
-        state.teamMembers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        state.teamMembers = snapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(member => member.role === 'admin' || member.role === 'manager');
         if (state.currentTab === 'dashboard') renderSalesDashboard();
       });
 
@@ -14272,7 +14274,7 @@
       return Math.min((totalValue / kpi.targetValue) * 100, 100).toFixed(2);
     }
 
-    // 총 성과지표 달성률 계산 (NEW) - 단위별 성과지표들의 평균
+    // 총 성과지표 달성률 계산 (NEW) - 단위별 성과지표들의 가중평균 (weight 기반)
     function calcTotalMetricRate(totalMetricId) {
       const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
       if (!totalMetric) return 0;
@@ -14282,10 +14284,26 @@
 
       if (unitMetrics.length === 0) return 0;
 
-      const rates = unitMetrics.map(um => parseFloat(calcUnitMetricRate(um.id)));
-      const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+      // weight가 설정되어 있으면 가중평균, 없으면 단순평균
+      const hasWeights = unitMetrics.some(um => um.weight !== undefined && um.weight !== null);
 
-      return avgRate.toFixed(2);
+      if (hasWeights) {
+        // 가중평균 계산
+        let weightedSum = 0;
+        let totalWeight = 0;
+        unitMetrics.forEach(um => {
+          const rate = parseFloat(calcUnitMetricRate(um.id));
+          const weight = um.weight || 0;
+          weightedSum += rate * weight;
+          totalWeight += weight;
+        });
+        return totalWeight > 0 ? (weightedSum / totalWeight).toFixed(2) : 0;
+      } else {
+        // 단순평균 계산
+        const rates = unitMetrics.map(um => parseFloat(calcUnitMetricRate(um.id)));
+        const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+        return avgRate.toFixed(2);
+      }
     }
 
     // 성과지표(단위별) 달성률 계산 (NEW)
@@ -14497,7 +14515,19 @@
                                   return `
                                     <div style="background: var(--gray-50); border-radius: 8px; padding: 10px; margin-bottom: 8px;">
                                       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                        <div style="font-size: 11px; font-weight: 600; color: var(--gray-700);">📊 ${tm.name} (총 성과지표)</div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                          <div style="font-size: 11px; font-weight: 600; color: var(--gray-700);">📊 ${tm.name} (총 성과지표)</div>
+                                          ${unitMetrics.length > 1 ? `
+                                            <button
+                                              onclick="event.stopPropagation(); openWeightAdjustModal('${tm.id}')"
+                                              style="padding: 2px 8px; border: 1px solid var(--gray-300); border-radius: 4px; background: white; color: var(--gray-600); font-size: 9px; cursor: pointer;"
+                                              onmouseover="this.style.background='var(--gray-100)'"
+                                              onmouseout="this.style.background='white'"
+                                              title="성과지표 지분 조정">
+                                              ⚖️ 지분조정
+                                            </button>
+                                          ` : ''}
+                                        </div>
                                         <span style="font-size: 11px; font-weight: 700; color: ${tmStatusColor};">${tmRate}%</span>
                                       </div>
 
@@ -15028,9 +15058,9 @@
                   <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">메인 KPI</th>
                   <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">서브 KPI</th>
                   <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">목표</th>
-                  <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">현재</th>
+                  <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">총 성과지표</th>
+                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">행동지표</th>
                   <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">달성률</th>
-                  <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">진행</th>
                   <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200); width: 50px;"></th>
                 </tr>
               </thead>
@@ -15105,11 +15135,18 @@
                           </div>
                         </td>
                         <td style="padding: 12px; text-align: right; color: var(--gray-500);">${formatAmountWithSummary(kpi.targetValue || 0, kpi.unit || '')}</td>
-                        <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">${formatAmountWithSummary(kpi.currentValue, kpi.unit || '')}</td>
-                        <td style="padding: 12px; text-align: center;">
-                          <span style="font-weight: 700; color: ${statusColor};">${kpi.rate}%</span>
+                        <td style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-700);">
+                          ${formatAmountWithSummary(kpi.currentValue, kpi.unit || '')}
+                          ${outputMetrics.length > 0 ? `<div style="font-size: 10px; color: var(--gray-400); margin-top: 2px;">📤 ${outputMetrics.length}개</div>` : ''}
                         </td>
-                        <td style="padding: 12px; width: 100px;">
+                        <td style="padding: 12px; text-align: center;">
+                          ${inputMetrics.length > 0 ? `
+                            <div style="font-size: 12px; font-weight: 600; color: var(--gray-600);">${inputMetrics.length}개</div>
+                            <div style="font-size: 10px; color: var(--gray-400);">📥 Input</div>
+                          ` : `<span style="font-size: 11px; color: var(--gray-400);">-</span>`}
+                        </td>
+                        <td style="padding: 12px; text-align: center; width: 120px;">
+                          <div style="font-weight: 700; color: ${statusColor}; margin-bottom: 4px;">${kpi.rate}%</div>
                           <div style="height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden;">
                             <div style="height: 100%; width: ${Math.min(kpi.rate, 100)}%; background: ${statusColor}; border-radius: 3px;"></div>
                           </div>
@@ -16982,10 +17019,240 @@
 
         lag.totalMetricId = totalMetricId || null;
 
+        // 연결 후 자동으로 weight 재분배
+        if (totalMetricId) {
+          await autoDistributeWeights(totalMetricId);
+        }
+
         showToast('연결 완료', 'success');
       } catch (e) {
         console.error('연결 오류:', e);
         showToast('연결 실패', 'error');
+      }
+    }
+
+    // 성과지표 지분 자동 분배
+    async function autoDistributeWeights(totalMetricId) {
+      try {
+        const indicators = okrState.laggingIndicators.filter(l =>
+          l.totalMetricId === totalMetricId && l.type === 'output'
+        );
+
+        if (indicators.length === 0) return;
+
+        const weight = 100 / indicators.length;
+
+        // 각 지표에 동일한 weight 분배
+        for (const ind of indicators) {
+          await db.collection('okr_laggingIndicators').doc(ind.id).update({
+            weight: parseFloat(weight.toFixed(2)),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          ind.weight = parseFloat(weight.toFixed(2));
+        }
+
+        console.log(`Weight 자동 분배 완료: ${indicators.length}개 지표에 각 ${weight.toFixed(2)}%`);
+      } catch (e) {
+        console.error('Weight 자동 분배 오류:', e);
+      }
+    }
+
+    // 성과지표 지분 수동 조정 모달
+    function openWeightAdjustModal(totalMetricId) {
+      const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
+      if (!totalMetric) return;
+
+      const indicators = okrState.laggingIndicators.filter(l =>
+        l.totalMetricId === totalMetricId && l.type === 'output'
+      );
+
+      if (indicators.length === 0) {
+        showToast('연결된 성과지표가 없습니다', 'warning');
+        return;
+      }
+
+      const kpi = okrState.kpis.find(k => k.id === totalMetric.kpiId);
+      const kr = okrState.keyResults.find(kr => kr.id === kpi?.keyResultId);
+      const krIdx = okrState.keyResults.indexOf(kr);
+
+      showModal(`
+        <div style="padding: 24px;">
+          <h3 style="margin: 0 0 8px 0; font-size: 18px; color: var(--gray-800);">성과지표 지분 조정</h3>
+          <p style="margin: 0 0 24px 0; font-size: 13px; color: var(--gray-500);">총 성과지표: ${totalMetric.name}</p>
+
+          <div style="background: var(--gray-50); padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+            ${indicators.map((ind, idx) => `
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+                  ${ind.name}
+                </label>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <input
+                    type="range"
+                    id="weight-slider-${ind.id}"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value="${ind.weight || (100 / indicators.length).toFixed(2)}"
+                    oninput="updateWeightDisplay('${ind.id}')"
+                    style="flex: 1;"
+                  />
+                  <input
+                    type="number"
+                    id="weight-input-${ind.id}"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value="${ind.weight || (100 / indicators.length).toFixed(2)}"
+                    oninput="updateWeightSlider('${ind.id}')"
+                    style="width: 70px; padding: 6px 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px; text-align: right;"
+                  />
+                  <span style="font-size: 13px; color: var(--gray-600); width: 20px;">%</span>
+                </div>
+              </div>
+            `).join('')}
+
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 2px solid var(--gray-300);">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 14px; font-weight: 600; color: var(--gray-700);">총합</span>
+                <span id="total-weight" style="font-size: 16px; font-weight: 700; color: var(--gray-800);">100.0%</span>
+              </div>
+              <div id="weight-warning" style="margin-top: 8px; font-size: 12px; color: var(--danger); display: none;">
+                ⚠️ 총합이 100%가 되어야 저장할 수 있습니다.
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px;">
+            <button
+              onclick="applyWeightChanges('${totalMetricId}')"
+              id="save-weight-btn"
+              style="flex: 1; padding: 12px; background: ${okrColors[krIdx]}; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;"
+              onmouseover="this.style.opacity='0.9'"
+              onmouseout="this.style.opacity='1'">
+              저장
+            </button>
+            <button
+              onclick="autoDistributeWeights('${totalMetricId}'); hideModal(); setTimeout(() => openWeightAdjustModal('${totalMetricId}'), 300);"
+              style="flex: 1; padding: 12px; background: var(--gray-500); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;"
+              onmouseover="this.style.opacity='0.9'"
+              onmouseout="this.style.opacity='1'">
+              균등 분배
+            </button>
+            <button
+              onclick="hideModal()"
+              style="padding: 12px 24px; background: white; color: var(--gray-600); border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;"
+              onmouseover="this.style.background='var(--gray-50)'"
+              onmouseout="this.style.background='white'">
+              취소
+            </button>
+          </div>
+        </div>
+      `);
+
+      // 초기 총합 체크
+      setTimeout(() => updateTotalWeight(totalMetricId), 100);
+    }
+
+    // Weight 슬라이더 업데이트
+    function updateWeightDisplay(indId) {
+      const slider = document.getElementById(`weight-slider-${indId}`);
+      const input = document.getElementById(`weight-input-${indId}`);
+      if (slider && input) {
+        input.value = parseFloat(slider.value).toFixed(1);
+        updateTotalWeight();
+      }
+    }
+
+    // Weight 입력 필드 업데이트
+    function updateWeightSlider(indId) {
+      const slider = document.getElementById(`weight-slider-${indId}`);
+      const input = document.getElementById(`weight-input-${indId}`);
+      if (slider && input) {
+        let value = parseFloat(input.value);
+        if (value > 100) value = 100;
+        if (value < 0) value = 0;
+        slider.value = value;
+        input.value = value.toFixed(1);
+        updateTotalWeight();
+      }
+    }
+
+    // 총 Weight 계산 및 표시
+    function updateTotalWeight() {
+      const indicators = okrState.laggingIndicators.filter(l =>
+        document.getElementById(`weight-slider-${l.id}`)
+      );
+
+      let total = 0;
+      indicators.forEach(ind => {
+        const slider = document.getElementById(`weight-slider-${ind.id}`);
+        if (slider) {
+          total += parseFloat(slider.value);
+        }
+      });
+
+      const totalWeightEl = document.getElementById('total-weight');
+      const warningEl = document.getElementById('weight-warning');
+      const saveBtn = document.getElementById('save-weight-btn');
+
+      if (totalWeightEl) {
+        totalWeightEl.textContent = total.toFixed(1) + '%';
+        const isValid = Math.abs(total - 100) < 0.1;
+        totalWeightEl.style.color = isValid ? 'var(--success)' : 'var(--danger)';
+
+        if (warningEl) {
+          warningEl.style.display = isValid ? 'none' : 'block';
+        }
+
+        if (saveBtn) {
+          saveBtn.disabled = !isValid;
+          saveBtn.style.opacity = isValid ? '1' : '0.5';
+          saveBtn.style.cursor = isValid ? 'pointer' : 'not-allowed';
+        }
+      }
+    }
+
+    // Weight 변경사항 적용
+    async function applyWeightChanges(totalMetricId) {
+      try {
+        const indicators = okrState.laggingIndicators.filter(l =>
+          l.totalMetricId === totalMetricId && l.type === 'output'
+        );
+
+        // 총합 검증
+        let total = 0;
+        const weights = {};
+        indicators.forEach(ind => {
+          const input = document.getElementById(`weight-input-${ind.id}`);
+          if (input) {
+            const weight = parseFloat(input.value);
+            weights[ind.id] = weight;
+            total += weight;
+          }
+        });
+
+        if (Math.abs(total - 100) >= 0.1) {
+          showToast('총합이 100%가 되어야 합니다', 'error');
+          return;
+        }
+
+        // 저장
+        for (const ind of indicators) {
+          if (weights[ind.id] !== undefined) {
+            await db.collection('okr_laggingIndicators').doc(ind.id).update({
+              weight: weights[ind.id],
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            ind.weight = weights[ind.id];
+          }
+        }
+
+        hideModal();
+        showToast('지분이 조정되었습니다', 'success');
+      } catch (e) {
+        console.error('Weight 저장 오류:', e);
+        showToast('저장 실패', 'error');
       }
     }
 
