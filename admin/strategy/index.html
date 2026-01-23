@@ -1373,7 +1373,7 @@
               <span style="font-size: 12px; color: var(--gray-500);">그룹:</span>
               <select id="taskPlanGroupBy" onchange="filterTaskPlan()" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white;">
                 <option value="status">상태별</option>
-                <option value="kr">KR별</option>
+                <option value="kr">메인 KPI별</option>
                 <option value="assignee">담당자별</option>
               </select>
             </div>
@@ -2721,7 +2721,7 @@
           switch (type) {
             case 'laggingIndicator': return '지표';
             case 'kpi': return 'KPI';
-            case 'keyResult': return 'KR';
+            case 'keyResult': return '메인 KPI';
             case 'dailyLog': return '업무기록';
             default: return type;
           }
@@ -3405,7 +3405,7 @@
 
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div style="background: white; padding: 12px; border-radius: 8px;">
-                  <div style="font-weight: 600; color: var(--gray-600); margin-bottom: 6px;">📋 활동형 지표</div>
+                  <div style="font-weight: 600; color: var(--gray-600); margin-bottom: 6px;">📥 활동형(Input) 지표</div>
                   <div style="font-size: 12px; color: var(--gray-600);">
                     • 일상 업무 활동 추적 (참고용)<br>
                     • KPI 달성률에 직접 반영 안됨<br>
@@ -3413,7 +3413,7 @@
                   </div>
                 </div>
                 <div style="background: white; padding: 12px; border-radius: 8px;">
-                  <div style="font-weight: 600; color: var(--success); margin-bottom: 6px;">💰 성과형 지표</div>
+                  <div style="font-weight: 600; color: var(--success); margin-bottom: 6px;">📤 성과형(Output) 지표</div>
                   <div style="font-size: 12px; color: var(--gray-600);">
                     • 실제 성과를 측정<br>
                     • KPI 달성률에 직접 반영<br>
@@ -14516,12 +14516,19 @@
       }
 
       const oRate = calcOkrObjectiveRate();
-      const krRates = okrState.keyResults.map(kr => ({ ...kr, rate: calcOkrKRRate(kr.id) }));
+      // 대시보드에서 숨길 메인KPI 패턴 (기타업무, 넷폼알앤디 별도 업무 등)
+      const hiddenKRPatterns = ['기타업무', '넷폼알앤디 별도', '별도 업무', '기타 업무'];
+      const isHiddenKR = (krName) => hiddenKRPatterns.some(pattern => krName && krName.includes(pattern));
 
-      // KPI 현황 데이터 준비
-      const kpiStatusData = okrState.kpis.map(kpi => {
-        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
-        const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
+      // 대시보드 표시용 메인KPI (숨김 패턴 제외)
+      const visibleKeyResults = okrState.keyResults.filter(kr => !isHiddenKR(kr.name));
+      const krRates = visibleKeyResults.map(kr => ({ ...kr, rate: calcOkrKRRate(kr.id) }));
+
+      // KPI 현황 데이터 준비 (숨김 메인KPI의 서브KPI도 제외)
+      const hiddenKRIds = okrState.keyResults.filter(kr => isHiddenKR(kr.name)).map(kr => kr.id);
+      const kpiStatusData = okrState.kpis.filter(kpi => !hiddenKRIds.includes(kpi.keyResultId)).map(kpi => {
+        const kr = visibleKeyResults.find(k => k.id === kpi.keyResultId);
+        const krIdx = visibleKeyResults.findIndex(k => k.id === kpi.keyResultId);
         const rate = calcOkrKPIRate(kpi.id);
         const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
         const currentValue = lagsForKPI.reduce((sum, lag) => {
@@ -14661,7 +14668,7 @@
               </select>
               <select id="kpiFilterKR" onchange="updateKpiFilter('krId', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
                 <option value="all" ${okrState.kpiFilter.krId === 'all' ? 'selected' : ''}>전체 메인 KPI</option>
-                ${okrState.keyResults.map((kr, idx) => `<option value="${kr.id}" ${okrState.kpiFilter.krId === kr.id ? 'selected' : ''}>● ${kr.name}</option>`).join('')}
+                ${visibleKeyResults.map((kr, idx) => `<option value="${kr.id}" ${okrState.kpiFilter.krId === kr.id ? 'selected' : ''}>● ${kr.name}</option>`).join('')}
               </select>
               <select id="kpiFilterStatus" onchange="updateKpiFilter('status', this.value)" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; cursor: pointer; background: white;">
                 <option value="all" ${okrState.kpiFilter.status === 'all' ? 'selected' : ''}>전체 상태</option>
@@ -14679,8 +14686,8 @@
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
               <thead>
                 <tr style="background: var(--gray-50);">
-                  <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">KR</th>
-                  <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">KPI</th>
+                  <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">메인 KPI</th>
+                  <th style="padding: 12px; text-align: left; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">서브 KPI</th>
                   <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">목표</th>
                   <th style="padding: 12px; text-align: right; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">현재</th>
                   <th style="padding: 12px; text-align: center; font-weight: 600; color: var(--gray-600); border-bottom: 2px solid var(--gray-200);">달성률</th>
@@ -14853,7 +14860,7 @@
             <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; border-left: 4px solid var(--gray-400);">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: flex; align-items: center; gap: 6px;">
-                  📋 활동형 지표
+                  📥 활동형(Input) 지표
                 </div>
                 <span style="font-size: 11px; padding: 2px 8px; background: var(--gray-200); color: var(--gray-600); border-radius: 10px;">참고용</span>
               </div>
@@ -14885,7 +14892,7 @@
             <div style="background: var(--success-light); border-radius: 12px; padding: 16px; border-left: 4px solid var(--success);">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: flex; align-items: center; gap: 6px;">
-                  💰 성과형 지표
+                  📤 성과형(Output) 지표
                 </div>
                 <span style="font-size: 11px; padding: 2px 8px; background: var(--success); color: white; border-radius: 10px;">KPI 반영</span>
               </div>
@@ -15170,12 +15177,12 @@
           <!-- 활동형/성과형 요약 카드 -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
             <div style="background: linear-gradient(135deg, #ECFDF5, #D1FAE5); padding: 20px; border-radius: 12px; border-left: 4px solid #10B981;">
-              <div style="font-size: 12px; color: #059669; margin-bottom: 8px; font-weight: 600;">📋 활동형</div>
+              <div style="font-size: 12px; color: #059669; margin-bottom: 8px; font-weight: 600;">📥 활동형(Input)</div>
               <div style="font-size: 28px; font-weight: 800; color: #047857;">${totalActivityCount}<span style="font-size: 14px; font-weight: 500;">건</span></div>
               <div style="font-size: 12px; color: #10B981; margin-top: 4px;">${activityRate}% 달성</div>
             </div>
             <div style="background: linear-gradient(135deg, #FFFBEB, #FEF3C7); padding: 20px; border-radius: 12px; border-left: 4px solid #F59E0B;">
-              <div style="font-size: 12px; color: #D97706; margin-bottom: 8px; font-weight: 600;">💰 성과형</div>
+              <div style="font-size: 12px; color: #D97706; margin-bottom: 8px; font-weight: 600;">📤 성과형(Output)</div>
               <div style="font-size: 28px; font-weight: 800; color: #B45309;">${totalResultValue}<span style="font-size: 14px; font-weight: 500;">건</span></div>
               <div style="font-size: 12px; color: #F59E0B; margin-top: 4px;">${resultRate}% 달성</div>
             </div>
@@ -15187,7 +15194,7 @@
           <!-- 활동형 지표 -->
           <div class="card" style="background: linear-gradient(180deg, #F0FDF4 0%, white 30%);">
             <div style="font-size: 16px; font-weight: 700; color: #059669; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-              📋 활동형 지표
+              📥 활동형(Input) 지표
             </div>
             <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 16px;">${selectedMember ? selectedMember.name + '님의 일일 업무 활동 기록' : '일일 업무 활동 기록 현황'}</p>
 
@@ -15233,7 +15240,7 @@
           <!-- 성과형 지표 -->
           <div class="card" style="background: linear-gradient(180deg, #FFFBEB 0%, white 30%);">
             <div style="font-size: 16px; font-weight: 700; color: #D97706; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-              💰 성과형 지표
+              📤 성과형(Output) 지표
             </div>
             <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 16px;">${selectedMember ? selectedMember.name + '님의 매출/실적 성과 달성' : '매출/실적 성과 달성 현황'}</p>
 
@@ -15940,8 +15947,8 @@
                 <div style="display: flex; gap: 6px; align-items: center;">
                   <select id="lagTypeFilter" onchange="filterLagsByType(this.value, '${krId}')" style="padding: 4px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; cursor: pointer; background: white;">
                     <option value="all">전체 유형</option>
-                    <option value="activity">📋 활동형</option>
-                    <option value="result">💰 성과형</option>
+                    <option value="activity">📥 활동형(Input)</option>
+                    <option value="result">📤 성과형(Output)</option>
                   </select>
                   <button onclick="toggleAllKpiFolders(true)" style="padding: 4px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; cursor: pointer; background: white;" title="모두 펼치기">펼치기</button>
                   <button onclick="toggleAllKpiFolders(false)" style="padding: 4px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; cursor: pointer; background: white;" title="모두 접기">접기</button>
@@ -16099,22 +16106,41 @@
               📊 유형 <span style="color: var(--danger);">*</span>
             </label>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s;" onclick="this.querySelector('input').checked=true; this.style.borderColor='var(--primary)'; this.style.background='var(--primary-light)'; this.parentElement.children[1].style.borderColor='var(--gray-200)'; this.parentElement.children[1].style.background='white'; document.getElementById('newLagValuePerUnit').parentElement.style.display='none';">
+              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s;" onclick="selectLagType('input', this)">
                 <input type="radio" name="newLagType" value="input" checked style="display: none;">
                 <span style="font-size: 18px;">📋</span>
                 <div>
-                  <div style="font-size: 13px; font-weight: 600;">활동형</div>
+                  <div style="font-size: 13px; font-weight: 600;">활동형(Input)</div>
                   <div style="font-size: 10px; color: var(--gray-500);">행동 횟수 추적</div>
                 </div>
               </label>
-              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s; background: white;" onclick="this.querySelector('input').checked=true; this.style.borderColor='var(--success)'; this.style.background='var(--success-light)'; this.parentElement.children[0].style.borderColor='var(--gray-200)'; this.parentElement.children[0].style.background='white'; document.getElementById('newLagValuePerUnit').parentElement.style.display='block';">
+              <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.2s; background: white;" onclick="selectLagType('output', this)">
                 <input type="radio" name="newLagType" value="output" style="display: none;">
                 <span style="font-size: 18px;">💰</span>
                 <div>
-                  <div style="font-size: 13px; font-weight: 600;">성과형</div>
+                  <div style="font-size: 13px; font-weight: 600;">성과형(Output)</div>
                   <div style="font-size: 10px; color: var(--gray-500);">KPI 달성에 반영</div>
                 </div>
               </label>
+            </div>
+          </div>
+
+          <!-- 자주 사용하는 템플릿 -->
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              ⚡ 빠른 선택 <span style="color: var(--gray-400); font-size: 11px;">(클릭하면 자동 입력)</span>
+            </label>
+            <div id="metricTemplates" style="display: flex; flex-wrap: wrap; gap: 6px;">
+              <!-- 활동형 템플릿 -->
+              <button type="button" class="metric-template input-template" onclick="applyMetricTemplate('전화 상담', 'input')" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--gray-50);">📞 전화 상담</button>
+              <button type="button" class="metric-template input-template" onclick="applyMetricTemplate('미팅', 'input')" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--gray-50);">🤝 미팅</button>
+              <button type="button" class="metric-template input-template" onclick="applyMetricTemplate('제안서 발송', 'input')" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--gray-50);">📄 제안서 발송</button>
+              <button type="button" class="metric-template input-template" onclick="applyMetricTemplate('콜드콜', 'input')" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--gray-50);">📱 콜드콜</button>
+              <button type="button" class="metric-template input-template" onclick="applyMetricTemplate('이메일 발송', 'input')" style="padding: 6px 12px; border: 1px solid var(--gray-200); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--gray-50);">📧 이메일 발송</button>
+              <!-- 성과형 템플릿 -->
+              <button type="button" class="metric-template output-template" onclick="applyMetricTemplate('정산완료', 'output')" style="padding: 6px 12px; border: 1px solid var(--success); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--success-light); color: var(--success);">💰 정산완료</button>
+              <button type="button" class="metric-template output-template" onclick="applyMetricTemplate('계약체결', 'output')" style="padding: 6px 12px; border: 1px solid var(--success); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--success-light); color: var(--success);">✅ 계약체결</button>
+              <button type="button" class="metric-template output-template" onclick="applyMetricTemplate('공구진행', 'output')" style="padding: 6px 12px; border: 1px solid var(--success); border-radius: 20px; font-size: 11px; cursor: pointer; background: var(--success-light); color: var(--success);">🛒 공구진행</button>
             </div>
           </div>
 
@@ -16132,7 +16158,7 @@
             <textarea id="newLagDescription" placeholder="예: 9개 카테고리 전체 메시지 정립 완료 시" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box; resize: vertical; min-height: 60px;"></textarea>
           </div>
 
-          <div style="margin-bottom: 16px; display: none;">
+          <div style="margin-bottom: 16px; display: none;" id="newLagValuePerUnitDiv">
             <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
               📏 건당 예상 값 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
             </label>
@@ -16148,6 +16174,19 @@
               </select>
             </div>
             <div style="font-size: 10px; color: var(--gray-500); margin-top: 4px;">1건당 예상 기여 값 (자동 환산용)</div>
+          </div>
+
+          <!-- ★ 정산 자동 연동 설정 (성과형일 때만 표시) -->
+          <div style="margin-bottom: 16px; display: none;" id="newLagSettlementLinkDiv">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+              🔗 운영센터 정산 연동 <span style="color: var(--gray-400); font-size: 11px;">(선택)</span>
+            </label>
+            <select id="newLagSettlementLink" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+              <option value="">연동 안함</option>
+              <option value="seller">🛒 셀러 정산 완료 시 자동 기록 (판매액)</option>
+              <option value="supplier">📦 공급사 정산 완료 시 자동 기록 (공급액)</option>
+            </select>
+            <div style="font-size: 10px; color: var(--success); margin-top: 4px;">💡 연동 설정 시 운영센터에서 정산 완료하면 이 KPI에 자동 반영됩니다</div>
           </div>
 
           <div style="margin-bottom: 20px;">
@@ -16166,6 +16205,65 @@
       `;
     }
 
+    // 지표 템플릿 적용
+    // 유형 선택 시 UI 업데이트
+    function selectLagType(type, labelEl) {
+      const radio = labelEl.querySelector('input');
+      if (radio) radio.checked = true;
+
+      const parent = labelEl.parentElement;
+      const otherLabel = parent.querySelector(`label:not(:has(input[value="${type}"]))`);
+
+      if (type === 'output') {
+        labelEl.style.borderColor = 'var(--success)';
+        labelEl.style.background = 'var(--success-light)';
+        if (otherLabel) {
+          otherLabel.style.borderColor = 'var(--gray-200)';
+          otherLabel.style.background = 'white';
+        }
+        // 성과형 옵션 표시
+        const valueDiv = document.getElementById('newLagValuePerUnitDiv');
+        const linkDiv = document.getElementById('newLagSettlementLinkDiv');
+        if (valueDiv) valueDiv.style.display = 'block';
+        if (linkDiv) linkDiv.style.display = 'block';
+      } else {
+        labelEl.style.borderColor = 'var(--primary)';
+        labelEl.style.background = 'var(--primary-light)';
+        if (otherLabel) {
+          otherLabel.style.borderColor = 'var(--gray-200)';
+          otherLabel.style.background = 'white';
+        }
+        // 활동형: 옵션 숨기기
+        const valueDiv = document.getElementById('newLagValuePerUnitDiv');
+        const linkDiv = document.getElementById('newLagSettlementLinkDiv');
+        if (valueDiv) valueDiv.style.display = 'none';
+        if (linkDiv) linkDiv.style.display = 'none';
+      }
+    }
+
+    function applyMetricTemplate(name, type, settlementLink = '') {
+      // 이름 입력
+      const nameInput = document.getElementById('newLagName');
+      if (nameInput) nameInput.value = name;
+
+      // 타입 선택
+      const typeLabels = document.querySelectorAll('input[name="newLagType"]');
+      typeLabels.forEach(radio => {
+        if (radio.value === type) {
+          const label = radio.closest('label');
+          if (label) selectLagType(type, label);
+        }
+      });
+
+      // 정산완료 템플릿은 자동으로 셀러 연동 선택
+      if (name === '정산완료') {
+        const linkSelect = document.getElementById('newLagSettlementLink');
+        if (linkSelect) linkSelect.value = 'seller';
+      }
+
+      showToast(`"${name}" 템플릿 적용됨`, 'info');
+    }
+
     // 지표 추가 실행
     async function addNewLaggingIndicator(krId, kpiId, krIdx) {
       const name = document.getElementById('newLagName')?.value?.trim();
@@ -16175,6 +16273,7 @@
       const lagType = typeRadio?.value || 'input';
       const valuePerUnit = parseInt(document.getElementById('newLagValuePerUnit')?.value) || 0;
       const lagUnit = document.getElementById('newLagUnit')?.value || '원';
+      const settlementLink = document.getElementById('newLagSettlementLink')?.value || '';
 
       if (!name) {
         showToast('Metric 이름을 입력해주세요', 'error');
@@ -16191,6 +16290,7 @@
           type: lagType, // 'input' 또는 'output'
           valuePerUnit: lagType === 'output' ? valuePerUnit : 0, // 성과형일 때만 건당 값
           unit: lagType === 'output' ? lagUnit : '', // 성과형일 때만 단위
+          linkedToSettlement: lagType === 'output' ? settlementLink : '', // ★ 정산 연동 설정
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
@@ -16297,14 +16397,14 @@
               <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid ${!isResultType ? okrColors[krIdx] : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; background: ${!isResultType ? okrColors[krIdx] + '10' : 'white'};" onclick="document.getElementById('editLagValuePerUnit').parentElement.style.display='none';">
                 <input type="radio" name="editLagType" value="input" ${!isResultType ? 'checked' : ''} style="accent-color: ${okrColors[krIdx]};">
                 <div>
-                  <div style="font-size: 13px; font-weight: 600;">📋 활동형</div>
+                  <div style="font-size: 13px; font-weight: 600;">📥 활동형(Input)</div>
                   <div style="font-size: 10px; color: var(--gray-500);">행동 횟수 추적 (참고용)</div>
                 </div>
               </label>
               <label style="display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid ${isResultType ? 'var(--success)' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; background: ${isResultType ? 'var(--success-light)' : 'white'};" onclick="document.getElementById('editLagValuePerUnit').parentElement.style.display='block';">
                 <input type="radio" name="editLagType" value="output" ${isResultType ? 'checked' : ''} style="accent-color: var(--success);">
                 <div>
-                  <div style="font-size: 13px; font-weight: 600;">💰 성과형</div>
+                  <div style="font-size: 13px; font-weight: 600;">📤 성과형(Output)</div>
                   <div style="font-size: 10px; color: var(--gray-500);">KPI 달성에 반영</div>
                 </div>
               </label>
@@ -18428,9 +18528,15 @@
             <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 8px;">💡 지표 추가 후 왼쪽 패널에서 활동형/성과형을 설정하세요</div>
             <div id="okrLagList">
               ${lagsForKPI.map(lag => `
-                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
                   <input type="text" class="okr-lag-version" value="${lag.version}" style="width: 60px; padding: 10px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;" placeholder="A">
                   <input type="text" class="okr-lag-name" value="${lag.name}" style="flex: 1; padding: 10px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;" placeholder="전화 상담">
+                  <input type="hidden" class="okr-lag-type" value="${lag.type || 'input'}">
+                  <input type="hidden" class="okr-lag-id" value="${lag.id || ''}">
+                  <input type="hidden" class="okr-lag-valuePerUnit" value="${lag.valuePerUnit || 0}">
+                  <input type="hidden" class="okr-lag-unit" value="${lag.unit || ''}">
+                  <input type="hidden" class="okr-lag-description" value="${lag.description || ''}">
+                  <span class="okr-lag-type-badge" style="padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 600; background: ${lag.type === 'output' ? 'var(--success-light)' : 'var(--gray-100)'}; color: ${lag.type === 'output' ? 'var(--success)' : 'var(--gray-600)'};">${lag.type === 'output' ? '📤 Output' : '📥 Input'}</span>
                   <button class="btn btn-secondary" onclick="this.parentElement.remove()">×</button>
                 </div>
               `).join('')}
@@ -18448,16 +18554,34 @@
       `);
     }
 
-    function addOkrLagInput() {
+    function addOkrLagInput(defaultType = 'input') {
       const lagList = document.getElementById('okrLagList');
       const div = document.createElement('div');
-      div.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
+      div.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px; align-items: center;';
       div.innerHTML = `
         <input type="text" class="okr-lag-version" style="width: 60px; padding: 10px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;" placeholder="A">
         <input type="text" class="okr-lag-name" style="flex: 1; padding: 10px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;" placeholder="전화 상담">
+        <input type="hidden" class="okr-lag-type" value="${defaultType}">
+        <input type="hidden" class="okr-lag-id" value="">
+        <input type="hidden" class="okr-lag-valuePerUnit" value="0">
+        <input type="hidden" class="okr-lag-unit" value="">
+        <input type="hidden" class="okr-lag-description" value="">
+        <select class="okr-lag-type-select" onchange="updateLagTypeBadge(this)" style="padding: 6px 10px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 12px; cursor: pointer; background: white;">
+          <option value="input" ${defaultType === 'input' ? 'selected' : ''}>📥 활동형(Input)</option>
+          <option value="output" ${defaultType === 'output' ? 'selected' : ''}>📤 성과형(Output)</option>
+        </select>
         <button class="btn btn-secondary" onclick="this.parentElement.remove()">×</button>
       `;
       lagList.appendChild(div);
+    }
+
+    // 지표 타입 선택 변경 시 hidden input 업데이트
+    function updateLagTypeBadge(selectEl) {
+      const parent = selectEl.parentElement;
+      const hiddenType = parent.querySelector('.okr-lag-type');
+      if (hiddenType) {
+        hiddenType.value = selectEl.value;
+      }
     }
 
     async function saveOkrKPI(krId, kpiId) {
@@ -18486,32 +18610,70 @@
         subAssigneeNames: subAssigneeNames,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
+
       try {
+        // ★ Firestore Batch Write로 트랜잭션 보장
+        // KPI와 Metrics가 동시에 저장/삭제되어 데이터 동기화 보장
+        const batch = db.batch();
         let savedKpiId = kpiId;
+
+        // 1. KPI 저장 (신규 또는 수정)
         if (kpiId) {
-          await db.collection('okr_kpis').doc(kpiId).update(data);
+          const kpiRef = db.collection('okr_kpis').doc(kpiId);
+          batch.update(kpiRef, data);
         } else {
           data.order = okrState.kpis.filter(k => k.keyResultId === krId).length + 1;
           data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-          const docRef = await db.collection('okr_kpis').add(data);
-          savedKpiId = docRef.id;
+          const newKpiRef = db.collection('okr_kpis').doc();
+          savedKpiId = newKpiRef.id;
+          batch.set(newKpiRef, data);
         }
-        // 지표 처리
+
+        // 2. 기존 Metrics 삭제 (배치에 추가)
+        const existingLags = okrState.laggingIndicators.filter(l => l.kpiId === savedKpiId);
+        for (const lag of existingLags) {
+          const lagRef = db.collection('okr_laggingIndicators').doc(lag.id);
+          batch.delete(lagRef);
+        }
+
+        // 3. 새 Metrics 추가 (배치에 추가)
         const versions = document.querySelectorAll('.okr-lag-version');
         const names = document.querySelectorAll('.okr-lag-name');
-        const existingLags = okrState.laggingIndicators.filter(l => l.kpiId === savedKpiId);
-        for (const lag of existingLags) await db.collection('okr_laggingIndicators').doc(lag.id).delete();
+        const types = document.querySelectorAll('.okr-lag-type');
+        const lagIds = document.querySelectorAll('.okr-lag-id');
+        const valuePerUnits = document.querySelectorAll('.okr-lag-valuePerUnit');
+        const units = document.querySelectorAll('.okr-lag-unit');
+        const descriptions = document.querySelectorAll('.okr-lag-description');
+
         for (let i = 0; i < versions.length; i++) {
           const version = versions[i].value.trim();
           const lagName = names[i].value.trim();
+          const lagType = types[i]?.value || 'input';
+          const valuePerUnit = parseInt(valuePerUnits[i]?.value) || 0;
+          const lagUnit = units[i]?.value || '';
+          const description = descriptions[i]?.value || '';
+
           if (version && lagName) {
-            await db.collection('okr_laggingIndicators').add({
-              kpiId: savedKpiId, version, name: lagName,
-              totalValue: 0, logCount: 0, isActive: true,
+            const newLagRef = db.collection('okr_laggingIndicators').doc();
+            batch.set(newLagRef, {
+              kpiId: savedKpiId,
+              version,
+              name: lagName,
+              type: lagType,  // ★ type 필드 저장 (input/output)
+              valuePerUnit: lagType === 'output' ? valuePerUnit : 0,
+              unit: lagType === 'output' ? lagUnit : '',
+              description: description,
+              totalValue: 0,
+              logCount: 0,
+              isActive: true,
               createdAt: firebase.firestore.FieldValue.serverTimestamp()
             });
           }
         }
+
+        // 4. 배치 실행 (원자적 - 하나라도 실패 시 전체 롤백)
+        await batch.commit();
+        console.log('✅ KPI 및 Metrics 동기화 저장 완료');
 
         // 필터 상태 확인 - 팀원 필터가 설정되어 있고 수정된 KPI가 필터에서 제외될 경우
         const currentMemberFilter = okrState.kpiFilter.memberId;
@@ -18534,22 +18696,43 @@
         renderOkrSettings();
         renderOkrRecord();
         closeModal();
-      } catch (e) { console.error(e); showToast('저장 실패', 'error'); }
+      } catch (e) {
+        console.error('❌ KPI 저장 실패 (롤백됨):', e);
+        showToast('저장 실패 - 변경사항이 롤백되었습니다', 'error');
+      }
     }
 
     async function deleteOkrKPI(kpiId) {
       if (!confirm('이 KPI를 삭제하시겠습니까?')) return;
       try {
+        // ★ Firestore Batch Write로 트랜잭션 보장
+        const batch = db.batch();
+
+        // 1. 연관된 모든 Metrics 삭제
         const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
-        for (const lag of lags) await db.collection('okr_laggingIndicators').doc(lag.id).delete();
-        await db.collection('okr_kpis').doc(kpiId).delete();
+        for (const lag of lags) {
+          const lagRef = db.collection('okr_laggingIndicators').doc(lag.id);
+          batch.delete(lagRef);
+        }
+
+        // 2. KPI 삭제
+        const kpiRef = db.collection('okr_kpis').doc(kpiId);
+        batch.delete(kpiRef);
+
+        // 3. 배치 실행 (원자적)
+        await batch.commit();
+        console.log('✅ KPI 및 연관 Metrics 동기화 삭제 완료');
+
         await loadOkrData();
         renderOkrDashboard();
         renderOkrSettings();
         renderOkrRecord();
         closeModal();
         showToast('삭제되었습니다', 'success');
-      } catch (e) { console.error(e); showToast('삭제 실패', 'error'); }
+      } catch (e) {
+        console.error('❌ KPI 삭제 실패 (롤백됨):', e);
+        showToast('삭제 실패 - 변경사항이 롤백되었습니다', 'error');
+      }
     }
 
     // 빠른 추가 모달
@@ -18565,10 +18748,21 @@
             </select>
           </div>
           <div style="margin-bottom: 16px;">
-            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">KPI 선택 *</label>
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">서브 KPI 선택 *</label>
             <select id="quickAddKPI" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; font-family: inherit;">
-              <option value="">먼저 KR을 선택하세요</option>
+              <option value="">먼저 메인 KPI를 선택하세요</option>
             </select>
+          </div>
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">유형 *</label>
+            <div style="display: flex; gap: 12px;">
+              <label style="flex: 1; display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--primary); border-radius: 8px; cursor: pointer; background: var(--primary-light);">
+                <input type="radio" name="quickAddType" value="input" checked style="accent-color: var(--primary);"> 📥 활동형(Input)
+              </label>
+              <label style="flex: 1; display: flex; align-items: center; gap: 8px; padding: 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer;">
+                <input type="radio" name="quickAddType" value="output" style="accent-color: var(--success);"> 📤 성과형(Output)
+              </label>
+            </div>
           </div>
           <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 16px; margin-bottom: 20px;">
             <div>
@@ -18576,8 +18770,8 @@
               <input type="text" id="quickAddVersion" value="A" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; font-family: inherit;">
             </div>
             <div>
-              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">업무명 *</label>
-              <input type="text" id="quickAddName" placeholder="예: 신규 업무" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; font-family: inherit;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">Metric 이름 *</label>
+              <input type="text" id="quickAddName" placeholder="예: 전화 상담" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; font-family: inherit;">
             </div>
           </div>
           <div style="display: flex; justify-content: flex-end; gap: 12px;">
@@ -18602,11 +18796,15 @@
       const kpiId = document.getElementById('quickAddKPI')?.value;
       const version = document.getElementById('quickAddVersion')?.value.trim() || 'A';
       const name = document.getElementById('quickAddName')?.value.trim();
-      if (!kpiId) { showToast('KPI를 선택해주세요', 'error'); return; }
-      if (!name) { showToast('업무명을 입력해주세요', 'error'); return; }
+      const typeRadio = document.querySelector('input[name="quickAddType"]:checked');
+      const lagType = typeRadio?.value || 'input';
+
+      if (!kpiId) { showToast('서브 KPI를 선택해주세요', 'error'); return; }
+      if (!name) { showToast('Metric 이름을 입력해주세요', 'error'); return; }
       try {
         await db.collection('okr_laggingIndicators').add({
           kpiId, version, name,
+          type: lagType,  // ★ type 필드 저장
           totalValue: 0, logCount: 0, isActive: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -18614,7 +18812,7 @@
         renderOkrRecord();
         renderOkrSettings();
         closeModal();
-        showToast('추가되었습니다', 'success');
+        showToast(`"${name}" 추가됨 (${lagType === 'output' ? '성과형(Output)' : '활동형(Input)'})`, 'success');
       } catch (e) { console.error(e); showToast('추가 실패', 'error'); }
     }
 
