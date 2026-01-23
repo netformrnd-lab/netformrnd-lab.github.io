@@ -1079,9 +1079,12 @@
       kpis: [],
       leadingIndicators: [],
       laggingIndicators: [],
+      totalMetrics: [],      // 총 성과지표 (NEW)
+      subIndicators: [],     // 하위지표 (NEW)
       dailyLogs: [],
       todayLogs: [],
-      currentUser: null
+      currentUser: null,
+      employees: []          // 알림용 팀원 정보
     };
 
     // 오늘 날짜
@@ -1123,9 +1126,17 @@
         const leadSnapshot = await db.collection('okr_leadingIndicators').get();
         state.leadingIndicators = leadSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 후행지표
+        // 총 성과지표 (NEW)
+        const totalMetricsSnapshot = await db.collection('okr_totalMetrics').get();
+        state.totalMetrics = totalMetricsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 후행지표 (성과지표 단위별)
         const lagSnapshot = await db.collection('okr_laggingIndicators').get();
         state.laggingIndicators = lagSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 하위지표 (NEW)
+        const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
+        state.subIndicators = subIndicatorsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 업무일지 (최근 30일)
         const thirtyDaysAgo = new Date();
@@ -1138,6 +1149,10 @@
 
         // 오늘 로그
         state.todayLogs = state.dailyLogs.filter(log => log.date === today);
+
+        // 팀원 정보 로드 (알림용)
+        const employeesSnapshot = await db.collection('employees').get();
+        state.employees = employeesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 초기 데이터가 없으면 시드
         if (!state.objective) {
@@ -1830,13 +1845,113 @@
       const kpi = state.kpis.find(k => k.id === kpiId);
       if (!kpi || !kpi.targetValue) return 0;
 
-      const lagsForKPI = state.laggingIndicators.filter(l => l.kpiId === kpiId);
-      const totalValue = lagsForKPI.reduce((sum, lag) => {
+      // 새로운 계층 구조: 총 성과지표가 있으면 해당 로직 사용
+      const totalMetricsForKPI = state.totalMetrics.filter(tm => tm.kpiId === kpiId);
+
+      if (totalMetricsForKPI.length > 0) {
+        // 총 성과지표 기반 계산
+        const rates = totalMetricsForKPI.map(tm => parseFloat(calcTotalMetricRate(tm.id)));
+        const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+        return Math.round(avgRate);
+      }
+
+      // 기존 구조: 성과형(output) 지표만 KPI 달성률에 반영
+      const resultLags = state.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
+
+      const totalValue = resultLags.reduce((sum, lag) => {
         const logs = state.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
-        return sum + logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+        const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+
+        // 건당 예상 금액이 있으면 곱하기, 없으면 직접 합산
+        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+          return sum + (logSum * lag.valuePerUnit);
+        }
+        return sum + logSum;
       }, 0);
 
       return Math.min(Math.round((totalValue / kpi.targetValue) * 100), 100);
+    }
+
+    // 총 성과지표 달성률 계산 (NEW)
+    function calcTotalMetricRate(totalMetricId) {
+      const totalMetric = state.totalMetrics.find(tm => tm.id === totalMetricId);
+      if (!totalMetric) return 0;
+
+      // 해당 총 성과지표에 연결된 성과지표(단위별)들
+      const unitMetrics = state.laggingIndicators.filter(l => l.totalMetricId === totalMetricId && l.type === 'output');
+
+      if (unitMetrics.length === 0) return 0;
+
+      const rates = unitMetrics.map(um => parseFloat(calcUnitMetricRate(um.id)));
+      const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+
+      return avgRate.toFixed(2);
+    }
+
+    // 성과지표(단위별) 달성률 계산 (NEW)
+    function calcUnitMetricRate(lagId) {
+      const lag = state.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return 0;
+
+      // 하위지표가 있는 경우
+      const subIndicators = state.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+
+      if (subIndicators.length > 0) {
+        // 하위지표들의 합계
+        const totalValue = subIndicators.reduce((sum, si) => {
+          return sum + calcSubIndicatorValue(si.id);
+        }, 0);
+
+        // 건당 예상 금액 적용
+        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+          const kpi = state.kpis.find(k => k.id === lag.kpiId);
+          if (kpi && kpi.targetValue) {
+            return Math.min((totalValue * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
+          }
+        }
+        return totalValue;
+      }
+
+      // 기존 구조: 직접 dailyLogs에서 계산
+      const logs = state.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+      const totalValue = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+
+      // 건당 예상 금액 적용
+      if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+        const kpi = state.kpis.find(k => k.id === lag.kpiId);
+        if (kpi && kpi.targetValue) {
+          return Math.min((totalValue * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
+        }
+      }
+
+      return totalValue;
+    }
+
+    // 하위지표 값 계산 (NEW)
+    function calcSubIndicatorValue(subIndicatorId) {
+      const subIndicator = state.subIndicators.find(si => si.id === subIndicatorId);
+      if (!subIndicator) return 0;
+
+      // 해당 하위지표에 연결된 업무일지 합계
+      const logs = state.dailyLogs.filter(l => l.subIndicatorId === subIndicatorId);
+      return logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+    }
+
+    // 성과지표(단위별)의 총 값 계산 (NEW)
+    function calcUnitMetricValue(lagId) {
+      const lag = state.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return 0;
+
+      // 하위지표가 있는 경우
+      const subIndicators = state.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+
+      if (subIndicators.length > 0) {
+        return subIndicators.reduce((sum, si) => sum + calcSubIndicatorValue(si.id), 0);
+      }
+
+      // 기존 구조: 직접 dailyLogs에서 계산
+      const logs = state.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+      return logs.reduce((s, l) => s + (l.resultValue || 0), 0);
     }
 
     function calculateAvgDailyProgress(krId) {
@@ -1848,6 +1963,52 @@
 
       if (weekLogs.length === 0) return 0;
       return 1;
+    }
+
+    // ========================================
+    // 알림 시스템
+    // ========================================
+
+    // 알림 생성 (NEW)
+    async function createNotification(recipientId, type, message, targetId = null) {
+      try {
+        await db.collection('notifications').add({
+          recipientId: recipientId,
+          type: type,
+          message: message,
+          targetId: targetId,
+          isRead: false,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) {
+        console.error('알림 생성 오류:', e);
+      }
+    }
+
+    // 팀 활동 알림 생성 (NEW)
+    async function notifyTeamActivity(lagId, quantity, memberName) {
+      const lag = state.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      // 같은 KPI를 담당하는 팀원들에게만 알림
+      const kpi = state.kpis.find(k => k.id === lag.kpiId);
+      if (!kpi) return;
+
+      // 전략센터 팀원들 (본인 제외)
+      const teamMembers = state.employees.filter(e =>
+        e.center === '전략센터' && e.id !== state.currentUser?.uid
+      );
+
+      const quantityText = quantity > 1 ? ` ${quantity}건` : '';
+
+      for (const member of teamMembers) {
+        await createNotification(
+          member.id,
+          'team_activity',
+          `👤 ${memberName}님이 "${lag.name}"${quantityText}을 기록했습니다`,
+          lag.kpiId
+        );
+      }
     }
 
     // ========================================
@@ -1882,6 +2043,10 @@
       const kpi = state.kpis.find(k => k.id === kpiId);
       const lag = state.laggingIndicators.find(l => l.id === lagId);
 
+      // 하위지표 확인 (NEW)
+      const subIndicators = state.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+      const hasSubIndicators = subIndicators.length > 0;
+
       const isAmount = inputType === 'amount';
       const title = isAmount ? '💰 성과 기록 (금액)' : '📊 성과 기록 (수량)';
       const placeholder = isAmount ? '금액을 입력하세요 (예: 50000000)' : '수량을 입력하세요 (예: 1, 2, 3...)';
@@ -1897,8 +2062,22 @@
           <div class="modal-body">
             <div class="form-group">
               <label class="form-label">${kpi?.name || 'KPI'} - ${lag?.name || ''} (${lag?.version || ''}버전)</label>
+
+              ${hasSubIndicators ? `
+                <!-- 하위지표 선택 (NEW) -->
+                <div style="margin-bottom: 16px;">
+                  <label class="form-label" style="font-size: 13px;">하위지표 선택</label>
+                  <select class="form-input" id="subIndicatorSelect" style="margin-bottom: 8px;">
+                    <option value="">선택 안함 (전체)</option>
+                    ${subIndicators.map(si => `
+                      <option value="${si.id}">${si.name}</option>
+                    `).join('')}
+                  </select>
+                </div>
+              ` : ''}
+
               <input type="number" class="form-input" id="recordValue"
-                placeholder="${placeholder}" autofocus
+                placeholder="${placeholder}" ${hasSubIndicators ? '' : 'autofocus'}
                 style="font-size: 18px; padding: 12px;">
               <div style="margin-top: 8px; font-size: 13px; color: var(--gray-500);">
                 단위: ${kpi?.unit || ''}
@@ -1919,7 +2098,7 @@
         input.focus();
         input.addEventListener('keypress', (e) => {
           if (e.key === 'Enter') {
-            saveRecord(krId, kpiId, lagId);
+            saveRecord(krId, kpiId, lagId, inputType);
           }
         });
       }, 100);
@@ -1935,11 +2114,15 @@
         return;
       }
 
+      // 하위지표 선택값 가져오기 (NEW)
+      const subIndicatorSelect = document.getElementById('subIndicatorSelect');
+      const subIndicatorId = subIndicatorSelect ? subIndicatorSelect.value : null;
+
       closeModal();
-      await recordWork(krId, kpiId, lagId, value);
+      await recordWork(krId, kpiId, lagId, value, subIndicatorId);
     }
 
-    async function recordWork(krId, kpiId, lagId, resultValue) {
+    async function recordWork(krId, kpiId, lagId, resultValue, subIndicatorId = null) {
       try {
         const log = {
           date: today,
@@ -1948,6 +2131,7 @@
           krId,
           kpiId,
           laggingIndicatorId: lagId,
+          subIndicatorId: subIndicatorId || null,  // 하위지표 ID (NEW)
           resultValue: resultValue,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
@@ -1957,6 +2141,11 @@
         // 로컬 상태 업데이트
         state.dailyLogs.unshift({ ...log, id: 'temp-' + Date.now() });
         state.todayLogs = state.dailyLogs.filter(l => l.date === today);
+
+        // 팀 활동 알림 발송 (NEW)
+        if (state.currentUser) {
+          await notifyTeamActivity(lagId, resultValue, state.currentUser.displayName || '사용자');
+        }
 
         // UI 업데이트
         renderAll();
