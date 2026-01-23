@@ -10293,11 +10293,16 @@ async function syncSettlementToKPI(type, settlement) {
       ? Number(settlement.salesAmount || 0)  // 셀러: 판매액
       : Number(settlement.totalAmount || 0); // 공급사: 총액
 
-    // 4. okr_dailyLogs에 자동 기록
+    // 4. 하위지표(subIndicators) 확인
+    const subIndicatorsSnapshot = await db.collection('okr_subIndicators')
+      .where('laggingIndicatorId', '==', metric.id)
+      .get();
+
+    // 5. okr_dailyLogs에 자동 기록
     const today = new Date().toISOString().split('T')[0];
     const now = new Date();
 
-    await db.collection('okr_dailyLogs').add({
+    const logData = {
       date: today,
       memberId: 'system_auto',
       memberName: '정산 자동연동',
@@ -10314,7 +10319,16 @@ async function syncSettlementToKPI(type, settlement) {
       sourceType: type,
       sourceId: settlement.id,
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    };
+
+    // 하위지표가 있으면 첫 번째(기본) 하위지표에 기록
+    if (!subIndicatorsSnapshot.empty) {
+      const defaultSubIndicator = subIndicatorsSnapshot.docs[0];
+      logData.subIndicatorId = defaultSubIndicator.id;
+      console.log(`✓ 하위지표 "${defaultSubIndicator.data().name}"에 기록`);
+    }
+
+    await db.collection('okr_dailyLogs').add(logData);
 
     // 전략센터 팀원들에게 정산 연동 알림 전송
     const employeesSnapshot = await db.collection('employees').where('center', '==', '전략센터').get();

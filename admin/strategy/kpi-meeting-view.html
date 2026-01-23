@@ -349,7 +349,9 @@
       objective: null,
       keyResults: [],
       kpis: [],
-      laggingIndicators: [],
+      totalMetrics: [],      // 총 성과지표 (NEW)
+      laggingIndicators: [],  // 성과지표(단위별)
+      subIndicators: [],     // 하위지표 (NEW)
       dailyLogs: []
     };
 
@@ -373,9 +375,17 @@
         const kpiSnapshot = await db.collection('okr_kpis').orderBy('order').get();
         okrData.kpis = kpiSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 지표
+        // 총 성과지표 (NEW)
+        const totalMetricsSnapshot = await db.collection('okr_totalMetrics').get();
+        okrData.totalMetrics = totalMetricsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 성과지표(단위별) - 기존 laggingIndicators
         const lagSnapshot = await db.collection('okr_laggingIndicators').get();
         okrData.laggingIndicators = lagSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 하위지표 (NEW)
+        const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
+        okrData.subIndicators = subIndicatorsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 업무일지 (최근 30일)
         const thirtyDaysAgo = new Date();
@@ -404,13 +414,112 @@
       const kpi = okrData.kpis.find(k => k.id === kpiId);
       if (!kpi || !kpi.targetValue) return 0;
 
-      const lags = okrData.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
-      const current = lags.reduce((sum, lag) => {
+      // 새로운 계층 구조 확인: 총 성과지표가 있는 경우
+      const totalMetricsForKPI = okrData.totalMetrics.filter(tm => tm.kpiId === kpiId);
+
+      if (totalMetricsForKPI.length > 0) {
+        // 새 구조: 총 성과지표들의 평균 달성률
+        const rates = totalMetricsForKPI.map(tm => parseFloat(calcTotalMetricRate(tm.id)));
+        const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+        return Math.round(avgRate);
+      }
+
+      // 기존 구조: 성과형(output) 지표만 KPI 달성률에 반영
+      const resultLags = okrData.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
+
+      const totalValue = resultLags.reduce((sum, lag) => {
         const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
-        return sum + logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+        const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+
+        // 건당 예상 금액이 있으면 적용
+        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+          return sum + (logSum * lag.valuePerUnit);
+        }
+        return sum + logSum;
       }, 0);
 
-      return Math.round((current / kpi.targetValue) * 100);
+      return Math.round(Math.min((totalValue / kpi.targetValue) * 100, 100));
+    }
+
+    // 총 성과지표 달성률 계산 (NEW) - 단위별 성과지표들의 평균
+    function calcTotalMetricRate(totalMetricId) {
+      const totalMetric = okrData.totalMetrics.find(tm => tm.id === totalMetricId);
+      if (!totalMetric) return 0;
+
+      // 해당 총 성과지표에 연결된 성과지표(단위별)들
+      const unitMetrics = okrData.laggingIndicators.filter(l => l.totalMetricId === totalMetricId && l.type === 'output');
+
+      if (unitMetrics.length === 0) return 0;
+
+      const rates = unitMetrics.map(um => parseFloat(calcUnitMetricRate(um.id)));
+      const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+      return avgRate.toFixed(2);
+    }
+
+    // 성과지표(단위별) 달성률 계산 (NEW)
+    function calcUnitMetricRate(lagId) {
+      const lag = okrData.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return 0;
+
+      // 하위지표가 있는 경우
+      const subIndicators = okrData.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+
+      if (subIndicators.length > 0) {
+        // 하위지표들의 합계
+        const totalValue = subIndicators.reduce((sum, si) => {
+          return sum + calcSubIndicatorValue(si.id);
+        }, 0);
+
+        // 건당 예상 금액 적용
+        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+          const kpi = okrData.kpis.find(k => k.id === lag.kpiId);
+          if (kpi && kpi.targetValue) {
+            return Math.min((totalValue * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
+          }
+        }
+        return totalValue;
+      }
+
+      // 기존 구조: 직접 dailyLogs에서 계산
+      const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+      const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+
+      // 건당 예상 금액 적용
+      if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+        const kpi = okrData.kpis.find(k => k.id === lag.kpiId);
+        if (kpi && kpi.targetValue) {
+          return Math.min((logSum * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
+        }
+      }
+
+      return logSum;
+    }
+
+    // 하위지표 값 계산 (NEW)
+    function calcSubIndicatorValue(subIndicatorId) {
+      const subIndicator = okrData.subIndicators.find(si => si.id === subIndicatorId);
+      if (!subIndicator) return 0;
+
+      // 해당 하위지표에 연결된 업무일지 합계
+      const logs = okrData.dailyLogs.filter(l => l.subIndicatorId === subIndicatorId);
+      return logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+    }
+
+    // 성과지표(단위별)의 총 값 계산 (NEW)
+    function calcUnitMetricValue(lagId) {
+      const lag = okrData.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return 0;
+
+      // 하위지표가 있는 경우
+      const subIndicators = okrData.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+
+      if (subIndicators.length > 0) {
+        return subIndicators.reduce((sum, si) => sum + calcSubIndicatorValue(si.id), 0);
+      }
+
+      // 기존 구조: 직접 dailyLogs에서 계산
+      const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+      return logs.reduce((s, l) => s + (l.resultValue || 0), 0);
     }
 
     // KR 달성률 계산
@@ -491,10 +600,11 @@
             </div>
             ${kpisForKR.map(kpi => {
               const kpiRate = calcKPIRate(kpi.id);
-              const metrics = okrData.laggingIndicators.filter(l => l.kpiId === kpi.id);
-              const inputMetrics = metrics.filter(l => l.type !== 'output');
-              const outputMetrics = metrics.filter(l => l.type === 'output');
               const statusColor = kpiRate >= 80 ? '#10B981' : kpiRate >= 50 ? '#F59E0B' : '#EF4444';
+
+              // 새로운 계층 구조 확인
+              const totalMetricsForKPI = okrData.totalMetrics.filter(tm => tm.kpiId === kpi.id);
+              const hasNewStructure = totalMetricsForKPI.length > 0;
 
               return `
                 <div class="kpi-item">
@@ -505,34 +615,91 @@
                   <div class="progress-bar">
                     <div class="progress-fill" style="width: ${Math.min(kpiRate, 100)}%; background: ${statusColor};"></div>
                   </div>
-                  <div class="metrics-grid">
-                    <div class="metric-section input">
-                      <div class="metric-label">📥 Input Metrics (${inputMetrics.length})</div>
-                      ${inputMetrics.length > 0 ? inputMetrics.map(m => {
-                        const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
-                        const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+                  ${hasNewStructure ? `
+                    <!-- 새 구조: 총 성과지표 기반 -->
+                    ${totalMetricsForKPI.map(tm => {
+                      const tmRate = calcTotalMetricRate(tm.id);
+                      const tmStatusColor = tmRate >= 80 ? '#10B981' : tmRate >= 50 ? '#F59E0B' : '#EF4444';
+                      const unitMetrics = okrData.laggingIndicators.filter(l => l.totalMetricId === tm.id && l.type === 'output');
+
+                      return `
+                        <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 12px; margin-top: 12px;">
+                          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                            <div style="font-size: 12px; font-weight: 600; opacity: 0.9;">📊 ${tm.name} (총 성과지표)</div>
+                            <span style="font-size: 13px; font-weight: 700; color: ${tmStatusColor};">${tmRate}%</span>
+                          </div>
+
+                          ${unitMetrics.map(um => {
+                            const umValue = calcUnitMetricValue(um.id);
+                            const subInds = okrData.subIndicators.filter(si => si.laggingIndicatorId === um.id);
+
+                            return `
+                              <div style="background: rgba(255,255,255,0.08); border-radius: 6px; padding: 10px; margin-bottom: 8px; border-left: 3px solid ${okrColors[krIdx]};">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: ${subInds.length > 0 ? '8px' : '0'};">
+                                  <span style="font-size: 11px; font-weight: 600;"><span class="ab-badge">${um.version || 'A'}</span>${um.name}</span>
+                                  <span style="font-size: 12px; font-weight: 700; color: #10B981;">${formatKoreanAmount(umValue) || umValue.toLocaleString()}</span>
+                                </div>
+
+                                ${subInds.length > 0 ? `
+                                  <!-- 하위지표 -->
+                                  <div style="margin-left: 12px; padding-left: 12px; border-left: 2px solid rgba(255,255,255,0.2);">
+                                    ${subInds.map(si => {
+                                      const siValue = calcSubIndicatorValue(si.id);
+                                      return `
+                                        <div style="display: flex; justify-content: space-between; font-size: 10px; opacity: 0.8; margin-bottom: 4px;">
+                                          <span>└ ${si.name}</span>
+                                          <span style="font-weight: 600;">${siValue.toLocaleString()}</span>
+                                        </div>
+                                      `;
+                                    }).join('')}
+                                  </div>
+                                ` : ''}
+                              </div>
+                            `;
+                          }).join('')}
+                        </div>
+                      `;
+                    }).join('')}
+                  ` : `
+                    <!-- 기존 구조: Input/Output Metrics -->
+                    <div class="metrics-grid" style="margin-top: 12px;">
+                      ${(() => {
+                        const metrics = okrData.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                        const inputMetrics = metrics.filter(l => l.type !== 'output');
+                        const outputMetrics = metrics.filter(l => l.type === 'output');
+
                         return `
-                          <div class="metric-item">
-                            <span><span class="ab-badge">${m.version || 'A'}</span>${m.name}</span>
-                            <span class="metric-value">${total.toLocaleString()}</span>
+                          <div class="metric-section input">
+                            <div class="metric-label">📥 Input Metrics (${inputMetrics.length})</div>
+                            ${inputMetrics.length > 0 ? inputMetrics.map(m => {
+                              const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                              const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                              return `
+                                <div class="metric-item">
+                                  <span><span class="ab-badge">${m.version || 'A'}</span>${m.name}</span>
+                                  <span class="metric-value">${total.toLocaleString()}</span>
+                                </div>
+                              `;
+                            }).join('') : '<div style="font-size: 11px; opacity: 0.5;">없음</div>'}
+                          </div>
+                          <div class="metric-section output">
+                            <div class="metric-label" style="color: #10B981;">📤 Output Metrics (${outputMetrics.length})</div>
+                            ${outputMetrics.length > 0 ? outputMetrics.map(m => {
+                              const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                              const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                              return `
+                                <div class="metric-item">
+                                  <span><span class="ab-badge">${m.version || 'A'}</span>${m.name}</span>
+                                  <span class="metric-value" style="color: #10B981;">${formatKoreanAmount(total) || total.toLocaleString()}</span>
+                                </div>
+                              `;
+                            }).join('') : '<div style="font-size: 11px; opacity: 0.5;">없음</div>'}
                           </div>
                         `;
-                      }).join('') : '<div style="font-size: 11px; opacity: 0.5;">없음</div>'}
+                      })()}
                     </div>
-                    <div class="metric-section output">
-                      <div class="metric-label" style="color: #10B981;">📤 Output Metrics (${outputMetrics.length})</div>
-                      ${outputMetrics.length > 0 ? outputMetrics.map(m => {
-                        const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
-                        const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                        return `
-                          <div class="metric-item">
-                            <span><span class="ab-badge">${m.version || 'A'}</span>${m.name}</span>
-                            <span class="metric-value" style="color: #10B981;">${formatKoreanAmount(total) || total.toLocaleString()}</span>
-                          </div>
-                        `;
-                      }).join('') : '<div style="font-size: 11px; opacity: 0.5;">없음</div>'}
-                    </div>
-                  </div>
+                  `}
                 </div>
               `;
             }).join('')}
@@ -573,10 +740,11 @@
                 <div class="mindmap-kpi-list">
                   ${kpisForKR.map(kpi => {
                     const kpiRate = calcKPIRate(kpi.id);
-                    const metrics = okrData.laggingIndicators.filter(l => l.kpiId === kpi.id);
-                    const inputMetrics = metrics.filter(l => l.type !== 'output');
-                    const outputMetrics = metrics.filter(l => l.type === 'output');
                     const statusColor = kpiRate >= 80 ? '#10B981' : kpiRate >= 50 ? '#F59E0B' : '#EF4444';
+
+                    // 새로운 계층 구조 확인
+                    const totalMetricsForKPI = okrData.totalMetrics.filter(tm => tm.kpiId === kpi.id);
+                    const hasNewStructure = totalMetricsForKPI.length > 0;
 
                     return `
                       <div class="mindmap-kpi" style="border-left: 4px solid ${okrColors[krIdx]};">
@@ -585,34 +753,91 @@
                           <span style="font-size: 16px; font-weight: 700; color: ${statusColor};">${kpiRate}%</span>
                         </div>
 
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                          <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;">
-                            <div style="font-size: 10px; font-weight: 600; color: #9CA3AF; margin-bottom: 6px;">📥 Input (${inputMetrics.length})</div>
-                            ${inputMetrics.slice(0, 3).map(m => {
-                              const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
-                              const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                              return `<div style="font-size: 11px; color: #D1D5DB; margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                <span>[${m.version || 'A'}] ${m.name.length > 8 ? m.name.substring(0, 8) + '...' : m.name}</span>
-                                <span style="font-weight: 600;">${total}</span>
-                              </div>`;
-                            }).join('')}
-                            ${inputMetrics.length > 3 ? `<div style="font-size: 10px; opacity: 0.5;">+${inputMetrics.length - 3}개 더</div>` : ''}
-                            ${inputMetrics.length === 0 ? '<div style="font-size: 10px; opacity: 0.5;">-</div>' : ''}
+                        ${hasNewStructure ? `
+                          <!-- 새 구조: 4단계 계층 (KPI → 총 성과지표 → 성과지표(단위별) → 하위지표) -->
+                          ${totalMetricsForKPI.map(tm => {
+                            const tmRate = calcTotalMetricRate(tm.id);
+                            const tmStatusColor = tmRate >= 80 ? '#10B981' : tmRate >= 50 ? '#F59E0B' : '#EF4444';
+                            const unitMetrics = okrData.laggingIndicators.filter(l => l.totalMetricId === tm.id && l.type === 'output');
+
+                            return `
+                              <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px; margin-bottom: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                  <div style="font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.9);">📊 ${tm.name}</div>
+                                  <span style="font-size: 12px; font-weight: 700; color: ${tmStatusColor};">${tmRate}%</span>
+                                </div>
+
+                                ${unitMetrics.map(um => {
+                                  const umValue = calcUnitMetricValue(um.id);
+                                  const subInds = okrData.subIndicators.filter(si => si.laggingIndicatorId === um.id);
+
+                                  return `
+                                    <div style="background: rgba(255,255,255,0.08); border-radius: 6px; padding: 8px; margin-bottom: 6px; border-left: 3px solid ${okrColors[krIdx]};">
+                                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: ${subInds.length > 0 ? '6px' : '0'};">
+                                        <span style="font-size: 10px; color: #D1D5DB;">[${um.version || 'A'}] ${um.name.length > 12 ? um.name.substring(0, 12) + '...' : um.name}</span>
+                                        <span style="font-size: 11px; font-weight: 700; color: #10B981;">${formatKoreanAmount(umValue) || umValue}</span>
+                                      </div>
+
+                                      ${subInds.length > 0 ? `
+                                        <!-- 하위지표 -->
+                                        <div style="margin-left: 8px; padding-left: 8px; border-left: 2px solid rgba(255,255,255,0.2);">
+                                          ${subInds.slice(0, 3).map(si => {
+                                            const siValue = calcSubIndicatorValue(si.id);
+                                            return `
+                                              <div style="font-size: 9px; color: rgba(255,255,255,0.7); display: flex; justify-content: space-between; margin-bottom: 3px;">
+                                                <span>└ ${si.name.length > 10 ? si.name.substring(0, 10) + '...' : si.name}</span>
+                                                <span style="font-weight: 600;">${siValue}</span>
+                                              </div>
+                                            `;
+                                          }).join('')}
+                                          ${subInds.length > 3 ? `<div style="font-size: 9px; color: rgba(255,255,255,0.5);">+${subInds.length - 3}개 더</div>` : ''}
+                                        </div>
+                                      ` : ''}
+                                    </div>
+                                  `;
+                                }).join('')}
+                              </div>
+                            `;
+                          }).join('')}
+                        ` : `
+                          <!-- 기존 구조: Input/Output Metrics -->
+                          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            ${(() => {
+                              const metrics = okrData.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                              const inputMetrics = metrics.filter(l => l.type !== 'output');
+                              const outputMetrics = metrics.filter(l => l.type === 'output');
+
+                              return `
+                                <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;">
+                                  <div style="font-size: 10px; font-weight: 600; color: #9CA3AF; margin-bottom: 6px;">📥 Input (${inputMetrics.length})</div>
+                                  ${inputMetrics.slice(0, 3).map(m => {
+                                    const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                                    const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                    return `<div style="font-size: 11px; color: #D1D5DB; margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                      <span>[${m.version || 'A'}] ${m.name.length > 8 ? m.name.substring(0, 8) + '...' : m.name}</span>
+                                      <span style="font-weight: 600;">${total}</span>
+                                    </div>`;
+                                  }).join('')}
+                                  ${inputMetrics.length > 3 ? `<div style="font-size: 10px; opacity: 0.5;">+${inputMetrics.length - 3}개 더</div>` : ''}
+                                  ${inputMetrics.length === 0 ? '<div style="font-size: 10px; opacity: 0.5;">-</div>' : ''}
+                                </div>
+                                <div style="background: rgba(16, 185, 129, 0.1); border-radius: 8px; padding: 10px;">
+                                  <div style="font-size: 10px; font-weight: 600; color: #10B981; margin-bottom: 6px;">📤 Output (${outputMetrics.length})</div>
+                                  ${outputMetrics.slice(0, 3).map(m => {
+                                    const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                                    const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                    return `<div style="font-size: 11px; color: #D1D5DB; margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                      <span>[${m.version || 'A'}] ${m.name.length > 8 ? m.name.substring(0, 8) + '...' : m.name}</span>
+                                      <span style="font-weight: 700; color: #10B981;">${formatKoreanAmount(total) || total}</span>
+                                    </div>`;
+                                  }).join('')}
+                                  ${outputMetrics.length > 3 ? `<div style="font-size: 10px; opacity: 0.5;">+${outputMetrics.length - 3}개 더</div>` : ''}
+                                  ${outputMetrics.length === 0 ? '<div style="font-size: 10px; opacity: 0.5;">-</div>' : ''}
+                                </div>
+                              `;
+                            })()}
                           </div>
-                          <div style="background: rgba(16, 185, 129, 0.1); border-radius: 8px; padding: 10px;">
-                            <div style="font-size: 10px; font-weight: 600; color: #10B981; margin-bottom: 6px;">📤 Output (${outputMetrics.length})</div>
-                            ${outputMetrics.slice(0, 3).map(m => {
-                              const logs = okrData.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
-                              const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                              return `<div style="font-size: 11px; color: #D1D5DB; margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                <span>[${m.version || 'A'}] ${m.name.length > 8 ? m.name.substring(0, 8) + '...' : m.name}</span>
-                                <span style="font-weight: 700; color: #10B981;">${formatKoreanAmount(total) || total}</span>
-                              </div>`;
-                            }).join('')}
-                            ${outputMetrics.length > 3 ? `<div style="font-size: 10px; opacity: 0.5;">+${outputMetrics.length - 3}개 더</div>` : ''}
-                            ${outputMetrics.length === 0 ? '<div style="font-size: 10px; opacity: 0.5;">-</div>' : ''}
-                          </div>
-                        </div>
+                        `}
                       </div>
                     `;
                   }).join('')}
