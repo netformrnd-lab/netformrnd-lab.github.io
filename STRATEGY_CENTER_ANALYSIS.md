@@ -15,8 +15,8 @@
 │                         전략 설정 단계                            │
 ├─────────────────────────────────────────────────────────────────┤
 │  1. Objective (목표)                                             │
-│    └─ 2. Key Results (핵심 결과)                                 │
-│         └─ 3. KPI (핵심 성과 지표)                               │
+│    └─ 2. 메인 KPI (okr_keyResults)                              │
+│         └─ 3. 서브 KPI (okr_kpis)                               │
 │              └─ 4. 총 성과지표 (NEW - index.html만 지원)         │
 │                   └─ 5. 성과지표(단위별)                         │
 │                        └─ 6. 하위지표 (NEW - index.html만 지원)  │
@@ -30,12 +30,12 @@
 │     └─ 자동 연동 (정산 시스템)                                   │
 │                                                                  │
 │  8. 정산 시스템 (admin/index.html)                               │
-│     ├─ 셀러 정산 완료 → KPI 자동 기록                            │
-│     └─ 공급사 정산 완료 → KPI 자동 기록                          │
+│     ├─ 셀러 정산 완료 → 서브 KPI 자동 기록                       │
+│     └─ 공급사 정산 완료 → 서브 KPI 자동 기록                     │
 │                                                                  │
 │  9. 알림 시스템 (notifications)                                  │
-│     ├─ KPI 100% 달성 → 팀 전체 알림                              │
-│     ├─ 마일스톤 (50%, 80%, 100%) → 담당자 알림                   │
+│     ├─ 서브 KPI 100% 달성 → 팀 전체 알림                         │
+│     ├─ 메인 KPI 마일스톤 (50%, 80%, 100%) → 담당자 알림          │
 │     ├─ 마감일 임박 (3일 전, 1일 전) → 담당자 알림                │
 │     ├─ 팀 활동 기록 → 팀원 알림                                  │
 │     └─ 정산 자동 연동 → 담당자 알림                              │
@@ -57,7 +57,7 @@
 │  12. 그로스보드 프레젠테이션 (growthboard-presentation.html)      │
 │      ├─ 팀 요약 슬라이드                                         │
 │      ├─ 개인별 통계                                              │
-│      └─ KR 상세 모달                                             │
+│      └─ 메인 KPI 상세 모달                                       │
 │                                                                  │
 │  13. 그로스보드 공유 (growthboard/songhee/index.html)            │
 │      └─ 개인 성장 전략 발표 자료                                 │
@@ -72,16 +72,16 @@
 
 #### 문제 상황
 - **index.html**: 새로운 4단계 계층 구조 사용
-  - KPI → 총 성과지표 → 성과지표(단위별) → 하위지표 → 업무일지
+  - 서브 KPI → 총 성과지표 → 성과지표(단위별) → 하위지표 → 업무일지
   - Firebase 컬렉션: `okr_totalMetrics`, `okr_subIndicators` 사용
 
 - **다른 파일들**: 기존 2단계 구조 사용
-  - KPI → 성과지표 → 업무일지
+  - 서브 KPI → 성과지표 → 업무일지
   - 새 컬렉션 미사용
 
 #### 영향
-- **데이터 불일치**: 같은 KPI인데 index.html과 okr-tracker.html에서 다른 달성률 표시 가능
-- **기능 제약**: 새로운 계층 구조로 만든 KPI는 다른 뷰에서 제대로 표시 안 됨
+- **데이터 불일치**: 같은 서브 KPI인데 index.html과 okr-tracker.html에서 다른 달성률 표시 가능
+- **기능 제약**: 새로운 계층 구조로 만든 서브 KPI는 다른 뷰에서 제대로 표시 안 됨
 - **사용자 혼란**: 화면마다 다른 데이터를 보게 됨
 
 #### 영향받는 파일
@@ -113,7 +113,7 @@ return logs.reduce((s, l) => s + (l.resultValue || 0), 0);
 ```
 
 #### 영향
-- 하위지표로 세분화한 KPI의 경우:
+- 하위지표로 세분화한 서브 KPI의 경우:
   - index.html: 하위지표별 합계 계산 ✅
   - 다른 파일: 전체 logs만 보고 계산 (중복 또는 누락 가능) ❌
 
@@ -143,6 +143,7 @@ okr_dailyLogs에 기록
   - **필요**: `subIndicatorId`도 고려해야 함
 - [ ] 정산 취소 시 삭제 로직이 하위지표 고려하는가?
 - [ ] 알림이 올바른 팀원에게 가는가?
+- [ ] 메인 KPI 담당자에게도 알림이 전달되는가?
 
 ---
 
@@ -153,7 +154,7 @@ okr_dailyLogs에 기록
 | 알림 타입 | 트리거 위치 | 동작 확인 | 문제점 |
 |----------|------------|----------|--------|
 | `kpi_achieved` | index.html | ✅ | - |
-| `kr_milestone` | index.html | ✅ | - |
+| `main_kpi_milestone` | index.html | ✅ | - |
 | `kpi_deadline` | index.html | ✅ | - |
 | `team_activity` | index.html | ✅ | - |
 | `settlement_sync` | admin/index.html | ⚠️ | 하위지표 미고려 |
@@ -163,8 +164,8 @@ okr_dailyLogs에 기록
   - index.html에서만 `team_activity` 알림 발송
   - okr-tracker.html은 알림 시스템 없음
 - **수신자 선택**: 팀원 목록을 어떻게 결정하는가?
-  - 현재: KPI의 담당자 또는 팀 전체
-  - 필요: KR 단위, 프로젝트 단위 선택 가능해야 함
+  - 현재: 서브 KPI의 담당자 또는 팀 전체
+  - 필요: 메인 KPI 단위, 프로젝트 단위 선택 가능해야 함
 
 ---
 
@@ -197,17 +198,17 @@ const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
 
 // UI에 하위지표 선택 추가
 function renderRecordForm() {
-  // 기존: laggingIndicator만 선택
-  // 신규: subIndicator도 선택 가능
+  // 기존: 성과지표만 선택
+  // 신규: 하위지표도 선택 가능
 
-  if (selectedLag.subIndicators && selectedLag.subIndicators.length > 0) {
+  if (selectedIndicator.subIndicators && selectedIndicator.subIndicators.length > 0) {
     // 하위지표 선택 드롭다운 표시
   }
 }
 
 // 계산 로직 수정
-function calcLagValue(lagId) {
-  const subIndicators = state.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+function calcIndicatorValue(indicatorId) {
+  const subIndicators = state.subIndicators.filter(si => si.laggingIndicatorId === indicatorId);
 
   if (subIndicators.length > 0) {
     // 하위지표별 합계
@@ -217,7 +218,7 @@ function calcLagValue(lagId) {
     }, 0);
   } else {
     // 기존 방식
-    const logs = state.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+    const logs = state.dailyLogs.filter(l => l.laggingIndicatorId === indicatorId);
     return logs.reduce((s, l) => s + (l.resultValue || 0), 0);
   }
 }
@@ -231,8 +232,8 @@ async function saveWorkLog(data) {
   await createNotification({
     recipientId: 'team', // 또는 특정 팀원들
     type: 'team_activity',
-    message: `${memberName}님이 ${lagName}에 업무를 기록했습니다.`,
-    targetId: lagId,
+    message: `${memberName}님이 ${indicatorName}에 업무를 기록했습니다.`,
+    targetId: indicatorId,
     targetType: 'laggingIndicator'
   });
 }
@@ -251,27 +252,31 @@ async function saveWorkLog(data) {
 
 // 마인드맵 뷰 수정
 function renderMindmap() {
-  kpis.forEach(kpi => {
-    const totalMetrics = state.totalMetrics.filter(tm => tm.kpiId === kpi.id);
+  keyResults.forEach(kr => {
+    const subKpis = state.kpis.filter(kpi => kpi.keyResultId === kr.id);
 
-    if (totalMetrics.length > 0) {
-      // 총 성과지표 → 단위별 성과지표 → 하위지표 계층 표시
-      totalMetrics.forEach(tm => {
-        const unitMetrics = state.laggingIndicators.filter(l =>
-          l.totalMetricId === tm.id
-        );
+    subKpis.forEach(kpi => {
+      const totalMetrics = state.totalMetrics.filter(tm => tm.kpiId === kpi.id);
 
-        unitMetrics.forEach(um => {
-          const subIndicators = state.subIndicators.filter(si =>
-            si.laggingIndicatorId === um.id
+      if (totalMetrics.length > 0) {
+        // 총 성과지표 → 단위별 성과지표 → 하위지표 계층 표시
+        totalMetrics.forEach(tm => {
+          const unitMetrics = state.laggingIndicators.filter(l =>
+            l.totalMetricId === tm.id
           );
 
-          // 4단계 계층 렌더링
+          unitMetrics.forEach(um => {
+            const subIndicators = state.subIndicators.filter(si =>
+              si.laggingIndicatorId === um.id
+            );
+
+            // 4단계 계층 렌더링
+          });
         });
-      });
-    } else {
-      // 기존 방식 렌더링
-    }
+      } else {
+        // 기존 방식 렌더링
+      }
+    });
   });
 }
 
@@ -288,23 +293,23 @@ function renderMindmap() {
 **admin/index.html 수정**:
 ```javascript
 async function syncSettlementToKPI(settlement, type) {
-  // 기존: linkedToSettlement로 laggingIndicator 찾기
-  const lagsSnapshot = await db.collection('okr_laggingIndicators')
+  // 기존: linkedToSettlement로 성과지표 찾기
+  const indicatorsSnapshot = await db.collection('okr_laggingIndicators')
     .where('linkedToSettlement', '==', type)
     .get();
 
-  for (const lagDoc of lagsSnapshot.docs) {
-    const lag = { id: lagDoc.id, ...lagDoc.data() };
+  for (const indicatorDoc of indicatorsSnapshot.docs) {
+    const indicator = { id: indicatorDoc.id, ...indicatorDoc.data() };
 
     // NEW: 하위지표가 있는지 확인
     const subIndicatorsSnapshot = await db.collection('okr_subIndicators')
-      .where('laggingIndicatorId', '==', lag.id)
+      .where('laggingIndicatorId', '==', indicator.id)
       .get();
 
     let logData = {
       date: settlement.settlementDate || new Date().toISOString().split('T')[0],
       memberId: currentUser.uid,
-      laggingIndicatorId: lag.id,
+      laggingIndicatorId: indicator.id,
       resultValue: type === 'seller' ? settlement.sellerAmount : settlement.supplierAmount,
       memo: `정산 자동 연동: ${settlement.productName}`,
       source: 'settlement_auto',
@@ -322,16 +327,16 @@ async function syncSettlementToKPI(settlement, type) {
 
     // 알림 발송
     await createNotification({
-      recipientId: lag.ownerId || 'admin',
+      recipientId: indicator.ownerId || 'admin',
       type: 'settlement_sync',
-      message: `정산이 완료되어 ${lag.name}에 자동으로 반영되었습니다.`,
-      targetId: lag.id,
+      message: `정산이 완료되어 ${indicator.name}에 자동으로 반영되었습니다.`,
+      targetId: indicator.id,
       targetType: 'laggingIndicator'
     });
   }
 }
 
-// 정산 취소 시에도 subIndicatorId 고려
+// 정산 취소 시에도 하위지표 고려
 async function removeSettlementFromKPI(settlementId) {
   const logsSnapshot = await db.collection('okr_dailyLogs')
     .where('settlementId', '==', settlementId)
@@ -354,7 +359,7 @@ async function removeSettlementFromKPI(settlementId) {
 
 **변경 사항**:
 - 팀 요약 슬라이드에 총 성과지표 표시
-- KR 상세 모달에서 하위지표별 진척도 표시
+- 메인 KPI 상세 모달에서 하위지표별 진척도 표시
 - 개인 통계 계산 시 하위지표 고려
 
 **예상 작업량**: ~250줄 추가/수정
@@ -370,11 +375,11 @@ async function removeSettlementFromKPI(settlementId) {
 const db = firebase.firestore();
 
 async function loadPersonalKPI(memberId) {
-  const kpisSnapshot = await db.collection('okr_kpis')
+  const subKpisSnapshot = await db.collection('okr_kpis')
     .where('ownerId', '==', memberId)
     .get();
 
-  // 개인 KPI 기반 그로스보드 동적 생성
+  // 개인 서브 KPI 기반 그로스보드 동적 생성
 }
 ```
 
@@ -396,7 +401,7 @@ async function loadPersonalKPI(memberId) {
    // 사용자별 알림 설정
    const notificationSettings = {
      kpi_achieved: true,
-     kr_milestone: true,
+     main_kpi_milestone: true,
      kpi_deadline: false, // 마감일 알림 끄기
      team_activity: true,
      settlement_sync: true
@@ -448,7 +453,7 @@ async function validateDataIntegrity() {
     const tm = doc.data();
     const kpi = await db.collection('okr_kpis').doc(tm.kpiId).get();
     if (!kpi.exists) {
-      issues.push(`총 성과지표 "${tm.name}"의 KPI가 존재하지 않습니다.`);
+      issues.push(`총 성과지표 "${tm.name}"의 서브 KPI가 존재하지 않습니다.`);
     }
   }
 
@@ -576,6 +581,7 @@ async function loadKPIs(forceRefresh = false) {
 | 🟢 P2 | 데이터 검증 스크립트 | admin/strategy/index.html | ~300줄 | Low |
 | 🟢 P2 | 성능 최적화 | 전체 | ~150줄 | Low |
 | 🟢 P2 | 모바일 최적화 | 전체 CSS | ~100줄 | Low |
+| 🟢 P3 | 용어 표준화 | 전체 문서 | ~50줄 | Low |
 
 **총 예상 작업량**: ~2,000줄
 
@@ -638,7 +644,7 @@ async function loadKPIs(forceRefresh = false) {
 - [ ] kpi-meeting-view.html에서 총 성과지표 표시
 - [ ] growthboard-presentation.html에서 계층 구조 반영
 - [ ] 정산 연동 시 하위지표 고려
-- [ ] 모든 화면에서 동일한 달성률 계산
+- [ ] 모든 화면에서 동일한 서브 KPI 달성률 계산
 
 ### 고도화 완료 확인
 - [ ] 모든 입력 경로에서 알림 발송
@@ -648,9 +654,9 @@ async function loadKPIs(forceRefresh = false) {
 - [ ] 모바일 반응형 정상 작동
 
 ### 테스트 시나리오
-- [ ] 새 KPI 생성 → 총 성과지표 추가 → 하위지표 추가 → 업무 기록
+- [ ] 새 메인 KPI 생성 → 서브 KPI 추가 → 총 성과지표 추가 → 하위지표 추가 → 업무 기록
 - [ ] 모든 뷰에서 동일한 데이터 표시 확인
-- [ ] 정산 완료 → KPI 자동 반영 → 알림 수신 확인
+- [ ] 정산 완료 → 서브 KPI 자동 반영 → 알림 수신 확인
 - [ ] 그로스보드 프레젠테이션에서 계층 구조 확인
 - [ ] 데이터 검증 스크립트로 무결성 확인
 
@@ -660,3 +666,28 @@ async function loadKPIs(forceRefresh = false) {
 **예상 완료일**: 3주 후
 **담당**: Claude Code
 **세션**: claude/document-recent-changes-f9TEG
+
+---
+
+## 📌 용어 표준화 (2026-01-23 업데이트)
+
+### 적용된 용어 변경
+- **"KR" 또는 "Key Results"** → **"메인 KPI"** (okr_keyResults)
+- **"KPI" (단독)** → **"서브 KPI"** (okr_kpis)
+- **"kr_milestone" 알림** → **"main_kpi_milestone" 알림**
+
+### 계층 구조 확정
+```
+목표 (Objective, okr_objective)
+ └─ 메인 KPI (okr_keyResults)
+      └─ 서브 KPI (okr_kpis)
+           └─ 총 성과지표 (okr_totalMetrics)
+                └─ 성과지표 (okr_laggingIndicators)
+                     └─ 하위지표 (okr_subIndicators)
+                          └─ 업무일지 (okr_dailyLogs)
+```
+
+### 수정 대상 파일
+1. ✅ STRATEGY_CENTER_ANALYSIS.md - 용어 표준화 완료
+2. ✅ CHANGELOG.md - 용어 표준화 완료
+3. ⏳ 실제 코드 구현 (okr-tracker.html, kpi-meeting-view.html, 등)
