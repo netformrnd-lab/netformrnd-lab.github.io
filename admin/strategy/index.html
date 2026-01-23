@@ -14025,7 +14025,9 @@
       objective: null,
       keyResults: [],
       kpis: [],
-      laggingIndicators: [],
+      totalMetrics: [],  // 총 성과지표 (NEW)
+      laggingIndicators: [],  // 성과지표(단위별)
+      subIndicators: [],  // 하위지표 (NEW)
       dailyLogs: [],
       todayLogs: [],
       personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
@@ -14099,9 +14101,17 @@
         const kpiSnapshot = await db.collection('okr_kpis').orderBy('order').get();
         okrState.kpis = kpiSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 지표 (활동/성과)
+        // 총 성과지표 (NEW)
+        const totalMetricsSnapshot = await db.collection('okr_totalMetrics').get();
+        okrState.totalMetrics = totalMetricsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 성과지표(단위별) - 기존 laggingIndicators
         const lagSnapshot = await db.collection('okr_laggingIndicators').get();
         okrState.laggingIndicators = lagSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 하위지표 (NEW)
+        const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
+        okrState.subIndicators = subIndicatorsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 업무일지 (최근 30일)
         const thirtyDaysAgo = new Date();
@@ -14234,7 +14244,17 @@
       const kpi = okrState.kpis.find(k => k.id === kpiId);
       if (!kpi || !kpi.targetValue) return 0;
 
-      // 성과형(result) 지표만 KPI 달성률에 반영
+      // 새로운 계층 구조 확인: 총 성과지표가 있는 경우
+      const totalMetricsForKPI = okrState.totalMetrics.filter(tm => tm.kpiId === kpiId);
+
+      if (totalMetricsForKPI.length > 0) {
+        // 새 구조: 총 성과지표들의 평균 달성률
+        const rates = totalMetricsForKPI.map(tm => parseFloat(calcTotalMetricRate(tm.id)));
+        const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+        return avgRate.toFixed(2);
+      }
+
+      // 기존 구조: 성과형(output) 지표만 KPI 달성률에 반영
       const resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
 
       const totalValue = resultLags.reduce((sum, lag) => {
@@ -14250,6 +14270,87 @@
 
       // 서브 KPI: 소수 둘째자리까지
       return Math.min((totalValue / kpi.targetValue) * 100, 100).toFixed(2);
+    }
+
+    // 총 성과지표 달성률 계산 (NEW) - 단위별 성과지표들의 평균
+    function calcTotalMetricRate(totalMetricId) {
+      const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
+      if (!totalMetric) return 0;
+
+      // 해당 총 성과지표에 연결된 성과지표(단위별)들
+      const unitMetrics = okrState.laggingIndicators.filter(l => l.totalMetricId === totalMetricId && l.type === 'output');
+
+      if (unitMetrics.length === 0) return 0;
+
+      const rates = unitMetrics.map(um => parseFloat(calcUnitMetricRate(um.id)));
+      const avgRate = rates.reduce((a, b) => a + b, 0) / rates.length;
+
+      return avgRate.toFixed(2);
+    }
+
+    // 성과지표(단위별) 달성률 계산 (NEW)
+    function calcUnitMetricRate(lagId) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return 0;
+
+      // 하위지표가 있는 경우
+      const subIndicators = okrState.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+
+      if (subIndicators.length > 0) {
+        // 하위지표들의 합계
+        const totalValue = subIndicators.reduce((sum, si) => {
+          return sum + calcSubIndicatorValue(si.id);
+        }, 0);
+
+        // 건당 예상 금액 적용
+        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+          const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+          if (kpi && kpi.targetValue) {
+            return Math.min((totalValue * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
+          }
+        }
+        return totalValue;
+      }
+
+      // 기존 구조: 직접 dailyLogs에서 계산
+      const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+      const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
+
+      if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        if (kpi && kpi.targetValue) {
+          return Math.min((logSum * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
+        }
+      }
+
+      return logSum;
+    }
+
+    // 하위지표 값 계산 (NEW)
+    function calcSubIndicatorValue(subIndicatorId) {
+      const subIndicator = okrState.subIndicators.find(si => si.id === subIndicatorId);
+      if (!subIndicator) return 0;
+
+      // 해당 하위지표에 연결된 업무일지 합계
+      const logs = okrState.dailyLogs.filter(l => l.subIndicatorId === subIndicatorId);
+      return logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+    }
+
+    // 성과지표(단위별)의 총 값 계산 (NEW)
+    function calcUnitMetricValue(lagId) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return 0;
+
+      // 하위지표가 있는 경우
+      const subIndicators = okrState.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+
+      if (subIndicators.length > 0) {
+        return subIndicators.reduce((sum, si) => sum + calcSubIndicatorValue(si.id), 0);
+      }
+
+      // 기존 구조: 직접 dailyLogs에서 계산
+      const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
+      return logs.reduce((s, l) => s + (l.resultValue || 0), 0);
     }
 
     // 활동형 지표 통계 계산
@@ -14322,7 +14423,7 @@
       }
     }
 
-    // 마인드맵 렌더링
+    // 마인드맵 렌더링 (새로운 계층 구조 지원)
     function renderKpiMindmap() {
       const container = document.getElementById('kpiMindmapContent');
       if (!container || !okrState.objective) return;
@@ -14350,7 +14451,7 @@
                 const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
 
                 return `
-                  <div style="flex: 1; min-width: 280px; max-width: 400px;">
+                  <div style="flex: 1; min-width: 280px; max-width: 500px;">
                     <!-- 메인 KPI -->
                     <div style="background: ${okrColors[krIdx]}15; border: 2px solid ${okrColors[krIdx]}; border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 20px;">
                       <div style="font-size: 11px; color: ${okrColors[krIdx]}; font-weight: 600; margin-bottom: 6px;">메인 KPI ${krIdx + 1}</div>
@@ -14367,10 +14468,16 @@
                     <div style="display: flex; flex-direction: column; gap: 12px;">
                       ${kpisForKR.map(kpi => {
                         const kpiRate = calcOkrKPIRate(kpi.id);
-                        const metricsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                        const statusColor = kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)';
+
+                        // 새로운 계층: 총 성과지표 확인
+                        const totalMetricsForKPI = okrState.totalMetrics.filter(tm => tm.kpiId === kpi.id);
+                        const hasNewStructure = totalMetricsForKPI.length > 0;
+
+                        // 기존 구조의 지표들
+                        const metricsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id && !l.totalMetricId);
                         const inputMetrics = metricsForKPI.filter(l => l.type !== 'output');
                         const outputMetrics = metricsForKPI.filter(l => l.type === 'output');
-                        const statusColor = kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)';
 
                         return `
                           <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px; border-left: 4px solid ${okrColors[krIdx]};">
@@ -14379,42 +14486,93 @@
                               <span style="font-size: 12px; font-weight: 700; color: ${statusColor};">${kpiRate}%</span>
                             </div>
 
-                            <!-- Input/Output Metrics -->
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
-                              <!-- Input Metrics -->
-                              <div style="background: var(--gray-50); border-radius: 8px; padding: 10px;">
-                                <div style="font-size: 10px; font-weight: 600; color: var(--gray-500); margin-bottom: 6px;">📥 Input (${inputMetrics.length})</div>
-                                ${inputMetrics.slice(0, 3).map(m => {
-                                  const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
-                                  const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                                  return `
-                                    <div style="font-size: 11px; color: var(--gray-600); margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                      <span title="A/B 버전: ${m.version || 'A'}">[${m.version || 'A'}] ${m.name.length > 10 ? m.name.substring(0, 10) + '...' : m.name}</span>
-                                      <span style="font-weight: 600;">${total}</span>
-                                    </div>
-                                  `;
-                                }).join('')}
-                                ${inputMetrics.length > 3 ? `<div style="font-size: 10px; color: var(--gray-400);">+${inputMetrics.length - 3}개 더</div>` : ''}
-                                ${inputMetrics.length === 0 ? `<div style="font-size: 10px; color: var(--gray-400);">-</div>` : ''}
-                              </div>
+                            ${hasNewStructure ? `
+                              <!-- 새 구조: 총 성과지표 -->
+                              <div style="margin-top: 10px;">
+                                ${totalMetricsForKPI.map(tm => {
+                                  const tmRate = calcTotalMetricRate(tm.id);
+                                  const tmStatusColor = tmRate >= 80 ? 'var(--success)' : tmRate >= 50 ? 'var(--warning)' : 'var(--danger)';
+                                  const unitMetrics = okrState.laggingIndicators.filter(l => l.totalMetricId === tm.id);
 
-                              <!-- Output Metrics -->
-                              <div style="background: var(--success-light); border-radius: 8px; padding: 10px;">
-                                <div style="font-size: 10px; font-weight: 600; color: var(--success); margin-bottom: 6px;">📤 Output (${outputMetrics.length})</div>
-                                ${outputMetrics.slice(0, 3).map(m => {
-                                  const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
-                                  const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
                                   return `
-                                    <div style="font-size: 11px; color: var(--gray-700); margin-bottom: 4px; display: flex; justify-content: space-between;">
-                                      <span title="A/B 버전: ${m.version || 'A'}">[${m.version || 'A'}] ${m.name.length > 10 ? m.name.substring(0, 10) + '...' : m.name}</span>
-                                      <span style="font-weight: 700; color: var(--success);">${formatKoreanAmount(total) || total}</span>
+                                    <div style="background: var(--gray-50); border-radius: 8px; padding: 10px; margin-bottom: 8px;">
+                                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                        <div style="font-size: 11px; font-weight: 600; color: var(--gray-700);">📊 ${tm.name} (총 성과지표)</div>
+                                        <span style="font-size: 11px; font-weight: 700; color: ${tmStatusColor};">${tmRate}%</span>
+                                      </div>
+
+                                      <!-- 성과지표(단위별) -->
+                                      ${unitMetrics.map(um => {
+                                        const umValue = calcUnitMetricValue(um.id);
+                                        const subInds = okrState.subIndicators.filter(si => si.laggingIndicatorId === um.id);
+
+                                        return `
+                                          <div style="background: white; border-radius: 6px; padding: 8px; margin-bottom: 6px; border-left: 3px solid ${okrColors[krIdx]};">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                              <span style="font-size: 10px; color: var(--gray-600);">[${um.version || 'A'}] ${um.name}</span>
+                                              <span style="font-size: 10px; font-weight: 600; color: var(--success);">${formatKoreanAmount(umValue) || umValue}</span>
+                                            </div>
+
+                                            ${subInds.length > 0 ? `
+                                              <!-- 하위지표 -->
+                                              <div style="margin-top: 4px; padding-left: 8px; border-left: 2px solid var(--gray-200);">
+                                                ${subInds.slice(0, 3).map(si => {
+                                                  const siValue = calcSubIndicatorValue(si.id);
+                                                  return `
+                                                    <div style="font-size: 9px; color: var(--gray-500); display: flex; justify-content: space-between;">
+                                                      <span>└ ${si.name}</span>
+                                                      <span>${siValue}</span>
+                                                    </div>
+                                                  `;
+                                                }).join('')}
+                                                ${subInds.length > 3 ? `<div style="font-size: 9px; color: var(--gray-400);">+${subInds.length - 3}개 더</div>` : ''}
+                                              </div>
+                                            ` : ''}
+                                          </div>
+                                        `;
+                                      }).join('')}
                                     </div>
                                   `;
                                 }).join('')}
-                                ${outputMetrics.length > 3 ? `<div style="font-size: 10px; color: var(--gray-500);">+${outputMetrics.length - 3}개 더</div>` : ''}
-                                ${outputMetrics.length === 0 ? `<div style="font-size: 10px; color: var(--gray-400);">-</div>` : ''}
                               </div>
-                            </div>
+                            ` : `
+                              <!-- 기존 구조: Input/Output Metrics -->
+                              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
+                                <!-- Input Metrics -->
+                                <div style="background: var(--gray-50); border-radius: 8px; padding: 10px;">
+                                  <div style="font-size: 10px; font-weight: 600; color: var(--gray-500); margin-bottom: 6px;">📥 Input (${inputMetrics.length})</div>
+                                  ${inputMetrics.slice(0, 3).map(m => {
+                                    const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                                    const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                    return `
+                                      <div style="font-size: 11px; color: var(--gray-600); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                        <span title="A/B 버전: ${m.version || 'A'}">[${m.version || 'A'}] ${m.name.length > 10 ? m.name.substring(0, 10) + '...' : m.name}</span>
+                                        <span style="font-weight: 600;">${total}</span>
+                                      </div>
+                                    `;
+                                  }).join('')}
+                                  ${inputMetrics.length > 3 ? `<div style="font-size: 10px; color: var(--gray-400);">+${inputMetrics.length - 3}개 더</div>` : ''}
+                                  ${inputMetrics.length === 0 ? `<div style="font-size: 10px; color: var(--gray-400);">-</div>` : ''}
+                                </div>
+
+                                <!-- Output Metrics -->
+                                <div style="background: var(--success-light); border-radius: 8px; padding: 10px;">
+                                  <div style="font-size: 10px; font-weight: 600; color: var(--success); margin-bottom: 6px;">📤 Output (${outputMetrics.length})</div>
+                                  ${outputMetrics.slice(0, 3).map(m => {
+                                    const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === m.id);
+                                    const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+                                    return `
+                                      <div style="font-size: 11px; color: var(--gray-700); margin-bottom: 4px; display: flex; justify-content: space-between;">
+                                        <span title="A/B 버전: ${m.version || 'A'}">[${m.version || 'A'}] ${m.name.length > 10 ? m.name.substring(0, 10) + '...' : m.name}</span>
+                                        <span style="font-weight: 700; color: var(--success);">${formatKoreanAmount(total) || total}</span>
+                                      </div>
+                                    `;
+                                  }).join('')}
+                                  ${outputMetrics.length > 3 ? `<div style="font-size: 10px; color: var(--gray-500);">+${outputMetrics.length - 3}개 더</div>` : ''}
+                                  ${outputMetrics.length === 0 ? `<div style="font-size: 10px; color: var(--gray-400);">-</div>` : ''}
+                                </div>
+                              </div>
+                            `}
                           </div>
                         `;
                       }).join('')}
@@ -16144,8 +16302,8 @@
                   return `
                     <div class="kpi-folder" style="background: var(--gray-50); border-radius: 12px; overflow: hidden;">
                       <!-- KPI 헤더 (접기/펼치기) -->
-                      <div onclick="toggleKpiFolderInModal('${kpi.id}')" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; user-select: none;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
-                        <div style="display: flex; align-items: center; gap: 8px;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; cursor: pointer; user-select: none;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
+                        <div onclick="toggleKpiFolderInModal('${kpi.id}')" style="display: flex; align-items: center; gap: 8px; flex: 1;">
                           <span id="kpi-arrow-${kpi.id}" style="font-size: 10px; color: var(--gray-500); transition: transform 0.2s;">▼</span>
                           <div>
                             <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📂 ${kpi.name}</div>
@@ -16154,7 +16312,10 @@
                           <span style="font-size: 10px; color: var(--gray-400);">📋${activityCount}</span>
                           <span style="font-size: 10px; color: var(--success);">💰${resultCount}</span>
                         </div>
-                        <span style="font-size: 12px; color: ${kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)'}; font-weight: 600;">${kpiRate}%</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                          <button onclick="event.stopPropagation(); openKpiHierarchyModal('${kpi.id}')" style="padding: 4px 8px; border: 1px solid var(--gray-300); border-radius: 4px; font-size: 10px; background: white; cursor: pointer; color: var(--gray-600);" onmouseover="this.style.borderColor='${okrColors[krIdx]}'; this.style.color='${okrColors[krIdx]}'" onmouseout="this.style.borderColor='var(--gray-300)'; this.style.color='var(--gray-600)'" title="계층 구조 관리">🏗️</button>
+                          <span style="font-size: 12px; color: ${kpiRate >= 80 ? 'var(--success)' : kpiRate >= 50 ? 'var(--warning)' : 'var(--danger)'}; font-weight: 600;">${kpiRate}%</span>
+                        </div>
                       </div>
                       <!-- KPI 내용 (지표 목록) -->
                       <div id="kpi-content-${kpi.id}" style="padding: 0 14px 14px;">
@@ -16732,6 +16893,450 @@
       }
     }
 
+    // ========================================
+    // 총 성과지표 CRUD (NEW)
+    // ========================================
+
+    // 총 성과지표 추가
+    async function addTotalMetric(kpiId, name) {
+      try {
+        const newTotalMetric = {
+          kpiId,
+          name,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('okr_totalMetrics').add(newTotalMetric);
+        const totalMetricWithId = { ...newTotalMetric, id: docRef.id };
+        okrState.totalMetrics.push(totalMetricWithId);
+
+        await saveChangeLog('totalMetric', 'create', { id: docRef.id, name, kpiId });
+        showToast(`총 성과지표 "${name}" 추가됨`, 'success');
+
+        return docRef.id;
+      } catch (e) {
+        console.error('총 성과지표 추가 오류:', e);
+        showToast('추가 실패', 'error');
+        return null;
+      }
+    }
+
+    // 총 성과지표 수정
+    async function updateTotalMetric(totalMetricId, name) {
+      try {
+        const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
+        if (!totalMetric) return;
+
+        const oldName = totalMetric.name;
+
+        await db.collection('okr_totalMetrics').doc(totalMetricId).update({
+          name,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        totalMetric.name = name;
+
+        await saveChangeLog('totalMetric', 'update', { id: totalMetricId, changes: { name: { from: oldName, to: name } } });
+        showToast('총 성과지표 수정됨', 'success');
+      } catch (e) {
+        console.error('총 성과지표 수정 오류:', e);
+        showToast('수정 실패', 'error');
+      }
+    }
+
+    // 총 성과지표 삭제
+    async function deleteTotalMetric(totalMetricId) {
+      try {
+        const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
+        if (!totalMetric) return;
+
+        // 연결된 성과지표(단위별)의 totalMetricId를 null로 변경
+        const linkedLags = okrState.laggingIndicators.filter(l => l.totalMetricId === totalMetricId);
+        for (const lag of linkedLags) {
+          await db.collection('okr_laggingIndicators').doc(lag.id).update({ totalMetricId: null });
+          lag.totalMetricId = null;
+        }
+
+        await db.collection('okr_totalMetrics').doc(totalMetricId).delete();
+
+        okrState.totalMetrics = okrState.totalMetrics.filter(tm => tm.id !== totalMetricId);
+
+        await saveChangeLog('totalMetric', 'delete', { id: totalMetricId, name: totalMetric.name });
+        showToast(`총 성과지표 "${totalMetric.name}" 삭제됨`, 'success');
+      } catch (e) {
+        console.error('총 성과지표 삭제 오류:', e);
+        showToast('삭제 실패', 'error');
+      }
+    }
+
+    // 성과지표(단위별)를 총 성과지표에 연결
+    async function linkLagToTotalMetric(lagId, totalMetricId) {
+      try {
+        const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+        if (!lag) return;
+
+        await db.collection('okr_laggingIndicators').doc(lagId).update({
+          totalMetricId: totalMetricId || null,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        lag.totalMetricId = totalMetricId || null;
+
+        showToast('연결 완료', 'success');
+      } catch (e) {
+        console.error('연결 오류:', e);
+        showToast('연결 실패', 'error');
+      }
+    }
+
+    // ========================================
+    // 하위지표 CRUD (NEW)
+    // ========================================
+
+    // 하위지표 추가
+    async function addSubIndicator(laggingIndicatorId, name) {
+      try {
+        const newSubIndicator = {
+          laggingIndicatorId,
+          name,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('okr_subIndicators').add(newSubIndicator);
+        const subIndicatorWithId = { ...newSubIndicator, id: docRef.id };
+        okrState.subIndicators.push(subIndicatorWithId);
+
+        await saveChangeLog('subIndicator', 'create', { id: docRef.id, name, laggingIndicatorId });
+        showToast(`하위지표 "${name}" 추가됨`, 'success');
+
+        return docRef.id;
+      } catch (e) {
+        console.error('하위지표 추가 오류:', e);
+        showToast('추가 실패', 'error');
+        return null;
+      }
+    }
+
+    // 하위지표 수정
+    async function updateSubIndicator(subIndicatorId, name) {
+      try {
+        const subIndicator = okrState.subIndicators.find(si => si.id === subIndicatorId);
+        if (!subIndicator) return;
+
+        const oldName = subIndicator.name;
+
+        await db.collection('okr_subIndicators').doc(subIndicatorId).update({
+          name,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        subIndicator.name = name;
+
+        await saveChangeLog('subIndicator', 'update', { id: subIndicatorId, changes: { name: { from: oldName, to: name } } });
+        showToast('하위지표 수정됨', 'success');
+      } catch (e) {
+        console.error('하위지표 수정 오류:', e);
+        showToast('수정 실패', 'error');
+      }
+    }
+
+    // 하위지표 삭제
+    async function deleteSubIndicator(subIndicatorId) {
+      try {
+        const subIndicator = okrState.subIndicators.find(si => si.id === subIndicatorId);
+        if (!subIndicator) return;
+
+        // 연결된 업무일지의 subIndicatorId를 null로 변경
+        const linkedLogs = okrState.dailyLogs.filter(l => l.subIndicatorId === subIndicatorId);
+        for (const log of linkedLogs) {
+          await db.collection('okr_dailyLogs').doc(log.id).update({ subIndicatorId: null });
+          log.subIndicatorId = null;
+        }
+
+        await db.collection('okr_subIndicators').doc(subIndicatorId).delete();
+
+        okrState.subIndicators = okrState.subIndicators.filter(si => si.id !== subIndicatorId);
+
+        await saveChangeLog('subIndicator', 'delete', { id: subIndicatorId, name: subIndicator.name });
+        showToast(`하위지표 "${subIndicator.name}" 삭제됨`, 'success');
+      } catch (e) {
+        console.error('하위지표 삭제 오류:', e);
+        showToast('삭제 실패', 'error');
+      }
+    }
+
+    // ========================================
+    // KPI 계층 관리 모달 (NEW)
+    // ========================================
+
+    // KPI 계층 구조 관리 모달 열기
+    function openKpiHierarchyModal(kpiId) {
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      if (!kpi) return;
+
+      const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+      const krIdx = kr ? okrState.keyResults.findIndex(k => k.id === kr.id) : 0;
+
+      const totalMetricsForKPI = okrState.totalMetrics.filter(tm => tm.kpiId === kpiId);
+      const unlinkedLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && !l.totalMetricId && l.type === 'output');
+
+      showModal(`
+        <div style="padding: 24px; width: 900px; max-width: 95vw; box-sizing: border-box;">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid ${okrColors[krIdx]};">
+            <span style="font-size: 28px;">🏗️</span>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${kpi.name} - 계층 구조 관리</div>
+              <div style="font-size: 13px; color: var(--gray-500);">총 성과지표 → 성과지표(단위별) → 하위지표</div>
+            </div>
+            <button class="btn btn-secondary" onclick="closeModal()" style="padding: 8px 16px;">닫기</button>
+          </div>
+
+          <div style="display: flex; gap: 20px;">
+            <!-- 왼쪽: 계층 구조 트리 -->
+            <div style="flex: 1; max-height: 500px; overflow-y: auto;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-size: 14px; font-weight: 600; color: var(--gray-700);">📊 계층 구조</div>
+                <button onclick="showAddTotalMetricForm('${kpiId}', ${krIdx})" style="padding: 6px 12px; background: ${okrColors[krIdx]}; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">+ 총 성과지표 추가</button>
+              </div>
+
+              <div id="hierarchyTreeContainer" style="display: flex; flex-direction: column; gap: 12px;">
+                ${totalMetricsForKPI.map(tm => {
+                  const linkedLags = okrState.laggingIndicators.filter(l => l.totalMetricId === tm.id);
+                  const tmRate = calcTotalMetricRate(tm.id);
+
+                  return `
+                    <div style="background: var(--gray-50); border-radius: 12px; padding: 14px; border-left: 4px solid ${okrColors[krIdx]};">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                          <span style="font-size: 16px;">📊</span>
+                          <div>
+                            <div style="font-size: 14px; font-weight: 600; color: var(--gray-800);">${tm.name}</div>
+                            <div style="font-size: 11px; color: var(--gray-500);">총 성과지표 | 달성률: ${tmRate}%</div>
+                          </div>
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                          <button onclick="showEditTotalMetricForm('${tm.id}', ${krIdx})" style="padding: 4px 8px; border: 1px solid var(--gray-300); border-radius: 4px; font-size: 11px; cursor: pointer; background: white;">수정</button>
+                          <button onclick="confirmDeleteTotalMetric('${tm.id}')" style="padding: 4px 8px; border: 1px solid var(--danger); border-radius: 4px; font-size: 11px; cursor: pointer; background: white; color: var(--danger);">삭제</button>
+                        </div>
+                      </div>
+
+                      <!-- 연결된 성과지표(단위별) -->
+                      <div style="margin-left: 20px; display: flex; flex-direction: column; gap: 8px;">
+                        ${linkedLags.map(lag => {
+                          const subInds = okrState.subIndicators.filter(si => si.laggingIndicatorId === lag.id);
+                          const lagValue = calcUnitMetricValue(lag.id);
+
+                          return `
+                            <div style="background: white; border-radius: 8px; padding: 10px; border-left: 3px solid var(--success);">
+                              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                  <span style="font-size: 12px;">📈</span>
+                                  <span style="font-size: 13px; font-weight: 600; color: var(--gray-700);">[${lag.version || 'A'}] ${lag.name}</span>
+                                  <span style="font-size: 11px; color: var(--success); font-weight: 600;">${formatKoreanAmount(lagValue) || lagValue}</span>
+                                </div>
+                                <button onclick="showAddSubIndicatorForm('${lag.id}', ${krIdx})" style="padding: 2px 6px; border: 1px dashed var(--gray-300); border-radius: 4px; font-size: 10px; cursor: pointer; background: white;">+ 하위지표</button>
+                              </div>
+
+                              <!-- 하위지표 목록 -->
+                              ${subInds.length > 0 ? `
+                                <div style="margin-left: 16px; display: flex; flex-direction: column; gap: 4px;">
+                                  ${subInds.map(si => {
+                                    const siValue = calcSubIndicatorValue(si.id);
+                                    return `
+                                      <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: var(--gray-50); border-radius: 4px;">
+                                        <span style="font-size: 11px; color: var(--gray-600);">└ ${si.name}</span>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                          <span style="font-size: 11px; font-weight: 600; color: var(--gray-700);">${siValue}</span>
+                                          <button onclick="confirmDeleteSubIndicator('${si.id}')" style="padding: 2px 4px; border: none; background: transparent; font-size: 10px; cursor: pointer; color: var(--gray-400);" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--gray-400)'">✕</button>
+                                        </div>
+                                      </div>
+                                    `;
+                                  }).join('')}
+                                </div>
+                              ` : ''}
+                            </div>
+                          `;
+                        }).join('')}
+
+                        ${linkedLags.length === 0 ? `
+                          <div style="text-align: center; padding: 12px; color: var(--gray-400); font-size: 12px;">
+                            연결된 성과지표(단위별)가 없습니다
+                          </div>
+                        ` : ''}
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+
+                ${totalMetricsForKPI.length === 0 ? `
+                  <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+                    <div style="font-size: 32px; margin-bottom: 12px;">📊</div>
+                    <div style="font-size: 14px; margin-bottom: 8px;">총 성과지표가 없습니다</div>
+                    <div style="font-size: 12px;">위의 '+ 총 성과지표 추가' 버튼을 클릭하세요</div>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- 오른쪽: 미연결 성과지표(단위별) -->
+            <div style="width: 280px; flex-shrink: 0;">
+              <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">📋 미연결 성과지표</div>
+              <div style="background: var(--gray-50); border-radius: 12px; padding: 12px; max-height: 460px; overflow-y: auto;">
+                ${unlinkedLags.length > 0 ? `
+                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 10px;">드래그하거나 클릭하여 총 성과지표에 연결하세요</div>
+                  ${unlinkedLags.map(lag => `
+                    <div id="unlinked-lag-${lag.id}" style="background: white; border: 1px solid var(--gray-200); border-radius: 8px; padding: 10px; margin-bottom: 8px; cursor: pointer;" onclick="showLinkLagModal('${lag.id}', '${kpiId}', ${krIdx})">
+                      <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">[${lag.version || 'A'}] ${lag.name}</div>
+                      <div style="font-size: 10px; color: var(--gray-500); margin-top: 4px;">클릭하여 연결</div>
+                    </div>
+                  `).join('')}
+                ` : `
+                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">
+                    <div style="font-size: 12px;">모든 성과지표가 연결됨</div>
+                  </div>
+                `}
+              </div>
+            </div>
+          </div>
+        </div>
+      `);
+    }
+
+    // 총 성과지표 추가 폼
+    function showAddTotalMetricForm(kpiId, krIdx) {
+      const formArea = document.getElementById('hierarchyTreeContainer');
+      if (!formArea) return;
+
+      const formHtml = `
+        <div id="addTotalMetricForm" style="background: ${okrColors[krIdx]}10; border: 2px dashed ${okrColors[krIdx]}; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+          <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 12px;">📊 총 성과지표 추가</div>
+          <input type="text" id="newTotalMetricName" placeholder="총 성과지표 이름 (예: 공구 매출)" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box;" />
+          <div style="display: flex; gap: 8px;">
+            <button onclick="executeAddTotalMetric('${kpiId}', ${krIdx})" style="flex: 1; padding: 10px; background: ${okrColors[krIdx]}; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">추가</button>
+            <button onclick="openKpiHierarchyModal('${kpiId}')" style="flex: 1; padding: 10px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+          </div>
+        </div>
+      `;
+
+      formArea.insertAdjacentHTML('afterbegin', formHtml);
+      document.getElementById('newTotalMetricName')?.focus();
+    }
+
+    // 총 성과지표 추가 실행
+    async function executeAddTotalMetric(kpiId, krIdx) {
+      const name = document.getElementById('newTotalMetricName')?.value?.trim();
+      if (!name) {
+        showToast('이름을 입력해주세요', 'error');
+        return;
+      }
+
+      await addTotalMetric(kpiId, name);
+      openKpiHierarchyModal(kpiId);
+    }
+
+    // 총 성과지표 수정 폼
+    function showEditTotalMetricForm(totalMetricId, krIdx) {
+      const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
+      if (!totalMetric) return;
+
+      const formArea = document.getElementById('hierarchyTreeContainer');
+      if (!formArea) return;
+
+      const formHtml = `
+        <div id="editTotalMetricForm" style="background: ${okrColors[krIdx]}10; border: 2px solid ${okrColors[krIdx]}; border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+          <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 12px;">📊 총 성과지표 수정</div>
+          <input type="text" id="editTotalMetricName" value="${totalMetric.name}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box;" />
+          <div style="display: flex; gap: 8px;">
+            <button onclick="executeEditTotalMetric('${totalMetricId}', '${totalMetric.kpiId}')" style="flex: 1; padding: 10px; background: ${okrColors[krIdx]}; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">저장</button>
+            <button onclick="openKpiHierarchyModal('${totalMetric.kpiId}')" style="flex: 1; padding: 10px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+          </div>
+        </div>
+      `;
+
+      formArea.insertAdjacentHTML('afterbegin', formHtml);
+      document.getElementById('editTotalMetricName')?.focus();
+    }
+
+    // 총 성과지표 수정 실행
+    async function executeEditTotalMetric(totalMetricId, kpiId) {
+      const name = document.getElementById('editTotalMetricName')?.value?.trim();
+      if (!name) {
+        showToast('이름을 입력해주세요', 'error');
+        return;
+      }
+
+      await updateTotalMetric(totalMetricId, name);
+      openKpiHierarchyModal(kpiId);
+    }
+
+    // 총 성과지표 삭제 확인
+    function confirmDeleteTotalMetric(totalMetricId) {
+      const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
+      if (!totalMetric) return;
+
+      if (confirm(`총 성과지표 "${totalMetric.name}"을(를) 삭제하시겠습니까?\n\n연결된 성과지표(단위별)는 미연결 상태로 변경됩니다.`)) {
+        deleteTotalMetric(totalMetricId).then(() => {
+          openKpiHierarchyModal(totalMetric.kpiId);
+        });
+      }
+    }
+
+    // 하위지표 추가 폼
+    function showAddSubIndicatorForm(lagId, krIdx) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      const name = prompt('하위지표 이름을 입력하세요 (예: 공구제안, 공구진행시작)');
+      if (name && name.trim()) {
+        addSubIndicator(lagId, name.trim()).then(() => {
+          const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+          if (kpi) openKpiHierarchyModal(kpi.id);
+        });
+      }
+    }
+
+    // 하위지표 삭제 확인
+    function confirmDeleteSubIndicator(subIndicatorId) {
+      const subIndicator = okrState.subIndicators.find(si => si.id === subIndicatorId);
+      if (!subIndicator) return;
+
+      if (confirm(`하위지표 "${subIndicator.name}"을(를) 삭제하시겠습니까?`)) {
+        deleteSubIndicator(subIndicatorId).then(() => {
+          const lag = okrState.laggingIndicators.find(l => l.id === subIndicator.laggingIndicatorId);
+          if (lag) {
+            const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+            if (kpi) openKpiHierarchyModal(kpi.id);
+          }
+        });
+      }
+    }
+
+    // 성과지표(단위별)를 총 성과지표에 연결하는 모달
+    function showLinkLagModal(lagId, kpiId, krIdx) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      const totalMetricsForKPI = okrState.totalMetrics.filter(tm => tm.kpiId === kpiId);
+
+      if (totalMetricsForKPI.length === 0) {
+        showToast('먼저 총 성과지표를 추가해주세요', 'error');
+        return;
+      }
+
+      const selectedTM = prompt(`"${lag.name}"을(를) 연결할 총 성과지표 번호를 입력하세요:\n\n${totalMetricsForKPI.map((tm, i) => `${i + 1}. ${tm.name}`).join('\n')}`);
+
+      if (selectedTM) {
+        const idx = parseInt(selectedTM) - 1;
+        if (idx >= 0 && idx < totalMetricsForKPI.length) {
+          linkLagToTotalMetric(lagId, totalMetricsForKPI[idx].id).then(() => {
+            openKpiHierarchyModal(kpiId);
+          });
+        } else {
+          showToast('올바른 번호를 입력해주세요', 'error');
+        }
+      }
+    }
+
     // 삭제 취소
     function cancelDeleteLag() {
       const formArea = document.getElementById('workRecordFormArea');
@@ -16795,20 +17400,57 @@
           currentSelectedLag.krId,
           currentSelectedLag.kpiId,
           currentSelectedLag.lagId,
-          currentSelectedLag.krIdx
+          currentSelectedLag.krIdx,
+          currentSelectedLag.selectedSubIndicatorId
         );
       }
     });
 
+    // 하위지표 선택 (NEW)
+    function selectSubIndicator(subIndicatorId, krId, kpiId, lagId, krIdx) {
+      // hidden input 업데이트
+      const hiddenInput = document.getElementById('selectedSubIndicatorId');
+      if (hiddenInput) {
+        hiddenInput.value = subIndicatorId;
+      }
+
+      // 현재 선택 상태 저장
+      if (currentSelectedLag) {
+        currentSelectedLag.selectedSubIndicatorId = subIndicatorId;
+      }
+
+      // 버튼 스타일 업데이트
+      okrState.subIndicators.filter(si => si.laggingIndicatorId === lagId).forEach(si => {
+        const btn = document.getElementById(`subIndBtn${si.id}`);
+        if (btn) {
+          if (si.id === subIndicatorId) {
+            btn.style.borderColor = okrColors[krIdx];
+            btn.style.background = `${okrColors[krIdx]}15`;
+            btn.style.color = okrColors[krIdx];
+            btn.style.fontWeight = '700';
+          } else {
+            btn.style.borderColor = 'var(--gray-200)';
+            btn.style.background = 'white';
+            btn.style.color = 'var(--gray-600)';
+            btn.style.fontWeight = '600';
+          }
+        }
+      });
+    }
+
     // Metric 선택 시 오른쪽에 입력 폼 표시
-    function selectLagForRecord(krId, kpiId, lagId, krIdx) {
+    function selectLagForRecord(krId, kpiId, lagId, krIdx, selectedSubIndicatorId = null) {
       // 현재 선택된 지표 정보 저장
-      currentSelectedLag = { krId, kpiId, lagId, krIdx };
+      currentSelectedLag = { krId, kpiId, lagId, krIdx, selectedSubIndicatorId };
       const kr = okrState.keyResults.find(k => k.id === krId);
       const kpi = okrState.kpis.find(k => k.id === kpiId);
       const lag = okrState.laggingIndicators.find(l => l.id === lagId);
 
       if (!kr || !kpi || !lag) return;
+
+      // 하위지표 확인
+      const subIndicators = okrState.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+      const hasSubIndicators = subIndicators.length > 0;
 
       // 첨부파일 초기화
       workRecordAttachments = [];
@@ -16831,6 +17473,25 @@
       // Input/Output Metrics 타입과 KPI 단위에 따라 입력 폼 결정
       const isInputMetric = lag.type === 'input';
       const isMoneyUnit = kpi && ['원', '달러', '€', '￦'].includes(kpi.unit);
+
+      // 하위지표 선택 UI 생성
+      const subIndicatorSelectHtml = hasSubIndicators ? `
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">
+            📌 하위지표 선택 <span style="color: var(--danger);">*</span>
+          </label>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            ${subIndicators.map((si, idx) => `
+              <button type="button" id="subIndBtn${si.id}" onclick="selectSubIndicator('${si.id}', '${krId}', '${kpiId}', '${lagId}', ${krIdx})"
+                style="padding: 8px 14px; border: 2px solid ${selectedSubIndicatorId === si.id ? okrColors[krIdx] : 'var(--gray-200)'}; border-radius: 8px; background: ${selectedSubIndicatorId === si.id ? okrColors[krIdx] + '15' : 'white'}; color: ${selectedSubIndicatorId === si.id ? okrColors[krIdx] : 'var(--gray-600)'}; font-size: 12px; font-weight: ${selectedSubIndicatorId === si.id ? '700' : '600'}; cursor: pointer;">
+                ${si.name}
+              </button>
+            `).join('')}
+          </div>
+          <input type="hidden" id="selectedSubIndicatorId" value="${selectedSubIndicatorId || ''}" />
+          <div style="font-size: 10px; color: var(--gray-500); margin-top: 4px;">기록할 하위지표를 선택하세요 (예: 공구제안a, 공구제안b)</div>
+        </div>
+      ` : '';
 
       // 오른쪽 폼 영역 업데이트
       const formArea = document.getElementById('workRecordFormArea');
@@ -16911,6 +17572,9 @@
             <div style="font-size: 12px; color: var(--gray-700); line-height: 1.4;">${lag.description}</div>
           </div>
           ` : ''}
+
+          <!-- 하위지표 선택 (있는 경우) -->
+          ${subIndicatorSelectHtml}
 
           <!-- 버전 선택 -->
           <div style="margin-bottom: 16px;">
@@ -17329,6 +17993,17 @@
       const quantityInput = document.getElementById('workRecordQuantity');
       const quantityValue = quantityInput?.value?.trim();
 
+      // 하위지표 확인
+      const subIndicators = okrState.subIndicators.filter(si => si.laggingIndicatorId === lagId);
+      const hasSubIndicators = subIndicators.length > 0;
+      const selectedSubIndicatorId = document.getElementById('selectedSubIndicatorId')?.value || null;
+
+      // 하위지표가 있는데 선택하지 않은 경우
+      if (hasSubIndicators && !selectedSubIndicatorId) {
+        showToast('하위지표를 선택해주세요', 'error');
+        return;
+      }
+
       // 빈 입력 또는 0 입력 검증
       if (!quantityValue || quantityValue === '0' || parseInt(quantityValue) <= 0) {
         showToast('수량 또는 금액을 입력해주세요', 'error');
@@ -17364,8 +18039,8 @@
         }
       }
 
-      // 업무 기록
-      await recordOkrWork(krId, kpiId, lagId, quantity, memo, attachmentUrls, version);
+      // 업무 기록 (하위지표 ID 포함)
+      await recordOkrWork(krId, kpiId, lagId, quantity, memo, attachmentUrls, version, selectedSubIndicatorId);
 
       // 폼 초기화 (모달 유지)
       workRecordAttachments = [];
@@ -17779,7 +18454,7 @@
       return `${hours}:${minutes}`;
     }
 
-    async function recordOkrWork(krId, kpiId, lagId, quantity = 1, memo = '', attachments = [], version = 'A') {
+    async function recordOkrWork(krId, kpiId, lagId, quantity = 1, memo = '', attachments = [], version = 'A', subIndicatorId = null) {
       try {
         const now = new Date();
         const registeredTime = formatTime(now);
@@ -17789,6 +18464,8 @@
           memberId: state.currentUser?.uid || 'anonymous',
           memberName: state.currentUser?.name || '사용자',
           krId, kpiId, laggingIndicatorId: lagId,
+          // 하위지표 ID (NEW)
+          subIndicatorId: subIndicatorId || null,
           resultValue: quantity,
           // 버전 추가
           version: version,
