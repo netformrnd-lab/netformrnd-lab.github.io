@@ -7,6 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
     <style>
         :root {
             --color-primary: #1e3a8a;
@@ -763,6 +767,144 @@
             50% { transform: scale(1.05); }
         }
 
+        /* 미디어 업로드 UI */
+        .media-upload-container {
+            margin: 24px 0;
+            padding: 24px;
+            background: white;
+            border-radius: 16px;
+            border: 2px dashed var(--color-accent);
+            display: none;
+        }
+
+        .media-upload-container.active {
+            display: block;
+        }
+
+        .media-upload-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .media-upload-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--color-primary);
+        }
+
+        .media-upload-buttons {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .media-upload-btn {
+            background: var(--color-accent);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .media-upload-btn:hover {
+            background: var(--color-primary-light);
+            transform: translateY(-2px);
+        }
+
+        .media-display-mode {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            border: 2px solid var(--color-border);
+            background: white;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .mode-btn.active {
+            background: var(--color-accent);
+            border-color: var(--color-accent);
+            color: white;
+        }
+
+        .media-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .media-item {
+            position: relative;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .media-item img,
+        .media-item video {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .media-item-delete {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(220, 38, 38, 0.9);
+            color: white;
+            border: none;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .before-after-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .before-after-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--color-text);
+        }
+
+        .upload-progress {
+            margin-top: 12px;
+            padding: 12px;
+            background: var(--color-accent-light);
+            border-radius: 8px;
+            font-size: 14px;
+            color: var(--color-accent);
+            display: none;
+        }
+
+        .upload-progress.active {
+            display: block;
+        }
+
         /* 반응형 */
         @media (max-width: 768px) {
             .nav-buttons {
@@ -1378,6 +1520,27 @@
     </div>
 
     <script>
+        // ========== Firebase 초기화 ==========
+        // Firebase 설정 (사용자가 본인의 Firebase 프로젝트로 교체 필요)
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Firebase 초기화
+        let storage = null;
+        try {
+            firebase.initializeApp(firebaseConfig);
+            storage = firebase.storage();
+            console.log('Firebase Storage 초기화 성공');
+        } catch (error) {
+            console.warn('Firebase 초기화 실패 (설정 필요):', error);
+        }
+
         // 슬라이드 관리
         let currentSlide = 0;
         const slides = document.querySelectorAll('.slide');
@@ -1594,6 +1757,273 @@
                 }
             }
         });
+
+        // ========== 미디어 업로드 기능 ==========
+        let mediaData = {};
+
+        // 미디어 업로드 컨테이너를 각 섹션에 추가
+        function initMediaUpload() {
+            if (!isEditMode) return;
+
+            // 주요 섹션(카드, 스토리 카드 등)에 미디어 업로드 UI 추가
+            const containers = document.querySelectorAll('.story-card, .card, .value-card');
+
+            containers.forEach((container, index) => {
+                const containerId = `media-container-${index}`;
+
+                // 이미 추가된 경우 스킵
+                if (container.querySelector('.media-upload-container')) return;
+
+                const uploadHTML = `
+                    <div class="media-upload-container" id="${containerId}">
+                        <div class="media-upload-header">
+                            <div class="media-upload-title">📸 미디어 추가</div>
+                        </div>
+                        <div class="media-display-mode">
+                            <button class="mode-btn active" data-mode="grid" data-container="${containerId}">일반 그리드</button>
+                            <button class="mode-btn" data-mode="before-after" data-container="${containerId}">비포 / 애프터</button>
+                        </div>
+                        <div class="media-upload-buttons">
+                            <input type="file" id="file-${containerId}" accept="image/*,video/*,.gif" multiple style="display: none;">
+                            <button class="media-upload-btn" onclick="document.getElementById('file-${containerId}').click()">
+                                🖼️ 이미지/영상 선택
+                            </button>
+                            <button class="media-upload-btn" onclick="uploadMedia('${containerId}')">
+                                ⬆️ 업로드
+                            </button>
+                        </div>
+                        <div class="upload-progress" id="progress-${containerId}"></div>
+                        <div class="media-grid" id="grid-${containerId}"></div>
+                    </div>
+                `;
+
+                container.insertAdjacentHTML('beforeend', uploadHTML);
+
+                // 미디어 컨테이너 표시/숨김 토글 버튼 추가
+                const toggleBtn = document.createElement('button');
+                toggleBtn.className = 'media-upload-btn';
+                toggleBtn.textContent = '📸 미디어 관리';
+                toggleBtn.style.marginTop = '12px';
+                toggleBtn.onclick = () => {
+                    const uploadContainer = document.getElementById(containerId);
+                    uploadContainer.classList.toggle('active');
+                };
+                container.appendChild(toggleBtn);
+            });
+
+            // 모드 버튼 이벤트 리스너
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const container = this.dataset.container;
+                    const mode = this.dataset.mode;
+
+                    // 같은 그룹의 버튼들 비활성화
+                    document.querySelectorAll(`[data-container="${container}"]`).forEach(b => {
+                        b.classList.remove('active');
+                    });
+                    this.classList.add('active');
+
+                    // 미디어 데이터에 모드 저장
+                    if (!mediaData[container]) {
+                        mediaData[container] = { mode: mode, files: [] };
+                    } else {
+                        mediaData[container].mode = mode;
+                    }
+
+                    // 미디어 표시 업데이트
+                    displayMedia(container);
+                });
+            });
+        }
+
+        // 미디어 업로드 함수
+        async function uploadMedia(containerId) {
+            const fileInput = document.getElementById(`file-${containerId}`);
+            const files = fileInput.files;
+
+            if (files.length === 0) {
+                alert('파일을 먼저 선택해주세요.');
+                return;
+            }
+
+            if (!storage) {
+                alert('Firebase Storage가 설정되지 않았습니다. Firebase 설정을 완료해주세요.');
+                // 로컬에 파일 URL만 저장 (테스트용)
+                saveMediaLocally(containerId, files);
+                return;
+            }
+
+            const progressDiv = document.getElementById(`progress-${containerId}`);
+            progressDiv.classList.add('active');
+            progressDiv.textContent = '업로드 중...';
+
+            try {
+                const uploadedUrls = [];
+
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const timestamp = Date.now();
+                    const fileName = `moyeoradeal/${containerId}/${timestamp}_${file.name}`;
+
+                    // Firebase Storage에 업로드
+                    const storageRef = storage.ref(fileName);
+                    const uploadTask = await storageRef.put(file);
+                    const downloadUrl = await uploadTask.ref.getDownloadURL();
+
+                    uploadedUrls.push({
+                        url: downloadUrl,
+                        type: file.type.startsWith('video') ? 'video' : 'image',
+                        name: file.name
+                    });
+
+                    progressDiv.textContent = `업로드 중... (${i + 1}/${files.length})`;
+                }
+
+                // 미디어 데이터에 저장
+                if (!mediaData[containerId]) {
+                    mediaData[containerId] = { mode: 'grid', files: [] };
+                }
+                mediaData[containerId].files.push(...uploadedUrls);
+
+                // 미디어 표시
+                displayMedia(containerId);
+
+                // 전체 데이터 저장
+                saveAllMediaData();
+
+                progressDiv.textContent = '✅ 업로드 완료!';
+                setTimeout(() => {
+                    progressDiv.classList.remove('active');
+                }, 2000);
+
+                // 파일 입력 초기화
+                fileInput.value = '';
+
+            } catch (error) {
+                console.error('업로드 실패:', error);
+                progressDiv.textContent = '❌ 업로드 실패';
+                alert('업로드에 실패했습니다: ' + error.message);
+            }
+        }
+
+        // 로컬 파일 저장 (Firebase 없을 때 테스트용)
+        function saveMediaLocally(containerId, files) {
+            const urls = [];
+
+            Array.from(files).forEach(file => {
+                const url = URL.createObjectURL(file);
+                urls.push({
+                    url: url,
+                    type: file.type.startsWith('video') ? 'video' : 'image',
+                    name: file.name
+                });
+            });
+
+            if (!mediaData[containerId]) {
+                mediaData[containerId] = { mode: 'grid', files: [] };
+            }
+            mediaData[containerId].files.push(...urls);
+
+            displayMedia(containerId);
+
+            alert('로컬 미리보기로 추가되었습니다. (Firebase 설정 후 실제 업로드 가능)');
+            document.getElementById(`file-${containerId}`).value = '';
+        }
+
+        // 미디어 표시
+        function displayMedia(containerId) {
+            const gridDiv = document.getElementById(`grid-${containerId}`);
+            const data = mediaData[containerId];
+
+            if (!data || data.files.length === 0) {
+                gridDiv.innerHTML = '<p style="color: #9ca3af; text-align: center;">업로드된 미디어가 없습니다.</p>';
+                return;
+            }
+
+            const mode = data.mode || 'grid';
+
+            if (mode === 'before-after' && data.files.length >= 2) {
+                // 비포/애프터 모드
+                gridDiv.innerHTML = `
+                    <div class="before-after-container">
+                        <div>
+                            <div class="before-after-label">Before</div>
+                            <div class="media-item">
+                                ${createMediaElement(data.files[0], containerId, 0)}
+                            </div>
+                        </div>
+                        <div>
+                            <div class="before-after-label">After</div>
+                            <div class="media-item">
+                                ${createMediaElement(data.files[1], containerId, 1)}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // 일반 그리드 모드
+                gridDiv.style.display = 'grid';
+                gridDiv.innerHTML = data.files.map((file, index) => `
+                    <div class="media-item">
+                        ${createMediaElement(file, containerId, index)}
+                        <button class="media-item-delete" onclick="deleteMedia('${containerId}', ${index})">×</button>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // 미디어 요소 생성
+        function createMediaElement(file, containerId, index) {
+            if (file.type === 'video') {
+                return `<video src="${file.url}" controls></video>`;
+            } else {
+                return `<img src="${file.url}" alt="${file.name}">`;
+            }
+        }
+
+        // 미디어 삭제
+        function deleteMedia(containerId, index) {
+            if (!confirm('이 미디어를 삭제하시겠습니까?')) return;
+
+            mediaData[containerId].files.splice(index, 1);
+            displayMedia(containerId);
+            saveAllMediaData();
+        }
+
+        // 모든 미디어 데이터 저장
+        function saveAllMediaData() {
+            localStorage.setItem('moyeoradeal-media', JSON.stringify(mediaData));
+            console.log('미디어 데이터 저장 완료');
+        }
+
+        // 미디어 데이터 불러오기
+        function loadAllMediaData() {
+            const saved = localStorage.getItem('moyeoradeal-media');
+            if (saved) {
+                try {
+                    mediaData = JSON.parse(saved);
+                    // 각 컨테이너의 미디어 표시
+                    Object.keys(mediaData).forEach(containerId => {
+                        displayMedia(containerId);
+                    });
+                    console.log('미디어 데이터 불러오기 완료');
+                } catch (error) {
+                    console.error('미디어 데이터 불러오기 실패:', error);
+                }
+            }
+        }
+
+        // 편집 모드가 활성화될 때 미디어 업로드 UI 초기화
+        const originalToggleEditMode = toggleEditMode;
+        toggleEditMode = function() {
+            originalToggleEditMode();
+            if (isEditMode) {
+                setTimeout(() => {
+                    initMediaUpload();
+                    loadAllMediaData();
+                }, 100);
+            }
+        };
     </script>
 </body>
 </html>
