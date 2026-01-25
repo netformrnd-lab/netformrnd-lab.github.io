@@ -10381,6 +10381,11 @@
           <!-- 통계 카드 -->
           <div id="worklog-stats" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;"></div>
 
+          <!-- 미팅 액션 아이템 -->
+          <div id="meeting-action-items" style="margin-bottom: 20px;">
+            <!-- 동적으로 렌더링 -->
+          </div>
+
           <!-- 메인 컨텐츠 -->
           <div id="worklog-main-content">
             <div style="text-align: center; padding: 60px;"><div class="loading-spinner"></div></div>
@@ -10389,11 +10394,161 @@
       `;
 
       loadWorkLogData();
+      loadMeetingActionItems();
     }
 
     function toggleUnlinkedFilter() {
       unlinkedFilter = !unlinkedFilter;
       renderWorkLog();
+    }
+
+    // Load and display pending meeting action items
+    async function loadMeetingActionItems() {
+      const container = document.getElementById('meeting-action-items');
+      if (!container) return;
+
+      const currentMember = getCurrentMember();
+      const today = new Date().toISOString().split('T')[0];
+
+      try {
+        const snapshot = await db.collection('okr_meetings')
+          .where('date', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]) // Last 30 days
+          .get();
+
+        const meetings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Extract all action items
+        let allActionItems = [];
+        meetings.forEach(meeting => {
+          if (meeting.actionItems && meeting.actionItems.length > 0) {
+            meeting.actionItems.forEach((item, index) => {
+              // Only show items assigned to current user or unassigned
+              if (!item.completed && (!item.assignee || item.assignee === currentMember.name || item.assignee === currentMember.loginId)) {
+                allActionItems.push({
+                  ...item,
+                  meetingId: meeting.id,
+                  meetingTitle: meeting.title,
+                  meetingDate: meeting.date,
+                  actionItemIndex: index
+                });
+              }
+            });
+          }
+        });
+
+        // Sort by deadline
+        allActionItems.sort((a, b) => {
+          if (!a.deadline) return 1;
+          if (!b.deadline) return -1;
+          return new Date(a.deadline) - new Date(b.deadline);
+        });
+
+        if (allActionItems.length === 0) {
+          container.innerHTML = '';
+          return;
+        }
+
+        // Render action items
+        container.innerHTML = `
+          <div style="background: linear-gradient(135deg, #F59E0B 0%, #EF4444 100%); border-radius: 16px; padding: 20px; color: white;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 16px; font-weight: 700;">🎯 미팅 액션 아이템 (${allActionItems.length}개)</div>
+              <a href="/admin/strategy/meeting-history.html" target="_blank" style="font-size: 12px; color: white; opacity: 0.9; text-decoration: none;">미팅 히스토리 →</a>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px;">
+              ${allActionItems.map(item => {
+                const isOverdue = item.deadline && new Date(item.deadline) < new Date(today);
+                const isDueSoon = item.deadline && new Date(item.deadline) <= new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+
+                return `
+                  <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 16px; backdrop-filter: blur(10px);">
+                    <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: start;">
+                      <span style="flex: 1;">${item.task}</span>
+                      ${isOverdue ? '<span style="background: #DC2626; padding: 2px 8px; border-radius: 4px; font-size: 11px;">지연</span>' :
+                        isDueSoon ? '<span style="background: #F59E0B; padding: 2px 8px; border-radius: 4px; font-size: 11px;">임박</span>' : ''}
+                    </div>
+                    <div style="font-size: 11px; opacity: 0.9; margin-bottom: 12px;">
+                      📋 ${item.meetingTitle} (${item.meetingDate})
+                      ${item.deadline ? `<br>📅 마감: ${item.deadline}` : ''}
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                      <button onclick="completeActionItemViaWorklog('${item.meetingId}', ${item.actionItemIndex})"
+                        style="flex: 1; padding: 8px; background: rgba(255,255,255,0.25); border: 1px solid rgba(255,255,255,0.4); border-radius: 8px; color: white; cursor: pointer; font-size: 12px; font-weight: 600;">
+                        ✓ 완료 처리
+                      </button>
+                      <button onclick="createWorklogFromActionItem('${item.meetingId}', ${item.actionItemIndex})"
+                        style="flex: 1; padding: 8px; background: white; border: none; border-radius: 8px; color: #F59E0B; cursor: pointer; font-size: 12px; font-weight: 600;">
+                        📝 업무일지 작성
+                      </button>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      } catch (error) {
+        console.error('Action items load error:', error);
+        container.innerHTML = '';
+      }
+    }
+
+    // Mark action item as completed
+    async function completeActionItemViaWorklog(meetingId, actionItemIndex) {
+      if (!confirm('이 액션 아이템을 완료 처리하시겠습니까?')) return;
+
+      try {
+        const meetingDoc = await db.collection('okr_meetings').doc(meetingId).get();
+        const meeting = meetingDoc.data();
+
+        if (meeting && meeting.actionItems && meeting.actionItems[actionItemIndex]) {
+          meeting.actionItems[actionItemIndex].completed = true;
+          meeting.actionItems[actionItemIndex].completedAt = new Date().toISOString();
+
+          await db.collection('okr_meetings').doc(meetingId).update({
+            actionItems: meeting.actionItems
+          });
+
+          alert('액션 아이템이 완료 처리되었습니다.');
+          loadMeetingActionItems();
+        }
+      } catch (error) {
+        console.error('Complete action item error:', error);
+        alert('완료 처리 실패: ' + error.message);
+      }
+    }
+
+    // Create worklog from action item
+    async function createWorklogFromActionItem(meetingId, actionItemIndex) {
+      try {
+        const meetingDoc = await db.collection('okr_meetings').doc(meetingId).get();
+        const meeting = meetingDoc.data();
+
+        if (!meeting || !meeting.actionItems || !meeting.actionItems[actionItemIndex]) {
+          alert('액션 아이템을 찾을 수 없습니다.');
+          return;
+        }
+
+        const actionItem = meeting.actionItems[actionItemIndex];
+
+        // Show modal to select which KPI/indicator to log this under
+        const relatedKpis = meeting.relatedKpiIds || [];
+
+        if (relatedKpis.length === 0) {
+          alert('이 미팅에 연결된 KPI가 없습니다. 미팅 히스토리에서 KPI를 연결해주세요.');
+          return;
+        }
+
+        // For now, just prompt user to record manually
+        // In a full implementation, you'd show a modal with KPI/indicator selection
+        alert(`액션 아이템: "${actionItem.task}"\n\n아래 OKR 대시보드에서 관련 성과지표를 선택하여 기록해주세요.`);
+
+        // Switch to OKR tab
+        switchTab('okr');
+      } catch (error) {
+        console.error('Create worklog error:', error);
+        alert('업무일지 작성 실패: ' + error.message);
+      }
     }
 
     async function loadWorkLogData() {
