@@ -2856,7 +2856,8 @@
           const totalValue = lagsForKPI.reduce((sum, lag) => {
             const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
             const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
-            return sum + (lag.valuePerUnit > 0 ? logSum * lag.valuePerUnit : logSum);
+            // ★ FIXED: calcLagValue 도우미 함수 사용
+            return sum + calcLagValue(lag, logSum);
           }, 0);
           return Math.min(Math.round((totalValue / kpi.targetValue) * 100), 100);
         });
@@ -2886,7 +2887,8 @@
               const currentValue = lagsForKPI.reduce((sum, lag) => {
                 const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
                 const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
-                return sum + (lag.valuePerUnit > 0 ? logSum * lag.valuePerUnit : logSum);
+                // ★ FIXED: calcLagValue 도우미 함수 사용
+                return sum + calcLagValue(lag, logSum);
               }, 0);
               const kpiRate = kpi.targetValue > 0 ? Math.min(Math.round((currentValue / kpi.targetValue) * 100), 100) : 0;
 
@@ -14242,6 +14244,26 @@
       return (rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(2);
     }
 
+    // ★ 금액 단위 확인 함수 (unit 버그 수정)
+    function isMoneyUnit(unit) {
+      return unit === '원' || unit === '$' || unit === '달러' || unit === '¥' || unit === '€' || unit === 'USD' || unit === 'KRW';
+    }
+
+    // ★ 성과지표 값 계산 (valuePerUnit 적용 - 금액 단위는 제외)
+    function calcLagValue(lag, logSum) {
+      // 금액 단위는 valuePerUnit 사용 안 함 (그대로 합산)
+      if (isMoneyUnit(lag.unit)) {
+        return logSum;
+      }
+
+      // 건수/개수 단위는 valuePerUnit 사용
+      if (lag.valuePerUnit && lag.valuePerUnit > 0) {
+        return logSum * lag.valuePerUnit;
+      }
+
+      return logSum;
+    }
+
     function calcOkrKPIRate(kpiId) {
       const kpi = okrState.kpis.find(k => k.id === kpiId);
       if (!kpi || !kpi.targetValue) return 0;
@@ -14263,11 +14285,8 @@
         const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
         const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
 
-        // 건당 예상 금액이 있으면 곱하기, 없으면 직접 합산
-        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
-          return sum + (logSum * lag.valuePerUnit);
-        }
-        return sum + logSum;
+        // ★ FIXED: calcLagValue 도우미 함수 사용 (금액 단위는 valuePerUnit 제외)
+        return sum + calcLagValue(lag, logSum);
       }, 0);
 
       // 서브 KPI: 소수 둘째자리까지
@@ -14311,6 +14330,8 @@
       const lag = okrState.laggingIndicators.find(l => l.id === lagId);
       if (!lag) return 0;
 
+      const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+
       // 하위지표가 있는 경우
       const subIndicators = okrState.subIndicators.filter(si => si.laggingIndicatorId === lagId);
 
@@ -14320,12 +14341,11 @@
           return sum + calcSubIndicatorValue(si.id);
         }, 0);
 
-        // 건당 예상 금액 적용
-        if (lag.valuePerUnit && lag.valuePerUnit > 0) {
-          const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
-          if (kpi && kpi.targetValue) {
-            return Math.min((totalValue * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
-          }
+        // ★ FIXED: calcLagValue 도우미 함수 사용
+        const actualValue = calcLagValue(lag, totalValue);
+
+        if (kpi && kpi.targetValue) {
+          return Math.min((actualValue / kpi.targetValue) * 100, 100).toFixed(2);
         }
         return totalValue;
       }
@@ -14334,11 +14354,11 @@
       const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lagId);
       const logSum = logs.reduce((s, l) => s + (l.resultValue || 0), 0);
 
-      if (lag.valuePerUnit && lag.valuePerUnit > 0) {
-        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
-        if (kpi && kpi.targetValue) {
-          return Math.min((logSum * lag.valuePerUnit / kpi.targetValue) * 100, 100).toFixed(2);
-        }
+      // ★ FIXED: calcLagValue 도우미 함수 사용
+      const actualValue = calcLagValue(lag, logSum);
+
+      if (kpi && kpi.targetValue) {
+        return Math.min((actualValue / kpi.targetValue) * 100, 100).toFixed(2);
       }
 
       return logSum;
@@ -15282,7 +15302,8 @@
                 let todayResultValue = 0;
                 resultLogs.forEach(log => {
                   const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
-                  const value = lag?.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+                  // ★ FIXED: calcLagValue 도우미 함수 사용
+                  const value = lag ? calcLagValue(lag, log.resultValue || 0) : (log.resultValue || 0);
                   totalResultValue += value;
                   if (log.date === okrToday) todayResultValue += value;
                 });
@@ -15413,7 +15434,8 @@
         let resultValue = 0;
         resultLogs.forEach(log => {
           const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
-          const value = lag?.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+          // ★ FIXED: calcLagValue 도우미 함수 사용
+          const value = lag ? calcLagValue(lag, log.resultValue || 0) : (log.resultValue || 0);
           resultValue += value;
         });
 
@@ -15462,7 +15484,8 @@
           lagsForKPI.forEach(lag => {
             const logs = filteredLogs.filter(log => log.laggingIndicatorId === lag.id && log.memberId === member.id);
             logs.forEach(log => {
-              value += lag.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+              // ★ FIXED: calcLagValue 도우미 함수 사용
+              value += calcLagValue(lag, log.resultValue || 0);
             });
           });
           memberKpiValues[member.id][kpi.id] = value;
@@ -15486,10 +15509,12 @@
       resultLags.forEach(lag => {
         const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
         logs.forEach(log => {
-          totalResultValue += lag.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+          // ★ FIXED: calcLagValue 도우미 함수 사용
+          totalResultValue += calcLagValue(lag, log.resultValue || 0);
         });
         if (lag.target) {
-          totalResultTarget += lag.valuePerUnit > 0 ? lag.target * lag.valuePerUnit : lag.target;
+          // ★ FIXED: target에도 calcLagValue 적용
+          totalResultTarget += calcLagValue(lag, lag.target);
         }
       });
 
@@ -15918,7 +15943,8 @@
       let resultValue = 0;
       resultLogs.forEach(log => {
         const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
-        const value = lag?.valuePerUnit > 0 ? (log.resultValue || 0) * lag.valuePerUnit : (log.resultValue || 0);
+        // ★ FIXED: calcLagValue 도우미 함수 사용
+        const value = lag ? calcLagValue(lag, log.resultValue || 0) : (log.resultValue || 0);
         resultValue += value;
       });
 
@@ -15969,7 +15995,8 @@
                   const actualValue = kpd.lagDetails.reduce((sum, ld) => {
                     const lag = ld.lag;
                     if (lag.type === 'output') {
-                      return sum + (lag.valuePerUnit > 0 ? ld.count * lag.valuePerUnit : ld.count);
+                      // ★ FIXED: calcLagValue 도우미 함수 사용
+                      return sum + calcLagValue(lag, ld.count);
                     }
                     return sum;
                   }, 0);
@@ -16651,7 +16678,11 @@
       const typeRadio = document.querySelector('input[name="newLagType"]:checked');
       const lagType = typeRadio?.value || 'input';
       const valuePerUnit = parseInt(document.getElementById('newLagValuePerUnit')?.value) || 0;
-      const lagUnit = document.getElementById('newLagUnit')?.value || '원';
+
+      // ★ FIXED: 서브 KPI의 unit을 상속받음 (하드코딩 제거)
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const lagUnit = document.getElementById('newLagUnit')?.value || kpi?.unit || '원';
+
       const settlementLink = document.getElementById('newLagSettlementLink')?.value || '';
 
       if (!name) {
@@ -16668,7 +16699,7 @@
           target: 10,
           type: lagType, // 'input' 또는 'output'
           valuePerUnit: lagType === 'output' ? valuePerUnit : 0, // 성과형일 때만 건당 값
-          unit: lagType === 'output' ? lagUnit : '', // 성과형일 때만 단위
+          unit: lagType === 'output' ? lagUnit : '', // ★ 성과형일 때만 단위 (서브 KPI에서 상속)
           linkedToSettlement: lagType === 'output' ? settlementLink : '', // ★ 정산 연동 설정
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
