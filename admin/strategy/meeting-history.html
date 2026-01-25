@@ -584,22 +584,147 @@
 
     /* Responsive */
     @media (max-width: 768px) {
+      .container {
+        padding: 16px;
+      }
+
+      .header {
+        padding: 16px 0;
+      }
+
+      .header-content {
+        flex-direction: column;
+        gap: 16px;
+        align-items: flex-start;
+      }
+
+      .header-title {
+        font-size: 18px;
+      }
+
+      .btn {
+        width: 100%;
+      }
+
       .meeting-list {
         grid-template-columns: 1fr;
       }
-      .report-container {
-        padding: 24px;
+
+      .meeting-card {
+        padding: 16px;
       }
+
+      .report-container {
+        padding: 20px;
+      }
+
+      .report-header {
+        padding-bottom: 24px;
+        margin-bottom: 32px;
+      }
+
+      .report-title-input {
+        font-size: 22px;
+      }
+
       .report-meta {
         flex-direction: column;
         align-items: flex-start;
         gap: 12px;
       }
+
+      .report-meta-item {
+        width: 100%;
+      }
+
+      .report-meta-item input,
+      .report-meta-item select {
+        width: 100%;
+      }
+
       .action-item {
         flex-direction: column;
       }
-      .action-item-assignee, .action-item-deadline {
+
+      .action-item-assignee,
+      .action-item-deadline {
         width: 100%;
+      }
+
+      .report-section {
+        margin-bottom: 32px;
+      }
+
+      .report-section-title {
+        font-size: 16px;
+      }
+
+      .report-textarea {
+        min-height: 100px;
+        font-size: 14px;
+      }
+
+      .report-actions {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .report-actions .btn {
+        width: 100%;
+      }
+
+      .view-toggle {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+
+      .tags-input {
+        padding: 10px;
+      }
+
+      .tag {
+        font-size: 12px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 12px;
+      }
+
+      .report-container {
+        padding: 16px;
+      }
+
+      .meeting-card {
+        padding: 12px;
+      }
+
+      .meeting-title {
+        font-size: 14px;
+      }
+
+      .meeting-summary {
+        font-size: 13px;
+      }
+
+      .report-title-input {
+        font-size: 20px;
+      }
+
+      .report-section-title {
+        font-size: 15px;
+      }
+
+      .btn {
+        padding: 10px 16px;
+        font-size: 13px;
+      }
+
+      .btn-small {
+        padding: 6px 10px;
+        font-size: 12px;
       }
     }
   </style>
@@ -706,6 +831,21 @@
 
         <div class="report-section">
           <div class="report-section-title">
+            <span class="report-section-icon">📊</span>
+            연관 KPI
+          </div>
+          <div id="relatedKpisContainer">
+            <select id="kpiSelector" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; font-family: inherit;">
+              <option value="">관련 KPI 선택...</option>
+            </select>
+            <div id="selectedKpisList" style="margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px;">
+              <!-- Selected KPIs will appear here as tags -->
+            </div>
+          </div>
+        </div>
+
+        <div class="report-section">
+          <div class="report-section-title">
             <span class="report-section-icon">🎯</span>
             액션 아이템
           </div>
@@ -746,24 +886,80 @@
     </div>
   </div>
 
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+
   <script>
-    let reports = JSON.parse(localStorage.getItem('meetingReports') || '[]');
+    // Firebase initialization
+    const firebaseConfig = {
+      apiKey: "AIzaSyBIovld04wHY1sDPQRH8XQsyIv9nnJp6Lo",
+      authDomain: "netform-strategy.firebaseapp.com",
+      projectId: "netform-strategy",
+      storageBucket: "netform-strategy.firebasestorage.app",
+      messagingSenderId: "331082896890",
+      appId: "1:331082896890:web:e29f89f5e84a7f1f9ed6ce",
+      measurementId: "G-C5KSGM13LX"
+    };
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+
+    const db = firebase.firestore();
+    const auth = firebase.auth();
+
+    let reports = [];
     let currentReportId = null;
     let deleteTargetId = null;
     let currentFilter = 'all';
+    let unsubscribeMeetings = null;
 
     // Initialize
     function init() {
-      renderReports();
-      setupEventListeners();
+      // Check authentication
+      auth.onAuthStateChanged(user => {
+        if (!user) {
+          window.location.href = '/admin/';
+          return;
+        }
 
-      // URL parameter check
-      const urlParams = new URLSearchParams(window.location.search);
-      const reportId = urlParams.get('id');
-      if (reportId) {
-        viewReport(reportId);
-      }
+        // Load meetings from Firestore
+        loadMeetings();
+        setupEventListeners();
+
+        // URL parameter check
+        const urlParams = new URLSearchParams(window.location.search);
+        const reportId = urlParams.get('id');
+        if (reportId) {
+          setTimeout(() => viewReport(reportId), 500);
+        }
+      });
     }
+
+    // Load meetings from Firestore with real-time sync
+    function loadMeetings() {
+      if (unsubscribeMeetings) {
+        unsubscribeMeetings();
+      }
+
+      unsubscribeMeetings = db.collection('okr_meetings')
+        .orderBy('createdAt', 'desc')
+        .onSnapshot(snapshot => {
+          reports = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          renderReports();
+        }, error => {
+          console.error('Meeting load error:', error);
+          alert('미팅 데이터 로드 실패: ' + error.message);
+        });
+    }
+
+    let availableKpis = [];
+    let selectedKpiIds = [];
 
     function setupEventListeners() {
       // Attendee input
@@ -780,8 +976,85 @@
         updateReportTypeBadge(e.target.value);
       });
 
+      // KPI selector
+      document.getElementById('kpiSelector').addEventListener('change', (e) => {
+        if (e.target.value) {
+          addRelatedKpi(e.target.value);
+          e.target.value = '';
+        }
+      });
+
       // Date default
       document.getElementById('reportDate').valueAsDate = new Date();
+
+      // Load KPIs for selector
+      loadKpisForSelector();
+    }
+
+    // Load all KPIs for the selector
+    async function loadKpisForSelector() {
+      try {
+        const [krsSnapshot, kpisSnapshot] = await Promise.all([
+          db.collection('okr_keyResults').get(),
+          db.collection('okr_kpis').get()
+        ]);
+
+        availableKpis = [
+          ...krsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name,
+            type: 'Main KPI',
+            ...doc.data()
+          })),
+          ...kpisSnapshot.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name,
+            type: 'Sub KPI',
+            ...doc.data()
+          }))
+        ];
+
+        updateKpiSelector();
+      } catch (error) {
+        console.error('KPI load error:', error);
+      }
+    }
+
+    function updateKpiSelector() {
+      const selector = document.getElementById('kpiSelector');
+      const options = availableKpis
+        .filter(kpi => !selectedKpiIds.includes(kpi.id))
+        .map(kpi => `<option value="${kpi.id}">[${kpi.type}] ${kpi.name}</option>`)
+        .join('');
+      selector.innerHTML = '<option value="">관련 KPI 선택...</option>' + options;
+    }
+
+    function addRelatedKpi(kpiId) {
+      if (selectedKpiIds.includes(kpiId)) return;
+
+      selectedKpiIds.push(kpiId);
+      renderSelectedKpis();
+      updateKpiSelector();
+    }
+
+    function removeRelatedKpi(kpiId) {
+      selectedKpiIds = selectedKpiIds.filter(id => id !== kpiId);
+      renderSelectedKpis();
+      updateKpiSelector();
+    }
+
+    function renderSelectedKpis() {
+      const container = document.getElementById('selectedKpisList');
+      const selectedKpis = availableKpis.filter(kpi => selectedKpiIds.includes(kpi.id));
+
+      container.innerHTML = selectedKpis.map(kpi => `
+        <div class="tag">
+          <a href="/admin/strategy/?kpi=${kpi.id}" target="_blank" style="color: inherit; text-decoration: none;">
+            [${kpi.type}] ${kpi.name}
+          </a>
+          <span class="tag-remove" onclick="removeRelatedKpi('${kpi.id}')">×</span>
+        </div>
+      `).join('');
     }
 
     function updateReportTypeBadge(type) {
@@ -848,9 +1121,14 @@
 
       // Clear action items
       document.getElementById('actionItemsContainer').innerHTML = '';
+
+      // Clear selected KPIs
+      selectedKpiIds = [];
+      renderSelectedKpis();
+      updateKpiSelector();
     }
 
-    function saveReport() {
+    async function saveReport() {
       const title = document.getElementById('reportTitle').value.trim();
       if (!title) {
         alert('보고서 제목을 입력해주세요.');
@@ -864,15 +1142,18 @@
         .map(item => ({
           task: item.querySelector('.action-task').value,
           assignee: item.querySelector('.action-assignee').value,
-          deadline: item.querySelector('.action-deadline').value
+          deadline: item.querySelector('.action-deadline').value,
+          completed: false,
+          worklogId: null // Link to worklog when completed
         }))
         .filter(item => item.task);
 
+      const currentUser = auth.currentUser;
       const report = {
-        id: currentReportId || Date.now().toString(),
         title,
         date: document.getElementById('reportDate').value,
-        author: document.getElementById('reportAuthor').value,
+        author: document.getElementById('reportAuthor').value || currentUser?.displayName || currentUser?.email || '미상',
+        authorId: currentUser?.uid || null,
         type: document.getElementById('reportType').value,
         attendees,
         agenda: document.getElementById('reportAgenda').value,
@@ -880,20 +1161,27 @@
         decisions: document.getElementById('reportDecisions').value,
         notes: document.getElementById('reportNotes').value,
         actionItems,
-        createdAt: currentReportId ? reports.find(r => r.id === currentReportId)?.createdAt : new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        relatedKpiIds: selectedKpiIds, // Linked KPIs
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
 
-      if (currentReportId) {
-        const index = reports.findIndex(r => r.id === currentReportId);
-        reports[index] = report;
-      } else {
-        reports.unshift(report);
+      try {
+        if (currentReportId) {
+          // Update existing meeting
+          await db.collection('okr_meetings').doc(currentReportId).update(report);
+          alert('미팅 보고서가 수정되었습니다.');
+        } else {
+          // Create new meeting
+          report.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+          const docRef = await db.collection('okr_meetings').add(report);
+          console.log('Meeting created:', docRef.id);
+          alert('미팅 보고서가 저장되었습니다.');
+        }
+        showListView();
+      } catch (error) {
+        console.error('Save error:', error);
+        alert('저장 실패: ' + error.message);
       }
-
-      localStorage.setItem('meetingReports', JSON.stringify(reports));
-      alert('보고서가 저장되었습니다.');
-      showListView();
     }
 
     function viewReport(id) {
@@ -902,32 +1190,41 @@
 
       currentReportId = id;
 
-      document.getElementById('reportTitle').value = report.title;
-      document.getElementById('reportDate').value = report.date;
-      document.getElementById('reportAuthor').value = report.author;
-      document.getElementById('reportType').value = report.type;
-      updateReportTypeBadge(report.type);
-      document.getElementById('reportAgenda').value = report.agenda;
-      document.getElementById('reportDiscussion').value = report.discussion;
-      document.getElementById('reportDecisions').value = report.decisions;
-      document.getElementById('reportNotes').value = report.notes;
+      document.getElementById('reportTitle').value = report.title || '';
+      document.getElementById('reportDate').value = report.date || '';
+      document.getElementById('reportAuthor').value = report.author || '';
+      document.getElementById('reportType').value = report.type || 'report';
+      updateReportTypeBadge(report.type || 'report');
+      document.getElementById('reportAgenda').value = report.agenda || '';
+      document.getElementById('reportDiscussion').value = report.discussion || '';
+      document.getElementById('reportDecisions').value = report.decisions || '';
+      document.getElementById('reportNotes').value = report.notes || '';
 
       // Load attendees
       const attendeesContainer = document.getElementById('attendeesContainer');
       const existingTags = attendeesContainer.querySelectorAll('.tag');
       existingTags.forEach(tag => tag.remove());
-      report.attendees.forEach(name => addAttendee(name));
+      if (report.attendees) {
+        report.attendees.forEach(name => addAttendee(name));
+      }
 
       // Load action items
       const actionItemsContainer = document.getElementById('actionItemsContainer');
       actionItemsContainer.innerHTML = '';
-      report.actionItems.forEach(item => {
-        addActionItem();
-        const lastItem = actionItemsContainer.lastElementChild;
-        lastItem.querySelector('.action-task').value = item.task;
-        lastItem.querySelector('.action-assignee').value = item.assignee;
-        lastItem.querySelector('.action-deadline').value = item.deadline;
-      });
+      if (report.actionItems) {
+        report.actionItems.forEach(item => {
+          addActionItem();
+          const lastItem = actionItemsContainer.lastElementChild;
+          lastItem.querySelector('.action-task').value = item.task || '';
+          lastItem.querySelector('.action-assignee').value = item.assignee || '';
+          lastItem.querySelector('.action-deadline').value = item.deadline || '';
+        });
+      }
+
+      // Load related KPIs
+      selectedKpiIds = report.relatedKpiIds || [];
+      renderSelectedKpis();
+      updateKpiSelector();
 
       showReportView();
 
@@ -941,11 +1238,15 @@
       document.getElementById('deleteModal').classList.add('active');
     }
 
-    function confirmDelete() {
-      reports = reports.filter(r => r.id !== deleteTargetId);
-      localStorage.setItem('meetingReports', JSON.stringify(reports));
-      closeDeleteModal();
-      renderReports();
+    async function confirmDelete() {
+      try {
+        await db.collection('okr_meetings').doc(deleteTargetId).delete();
+        closeDeleteModal();
+        alert('보고서가 삭제되었습니다.');
+      } catch (error) {
+        console.error('Delete error:', error);
+        alert('삭제 실패: ' + error.message);
+      }
     }
 
     function closeDeleteModal() {
@@ -995,18 +1296,26 @@
           proposal: { class: 'proposal', text: '제안' },
           review: { class: 'review', text: '검토' }
         };
-        const typeStyle = typeStyles[report.type];
+        const typeStyle = typeStyles[report.type] || typeStyles.report;
+
+        const attendeeCount = (report.attendees && report.attendees.length) || 0;
+        const actionItemCount = (report.actionItems && report.actionItems.length) || 0;
+        const kpiCount = (report.relatedKpiIds && report.relatedKpiIds.length) || 0;
 
         return `
           <div class="meeting-card" onclick="viewReport('${report.id}')">
             <div class="meeting-card-header">
               <span class="meeting-type ${typeStyle.class}">${typeStyle.text}</span>
-              <span class="meeting-date">${report.date}</span>
+              <span class="meeting-date">${report.date || ''}</span>
             </div>
-            <div class="meeting-title">${report.title}</div>
+            <div class="meeting-title">${report.title || '제목 없음'}</div>
             <div class="meeting-summary">${report.agenda || report.discussion || '내용 없음'}</div>
             <div class="meeting-footer">
-              <div class="meeting-attendees">👥 ${report.attendees.length}명</div>
+              <div class="meeting-attendees">
+                👥 ${attendeeCount}명
+                ${actionItemCount > 0 ? `· 🎯 ${actionItemCount}개 액션` : ''}
+                ${kpiCount > 0 ? `· 📊 ${kpiCount}개 KPI` : ''}
+              </div>
               <div class="meeting-actions">
                 <button class="icon-btn" onclick="shareReport('${report.id}', event)" title="공유">🔗</button>
                 <button class="icon-btn" onclick="deleteReport('${report.id}', event)" title="삭제">🗑️</button>
