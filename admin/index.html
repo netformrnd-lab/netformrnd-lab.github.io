@@ -5574,12 +5574,106 @@ function submitDealForm(e, id) {
   saveDeal(data);
 }
 
+// 공급사 CS 문의/응대 내역 조회
+function renderSupplierCSHistory(phone, name) {
+  const normalizedPhone = (phone || '').replace(/-/g, '');
+  const supplierInquiries = state.supplierInquiries || [];
+  const proposalRequests = state.proposalRequests || [];
+
+  // 연락처 또는 이름으로 매칭되는 문의 찾기
+  const matchedInquiries = supplierInquiries.filter(inq => {
+    const inqPhone = (inq.contact || '').replace(/-/g, '');
+    const inqName = inq.name || '';
+    return (normalizedPhone && inqPhone === normalizedPhone) || (name && inqName === name);
+  });
+
+  const matchedProposals = proposalRequests.filter(req => {
+    const reqPhone = (req.contact || '').replace(/-/g, '');
+    const reqName = req.name || '';
+    return (normalizedPhone && reqPhone === normalizedPhone) || (name && reqName === name);
+  });
+
+  const allMatched = [...matchedInquiries.map(i => ({...i, type: 'inquiry'})), ...matchedProposals.map(p => ({...p, type: 'proposal'}))];
+
+  // 날짜순 정렬 (최신순)
+  allMatched.sort((a, b) => {
+    const aTime = a.createdAt?.seconds || a.createdAt?.getTime?.() || 0;
+    const bTime = b.createdAt?.seconds || b.createdAt?.getTime?.() || 0;
+    return bTime - aTime;
+  });
+
+  if (allMatched.length === 0) {
+    return `
+      <div style="text-align: center; padding: 20px; color: #6b7280;">
+        <div style="font-size: 24px; margin-bottom: 8px;">📭</div>
+        <p style="font-size: 13px;">연관된 문의 내역이 없습니다.</p>
+      </div>
+    `;
+  }
+
+  const formatDate = (timestamp) => {
+    if (!timestamp) return '-';
+    let d;
+    if (timestamp.toDate) d = timestamp.toDate();
+    else if (timestamp.seconds) d = new Date(timestamp.seconds * 1000);
+    else d = new Date(timestamp);
+    return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  };
+
+  const getStatusLabel = (status) => {
+    switch(status) {
+      case 'pending': return '<span style="background: #fee2e2; color: #dc2626; padding: 2px 8px; border-radius: 10px; font-size: 11px;">대기</span>';
+      case 'processing': return '<span style="background: #fef3c7; color: #d97706; padding: 2px 8px; border-radius: 10px; font-size: 11px;">처리중</span>';
+      case 'completed': return '<span style="background: #d1fae5; color: #059669; padding: 2px 8px; border-radius: 10px; font-size: 11px;">완료</span>';
+      default: return '<span style="background: #f3f4f6; color: #6b7280; padding: 2px 8px; border-radius: 10px; font-size: 11px;">대기</span>';
+    }
+  };
+
+  return `
+    <div style="max-height: 250px; overflow-y: auto;">
+      ${allMatched.map(item => `
+        <div style="background: white; border-radius: 8px; padding: 12px; margin-bottom: 8px; border: 1px solid #e5e7eb;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="background: ${item.type === 'inquiry' ? '#dbeafe' : '#f3e8ff'}; color: ${item.type === 'inquiry' ? '#1d4ed8' : '#7c3aed'}; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">
+                ${item.type === 'inquiry' ? '📞 문의' : '📄 제안서요청'}
+              </span>
+              ${getStatusLabel(item.status)}
+            </div>
+            <span style="font-size: 11px; color: #9ca3af;">${formatDate(item.createdAt)}</span>
+          </div>
+          <div style="font-size: 13px; color: #374151; margin-bottom: 4px;">
+            <strong>${item.name || '-'}</strong> · ${item.contact || '-'}
+          </div>
+          ${item.note ? `
+            <div style="background: #f9fafb; border-radius: 6px; padding: 8px; margin-top: 8px;">
+              <div style="font-size: 11px; color: #6b7280; margin-bottom: 4px;">📝 메모/응대기록:</div>
+              <div style="font-size: 12px; color: #374151; white-space: pre-wrap; line-height: 1.5;">${item.note}</div>
+            </div>
+          ` : ''}
+        </div>
+      `).join('')}
+    </div>
+    <div style="text-align: center; margin-top: 12px;">
+      <span style="font-size: 12px; color: #6b7280;">총 ${allMatched.length}건의 문의 내역</span>
+    </div>
+  `;
+}
+
+// 공급사 CS 내역 새로고침
+function refreshSupplierCSHistory(supplierId, phone, name) {
+  const container = document.getElementById('supplier-cs-history-container');
+  if (container) {
+    container.innerHTML = renderSupplierCSHistory(phone, name);
+  }
+}
+
 function openSupplierModal(supplier = null, bulk = false) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
   const m = document.getElementById('modal');
   m.className = 'modal show';
-  
+
   if (bulk) {
     // 일괄 등록은 제거하고 단순 안내로 변경
     m.innerHTML = `
@@ -5850,6 +5944,39 @@ function openSupplierModal(supplier = null, bulk = false) {
             </div>
           </div>
         </div>
+
+        <!-- 📊 유입 경로 -->
+        <div style="background: #f0fdf4; border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid #86efac;">
+          <h3 style="font-size: 13px; color: #166534; margin-bottom: 12px; font-weight: 600;">📊 유입 경로</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">유입 유형</label>
+              <select class="form-input" id="supplier-source-type" style="background: white;">
+                <option value="" ${!s.sourceType ? 'selected' : ''}>선택</option>
+                <option value="inbound" ${s.sourceType === 'inbound' ? 'selected' : ''}>📥 인바운드 (문의 접수)</option>
+                <option value="outbound" ${s.sourceType === 'outbound' ? 'selected' : ''}>📤 아웃바운드 (영업)</option>
+                <option value="referral" ${s.sourceType === 'referral' ? 'selected' : ''}>🤝 소개</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">유입 채널</label>
+              <input type="text" class="form-input" id="supplier-source-channel" value="${s.sourceChannel || ''}" placeholder="예: 웹사이트, 지인소개, 콜드콜" style="background: white;">
+            </div>
+          </div>
+        </div>
+
+        <!-- 📞 CS 문의 내역 -->
+        ${isEdit ? `
+        <div style="background: #eff6ff; border-radius: 8px; padding: 16px; margin-bottom: 12px; border: 1px solid #93c5fd;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="font-size: 13px; color: #1e40af; margin: 0; font-weight: 600;">📞 CS 문의/응대 내역</h3>
+            <button type="button" onclick="refreshSupplierCSHistory('${s.id}', '${(s.managerPhone || s.contact || '').replace(/'/g, "\\'")}', '${(s.name || '').replace(/'/g, "\\'")}')" style="padding: 4px 10px; background: white; border: 1px solid #3b82f6; border-radius: 6px; font-size: 11px; color: #1d4ed8; cursor: pointer;">🔄 새로고침</button>
+          </div>
+          <div id="supplier-cs-history-container">
+            ${renderSupplierCSHistory(s.managerPhone || s.contact, s.name)}
+          </div>
+        </div>
+        ` : ''}
         
         <!-- 기타 사항 -->
         <div class="form-group">
@@ -6621,6 +6748,9 @@ function submitSupplierForm(e, id) {
     // 로그인 정보
     loginId: document.getElementById('supplier-login-id')?.value || '',
     loginPw: document.getElementById('supplier-login-pw')?.value || '',
+    // 유입 경로
+    sourceType: document.getElementById('supplier-source-type')?.value || '',
+    sourceChannel: document.getElementById('supplier-source-channel')?.value || '',
     notes: document.getElementById('supplier-notes').value,
     contact: document.getElementById('supplier-manager-phone').value, // 호환성
     _products: products // 상품 목록 (saveSupplier에서 처리)
