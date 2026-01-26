@@ -8370,6 +8370,200 @@
     }
 
     // ========================================
+    // 새 개인 목표 시스템 (지표별 기간 설정)
+    // ========================================
+
+    // 개인 목표 설정 모달 열기 (새 버전)
+    function openPersonalGoalsModal(memberId = null) {
+      const currentMemberId = memberId || state.currentUser?.id;
+      const member = (state.teamMembers || []).find(m => m.id === currentMemberId);
+
+      if (!member) {
+        showToast('팀원 정보를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      // 행동지표(Input)와 성과지표(Output) 분리
+      const inputLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
+      const outputLags = okrState.laggingIndicators.filter(l => l.type === 'output');
+
+      // 메인 KPI별로 성과지표 그룹화
+      const outputByKR = {};
+      outputLags.forEach(lag => {
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        if (!kpi) return;
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        if (!kr) return;
+        if (!outputByKR[kr.id]) {
+          outputByKR[kr.id] = { kr, kpi, lags: [] };
+        }
+        outputByKR[kr.id].lags.push({ ...lag, kpi });
+      });
+
+      // 기존 목표 가져오기
+      const memberGoals = okrState.personalGoals.filter(g => g.memberId === currentMemberId);
+
+      showModal(`
+        <div style="padding: 24px; max-width: 700px; max-height: 80vh; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                🎯 ${member.name}님의 개인 목표 설정
+              </div>
+              <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">행동지표별 기간과 목표를 설정하세요</p>
+            </div>
+            <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          <!-- 행동지표(Input) 목표 설정 -->
+          <div style="margin-bottom: 24px;">
+            <div style="font-size: 15px; font-weight: 700; color: #059669; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              📥 행동지표(Input) 목표
+            </div>
+            <div style="background: #F0FDF4; border-radius: 12px; padding: 16px;">
+              ${inputLags.length === 0 ? `
+                <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 행동지표가 없습니다</div>
+              ` : inputLags.map(lag => {
+                const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
+                const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+                return `
+                  <div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: white; border-radius: 8px; margin-bottom: 8px;">
+                    <div style="flex: 1; min-width: 0;">
+                      <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        📋 ${lag.name}
+                      </div>
+                      <div style="font-size: 11px; color: var(--gray-500);">${kpi?.name || ''}</div>
+                    </div>
+                    <select id="goalPeriod_${lag.id}" style="padding: 6px 10px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; min-width: 70px;">
+                      <option value="daily" ${existingGoal?.period === 'daily' ? 'selected' : ''}>일</option>
+                      <option value="weekly" ${existingGoal?.period === 'weekly' ? 'selected' : ''}>주</option>
+                      <option value="monthly" ${(!existingGoal || existingGoal?.period === 'monthly') ? 'selected' : ''}>월</option>
+                    </select>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                      <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
+                        style="width: 70px; padding: 6px 10px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; text-align: right;">
+                      <span style="font-size: 12px; color: var(--gray-500);">${lag.unit || '건'}</span>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
+          <!-- 성과지표(Output) 목표 설정 (메인 KPI별) -->
+          <div style="margin-bottom: 24px;">
+            <div style="font-size: 15px; font-weight: 700; color: #D97706; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+              📤 성과지표(Output) 목표
+            </div>
+            <div style="background: #FFFBEB; border-radius: 12px; padding: 16px;">
+              ${Object.keys(outputByKR).length === 0 ? `
+                <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 성과지표가 없습니다</div>
+              ` : Object.values(outputByKR).map((group, idx) => `
+                <div style="margin-bottom: 16px; padding: 14px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
+                  <div style="font-size: 13px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 10px;">
+                    ${okrIcons[idx % 4]} ${group.kr.name}
+                  </div>
+                  ${group.lags.map(lag => {
+                    const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
+                    return `
+                      <div style="display: flex; align-items: center; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;">
+                        <div style="flex: 1; min-width: 0;">
+                          <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">💰 ${lag.name}</div>
+                        </div>
+                        <select id="goalPeriod_${lag.id}" style="padding: 6px 10px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; min-width: 70px;">
+                          <option value="daily" ${existingGoal?.period === 'daily' ? 'selected' : ''}>일</option>
+                          <option value="weekly" ${existingGoal?.period === 'weekly' ? 'selected' : ''}>주</option>
+                          <option value="monthly" ${(!existingGoal || existingGoal?.period === 'monthly') ? 'selected' : ''}>월</option>
+                        </select>
+                        <div style="display: flex; align-items: center; gap: 4px;">
+                          <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
+                            style="width: 100px; padding: 6px 10px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; text-align: right;">
+                          <span style="font-size: 12px; color: var(--gray-500);">${lag.unit || lag.kpi?.unit || '원'}</span>
+                        </div>
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+            <button class="btn btn-primary" onclick="savePersonalGoals('${currentMemberId}')">저장</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // 개인 목표 일괄 저장
+    async function savePersonalGoals(memberId) {
+      const allLags = okrState.laggingIndicators;
+      const batch = db.batch();
+      const goalsToSave = [];
+
+      // 모든 지표의 목표 수집
+      allLags.forEach(lag => {
+        const periodEl = document.getElementById(`goalPeriod_${lag.id}`);
+        const valueEl = document.getElementById(`goalValue_${lag.id}`);
+
+        if (periodEl && valueEl) {
+          const period = periodEl.value;
+          const targetValue = parseFloat(valueEl.value) || 0;
+
+          if (targetValue > 0) {
+            goalsToSave.push({
+              memberId: memberId,
+              indicatorId: lag.id,
+              indicatorName: lag.name,
+              indicatorType: lag.type === 'output' ? 'output' : 'input',
+              period: period,
+              targetValue: targetValue,
+              unit: lag.unit || (lag.type === 'output' ? '원' : '건')
+            });
+          }
+        }
+      });
+
+      try {
+        // 기존 목표 삭제
+        const existingGoals = okrState.personalGoals.filter(g => g.memberId === memberId);
+        existingGoals.forEach(goal => {
+          batch.delete(db.collection('okr_personalGoals').doc(goal.id));
+        });
+
+        // 새 목표 추가
+        goalsToSave.forEach(goal => {
+          const docRef = db.collection('okr_personalGoals').doc();
+          batch.set(docRef, {
+            ...goal,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+
+        await batch.commit();
+        await loadOkrData();
+        renderPersonalGrowthboard();
+        closeModal();
+        showToast(`개인 목표가 저장되었습니다! (${goalsToSave.length}개 지표)`, 'success');
+      } catch (e) {
+        console.error('개인 목표 저장 오류:', e);
+        showToast('저장 실패', 'error');
+      }
+    }
+
+    // 기간 라벨 반환
+    function getPeriodLabel(period) {
+      switch(period) {
+        case 'daily': return '일';
+        case 'weekly': return '주';
+        case 'monthly': return '월';
+        default: return '월';
+      }
+    }
+
+    // ========================================
     // 미팅 일지 관리
     // ========================================
 
@@ -14020,6 +14214,7 @@
       dailyLogs: [],
       todayLogs: [],
       personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
+      personalGoals: [],    // 새 개인 목표 (지표별 기간 설정)
       meetings: [],  // 미팅 일지
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
       expandedKRs: [],
@@ -14104,9 +14299,13 @@
         okrState.dailyLogs = logSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         okrState.todayLogs = okrState.dailyLogs.filter(log => log.date === okrToday);
 
-        // 개인 목표 로드
+        // 개인 목표 로드 (기존)
         const personalTargetSnapshot = await db.collection('okr_personalTargets').get();
         okrState.personalTargets = personalTargetSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 개인 목표 로드 (새 구조 - 지표별 기간 설정)
+        const personalGoalsSnapshot = await db.collection('okr_personalGoals').get();
+        okrState.personalGoals = personalGoalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 미팅 일지 로드 (최근 90일)
         const ninetyDaysAgo = new Date();
@@ -14207,8 +14406,8 @@
 
     // OKR 계산 함수들
     function calcOkrObjectiveRate() {
-      if (okrState.keyResults.length === 0) return 0;
-      const rates = okrState.keyResults.map(kr => calcOkrKRRate(kr.id));
+      if (okrState.keyResults.length === 0) return '0.000';
+      const rates = okrState.keyResults.map(kr => parseFloat(calcOkrKRRate(kr.id)) || 0);
       // 팀 그로스보드: 소수 셋째자리까지
       return (rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(3);
     }
@@ -15309,6 +15508,19 @@
         }
       });
 
+      // 지표별 기록 수 계산 (월별 비율용)
+      const indicatorStats = {};
+      allLags.forEach(lag => {
+        const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
+        const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+        indicatorStats[lag.id] = { lag, totalCount, logs };
+      });
+
+      // 활동형/성과형 각각의 총 기록 수
+      const totalInputRecords = activityLags.reduce((sum, lag) => sum + (indicatorStats[lag.id]?.totalCount || 0), 0);
+      const totalOutputRecords = resultLags.reduce((sum, lag) => sum + (indicatorStats[lag.id]?.totalCount || 0), 0);
+      const grandTotal = totalInputRecords + totalOutputRecords;
+
       container.innerHTML = `
         <!-- 헤더 -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
@@ -15317,10 +15529,13 @@
               👤 ${selectedMember ? selectedMember.name + '님의 그로스보드' : '개인 그로스보드'}
             </h2>
             <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">
-              ${selectedMember ? selectedMember.name + '님의 활동 현황 · 지표 달성률 · 개인 목표' : '팀원별 활동 현황 · 지표 달성률 · 개인 목표'}
+              ${selectedMember ? selectedMember.name + '님의 월별 활동 비율 · 개인 목표 달성' : '팀원별 월별 활동 비율 · 개인 목표 달성'}
             </p>
           </div>
           <div style="display: flex; gap: 8px; align-items: center;">
+            <button onclick="openPersonalGoalsModal('${selectedMember?.id || ''}')" style="padding: 8px 14px; background: var(--primary); color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+              🎯 목표설정
+            </button>
             <select id="personalPeriodFilter" onchange="updatePersonalPeriodFilter(this.value)" style="padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; cursor: pointer; background: white;">
               <option value="all" ${personalDashboardState.periodFilter === 'all' ? 'selected' : ''}>전체 기간</option>
               <option value="thisWeek" ${personalDashboardState.periodFilter === 'thisWeek' ? 'selected' : ''}>이번 주</option>
@@ -15333,42 +15548,57 @@
           </div>
         </div>
 
-        <!-- 1. 전체 활동형/성과형 비율 분석 -->
+        <!-- 1. 월별 활동형/성과형 비율 분석 (지표별 표시) -->
         <div class="card" style="margin-bottom: 20px;">
           <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
             📊 ${selectedMember ? selectedMember.name + '님의' : '전체'} 활동형/성과형 비율 분석
           </div>
-          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">${selectedMember ? selectedMember.name + '님의 업무 기록이' : '업무 기록이'} 어느 유형에 집중되어 있는지 확인하세요</p>
+          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 16px;">어떤 지표에 얼마나 기록했는지 비율을 확인하세요</p>
 
-          <!-- 전체 진행률 바 -->
+          <!-- 전체 진행률 바 (비율 기반) -->
           <div style="height: 24px; background: var(--gray-200); border-radius: 12px; overflow: hidden; margin-bottom: 20px; display: flex;">
-            <div style="height: 100%; width: ${totalActivityTarget > 0 ? (totalActivityCount / (totalActivityTarget + totalResultTarget) * 100) : 50}%; background: linear-gradient(135deg, #10B981, #34D399); transition: width 0.5s;"></div>
-            <div style="height: 100%; width: ${totalResultTarget > 0 ? (totalResultValue / (totalActivityTarget + totalResultTarget) * 100) : 50}%; background: linear-gradient(135deg, #F59E0B, #FBBF24); transition: width 0.5s;"></div>
+            <div style="height: 100%; width: ${grandTotal > 0 ? (totalInputRecords / grandTotal * 100) : 50}%; background: linear-gradient(135deg, #10B981, #34D399); transition: width 0.5s;"></div>
+            <div style="height: 100%; width: ${grandTotal > 0 ? (totalOutputRecords / grandTotal * 100) : 50}%; background: linear-gradient(135deg, #F59E0B, #FBBF24); transition: width 0.5s;"></div>
           </div>
 
-          <!-- 활동형/성과형 요약 카드 -->
+          <!-- 활동형/성과형 요약 카드 (지표별 비율 표시) -->
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <!-- 활동형(Input) -->
             <div style="background: linear-gradient(135deg, #ECFDF5, #D1FAE5); padding: 20px; border-radius: 12px; border-left: 4px solid #10B981;">
               <div style="font-size: 12px; color: #059669; margin-bottom: 8px; font-weight: 600;">📥 활동형(Input)</div>
-              <div style="font-size: 28px; font-weight: 800; color: #047857;">${totalActivityCount}<span style="font-size: 14px; font-weight: 500;">건</span></div>
-              <div style="font-size: 12px; color: #10B981; margin-top: 4px;">${activityRate}% 달성</div>
+              <div style="font-size: 24px; font-weight: 800; color: #047857; margin-bottom: 12px;">${totalInputRecords}<span style="font-size: 14px; font-weight: 500;">건</span></div>
+              <div style="font-size: 11px; color: #047857; max-height: 100px; overflow-y: auto;">
+                ${activityLags.slice(0, 5).map(lag => {
+                  const count = indicatorStats[lag.id]?.totalCount || 0;
+                  const ratio = totalInputRecords > 0 ? Math.round((count / totalInputRecords) * 100) : 0;
+                  return `<div style="display: flex; justify-content: space-between; padding: 2px 0;"><span>• ${lag.name}</span><span>${count}건 (${ratio}%)</span></div>`;
+                }).join('')}
+                ${activityLags.length > 5 ? `<div style="color: #059669; font-style: italic;">... 외 ${activityLags.length - 5}개</div>` : ''}
+              </div>
             </div>
+            <!-- 성과형(Output) - 메인 KPI별 분리 -->
             <div style="background: linear-gradient(135deg, #FFFBEB, #FEF3C7); padding: 20px; border-radius: 12px; border-left: 4px solid #F59E0B;">
               <div style="font-size: 12px; color: #D97706; margin-bottom: 8px; font-weight: 600;">📤 성과형(Output)</div>
-              <div style="font-size: 28px; font-weight: 800; color: #B45309;">${totalResultValue}<span style="font-size: 14px; font-weight: 500;">건</span></div>
-              <div style="font-size: 12px; color: #F59E0B; margin-top: 4px;">${resultRate}% 달성</div>
+              <div style="font-size: 24px; font-weight: 800; color: #B45309; margin-bottom: 12px;">${totalOutputRecords}<span style="font-size: 14px; font-weight: 500;">건</span></div>
+              <div style="font-size: 11px; color: #B45309; max-height: 100px; overflow-y: auto;">
+                ${Object.values(krLagGroups).filter(g => g.resultLags.length > 0).map((group, idx) => {
+                  const groupCount = group.resultLags.reduce((sum, lag) => sum + (indicatorStats[lag.id]?.totalCount || 0), 0);
+                  const ratio = totalOutputRecords > 0 ? Math.round((groupCount / totalOutputRecords) * 100) : 0;
+                  return `<div style="display: flex; justify-content: space-between; padding: 2px 0;"><span>${okrIcons[group.krIdx]} ${group.kr.name.slice(0, 12)}${group.kr.name.length > 12 ? '...' : ''}</span><span>${groupCount}건 (${ratio}%)</span></div>`;
+                }).join('')}
+              </div>
             </div>
           </div>
         </div>
 
         <!-- 2. 활동형 지표 / 성과형 지표 (2열 레이아웃) -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-          <!-- 활동형 지표 -->
+          <!-- 활동형 지표 (개인 목표 기간 표시) -->
           <div class="card" style="background: linear-gradient(180deg, #F0FDF4 0%, white 30%);">
             <div style="font-size: 16px; font-weight: 700; color: #059669; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
               📥 활동형(Input) 지표
             </div>
-            <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 16px;">${selectedMember ? selectedMember.name + '님의 일일 업무 활동 기록' : '일일 업무 활동 기록 현황'}</p>
+            <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 16px;">${selectedMember ? selectedMember.name + '님의 업무 활동 기록' : '업무 활동 기록 현황'}</p>
 
             ${Object.values(krLagGroups).filter(g => g.activityLags.length > 0).length === 0 ? `
               <div style="text-align: center; padding: 30px; color: var(--gray-400);">
@@ -15381,26 +15611,28 @@
                   ${okrIcons[group.krIdx]} ${group.kr.name}
                 </div>
                 ${group.activityLags.map(lag => {
-                  const hasTarget = lag.target && lag.target > 0;
                   const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
                   const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                  const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
+                  // 개인 목표 확인
+                  const memberId = selectedMember?.id || state.currentUser?.id;
+                  const personalGoal = (okrState.personalGoals || []).find(g => g.indicatorId === lag.id && g.memberId === memberId);
+                  const hasPersonalGoal = personalGoal && personalGoal.targetValue > 0;
+                  const achievementRate = hasPersonalGoal ? Math.min(Math.round((totalCount / personalGoal.targetValue) * 100), 100) : 0;
                   const statusColor = achievementRate >= 100 ? '#10B981' : achievementRate >= 70 ? '#3B82F6' : achievementRate >= 40 ? '#F59E0B' : '#9CA3AF';
+                  const periodLabel = personalGoal ? (personalGoal.period === 'daily' ? '일' : personalGoal.period === 'weekly' ? '주' : '월') : '';
 
                   return `
                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;">
                       <div style="flex: 1;">
                         <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">📋 ${lag.name}</div>
-                        <div style="font-size: 10px; color: var(--gray-500);">${lag.version ? lag.version + '버전' : lag.kpi.name}</div>
-                        ${hasTarget ? `<div style="font-size: 10px; color: var(--gray-500); margin-top: 2px;">목표: ${lag.target}건</div>` : ''}
+                        <div style="font-size: 10px; color: var(--gray-500);">${lag.kpi?.name || ''}</div>
+                        ${hasPersonalGoal ? `<div style="font-size: 10px; color: var(--primary); margin-top: 2px;">🎯 ${periodLabel}목표: ${personalGoal.targetValue}${lag.unit || '건'}</div>` : ''}
                       </div>
                       <div style="text-align: right;">
-                        ${hasTarget ? `
+                        ${hasPersonalGoal ? `
                           <div style="padding: 4px 10px; background: ${statusColor}; color: white; border-radius: 8px; font-size: 11px; font-weight: 700;">${achievementRate}%</div>
-                        ` : `
-                          <div style="padding: 4px 10px; background: var(--gray-200); color: var(--gray-600); border-radius: 8px; font-size: 10px; font-weight: 600;">미설정</div>
-                        `}
-                        <div style="font-size: 11px; color: var(--gray-600); margin-top: 4px;">현재: ${totalCount}건</div>
+                        ` : ''}
+                        <div style="font-size: 11px; color: var(--gray-600); margin-top: 4px;">현재: ${totalCount}${lag.unit || '건'}</div>
                       </div>
                     </div>
                   `;
@@ -15409,7 +15641,7 @@
             `).join('')}
           </div>
 
-          <!-- 성과형 지표 -->
+          <!-- 성과형 지표 (메인 KPI별, 개인 목표 기간 표시) -->
           <div class="card" style="background: linear-gradient(180deg, #FFFBEB 0%, white 30%);">
             <div style="font-size: 16px; font-weight: 700; color: #D97706; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
               📤 성과형(Output) 지표
@@ -15427,26 +15659,29 @@
                   ${okrIcons[group.krIdx]} ${group.kr.name}
                 </div>
                 ${group.resultLags.map(lag => {
-                  const hasTarget = lag.target && lag.target > 0;
                   const logs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
                   const totalCount = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-                  const achievementRate = hasTarget ? Math.min(Math.round((totalCount / lag.target) * 100), 100) : 0;
+                  // 개인 목표 확인
+                  const memberId = selectedMember?.id || state.currentUser?.id;
+                  const personalGoal = (okrState.personalGoals || []).find(g => g.indicatorId === lag.id && g.memberId === memberId);
+                  const hasPersonalGoal = personalGoal && personalGoal.targetValue > 0;
+                  const achievementRate = hasPersonalGoal ? Math.min(Math.round((totalCount / personalGoal.targetValue) * 100), 100) : 0;
                   const statusColor = achievementRate >= 100 ? '#10B981' : achievementRate >= 70 ? '#3B82F6' : achievementRate >= 40 ? '#F59E0B' : '#9CA3AF';
+                  const periodLabel = personalGoal ? (personalGoal.period === 'daily' ? '일' : personalGoal.period === 'weekly' ? '주' : '월') : '';
+                  const unitLabel = lag.unit || lag.kpi?.unit || '원';
 
                   return `
                     <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;">
                       <div style="flex: 1;">
                         <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">💰 ${lag.name}</div>
-                        <div style="font-size: 10px; color: var(--gray-500);">${lag.version ? lag.version + '버전' : lag.kpi.name}</div>
-                        ${hasTarget ? `<div style="font-size: 10px; color: var(--gray-500); margin-top: 2px;">목표: ${lag.target}건</div>` : ''}
+                        <div style="font-size: 10px; color: var(--gray-500);">${lag.kpi?.name || ''}</div>
+                        ${hasPersonalGoal ? `<div style="font-size: 10px; color: var(--warning); margin-top: 2px;">🎯 ${periodLabel}목표: ${personalGoal.targetValue.toLocaleString()}${unitLabel}</div>` : ''}
                       </div>
                       <div style="text-align: right;">
-                        ${hasTarget ? `
+                        ${hasPersonalGoal ? `
                           <div style="padding: 4px 10px; background: ${statusColor}; color: white; border-radius: 8px; font-size: 11px; font-weight: 700;">${achievementRate}%</div>
-                        ` : `
-                          <div style="padding: 4px 10px; background: var(--gray-200); color: var(--gray-600); border-radius: 8px; font-size: 10px; font-weight: 600;">미설정</div>
-                        `}
-                        <div style="font-size: 11px; color: var(--gray-600); margin-top: 4px;">현재: ${totalCount}건</div>
+                        ` : ''}
+                        <div style="font-size: 11px; color: var(--gray-600); margin-top: 4px;">현재: ${totalCount.toLocaleString()}${unitLabel}</div>
                       </div>
                     </div>
                   `;
