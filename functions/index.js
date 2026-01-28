@@ -9,6 +9,88 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 
 /**
+ * 아임웹(Imweb) API 프록시
+ * 브라우저 CORS 문제를 우회하기 위한 서버 프록시
+ *
+ * 1. 토큰 발급: API Key + Secret Key로 access_token 발급
+ * 2. API 호출: 주문 조회, 상품 조회 등
+ */
+app.post('/imweb', async (req, res) => {
+  try {
+    const { apiKey, apiSecret, apiEndpoint, accessToken, method = 'GET', body } = req.body;
+
+    // ==================== API 호출 모드 ====================
+    // accessToken이 있으면 아임웹 API 호출
+    if (apiEndpoint && accessToken) {
+      const apiUrl = `https://api.imweb.me${apiEndpoint}`;
+      console.log('Calling Imweb API:', apiUrl);
+
+      const fetchOptions = {
+        method: method,
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      };
+
+      if (body && method !== 'GET') {
+        fetchOptions.body = JSON.stringify(body);
+      }
+
+      const apiResponse = await fetch(apiUrl, fetchOptions);
+      const apiData = await apiResponse.json();
+
+      if (!apiResponse.ok) {
+        console.error('Imweb API error:', apiData);
+        return res.status(apiResponse.status).json(apiData);
+      }
+
+      console.log('Imweb API call successful');
+      return res.status(200).json(apiData);
+    }
+
+    // ==================== 토큰 발급 모드 ====================
+    // apiKey와 apiSecret으로 access_token 발급
+    if (!apiKey || !apiSecret) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'apiKey and apiSecret are required'
+      });
+    }
+
+    // 아임웹 토큰 발급 API 호출
+    const tokenUrl = 'https://api.imweb.me/v2/auth';
+    console.log('Requesting Imweb token');
+
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'key': apiKey,
+        'secret': apiSecret
+      }
+    });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok || tokenData.code !== 200) {
+      console.error('Imweb token error:', tokenData);
+      return res.status(tokenResponse.status).json(tokenData);
+    }
+
+    console.log('Imweb token issued successfully');
+    return res.status(200).json(tokenData);
+
+  } catch (error) {
+    console.error('Imweb proxy error:', error);
+    return res.status(500).json({
+      error: 'server_error',
+      error_description: error.message
+    });
+  }
+});
+
+/**
  * 카페24 OAuth 토큰 및 API 프록시
  * 브라우저 CORS 문제를 우회하기 위한 서버 프록시
  *
@@ -120,7 +202,14 @@ app.post('/', async (req, res) => {
 
 // Health check endpoint
 app.get('/', (req, res) => {
-  res.status(200).json({ status: 'ok', service: 'cafe24-oauth-proxy' });
+  res.status(200).json({
+    status: 'ok',
+    service: 'ecommerce-api-proxy',
+    endpoints: {
+      cafe24: 'POST /',
+      imweb: 'POST /imweb'
+    }
+  });
 });
 
 // Cloud Run은 PORT 환경변수를 사용

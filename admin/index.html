@@ -2145,6 +2145,9 @@
               <div class="menu-item" data-tab="cafe24Settings" onclick="switchTab('cafe24Settings')">
                 <span class="item-icon">⚙️</span>카페24 API 설정
               </div>
+              <div class="menu-item" data-tab="imwebSettings" onclick="switchTab('imwebSettings')">
+                <span class="item-icon">🌐</span>아임웹 API 설정
+              </div>
               <div class="folder-divider"></div>
               <!-- 고급 설정 서브폴더 -->
               <div class="sub-folder" style="border-left-color: #9ca3af;">
@@ -7421,6 +7424,7 @@ function render() {
     case 'cafe24Orders': renderCafe24Orders(); break;
     case 'cafe24Stats': renderCafe24Stats(); break;
     case 'cafe24Settings': renderCafe24Settings(); break;
+    case 'imwebSettings': renderImwebSettingsTab(); break;
     case 'guide': renderGuide(); break;
     case 'growthDashboard': renderGrowthDashboard(); break;
     case 'growthGuide': renderGrowthGuide(); break;
@@ -30537,6 +30541,365 @@ function toggleOKRMenu() {
     submenu.style.display = 'none';
     arrow.style.transform = 'rotate(0deg)';
   }
+}
+
+// ==================== 아임웹 API 설정 ====================
+const IMWEB_CONFIG = {
+  // Cloud Run 프록시 URL (CORS 우회용) - 아임웹 엔드포인트
+  proxyUrl: 'https://cafe24oauthtoken-751113514390.asia-northeast3.run.app/imweb'
+};
+
+// 아임웹 API 프록시 호출 함수 (CORS 우회)
+async function callImwebApi(accessToken, apiEndpoint, method = 'GET', body = null) {
+  console.log('아임웹 API 호출:', { apiEndpoint, method });
+
+  const response = await fetch(IMWEB_CONFIG.proxyUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      accessToken: accessToken,
+      apiEndpoint: apiEndpoint,
+      method: method,
+      body: body
+    })
+  });
+
+  const data = await response.json();
+  console.log('아임웹 API 응답:', response.status, data);
+
+  if (!response.ok) {
+    let errorMsg = data.error_description || data.msg || data.error || data.message;
+    if (typeof errorMsg === 'object') {
+      errorMsg = JSON.stringify(errorMsg);
+    }
+    const error = new Error(errorMsg || `API 오류: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+
+  return data;
+}
+
+// 아임웹 토큰 발급
+async function getImwebToken(apiKey, apiSecret) {
+  console.log('아임웹 토큰 발급 요청');
+
+  const response = await fetch(IMWEB_CONFIG.proxyUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      apiKey: apiKey,
+      apiSecret: apiSecret
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || data.code !== 200) {
+    throw new Error(data.msg || data.error_description || '토큰 발급 실패');
+  }
+
+  return data.data; // { access_token, expired_at }
+}
+
+// 아임웹 주문 데이터 동기화
+async function syncImwebOrders(isAuto = false) {
+  if (!isAuto && !confirm('아임웹에서 최신 주문 데이터를 가져오시겠습니까?')) return;
+
+  const btn = isAuto ? null : event?.target;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '🔄 수집 중...';
+  }
+
+  try {
+    // Firestore에서 아임웹 설정 가져오기
+    const settingsDoc = await db.collection('settings').doc('imweb').get();
+    if (!settingsDoc.exists) {
+      throw new Error('아임웹 API 설정이 없습니다. 설정 탭에서 먼저 API Key를 설정해주세요.');
+    }
+
+    const settings = settingsDoc.data();
+    let accessToken = settings.accessToken;
+    const tokenExpiry = settings.tokenExpiry?.toDate?.() || new Date(settings.tokenExpiry);
+
+    // 토큰 만료 확인 및 갱신
+    if (!accessToken || new Date() >= tokenExpiry) {
+      console.log('아임웹 토큰 만료, 재발급...');
+      const tokenData = await getImwebToken(settings.apiKey, settings.apiSecret);
+      accessToken = tokenData.access_token;
+
+      // 새 토큰 저장
+      await db.collection('settings').doc('imweb').update({
+        accessToken: accessToken,
+        tokenExpiry: new Date(tokenData.expired_at * 1000)
+      });
+    }
+
+    // 주문 목록 조회 (최근 30일)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    let allOrders = [];
+    let currentPage = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const ordersResponse = await callImwebApi(
+        accessToken,
+        `/v2/shop/orders?order_date_from=${Math.floor(thirtyDaysAgo.getTime() / 1000)}&page=${currentPage}&limit=100`
+      );
+
+      if (ordersResponse.code === 200 && ordersResponse.data) {
+        const orders = ordersResponse.data.list || [];
+        allOrders = allOrders.concat(orders);
+
+        // 페이지네이션 확인
+        const totalCount = ordersResponse.data.total_count || 0;
+        if (allOrders.length >= totalCount || orders.length < 100) {
+          hasMore = false;
+        } else {
+          currentPage++;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+
+    console.log(`아임웹 주문 ${allOrders.length}건 조회 완료`);
+
+    // Firestore에 주문 데이터 저장
+    const batch = db.batch();
+    let newCount = 0;
+    let updateCount = 0;
+
+    for (const order of allOrders) {
+      const orderRef = db.collection('orders').doc(`imweb_${order.order_no}`);
+      const existingDoc = await orderRef.get();
+
+      const orderData = {
+        platform: 'imweb',
+        orderNo: order.order_no,
+        orderDate: new Date(order.order_time * 1000),
+        status: order.status,
+        paymentStatus: order.pay_status,
+        buyerName: order.orderer?.name || '',
+        buyerPhone: order.orderer?.phone || '',
+        buyerEmail: order.orderer?.email || '',
+        totalAmount: order.price?.total || 0,
+        paymentAmount: order.price?.payment || 0,
+        shippingFee: order.price?.deliv || 0,
+        memo: order.order_memo || '',
+        items: (order.items || []).map(item => ({
+          productNo: item.prod_no,
+          productName: item.prod_name,
+          optionName: item.option || '',
+          quantity: item.count,
+          price: item.price
+        })),
+        rawData: order,
+        updatedAt: new Date(),
+        syncedAt: new Date()
+      };
+
+      // 레퍼럴 코드 추출 (주문 메모에서)
+      if (order.order_memo) {
+        const refMatch = order.order_memo.match(/ref[=:]\s*([A-Z0-9]+)/i);
+        if (refMatch) {
+          orderData.referralCode = refMatch[1];
+        }
+      }
+
+      if (!existingDoc.exists) {
+        orderData.createdAt = new Date();
+        newCount++;
+      } else {
+        updateCount++;
+      }
+
+      batch.set(orderRef, orderData, { merge: true });
+    }
+
+    await batch.commit();
+
+    const message = `✅ 아임웹 주문 동기화 완료!\n새 주문: ${newCount}건\n업데이트: ${updateCount}건\n총: ${allOrders.length}건`;
+    console.log(message);
+    if (!isAuto) alert(message);
+
+    // 주문 관리 탭 새로고침
+    if (document.getElementById('cafe24Orders')?.style.display !== 'none') {
+      renderCafe24OrdersTab();
+    }
+
+  } catch (err) {
+    console.error('아임웹 주문 동기화 오류:', err);
+    if (!isAuto) alert('❌ 동기화 실패: ' + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🔄 주문 데이터 동기화';
+    }
+  }
+}
+
+// 아임웹 연결 테스트
+async function testImwebConnection() {
+  const btn = event.target;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '테스트 중...';
+
+  try {
+    const settingsDoc = await db.collection('settings').doc('imweb').get();
+    if (!settingsDoc.exists) {
+      throw new Error('아임웹 API 설정이 없습니다.');
+    }
+
+    const settings = settingsDoc.data();
+
+    // 토큰 발급 테스트
+    const tokenData = await getImwebToken(settings.apiKey, settings.apiSecret);
+
+    // 새 토큰 저장
+    await db.collection('settings').doc('imweb').update({
+      accessToken: tokenData.access_token,
+      tokenExpiry: new Date(tokenData.expired_at * 1000)
+    });
+
+    alert('✅ 아임웹 연결 성공!\n토큰이 갱신되었습니다.');
+
+  } catch (err) {
+    console.error('아임웹 연결 테스트 오류:', err);
+    alert('❌ 연결 실패: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+// 아임웹 API 설정 저장
+async function saveImwebSettings() {
+  const apiKey = document.getElementById('imwebApiKey')?.value?.trim();
+  const apiSecret = document.getElementById('imwebApiSecret')?.value?.trim();
+  const siteCode = document.getElementById('imwebSiteCode')?.value?.trim();
+
+  if (!apiKey || !apiSecret) {
+    alert('API Key와 API Secret을 모두 입력해주세요.');
+    return;
+  }
+
+  try {
+    // 토큰 발급 테스트
+    const tokenData = await getImwebToken(apiKey, apiSecret);
+
+    // Firestore에 저장
+    await db.collection('settings').doc('imweb').set({
+      apiKey: apiKey,
+      apiSecret: apiSecret,
+      siteCode: siteCode || '',
+      accessToken: tokenData.access_token,
+      tokenExpiry: new Date(tokenData.expired_at * 1000),
+      updatedAt: new Date()
+    });
+
+    alert('✅ 아임웹 설정이 저장되었습니다!\n토큰 발급도 성공했습니다.');
+    renderImwebSettingsTab();
+
+  } catch (err) {
+    console.error('아임웹 설정 저장 오류:', err);
+    alert('❌ 저장 실패: ' + err.message);
+  }
+}
+
+// 아임웹 설정 탭 렌더링
+async function renderImwebSettingsTab() {
+  const app = document.getElementById('app');
+
+  // Firestore에서 기존 설정 가져오기
+  let savedConfig = {};
+  try {
+    const settingsDoc = await db.collection('settings').doc('imweb').get();
+    if (settingsDoc.exists) {
+      savedConfig = settingsDoc.data();
+    }
+  } catch (err) {
+    console.error('설정 로드 오류:', err);
+  }
+
+  const hasToken = savedConfig.accessToken && savedConfig.tokenExpiry;
+  const tokenExpiry = savedConfig.tokenExpiry?.toDate?.() || (savedConfig.tokenExpiry ? new Date(savedConfig.tokenExpiry) : null);
+  const isExpired = tokenExpiry && new Date() >= tokenExpiry;
+  const tokenExpiryText = tokenExpiry ? tokenExpiry.toLocaleString('ko-KR') : '-';
+
+  app.innerHTML = `
+    <div class="page-header">
+      <h1 class="page-title">🌐 아임웹 API 설정</h1>
+      <p style="color: var(--gray-500); margin-top: 4px;">아임웹 쇼핑몰 연동 설정</p>
+    </div>
+
+    <div class="card" style="max-width: 600px;">
+      <h3 style="font-size: 16px; font-weight: 700; margin-bottom: 20px;">🔑 API 인증 정보</h3>
+
+      <div class="form-group" style="margin-bottom: 16px;">
+        <label style="display: block; margin-bottom: 6px; font-weight: 600; color: var(--gray-700);">API Key</label>
+        <input type="text" id="imwebApiKey" class="form-control"
+          placeholder="아임웹 개발자 센터에서 발급받은 API Key"
+          value="${savedConfig.apiKey || ''}"
+          style="width: 100%; padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px;">
+      </div>
+
+      <div class="form-group" style="margin-bottom: 16px;">
+        <label style="display: block; margin-bottom: 6px; font-weight: 600; color: var(--gray-700);">API Secret</label>
+        <input type="password" id="imwebApiSecret" class="form-control"
+          placeholder="아임웹 개발자 센터에서 발급받은 API Secret"
+          value="${savedConfig.apiSecret || ''}"
+          style="width: 100%; padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px;">
+      </div>
+
+      <div class="form-group" style="margin-bottom: 20px;">
+        <label style="display: block; margin-bottom: 6px; font-weight: 600; color: var(--gray-700);">사이트 코드 (선택)</label>
+        <input type="text" id="imwebSiteCode" class="form-control"
+          placeholder="아임웹 사이트 코드"
+          value="${savedConfig.siteCode || ''}"
+          style="width: 100%; padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px;">
+        <p style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">여러 사이트 운영 시 사이트 구분용</p>
+      </div>
+
+      <button onclick="saveImwebSettings()" class="btn btn-primary" style="width: 100%; margin-bottom: 12px;">
+        💾 설정 저장
+      </button>
+
+      ${hasToken ? `
+        <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+          <button onclick="syncImwebOrders()" class="btn btn-primary" style="flex: 1;">
+            🔄 주문 데이터 동기화
+          </button>
+          <button onclick="testImwebConnection()" class="btn btn-secondary">
+            🔍 연결 테스트
+          </button>
+        </div>
+        <div style="padding: 12px; background: ${isExpired ? 'var(--warning-light)' : 'var(--success-light)'}; border-radius: 8px; font-size: 13px;">
+          <div style="color: var(--gray-700); margin-bottom: 4px;">⏰ 토큰 만료: ${tokenExpiryText}</div>
+          ${isExpired ? '<div style="color: var(--warning);">⚠️ 토큰 만료됨 (자동 갱신 됩니다)</div>' : '<div style="color: var(--success);">✅ 토큰 활성 상태</div>'}
+        </div>
+      ` : ''}
+
+      <div style="margin-top: 20px; padding: 16px; background: var(--info-light); border-radius: 8px;">
+        <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">📘 아임웹 API Key 발급 방법</h4>
+        <ol style="font-size: 13px; color: var(--gray-600); margin: 0; padding-left: 20px; line-height: 1.8;">
+          <li>아임웹 관리자 페이지 접속</li>
+          <li>환경설정 → 개발자 센터 이동</li>
+          <li>API Key/Secret 발급받기</li>
+          <li>발급받은 키를 위 필드에 입력</li>
+        </ol>
+      </div>
+    </div>
+  `;
 }
 
 // ==================== 카페24 API 설정 ====================
