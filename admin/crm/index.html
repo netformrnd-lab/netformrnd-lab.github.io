@@ -2124,6 +2124,103 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
+    // ==================== SMS API 설정 ====================
+    // Cloud Run에서 실행되는 API 프록시 URL
+    const SMS_API_URL = 'https://cafe24-oauth-proxy-527148187832.asia-northeast3.run.app';
+
+    /**
+     * 솔라피 SMS 발송 함수
+     * @param {string} to - 수신번호
+     * @param {string} text - 메시지 내용
+     * @param {object} metadata - 추가 메타데이터 (발송 기록용)
+     * @returns {Promise<object>} - 발송 결과
+     */
+    async function sendSMS(to, text, metadata = {}) {
+      try {
+        const response = await fetch(`${SMS_API_URL}/sms`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ to, text })
+        });
+
+        const result = await response.json();
+
+        // Firestore에 발송 이력 저장
+        await db.collection('smsHistory').add({
+          to: to,
+          text: text,
+          success: result.success,
+          messageId: result.data?.messageId || null,
+          error: result.success ? null : result.message,
+          metadata: metadata,
+          sentAt: firebase.firestore.FieldValue.serverTimestamp(),
+          sentBy: 'crm-center'
+        });
+
+        return result;
+      } catch (error) {
+        console.error('SMS 발송 오류:', error);
+
+        // 실패 이력도 저장
+        await db.collection('smsHistory').add({
+          to: to,
+          text: text,
+          success: false,
+          error: error.message,
+          metadata: metadata,
+          sentAt: firebase.firestore.FieldValue.serverTimestamp(),
+          sentBy: 'crm-center'
+        });
+
+        return {
+          success: false,
+          error: 'network_error',
+          message: error.message
+        };
+      }
+    }
+
+    /**
+     * 대량 SMS 발송 함수
+     * @param {Array} messages - [{to, text}, ...] 형식의 메시지 배열
+     * @returns {Promise<object>} - 발송 결과
+     */
+    async function sendBulkSMS(messages) {
+      try {
+        const response = await fetch(`${SMS_API_URL}/sms/bulk`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ messages })
+        });
+
+        const result = await response.json();
+
+        // Firestore에 대량 발송 이력 저장
+        await db.collection('smsHistory').add({
+          type: 'bulk',
+          count: messages.length,
+          success: result.success,
+          groupId: result.data?.groupId || null,
+          error: result.success ? null : result.message,
+          sentAt: firebase.firestore.FieldValue.serverTimestamp(),
+          sentBy: 'crm-center'
+        });
+
+        return result;
+      } catch (error) {
+        console.error('대량 SMS 발송 오류:', error);
+        return {
+          success: false,
+          error: 'network_error',
+          message: error.message
+        };
+      }
+    }
+
     // 상태 관리
     let state = {
       currentTab: 'dashboard',
@@ -6854,7 +6951,7 @@
       });
     }
 
-    // 문자/이메일 발송 모달 (예정)
+    // 문자/이메일 발송 모달 (솔라피 API 연동)
     function openSendModal(applicationId, type) {
       const app = state.supplierApplications.find(a => a.id === applicationId);
       if (!app) return;
@@ -6864,14 +6961,66 @@
       const companyName = app.companyName || app.name || '공급사';
 
       if (type === 'sms') {
-        // 알리고 API 연동 예정 - 현재는 안내 메시지
-        const message = `[모여라딜] ${companyName}님, 입점 온보딩 안내드립니다.\n\n아래 링크에서 서류를 제출해주세요.\n${onboardingUrl}`;
+        // 솔라피 SMS 발송 모달
+        const defaultMessage = `[모여라딜] ${companyName}님, 입점 온보딩 안내드립니다.\n\n아래 링크에서 서류를 제출해주세요.\n${onboardingUrl}`;
 
-        alert(`📱 문자 발송 기능 (알리고 API 연동 예정)\n\n발송 대상: ${app.phone || '-'}\n\n--- 문자 내용 미리보기 ---\n${message}\n\n현재는 링크를 복사하여 수동으로 전송해주세요.`);
-        navigator.clipboard.writeText(message);
-        showToast('📋 문자 내용이 복사되었습니다');
+        showModal(`
+          <div style="max-width: 500px;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+              <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;">📱</div>
+              <div>
+                <h3 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0;">SMS 문자 발송</h3>
+                <p style="font-size: 13px; color: #6b7280; margin: 4px 0 0 0;">솔라피 API를 통해 발송됩니다</p>
+              </div>
+            </div>
+
+            <div style="background: #f9fafb; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                <span style="font-size: 12px; color: #6b7280;">수신번호</span>
+                <span style="font-size: 14px; font-weight: 600; color: #1f2937;">${app.phone || '전화번호 없음'}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 12px; color: #6b7280;">수신자</span>
+                <span style="font-size: 14px; font-weight: 600; color: #1f2937;">${companyName}</span>
+              </div>
+            </div>
+
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px;">문자 내용</label>
+              <textarea id="smsContent" style="width: 100%; height: 150px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 13px; font-family: inherit; resize: vertical; box-sizing: border-box;">${defaultMessage}</textarea>
+              <div style="display: flex; justify-content: space-between; margin-top: 6px;">
+                <span id="smsCharCount" style="font-size: 11px; color: #6b7280;">${defaultMessage.length}자</span>
+                <span style="font-size: 11px; color: #9ca3af;">SMS 90byte / LMS 2000byte</span>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+              <button onclick="closeModal()" style="flex: 1; padding: 12px; background: #f3f4f6; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; color: #6b7280; cursor: pointer;">취소</button>
+              <button onclick="confirmSendSMS('${applicationId}', '${app.phone || ''}', '${companyName}')" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; color: white; cursor: pointer;" ${!app.phone ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
+                ${app.phone ? '📤 발송하기' : '전화번호 없음'}
+              </button>
+            </div>
+
+            <div style="margin-top: 12px; padding: 12px; background: #fef3c7; border-radius: 8px; display: flex; align-items: flex-start; gap: 8px;">
+              <span style="font-size: 14px;">💡</span>
+              <span style="font-size: 12px; color: #92400e;">SMS는 건당 13원, LMS(90byte 초과)는 건당 29원이 차감됩니다.</span>
+            </div>
+          </div>
+        `);
+
+        // 글자수 카운터 업데이트
+        setTimeout(() => {
+          const textarea = document.getElementById('smsContent');
+          const counter = document.getElementById('smsCharCount');
+          if (textarea && counter) {
+            textarea.addEventListener('input', () => {
+              counter.textContent = textarea.value.length + '자';
+            });
+          }
+        }, 100);
+
       } else if (type === 'email') {
-        // 이메일 발송 예정
+        // 이메일 발송 (기존 로직 유지)
         const subject = `[모여라딜] ${companyName}님 입점 온보딩 안내`;
         const body = `안녕하세요, ${companyName} 담당자님.\n\n모여라딜 입점에 관심 가져주셔서 감사합니다.\n\n아래 링크에서 입점에 필요한 서류를 제출해주세요.\n\n온보딩 링크: ${onboardingUrl}\n\n궁금하신 점은 언제든 문의해주세요.\n\n감사합니다.\n모여라딜 드림`;
 
@@ -6883,6 +7032,57 @@
           navigator.clipboard.writeText(body);
           showToast('📋 이메일 내용이 복사되었습니다');
         }
+      }
+    }
+
+    // SMS 발송 확인 및 실행
+    async function confirmSendSMS(applicationId, phone, companyName) {
+      const textarea = document.getElementById('smsContent');
+      if (!textarea) return;
+
+      const message = textarea.value.trim();
+      if (!message) {
+        showToast('⚠️ 메시지 내용을 입력해주세요');
+        return;
+      }
+
+      if (!phone) {
+        showToast('⚠️ 수신 전화번호가 없습니다');
+        return;
+      }
+
+      // 발송 버튼 비활성화 및 로딩 표시
+      const sendBtn = event.target;
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = '⏳ 발송 중...';
+
+      try {
+        const result = await sendSMS(phone, message, {
+          type: 'onboarding',
+          applicationId: applicationId,
+          companyName: companyName
+        });
+
+        if (result.success) {
+          showToast('✅ SMS 발송 완료!');
+          closeModal();
+
+          // 신청서에 SMS 발송 기록 업데이트
+          await db.collection('supplierApplications').doc(applicationId).update({
+            lastSMSSentAt: firebase.firestore.FieldValue.serverTimestamp(),
+            smsCount: firebase.firestore.FieldValue.increment(1)
+          });
+
+        } else {
+          showToast(`❌ 발송 실패: ${result.message}`);
+          sendBtn.disabled = false;
+          sendBtn.innerHTML = '📤 다시 시도';
+        }
+      } catch (error) {
+        console.error('SMS 발송 오류:', error);
+        showToast('❌ 발송 중 오류가 발생했습니다');
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = '📤 다시 시도';
       }
     }
 
