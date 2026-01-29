@@ -3414,6 +3414,7 @@ let state = {
   // 매출관리 내역서용 데이터
   sellerSettlements: [],
   supplierSettlements: [],
+  contentFeeSettlements: [],
   settlementBrands: [],
   supplierProducts: [],
   // 파트너 관리 데이터
@@ -3586,19 +3587,19 @@ function setupListeners() {
 
   // 셀러 입점 신청
   db.collection('sellerApplications').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-  
+    state.sellerApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    render();
+  });
+
   // 공급사 입점 신청
   db.collection('supplierApplications').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
     state.supplierApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
-  
+
   // 공구 제안서
   db.collection('dealProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
     state.dealProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    render();
-  });
-    state.sellerApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     render();
   });
 
@@ -27393,10 +27394,11 @@ function renderSupplierInquiries() {
           <tr style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
             <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">상태</th>
             <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">유형</th>
-            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">이름</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">기업명</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">담당자</th>
             <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">연락처</th>
+            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">첨부파일</th>
             <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">요청일시</th>
-            <th style="padding: 12px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">메모</th>
             <th style="padding: 12px 16px; text-align: center; font-size: 13px; font-weight: 600; color: var(--gray-600);">액션</th>
           </tr>
         </thead>
@@ -27407,12 +27409,18 @@ function renderSupplierInquiries() {
               <td style="padding: 14px 16px;">
                 <span style="background: ${item.type === 'supplier' ? '#dbeafe' : '#d1fae5'}; color: ${item.type === 'supplier' ? '#1d4ed8' : '#059669'}; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">${item.type === 'supplier' ? '공급사' : '셀러'}</span>
               </td>
-              <td style="padding: 14px 16px; font-weight: 500;">${item.name || '-'}</td>
               <td style="padding: 14px 16px;">
-                <a href="tel:${(item.contact || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500;">${item.contact || '-'}</a>
+                <div style="font-weight: 600;">${item.companyName || item.name || '-'}</div>
+                ${item.website ? `<a href="${item.website.startsWith('http') ? item.website : 'https://' + item.website}" target="_blank" style="font-size: 11px; color: var(--info);">🔗 홈페이지</a>` : ''}
+              </td>
+              <td style="padding: 14px 16px; font-size: 13px;">${item.managerName || '-'}</td>
+              <td style="padding: 14px 16px;">
+                <a href="tel:${(item.phone || item.contact || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500;">${item.phone || item.contact || '-'}</a>
+              </td>
+              <td style="padding: 14px 16px;">
+                ${item.fileUrl ? `<a href="${item.fileUrl}" target="_blank" style="color: var(--primary); font-size: 12px;">📎 ${item.fileName || '파일보기'}</a>` : '<span style="color: var(--gray-400); font-size: 12px;">-</span>'}
               </td>
               <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600);">${formatDateStr(item.createdAt)}</td>
-              <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.note || '-'}</td>
               <td style="padding: 14px 16px; text-align: center;">
                 <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
                   ${item.status !== 'processing' ? `
@@ -27421,7 +27429,7 @@ function renderSupplierInquiries() {
                   ${item.status !== 'completed' ? `
                     <button onclick="updateInquiryStatus('proposalRequests', '${item.id}', 'completed')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">완료</button>
                   ` : ''}
-                  <button onclick="openInquiryNoteModal('proposalRequests', '${item.id}', '${(item.note || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r')}', '${item.contact || ''}')" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">메모</button>
+                  <button onclick="openInquiryNoteModal('proposalRequests', '${item.id}', '${(item.note || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r')}', '${item.phone || item.contact || ''}')" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">메모</button>
                   <button onclick="deleteInquiry('proposalRequests', '${item.id}')" style="padding: 6px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">삭제</button>
                 </div>
               </td>
