@@ -27259,7 +27259,9 @@ function renderSupplierInquiries() {
                 <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
                   ${item.status !== 'processing' ? `
                     <button onclick="updateInquiryStatus('${collection}', '${item.id}', 'processing')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
-                  ` : ''}
+                  ` : (collection === 'supplierInquiries' ? `
+                    <button onclick="showExistingProposal('${item.id}', '${item.name || ''}', '${item.contact || ''}', '${item.email || ''}')" style="padding: 6px 12px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">📄 제안서</button>
+                  ` : '')}
                   ${item.status !== 'completed' ? `
                     <button onclick="updateInquiryStatus('${collection}', '${item.id}', 'completed')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">완료</button>
                   ` : ''}
@@ -27477,13 +27479,13 @@ async function updateInquiryStatus(collection, id, status) {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
 
-          // 제안서 URL 복사 모달 표시
-          showProposalCreatedModal(proposalUrl, inquiryData.name);
+          // 제안서 URL 복사 모달 표시 (연락처, 이메일 정보 포함)
+          showProposalCreatedModal(proposalUrl, inquiryData.name, false, inquiryData.contact || '', inquiryData.email || '');
           return;
         } else {
           // 이미 제안서가 있으면 URL 표시
           const existingUrl = `${window.location.origin}/supplier/custom-proposal/?id=${existingProposal.docs[0].id}`;
-          showProposalCreatedModal(existingUrl, inquiryData.name, true);
+          showProposalCreatedModal(existingUrl, inquiryData.name, true, inquiryData.contact || '', inquiryData.email || '');
         }
       }
     }
@@ -27500,11 +27502,11 @@ async function updateInquiryStatus(collection, id, status) {
 }
 
 // 맞춤제안서 생성 완료 모달
-function showProposalCreatedModal(url, companyName, isExisting = false) {
+function showProposalCreatedModal(url, companyName, isExisting = false, contact = '', email = '') {
   const m = document.getElementById('modal');
   m.className = 'modal show';
   m.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 550px;">
       <div class="modal-header">
         <h2 class="modal-title">${isExisting ? '📄 기존 제안서' : '🎉 맞춤제안서 생성 완료!'}</h2>
         <button class="modal-close" onclick="closeModal()">×</button>
@@ -27520,17 +27522,84 @@ function showProposalCreatedModal(url, companyName, isExisting = false) {
         <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 8px; padding: 12px; margin-bottom: 20px; word-break: break-all;">
           <code style="font-size: 12px; color: var(--gray-700);" id="proposalUrlText">${url}</code>
         </div>
-        <div style="display: flex; gap: 10px; justify-content: center;">
-          <button onclick="copyProposalUrl('${url}')" style="padding: 12px 24px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+        <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+          <button onclick="copyProposalUrl('${url}')" style="padding: 12px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
             <span>📋</span> URL 복사
           </button>
-          <button onclick="window.open('${url}', '_blank')" style="padding: 12px 24px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+          <button onclick="window.open('${url}', '_blank')" style="padding: 12px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
             <span>👁️</span> 미리보기
           </button>
+        </div>
+        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--gray-200);">
+          <p style="font-size: 13px; color: var(--gray-500); margin-bottom: 12px;">바로 발송하기</p>
+          <div style="display: flex; gap: 10px; justify-content: center;">
+            <button onclick="sendProposalSMS('${companyName}', '${contact}', '${url}')" style="padding: 12px 20px; background: #10b981; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+              <span>📱</span> 문자 발송
+            </button>
+            <button onclick="sendProposalEmail('${companyName}', '${email}', '${url}')" style="padding: 12px 20px; background: #6366f1; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+              <span>📧</span> 이메일 발송
+            </button>
+          </div>
         </div>
       </div>
     </div>
   `;
+}
+
+// 기존 제안서 조회 및 표시
+async function showExistingProposal(inquiryId, companyName, contact, email) {
+  try {
+    // proposalDerivatives에서 해당 문의 ID로 제안서 조회
+    const proposalsRef = db.collection('proposalDerivatives');
+    const q = proposalsRef.where('sourceInquiryId', '==', inquiryId);
+    const snapshot = await q.get();
+
+    if (!snapshot.empty) {
+      const proposalDoc = snapshot.docs[0];
+      const proposalData = proposalDoc.data();
+      const proposalUrl = `${window.location.origin}/supplier/custom-proposal/?id=${proposalDoc.id}`;
+
+      showProposalCreatedModal(proposalUrl, companyName || proposalData.companyName, true, contact, email);
+    } else {
+      // 제안서가 없는 경우 - 새로 생성 제안
+      if (confirm(`[${companyName}]의 제안서가 아직 없습니다.\n새로 생성하시겠습니까?`)) {
+        // 문의 데이터 가져오기
+        const inquiryDoc = await db.collection('supplierInquiries').doc(inquiryId).get();
+        if (inquiryDoc.exists) {
+          const inquiryData = inquiryDoc.data();
+
+          // 새 제안서 생성
+          const proposalData = {
+            companyName: inquiryData.name || companyName,
+            category: inquiryData.category || '',
+            contact: inquiryData.contact || contact,
+            email: inquiryData.email || email,
+            sourceType: 'supplierInquiry',
+            sourceInquiryId: inquiryId,
+            status: 'pending',
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            agreements: {
+              productInfo: false,
+              marketing: false,
+              settlement: false,
+              returns: false,
+              communication: false
+            }
+          };
+
+          const newProposalRef = await db.collection('proposalDerivatives').add(proposalData);
+          const newProposalUrl = `${window.location.origin}/supplier/custom-proposal/?id=${newProposalRef.id}`;
+
+          showProposalCreatedModal(newProposalUrl, companyName, false, contact, email);
+        } else {
+          alert('문의 정보를 찾을 수 없습니다.');
+        }
+      }
+    }
+  } catch (error) {
+    console.error('제안서 조회 오류:', error);
+    alert('제안서 조회 중 오류가 발생했습니다.');
+  }
 }
 
 // 제안서 URL 복사
@@ -27547,6 +27616,63 @@ function copyProposalUrl(url) {
     document.body.removeChild(textArea);
     showToast('URL이 클립보드에 복사되었습니다!');
   });
+}
+
+// 맞춤제안서 문자 발송
+function sendProposalSMS(name, contact, url) {
+  const message = `[모여라딜] ${name || '공급사'}님 안녕하세요!
+
+맞춤 제안서를 보내드립니다.
+아래 링크에서 확인 후 입점 신청 부탁드립니다.
+
+📋 맞춤제안서:
+${url}
+
+감사합니다.
+모여라딜 드림`;
+
+  // 메시지 클립보드 복사
+  navigator.clipboard.writeText(message).then(() => {
+    showToast('📱 문자 내용이 복사되었습니다!');
+
+    // 연락처가 있으면 SMS 앱 열기 시도
+    if (contact) {
+      const cleanPhone = contact.replace(/-/g, '');
+      window.open(`sms:${cleanPhone}?body=${encodeURIComponent(message)}`, '_blank');
+    }
+  }).catch(() => {
+    prompt('아래 메시지를 복사하세요:', message);
+  });
+}
+
+// 맞춤제안서 이메일 발송
+function sendProposalEmail(name, email, url) {
+  const subject = `[모여라딜] ${name || '공급사'}님 맞춤 제안서`;
+  const body = `안녕하세요, ${name || '공급사'}님!
+
+모여라딜에 관심 가져주셔서 감사합니다.
+
+${name}님을 위한 맞춤 제안서를 준비했습니다.
+아래 링크에서 확인하시고, 입점 신청까지 진행해 주세요.
+
+📋 맞춤제안서:
+${url}
+
+제안서 확인 후 협업 조건에 동의하시면
+1일 이내 계약서를 전달드리겠습니다.
+
+감사합니다.
+모여라딜 드림`;
+
+  if (email) {
+    window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  } else {
+    navigator.clipboard.writeText(`제목: ${subject}\n\n${body}`).then(() => {
+      showToast('📧 이메일 내용이 복사되었습니다. (이메일 주소 없음)');
+    }).catch(() => {
+      prompt('아래 내용을 복사하세요:', `제목: ${subject}\n\n${body}`);
+    });
+  }
 }
 
 // 문의 삭제 (공통)
