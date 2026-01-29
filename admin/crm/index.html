@@ -2157,6 +2157,31 @@
 
     let adminPassword = 'admin1234';
 
+    // 리스너 구독 정리용 배열
+    const unsubscribers = [];
+    let listenersInitialized = false;
+
+    // render 디바운싱 (과도한 render 호출 방지)
+    let renderTimeout = null;
+    function debouncedRender() {
+      if (renderTimeout) clearTimeout(renderTimeout);
+      renderTimeout = setTimeout(() => {
+        render();
+      }, 50);  // 50ms 디바운스
+    }
+
+    // 리스너 정리 함수
+    function cleanupListeners() {
+      unsubscribers.forEach(unsub => {
+        if (typeof unsub === 'function') unsub();
+      });
+      unsubscribers.length = 0;
+      listenersInitialized = false;
+    }
+
+    // 페이지 언로드 시 리스너 정리
+    window.addEventListener('beforeunload', cleanupListeners);
+
     // 비밀번호 로드
     async function loadAdminPassword() {
       try {
@@ -2208,100 +2233,145 @@
       setupListeners();
     }
 
-    // Firebase 리스너
+    // Firebase 리스너 (최적화: 디바운스 + 리스너 관리)
     function setupListeners() {
+      // 중복 초기화 방지
+      if (listenersInitialized) return;
+      listenersInitialized = true;
+
+      // 기존 리스너 정리
+      cleanupListeners();
+      listenersInitialized = true;
+
+      // 인바운드 관련 디바운스 함수
+      let inboundTimeout = null;
+      function debouncedInboundUpdate() {
+        if (inboundTimeout) clearTimeout(inboundTimeout);
+        inboundTimeout = setTimeout(() => {
+          updateInboundDashboard();
+          renderInboundList();
+        }, 50);
+      }
+
       // 공급사
-      db.collection('suppliers').orderBy('name').onSnapshot(snapshot => {
-        state.suppliers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('suppliers').orderBy('name').onSnapshot(snapshot => {
+          state.suppliers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 셀러
-      db.collection('sellers').orderBy('name').onSnapshot(snapshot => {
-        state.sellers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('sellers').orderBy('name').onSnapshot(snapshot => {
+          state.sellers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 어드민 제안
-      db.collection('adminProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.adminProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('adminProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.adminProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 셀러 제안
-      db.collection('sellerProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.sellerProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('sellerProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.sellerProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 공급사 맞춤 제안서 (proposalDerivatives)
-      db.collection('proposalDerivatives').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.supplierProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('proposalDerivatives').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.supplierProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 공구 제안
-      db.collection('dealSuggestions').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.dealSuggestions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('dealSuggestions').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.dealSuggestions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 공구 제안서
-      db.collection('dealProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.dealProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('dealProposals').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.dealProposals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 딜
-      db.collection('deals').orderBy('startDate', 'desc').onSnapshot(snapshot => {
-        state.deals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('deals').orderBy('startDate', 'desc').onSnapshot(snapshot => {
+          state.deals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 탐색 상품 목록 (공급사 제안용)
-      db.collection('productList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('productList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 탐색 셀러 목록 (입점권유용)
-      db.collection('sellerList').orderBy('accountName').onSnapshot(snapshot => {
-        state.sellerList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        render();
-      });
+      unsubscribers.push(
+        db.collection('sellerList').orderBy('accountName').onSnapshot(snapshot => {
+          state.sellerList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
 
       // 셀러 입점신청
-      db.collection('sellerApplications').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.sellerApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        updateApplicationBadges();
-        render();
-      });
+      unsubscribers.push(
+        db.collection('sellerApplications').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.sellerApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          updateApplicationBadges();
+          debouncedRender();
+        })
+      );
 
       // 공급사 입점신청
-      db.collection('supplierApplications').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.supplierApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        updateApplicationBadges();
-        render();
-      });
+      unsubscribers.push(
+        db.collection('supplierApplications').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.supplierApplications = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          updateApplicationBadges();
+          debouncedRender();
+        })
+      );
 
-      // 인바운드 관리용 컬렉션
-      db.collection('supplierInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.supplierInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        updateInboundDashboard();
-        renderInboundList();
-      });
+      // 인바운드 관리용 컬렉션 (디바운스 적용)
+      unsubscribers.push(
+        db.collection('supplierInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.supplierInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedInboundUpdate();
+        })
+      );
 
-      db.collection('sellerInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.sellerInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        updateInboundDashboard();
-        renderInboundList();
-      });
+      unsubscribers.push(
+        db.collection('sellerInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.sellerInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedInboundUpdate();
+        })
+      );
 
-      db.collection('proposalRequests').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        state.proposalRequests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        updateInboundDashboard();
-        renderInboundList();
-      });
+      unsubscribers.push(
+        db.collection('proposalRequests').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.proposalRequests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedInboundUpdate();
+        })
+      );
     }
 
     // 입점신청 배지 업데이트
@@ -2508,10 +2578,11 @@
           <thead>
             <tr style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">상태</th>
-              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">이름</th>
+              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">기업명</th>
+              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">담당자</th>
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">연락처</th>
+              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">첨부</th>
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">접수일</th>
-              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">메모</th>
               <th style="padding: 14px 16px; text-align: center; font-size: 13px; font-weight: 600; color: var(--gray-600);">관리</th>
             </tr>
           </thead>
@@ -2519,13 +2590,19 @@
             ${data.map(item => `
               <tr style="border-bottom: 1px solid var(--gray-100);">
                 <td style="padding: 14px 16px;">${getStatusBadge(item.status)}</td>
-                <td style="padding: 14px 16px; font-weight: 500;">${item.name || item.companyName || '-'}</td>
+                <td style="padding: 14px 16px;">
+                  <div style="font-weight: 600;">${item.companyName || item.name || '-'}</div>
+                  ${item.website ? `<a href="${item.website.startsWith('http') ? item.website : 'https://' + item.website}" target="_blank" style="font-size: 11px; color: var(--info);">🔗 홈페이지</a>` : ''}
+                </td>
+                <td style="padding: 14px 16px; font-size: 13px;">${item.managerName || '-'}</td>
                 <td style="padding: 14px 16px;">
                   <a href="tel:${(item.contact || item.phone || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500;">${item.contact || item.phone || '-'}</a>
-                  ${item.email ? `<div style="font-size: 12px; color: var(--gray-500);">${item.email}</div>` : ''}
+                  ${item.email ? `<div style="font-size: 11px; color: var(--gray-500);">${item.email}</div>` : ''}
+                </td>
+                <td style="padding: 14px 16px;">
+                  ${item.fileUrl ? `<a href="${item.fileUrl}" target="_blank" style="color: var(--primary); font-size: 12px;">📎 ${item.fileName || '파일'}</a>` : '<span style="color: var(--gray-400); font-size: 12px;">-</span>'}
                 </td>
                 <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600);">${formatDate(item.createdAt)}</td>
-                <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.note || item.message || '-'}</td>
                 <td style="padding: 14px 16px; text-align: center;">
                   <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
                     ${item.status !== 'processing' && item.status !== 'approved' ? `
@@ -2657,13 +2734,13 @@
       setTimeout(() => updateSendOptionStyle(), 0);
     }
 
-    // 발송 옵션 스타일 업데이트
-    function updateSendOptionStyle() {
-      const proposalOption = document.getElementById('send-option-proposal');
-      const onboardingOption = document.getElementById('send-option-onboarding');
+    // 발송 옵션 스타일 업데이트 (통합 함수)
+    function updateSendOptionStyle(suffix = '') {
+      const proposalOption = document.getElementById(`send-option-proposal${suffix}`);
+      const onboardingOption = document.getElementById(`send-option-onboarding${suffix}`);
       if (!proposalOption || !onboardingOption) return;
 
-      const selected = document.querySelector('input[name="send_option"]:checked')?.value;
+      const selected = document.querySelector(`input[name="send_option${suffix}"]:checked`)?.value;
 
       if (selected === 'proposal') {
         proposalOption.style.borderColor = '#7c3aed';
@@ -2676,6 +2753,11 @@
         proposalOption.style.borderColor = 'var(--gray-200)';
         proposalOption.style.background = 'var(--gray-50)';
       }
+    }
+
+    // 하위 호환성: updateSendOptionStyle2는 통합 함수 호출
+    function updateSendOptionStyle2() {
+      updateSendOptionStyle('2');
     }
 
     // CS메모에 타임스탬프 추가
@@ -2875,26 +2957,6 @@
           </div>
         </div>
       `;
-    }
-
-    function updateSendOptionStyle2() {
-      const proposalOption = document.getElementById('send-option-proposal2');
-      const onboardingOption = document.getElementById('send-option-onboarding2');
-      if (!proposalOption || !onboardingOption) return;
-
-      const selected = document.querySelector('input[name="send_option2"]:checked')?.value;
-
-      if (selected === 'proposal') {
-        proposalOption.style.borderColor = '#7c3aed';
-        proposalOption.style.background = '#f5f3ff';
-        onboardingOption.style.borderColor = 'var(--gray-200)';
-        onboardingOption.style.background = 'var(--gray-50)';
-      } else {
-        onboardingOption.style.borderColor = '#7c3aed';
-        onboardingOption.style.background = '#f5f3ff';
-        proposalOption.style.borderColor = 'var(--gray-200)';
-        proposalOption.style.background = 'var(--gray-50)';
-      }
     }
 
     // 직접 문자 발송 (처리중 상태에서)
@@ -6637,8 +6699,8 @@
         if (status === 'pending') {
           actions = `
             <button onclick="copyOnboardingLink('${app.id}')" style="padding: 8px 16px; background: var(--gray-700); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;">🔗 온보딩링크</button>
-            <button onclick="openSendModal('${app.id}', 'sms')" style="padding: 8px 16px; background: var(--gray-200); color: var(--gray-600); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;" title="알리고 API 연동 예정">📱 문자 (예정)</button>
-            <button onclick="openSendModal('${app.id}', 'email')" style="padding: 8px 16px; background: var(--gray-200); color: var(--gray-600); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;" title="이메일 발송 예정">📧 이메일 (예정)</button>
+            <button onclick="openApplicationSendModal('${app.id}', 'sms')" style="padding: 8px 16px; background: var(--gray-200); color: var(--gray-600); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;" title="알리고 API 연동 예정">📱 문자 (예정)</button>
+            <button onclick="openApplicationSendModal('${app.id}', 'email')" style="padding: 8px 16px; background: var(--gray-200); color: var(--gray-600); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;" title="이메일 발송 예정">📧 이메일 (예정)</button>
             <button onclick="approveSupplierApplication('${app.id}')" style="padding: 8px 16px; background: var(--success); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;">승인</button>
             <button onclick="rejectSupplierApplication('${app.id}')" style="padding: 8px 16px; background: var(--danger); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">거절</button>
           `;
@@ -6854,8 +6916,8 @@
       });
     }
 
-    // 문자/이메일 발송 모달 (예정)
-    function openSendModal(applicationId, type) {
+    // 문자/이메일 발송 모달 (예정) - 입점신청용
+    function openApplicationSendModal(applicationId, type) {
       const app = state.supplierApplications.find(a => a.id === applicationId);
       if (!app) return;
 
