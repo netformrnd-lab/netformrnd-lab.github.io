@@ -2529,15 +2529,14 @@
                 <td style="padding: 14px 16px; text-align: center;">
                   <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
                     ${item.status !== 'processing' && item.status !== 'approved' ? `
-                      <button onclick="updateInboundStatus('${collection}', '${item.id}', 'processing')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
+                      <button onclick="openCSMemoModal('${collection}', '${item.id}', '${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}', '${item.email || ''}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
                     ` : `
-                      <button onclick="sendInboundOnboardingSMS('${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}')" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;" title="온보딩 링크 발송">📱 문자</button>
-                      <button onclick="sendInboundOnboardingEmail('${item.name || item.companyName || ''}', '${item.email || ''}')" style="padding: 6px 12px; background: #6366f1; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;" title="온보딩 링크 발송">📧 이메일</button>
+                      <button onclick="openSendModal('${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}', '${item.email || ''}')" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;" title="발송하기">📤 발송</button>
                     `}
                     ${item.status !== 'completed' && item.status !== 'approved' ? `
                       <button onclick="updateInboundStatus('${collection}', '${item.id}', '${inboundSubType === 'application' ? 'approved' : 'completed'}')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">${inboundSubType === 'application' ? '승인' : '완료'}</button>
                     ` : ''}
-                    <button onclick="openInboundNoteModal('${collection}', '${item.id}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">메모</button>
+                    <button onclick="openCSMemoModal('${collection}', '${item.id}', '${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}', '${item.email || ''}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}', true)" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">CS메모</button>
                     <button onclick="deleteInboundItem('${collection}', '${item.id}')" style="padding: 6px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">삭제</button>
                   </div>
                 </td>
@@ -2574,32 +2573,144 @@
       }
     }
 
-    // 인바운드 메모 모달
-    function openInboundNoteModal(collection, id, currentNote) {
+    // CS메모 모달 (처리중 전환 + 메모 + 발송 통합)
+    function openCSMemoModal(collection, id, name, contact, email, currentNote, memoOnly = false) {
       const modal = document.getElementById('modal');
       if (!modal) return;
 
+      const isSupplier = inboundType === 'supplier';
+      const onboardingUrl = isSupplier
+        ? `${window.location.origin}/supplier/onboarding.html`
+        : `${window.location.origin}/seller/onboarding.html`;
+
       modal.className = 'modal show';
       modal.innerHTML = `
-        <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-content" style="max-width: 600px;">
           <div class="modal-header">
-            <h2 class="modal-title">📝 메모 수정</h2>
+            <h2 class="modal-title">📞 ${memoOnly ? 'CS메모' : '전화 상담 후 처리'}</h2>
             <button class="modal-close" onclick="closeModal()">×</button>
           </div>
           <div style="padding: 24px;">
-            <textarea id="inboundNoteInput" style="width: 100%; height: 150px; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit;">${currentNote || ''}</textarea>
-            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
-              <button onclick="closeModal()" style="padding: 10px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
-              <button onclick="saveInboundNote('${collection}', '${id}')" style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">저장</button>
+            <!-- 고객 정보 -->
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-weight: 600; font-size: 16px;">${name || '이름 없음'}</div>
+                  <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                    ${contact ? `📱 ${contact}` : '연락처 없음'} ${email ? `· 📧 ${email}` : ''}
+                  </div>
+                </div>
+                <span style="padding: 6px 12px; background: ${isSupplier ? '#7c3aed' : '#3b82f6'}; color: white; border-radius: 8px; font-size: 12px; font-weight: 600;">
+                  ${isSupplier ? '🏭 공급사' : '👩‍💼 셀러'}
+                </span>
+              </div>
+            </div>
+
+            <!-- CS 메모 -->
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📝 CS 메모</label>
+              <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                <button onclick="addTimestampToCSNote()" style="padding: 6px 12px; background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;">📅 현재 시간</button>
+                <button onclick="addCallLogToCSNote()" style="padding: 6px 12px; background: #dbeafe; border: 1px solid #3b82f6; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; color: #1d4ed8;">📞 통화 기록</button>
+                <button onclick="addInterestLogToCSNote()" style="padding: 6px 12px; background: #dcfce7; border: 1px solid #22c55e; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; color: #16a34a;">✅ 관심 표명</button>
+              </div>
+              <textarea id="csNoteInput" style="width: 100%; height: 100px; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit;">${currentNote || ''}</textarea>
+            </div>
+
+            ${!memoOnly ? `
+            <!-- 발송 옵션 -->
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">📤 다음 단계 선택</label>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer; transition: all 0.2s;" id="send-option-proposal">
+                  <input type="radio" name="send_option" value="proposal" style="margin-top: 2px; accent-color: #7c3aed; width: 18px; height: 18px;" onchange="updateSendOptionStyle()">
+                  <div>
+                    <div style="font-weight: 600; font-size: 14px; color: var(--gray-900);">📋 맞춤 제안서 + 온보딩</div>
+                    <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">제안서 내용과 함께 온보딩 링크 발송</div>
+                  </div>
+                </label>
+                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer; transition: all 0.2s;" id="send-option-onboarding">
+                  <input type="radio" name="send_option" value="onboarding" checked style="margin-top: 2px; accent-color: #7c3aed; width: 18px; height: 18px;" onchange="updateSendOptionStyle()">
+                  <div>
+                    <div style="font-weight: 600; font-size: 14px; color: var(--gray-900);">🚀 온보딩 링크만</div>
+                    <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">바로 입점 절차 진행 (서류 제출 안내)</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+            ` : ''}
+
+            <!-- 버튼 영역 -->
+            <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;">
+              <button onclick="closeModal()" style="padding: 12px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+              <button onclick="saveCSMemo('${collection}', '${id}')" style="padding: 12px 20px; background: var(--info); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">💾 메모 저장</button>
+              ${!memoOnly ? `
+              <button onclick="saveAndSendSMS('${collection}', '${id}', '${name}', '${contact}')" style="padding: 12px 20px; background: #10b981; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📱 문자 발송</button>
+              <button onclick="saveAndSendEmail('${collection}', '${id}', '${name}', '${email}')" style="padding: 12px 20px; background: #6366f1; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📧 이메일 발송</button>
+              ` : ''}
             </div>
           </div>
         </div>
       `;
+
+      // 초기 스타일 설정
+      setTimeout(() => updateSendOptionStyle(), 0);
     }
 
-    // 인바운드 메모 저장
-    async function saveInboundNote(collection, id) {
-      const noteInput = document.getElementById('inboundNoteInput');
+    // 발송 옵션 스타일 업데이트
+    function updateSendOptionStyle() {
+      const proposalOption = document.getElementById('send-option-proposal');
+      const onboardingOption = document.getElementById('send-option-onboarding');
+      if (!proposalOption || !onboardingOption) return;
+
+      const selected = document.querySelector('input[name="send_option"]:checked')?.value;
+
+      if (selected === 'proposal') {
+        proposalOption.style.borderColor = '#7c3aed';
+        proposalOption.style.background = '#f5f3ff';
+        onboardingOption.style.borderColor = 'var(--gray-200)';
+        onboardingOption.style.background = 'var(--gray-50)';
+      } else {
+        onboardingOption.style.borderColor = '#7c3aed';
+        onboardingOption.style.background = '#f5f3ff';
+        proposalOption.style.borderColor = 'var(--gray-200)';
+        proposalOption.style.background = 'var(--gray-50)';
+      }
+    }
+
+    // CS메모에 타임스탬프 추가
+    function addTimestampToCSNote() {
+      const textarea = document.getElementById('csNoteInput');
+      if (!textarea) return;
+      const now = new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const prefix = textarea.value ? '\n' : '';
+      textarea.value += `${prefix}[${now}] `;
+      textarea.focus();
+    }
+
+    // CS메모에 통화 기록 추가
+    function addCallLogToCSNote() {
+      const textarea = document.getElementById('csNoteInput');
+      if (!textarea) return;
+      const now = new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const prefix = textarea.value ? '\n' : '';
+      textarea.value += `${prefix}[${now}] 📞 전화 상담 완료 - `;
+      textarea.focus();
+    }
+
+    // CS메모에 관심 표명 추가
+    function addInterestLogToCSNote() {
+      const textarea = document.getElementById('csNoteInput');
+      if (!textarea) return;
+      const now = new Date().toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const prefix = textarea.value ? '\n' : '';
+      textarea.value += `${prefix}[${now}] ✅ 입점 관심 표명 → 온보딩 링크 발송 예정`;
+      textarea.focus();
+    }
+
+    // CS메모 저장
+    async function saveCSMemo(collection, id) {
+      const noteInput = document.getElementById('csNoteInput');
       if (!noteInput) return;
 
       const noteField = collection.includes('Application') ? 'message' : 'note';
@@ -2610,17 +2721,196 @@
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         showToast('메모가 저장되었습니다.');
-        closeModal();
       } catch (e) {
         console.error('메모 저장 실패:', e);
         alert('메모 저장에 실패했습니다.');
       }
     }
 
-    // 온보딩 링크 문자 발송
-    function sendInboundOnboardingSMS(name, contact) {
-      const onboardingUrl = `${window.location.origin}/supplier/onboarding.html`;
-      const message = `[모여라딜] ${name || '담당자'}님 안녕하세요!\n\n입점 안내드립니다.\n아래 링크에서 서류 제출 부탁드립니다.\n\n📋 온보딩 링크:\n${onboardingUrl}\n\n감사합니다.`;
+    // 저장 + 문자 발송
+    async function saveAndSendSMS(collection, id, name, contact) {
+      // 먼저 메모 저장 및 상태 변경
+      const noteInput = document.getElementById('csNoteInput');
+      const noteField = collection.includes('Application') ? 'message' : 'note';
+      const sendOption = document.querySelector('input[name="send_option"]:checked')?.value || 'onboarding';
+
+      try {
+        await db.collection(collection).doc(id).update({
+          [noteField]: noteInput?.value || '',
+          status: 'processing',
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 메시지 생성
+        const isSupplier = inboundType === 'supplier';
+        const onboardingUrl = isSupplier
+          ? `${window.location.origin}/supplier/onboarding.html`
+          : `${window.location.origin}/seller/onboarding.html`;
+
+        let message = '';
+        if (sendOption === 'proposal') {
+          message = `[모여라딜] ${name || '담당자'}님 안녕하세요!\n\n문의 주셔서 감사합니다.\n말씀드린 내용대로 맞춤 제안서를 보내드립니다.\n\n입점 진행을 원하시면 아래 링크에서 서류를 제출해 주세요.\n\n📋 입점 신청:\n${onboardingUrl}\n\n궁금하신 점은 언제든 연락주세요!\n감사합니다. 모여라딜 드림`;
+        } else {
+          message = `[모여라딜] ${name || '담당자'}님 안녕하세요!\n\n입점 안내드립니다.\n아래 링크에서 서류 제출 부탁드립니다.\n\n📋 입점 신청:\n${onboardingUrl}\n\n감사합니다.`;
+        }
+
+        // 클립보드 복사 + SMS 앱 열기
+        navigator.clipboard.writeText(message).then(() => {
+          showToast('📱 문자 내용이 복사되었습니다. 처리중으로 변경됨');
+          if (contact) {
+            const cleanPhone = contact.replace(/-/g, '');
+            window.open(`sms:${cleanPhone}?body=${encodeURIComponent(message)}`, '_blank');
+          }
+        }).catch(() => {
+          prompt('아래 메시지를 복사하세요:', message);
+        });
+
+        closeModal();
+      } catch (e) {
+        console.error('처리 실패:', e);
+        alert('처리에 실패했습니다.');
+      }
+    }
+
+    // 저장 + 이메일 발송
+    async function saveAndSendEmail(collection, id, name, email) {
+      // 먼저 메모 저장 및 상태 변경
+      const noteInput = document.getElementById('csNoteInput');
+      const noteField = collection.includes('Application') ? 'message' : 'note';
+      const sendOption = document.querySelector('input[name="send_option"]:checked')?.value || 'onboarding';
+
+      try {
+        await db.collection(collection).doc(id).update({
+          [noteField]: noteInput?.value || '',
+          status: 'processing',
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 메시지 생성
+        const isSupplier = inboundType === 'supplier';
+        const onboardingUrl = isSupplier
+          ? `${window.location.origin}/supplier/onboarding.html`
+          : `${window.location.origin}/seller/onboarding.html`;
+
+        let subject = '';
+        let body = '';
+
+        if (sendOption === 'proposal') {
+          subject = `[모여라딜] ${name || '담당자'}님 맞춤 제안서 및 입점 안내`;
+          body = `안녕하세요, ${name || '담당자'}님!\n\n모여라딜에 문의 주셔서 감사합니다.\n\n말씀드린 내용대로 맞춤 제안서를 보내드립니다.\n입점 진행을 원하시면 아래 링크에서 서류를 제출해 주세요.\n\n📋 입점 신청:\n${onboardingUrl}\n\n궁금하신 점은 언제든 연락주세요!\n\n감사합니다.\n모여라딜 드림`;
+        } else {
+          subject = `[모여라딜] ${name || '담당자'}님 입점 안내`;
+          body = `안녕하세요, ${name || '담당자'}님!\n\n모여라딜에 관심 가져주셔서 감사합니다.\n\n입점 절차 진행을 위해 아래 링크에서 서류를 제출해 주세요.\n\n📋 입점 신청:\n${onboardingUrl}\n\n서류 제출 후 검토 완료되면 계약 진행 안내드리겠습니다.\n\n감사합니다.\n모여라딜 드림`;
+        }
+
+        showToast('📧 이메일 발송 준비 완료. 처리중으로 변경됨');
+
+        if (email) {
+          window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        } else {
+          navigator.clipboard.writeText(`제목: ${subject}\n\n${body}`).then(() => {
+            alert('이메일 주소가 없습니다. 내용이 클립보드에 복사되었습니다.');
+          }).catch(() => {
+            prompt('아래 내용을 복사하세요:', `제목: ${subject}\n\n${body}`);
+          });
+        }
+
+        closeModal();
+      } catch (e) {
+        console.error('처리 실패:', e);
+        alert('처리에 실패했습니다.');
+      }
+    }
+
+    // 발송 모달 (처리중 상태에서 추가 발송)
+    function openSendModal(name, contact, email) {
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+
+      const isSupplier = inboundType === 'supplier';
+      const onboardingUrl = isSupplier
+        ? `${window.location.origin}/supplier/onboarding.html`
+        : `${window.location.origin}/seller/onboarding.html`;
+
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header">
+            <h2 class="modal-title">📤 발송하기</h2>
+            <button class="modal-close" onclick="closeModal()">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+              <div style="font-weight: 600;">${name || '이름 없음'}</div>
+              <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                ${contact ? `📱 ${contact}` : ''} ${email ? `· 📧 ${email}` : ''}
+              </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">발송 내용 선택</label>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer;" id="send-option-proposal2">
+                  <input type="radio" name="send_option2" value="proposal" style="margin-top: 2px; accent-color: #7c3aed; width: 18px; height: 18px;" onchange="updateSendOptionStyle2()">
+                  <div>
+                    <div style="font-weight: 600; font-size: 14px;">📋 맞춤 제안서 + 온보딩</div>
+                    <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">제안서 내용과 함께 온보딩 링크 발송</div>
+                  </div>
+                </label>
+                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: #f5f3ff; border: 2px solid #7c3aed; border-radius: 10px; cursor: pointer;" id="send-option-onboarding2">
+                  <input type="radio" name="send_option2" value="onboarding" checked style="margin-top: 2px; accent-color: #7c3aed; width: 18px; height: 18px;" onchange="updateSendOptionStyle2()">
+                  <div>
+                    <div style="font-weight: 600; font-size: 14px;">🚀 온보딩 링크만</div>
+                    <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">바로 입점 절차 진행</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+              <button onclick="closeModal()" style="padding: 12px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+              <button onclick="sendDirectSMS('${name}', '${contact}')" style="padding: 12px 20px; background: #10b981; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📱 문자</button>
+              <button onclick="sendDirectEmail('${name}', '${email}')" style="padding: 12px 20px; background: #6366f1; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📧 이메일</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function updateSendOptionStyle2() {
+      const proposalOption = document.getElementById('send-option-proposal2');
+      const onboardingOption = document.getElementById('send-option-onboarding2');
+      if (!proposalOption || !onboardingOption) return;
+
+      const selected = document.querySelector('input[name="send_option2"]:checked')?.value;
+
+      if (selected === 'proposal') {
+        proposalOption.style.borderColor = '#7c3aed';
+        proposalOption.style.background = '#f5f3ff';
+        onboardingOption.style.borderColor = 'var(--gray-200)';
+        onboardingOption.style.background = 'var(--gray-50)';
+      } else {
+        onboardingOption.style.borderColor = '#7c3aed';
+        onboardingOption.style.background = '#f5f3ff';
+        proposalOption.style.borderColor = 'var(--gray-200)';
+        proposalOption.style.background = 'var(--gray-50)';
+      }
+    }
+
+    // 직접 문자 발송 (처리중 상태에서)
+    function sendDirectSMS(name, contact) {
+      const sendOption = document.querySelector('input[name="send_option2"]:checked')?.value || 'onboarding';
+      const isSupplier = inboundType === 'supplier';
+      const onboardingUrl = isSupplier
+        ? `${window.location.origin}/supplier/onboarding.html`
+        : `${window.location.origin}/seller/onboarding.html`;
+
+      let message = '';
+      if (sendOption === 'proposal') {
+        message = `[모여라딜] ${name || '담당자'}님 안녕하세요!\n\n문의 주셔서 감사합니다.\n말씀드린 내용대로 맞춤 제안서를 보내드립니다.\n\n입점 진행을 원하시면 아래 링크에서 서류를 제출해 주세요.\n\n📋 입점 신청:\n${onboardingUrl}\n\n궁금하신 점은 언제든 연락주세요!\n감사합니다. 모여라딜 드림`;
+      } else {
+        message = `[모여라딜] ${name || '담당자'}님 안녕하세요!\n\n입점 안내드립니다.\n아래 링크에서 서류 제출 부탁드립니다.\n\n📋 입점 신청:\n${onboardingUrl}\n\n감사합니다.`;
+      }
 
       navigator.clipboard.writeText(message).then(() => {
         showToast('📱 문자 내용이 복사되었습니다.');
@@ -2631,23 +2921,38 @@
       }).catch(() => {
         prompt('아래 메시지를 복사하세요:', message);
       });
+      closeModal();
     }
 
-    // 온보딩 링크 이메일 발송
-    function sendInboundOnboardingEmail(name, email) {
-      const onboardingUrl = `${window.location.origin}/supplier/onboarding.html`;
-      const subject = `[모여라딜] ${name || '담당자'}님 입점 안내`;
-      const body = `안녕하세요, ${name || '담당자'}님!\n\n모여라딜에 관심 가져주셔서 감사합니다.\n\n입점 절차 진행을 위해 아래 링크에서 서류를 제출해 주세요.\n\n📋 온보딩 링크:\n${onboardingUrl}\n\n서류 제출 후 검토 완료되면 계약 진행 안내드리겠습니다.\n\n감사합니다.\n모여라딜 드림`;
+    // 직접 이메일 발송 (처리중 상태에서)
+    function sendDirectEmail(name, email) {
+      const sendOption = document.querySelector('input[name="send_option2"]:checked')?.value || 'onboarding';
+      const isSupplier = inboundType === 'supplier';
+      const onboardingUrl = isSupplier
+        ? `${window.location.origin}/supplier/onboarding.html`
+        : `${window.location.origin}/seller/onboarding.html`;
+
+      let subject = '';
+      let body = '';
+
+      if (sendOption === 'proposal') {
+        subject = `[모여라딜] ${name || '담당자'}님 맞춤 제안서 및 입점 안내`;
+        body = `안녕하세요, ${name || '담당자'}님!\n\n모여라딜에 문의 주셔서 감사합니다.\n\n말씀드린 내용대로 맞춤 제안서를 보내드립니다.\n입점 진행을 원하시면 아래 링크에서 서류를 제출해 주세요.\n\n📋 입점 신청:\n${onboardingUrl}\n\n궁금하신 점은 언제든 연락주세요!\n\n감사합니다.\n모여라딜 드림`;
+      } else {
+        subject = `[모여라딜] ${name || '담당자'}님 입점 안내`;
+        body = `안녕하세요, ${name || '담당자'}님!\n\n모여라딜에 관심 가져주셔서 감사합니다.\n\n입점 절차 진행을 위해 아래 링크에서 서류를 제출해 주세요.\n\n📋 입점 신청:\n${onboardingUrl}\n\n서류 제출 후 검토 완료되면 계약 진행 안내드리겠습니다.\n\n감사합니다.\n모여라딜 드림`;
+      }
 
       if (email) {
         window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       } else {
         navigator.clipboard.writeText(`제목: ${subject}\n\n${body}`).then(() => {
-          showToast('📧 이메일 내용이 복사되었습니다. (이메일 주소 없음)');
+          alert('이메일 주소가 없습니다. 내용이 클립보드에 복사되었습니다.');
         }).catch(() => {
           prompt('아래 내용을 복사하세요:', `제목: ${subject}\n\n${body}`);
         });
       }
+      closeModal();
     }
 
     // 모달 닫기
@@ -6174,6 +6479,11 @@
             <button onclick="approveSellerApplication('${app.id}')" style="padding: 8px 16px; background: var(--success); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;">승인</button>
             <button onclick="rejectSellerApplication('${app.id}')" style="padding: 8px 16px; background: var(--danger); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">거절</button>
           `;
+        } else if (status === 'approved') {
+          const sellerId = app.sellerId || app.id;
+          actions = `
+            <button onclick="openOnboardingAfterApproval('seller', '${sellerId}', '${(app.name || app.companyName || '').replace(/'/g, "\\'")}', '${(app.phone || '').replace(/'/g, "\\'")}', '${(app.email || '').replace(/'/g, "\\'")}')" style="padding: 8px 16px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;">📤 온보딩 발송</button>
+          `;
         }
 
         return `
@@ -6218,15 +6528,19 @@
           source: 'application',
           registeredAt: new Date().toISOString()
         };
-        await db.collection('sellers').add(sellerData);
+        const sellerRef = await db.collection('sellers').add(sellerData);
 
         // 신청 상태 업데이트
         await db.collection('sellerApplications').doc(id).update({
           status: 'approved',
-          approvedAt: new Date().toISOString()
+          approvedAt: new Date().toISOString(),
+          sellerId: sellerRef.id
         });
 
         showToast('승인 완료! 셀러 DB에 추가되었습니다.');
+
+        // 온보딩 링크 발송 모달 표시
+        openOnboardingAfterApproval('seller', sellerRef.id, app.name || app.companyName || '', app.phone || '', app.email || '');
       } catch (err) {
         console.error('승인 실패:', err);
         showToast('승인 처리에 실패했습니다');
@@ -6329,10 +6643,9 @@
             <button onclick="rejectSupplierApplication('${app.id}')" style="padding: 8px 16px; background: var(--danger); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">거절</button>
           `;
         } else if (status === 'approved') {
+          const supplierId = app.supplierId || app.id;
           actions = `
-            <button onclick="copyOnboardingLink('${app.id}')" style="padding: 8px 16px; background: var(--gray-700); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;">🔗 온보딩링크</button>
-            <button onclick="openSendModal('${app.id}', 'sms')" style="padding: 8px 16px; background: var(--gray-200); color: var(--gray-600); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;" title="알리고 API 연동 예정">📱 문자 (예정)</button>
-            <button onclick="openSendModal('${app.id}', 'email')" style="padding: 8px 16px; background: var(--gray-200); color: var(--gray-600); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;" title="이메일 발송 예정">📧 이메일 (예정)</button>
+            <button onclick="openOnboardingAfterApproval('supplier', '${supplierId}', '${(app.companyName || app.name || '').replace(/'/g, "\\'")}', '${(app.phone || '').replace(/'/g, "\\'")}', '${(app.email || '').replace(/'/g, "\\'")}')" style="padding: 8px 16px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; margin-right: 8px;">📤 온보딩 발송</button>
           `;
         }
 
@@ -6377,15 +6690,19 @@
           source: 'application',
           registeredAt: new Date().toISOString()
         };
-        await db.collection('suppliers').add(supplierData);
+        const supplierRef = await db.collection('suppliers').add(supplierData);
 
         // 신청 상태 업데이트
         await db.collection('supplierApplications').doc(id).update({
           status: 'approved',
-          approvedAt: new Date().toISOString()
+          approvedAt: new Date().toISOString(),
+          supplierId: supplierRef.id
         });
 
         showToast('승인 완료! 공급사 DB에 추가되었습니다.');
+
+        // 온보딩 링크 발송 모달 표시
+        openOnboardingAfterApproval('supplier', supplierRef.id, app.companyName || app.name || '', app.phone || '', app.email || '');
       } catch (err) {
         console.error('승인 실패:', err);
         showToast('승인 처리에 실패했습니다');
@@ -6407,6 +6724,115 @@
         console.error('거절 실패:', err);
         showToast('거절 처리에 실패했습니다');
       }
+    }
+
+    // 승인 후 온보딩 링크 발송 모달
+    function openOnboardingAfterApproval(type, entityId, name, phone, email) {
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+
+      const isSupplier = type === 'supplier';
+      const typeLabel = isSupplier ? '공급사' : '셀러';
+      const onboardingUrl = isSupplier
+        ? `${window.location.origin}/supplier/onboarding.html?id=${entityId}`
+        : `${window.location.origin}/seller/onboarding.html?id=${entityId}`;
+
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 520px;">
+          <div class="modal-header" style="background: linear-gradient(135deg, #16a34a, #22c55e); color: white; border-radius: 16px 16px 0 0;">
+            <h2 class="modal-title" style="color: white;">✅ 승인 완료 - 온보딩 링크 발송</h2>
+            <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <!-- 승인 완료 안내 -->
+            <div style="background: linear-gradient(135deg, #dcfce7, #bbf7d0); padding: 20px; border-radius: 12px; margin-bottom: 20px; text-align: center;">
+              <div style="font-size: 48px; margin-bottom: 8px;">🎉</div>
+              <div style="font-weight: 700; font-size: 18px; color: #16a34a;">${typeLabel} 승인이 완료되었습니다!</div>
+              <div style="font-size: 14px; color: #166534; margin-top: 8px;">이제 온보딩 링크를 발송해 주세요</div>
+            </div>
+
+            <!-- 고객 정보 -->
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 48px; height: 48px; background: ${isSupplier ? '#7c3aed' : '#f59e0b'}20; color: ${isSupplier ? '#7c3aed' : '#f59e0b'}; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700;">
+                  ${isSupplier ? '🏭' : '👤'}
+                </div>
+                <div>
+                  <div style="font-weight: 700; font-size: 16px;">${name || '이름 없음'}</div>
+                  <div style="font-size: 13px; color: var(--gray-500); margin-top: 2px;">
+                    ${phone ? `📱 ${phone}` : ''} ${email ? `· 📧 ${email}` : ''}
+                  </div>
+                </div>
+                <span style="margin-left: auto; padding: 4px 10px; background: ${isSupplier ? '#7c3aed' : '#f59e0b'}20; color: ${isSupplier ? '#7c3aed' : '#f59e0b'}; border-radius: 12px; font-size: 11px; font-weight: 600;">
+                  ${typeLabel}
+                </span>
+              </div>
+            </div>
+
+            <!-- 온보딩 링크 -->
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📋 온보딩 링크</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" value="${onboardingUrl}" readonly style="flex: 1; padding: 12px; border: 2px solid var(--gray-200); border-radius: 10px; font-size: 13px; background: var(--gray-50);" id="onboarding-url-input">
+                <button onclick="navigator.clipboard.writeText('${onboardingUrl}'); showToast('링크가 복사되었습니다!');" style="padding: 12px 16px; background: var(--gray-700); color: white; border: none; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;">
+                  📋 복사
+                </button>
+              </div>
+            </div>
+
+            <!-- 발송 버튼 -->
+            <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+              <button onclick="sendOnboardingSMS('${name}', '${phone}', '${onboardingUrl}', '${typeLabel}')" style="flex: 1; padding: 16px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">
+                📱 문자 발송
+              </button>
+              <button onclick="sendOnboardingEmail('${name}', '${email}', '${onboardingUrl}', '${typeLabel}')" style="flex: 1; padding: 16px; background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);">
+                📧 이메일 발송
+              </button>
+            </div>
+
+            <!-- 건너뛰기 버튼 -->
+            <button onclick="closeModal()" style="width: 100%; padding: 14px; background: var(--gray-100); color: var(--gray-600); border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">
+              나중에 발송하기
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // 온보딩 SMS 발송
+    function sendOnboardingSMS(name, phone, onboardingUrl, typeLabel) {
+      const message = `[모여라딜] ${name}님, ${typeLabel} 입점 온보딩 안내드립니다.\n\n아래 링크에서 서류를 제출해주세요.\n${onboardingUrl}\n\n궁금하신 점은 언제든 연락주세요!`;
+
+      if (phone) {
+        window.location.href = `sms:${phone.replace(/-/g, '')}?body=${encodeURIComponent(message)}`;
+        showToast('📱 문자 앱이 열립니다');
+      } else {
+        navigator.clipboard.writeText(message).then(() => {
+          alert('전화번호가 없습니다. 문자 내용이 클립보드에 복사되었습니다.');
+        }).catch(() => {
+          prompt('아래 내용을 복사하세요:', message);
+        });
+      }
+      closeModal();
+    }
+
+    // 온보딩 이메일 발송
+    function sendOnboardingEmail(name, email, onboardingUrl, typeLabel) {
+      const subject = `[모여라딜] ${name}님 ${typeLabel} 입점 온보딩 안내`;
+      const body = `안녕하세요, ${name}님!\n\n모여라딜 ${typeLabel} 입점 승인이 완료되었습니다. 축하드립니다! 🎉\n\n입점 절차 진행을 위해 아래 링크에서 온보딩 서류를 제출해 주세요.\n\n📋 온보딩 링크:\n${onboardingUrl}\n\n서류 제출 후 검토 완료되면 계약 진행 안내드리겠습니다.\n\n궁금하신 점은 언제든 문의해주세요.\n\n감사합니다.\n모여라딜 드림`;
+
+      if (email) {
+        window.location.href = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        showToast('📧 이메일 앱이 열립니다');
+      } else {
+        navigator.clipboard.writeText(`제목: ${subject}\n\n${body}`).then(() => {
+          alert('이메일 주소가 없습니다. 이메일 내용이 클립보드에 복사되었습니다.');
+        }).catch(() => {
+          prompt('아래 내용을 복사하세요:', `제목: ${subject}\n\n${body}`);
+        });
+      }
+      closeModal();
     }
 
     // 온보딩 링크 복사
