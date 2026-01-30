@@ -1506,7 +1506,7 @@
             <!-- 내 업무 / 팀 업무 토글 -->
             <div style="display: flex; align-items: center; gap: 8px;">
               <div id="taskViewToggle" style="display: flex; background: var(--gray-100); padding: 4px; border-radius: 8px;">
-                <button onclick="setTaskViewMode('my')" id="taskViewMyBtn" class="task-view-btn active" style="padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">내 업무</button>
+                <button onclick="setTaskViewMode('my')" id="taskViewMyBtn" class="task-view-btn active" style="padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">내 업무 <span id="taskViewMyLabel" style="color: var(--primary); font-weight: 700;"></span></button>
                 <button onclick="setTaskViewMode('team')" id="taskViewTeamBtn" class="task-view-btn" style="padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; background: transparent; color: var(--gray-600);">팀 업무</button>
               </div>
               <!-- 팀원 선택 (팀 업무 모드에서만 표시) -->
@@ -2387,21 +2387,37 @@
     // 현재 로그인 사용자 정보 로드
     async function loadCurrentUser() {
       try {
-        const loginId = sessionStorage.getItem('moyeora_login_id');
-        console.log('[사용자 로드] sessionStorage loginId:', loginId);
+        // 여러 가능한 키에서 로그인 ID 찾기
+        let loginId = sessionStorage.getItem('moyeora_login_id')
+                   || sessionStorage.getItem('loginId')
+                   || sessionStorage.getItem('userId')
+                   || localStorage.getItem('moyeora_login_id')
+                   || localStorage.getItem('loginId');
+
+        console.log('[사용자 로드] 찾은 loginId:', loginId);
+        console.log('[사용자 로드] sessionStorage 전체:', JSON.stringify(Object.keys(sessionStorage)));
+        console.log('[사용자 로드] localStorage moyeora 관련:', Object.keys(localStorage).filter(k => k.includes('moyeora')));
 
         if (loginId) {
-          const snapshot = await db.collection('teamMembers').where('loginId', '==', loginId).get();
-          console.log('[사용자 로드] teamMembers 쿼리 결과:', snapshot.size, '건');
+          // loginId로 검색
+          let snapshot = await db.collection('teamMembers').where('loginId', '==', loginId).get();
+          console.log('[사용자 로드] loginId로 검색:', snapshot.size, '건');
+
+          // 못 찾으면 name으로 검색
+          if (snapshot.empty) {
+            snapshot = await db.collection('teamMembers').where('name', '==', loginId).get();
+            console.log('[사용자 로드] name으로 검색:', snapshot.size, '건');
+          }
 
           if (!snapshot.empty) {
             state.currentUser = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
             console.log('[사용자 로드] 성공:', state.currentUser.id, state.currentUser.name, state.currentUser.loginId);
           }
         }
+
         // 기본값 설정 (관리자로 가정)
         if (!state.currentUser) {
-          console.warn('[사용자 로드] 실패 - 기본값 사용');
+          console.warn('[사용자 로드] 실패 - 기본값 사용. 로그인 정보를 찾을 수 없습니다.');
           state.currentUser = { id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' };
         }
 
@@ -20969,7 +20985,15 @@
       taskPlanState.filter.viewMode = 'my';
       taskPlanState.filter.member = state.currentUser?.id || 'all';
       taskPlanState.filter.quickFilter = 'doing';
-      console.log('[업무계획] 렌더링 시작 - currentUser:', state.currentUser?.id, state.currentUser?.name);
+
+      // 내 업무 버튼에 로그인 ID 표시
+      const myLabel = document.getElementById('taskViewMyLabel');
+      if (myLabel) {
+        const loginId = state.currentUser?.loginId || state.currentUser?.name || '미인식';
+        myLabel.textContent = `(${loginId})`;
+      }
+
+      console.log('[업무계획] 렌더링 시작 - currentUser:', state.currentUser?.id, state.currentUser?.name, state.currentUser?.loginId);
       loadTaskPlanData();
     }
 
