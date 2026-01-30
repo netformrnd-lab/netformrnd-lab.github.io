@@ -2387,43 +2387,56 @@
     // 현재 로그인 사용자 정보 로드
     async function loadCurrentUser() {
       try {
-        // 여러 가능한 키에서 로그인 ID 찾기
-        let loginId = sessionStorage.getItem('moyeora_login_id')
-                   || sessionStorage.getItem('loginId')
-                   || sessionStorage.getItem('userId')
-                   || localStorage.getItem('moyeora_login_id')
-                   || localStorage.getItem('loginId');
+        // 1. moyeora_admin_user에서 JSON 객체 확인 (로그인 시 저장됨)
+        const adminUserJson = sessionStorage.getItem('moyeora_admin_user');
+        console.log('[사용자 로드] moyeora_admin_user:', adminUserJson);
 
-        console.log('[사용자 로드] 찾은 loginId:', loginId);
-        console.log('[사용자 로드] sessionStorage 전체:', JSON.stringify(Object.keys(sessionStorage)));
-        console.log('[사용자 로드] localStorage moyeora 관련:', Object.keys(localStorage).filter(k => k.includes('moyeora')));
+        if (adminUserJson) {
+          const adminUser = JSON.parse(adminUserJson);
+          console.log('[사용자 로드] 파싱된 adminUser:', adminUser);
 
-        if (loginId) {
-          // loginId로 검색
-          let snapshot = await db.collection('teamMembers').where('loginId', '==', loginId).get();
-          console.log('[사용자 로드] loginId로 검색:', snapshot.size, '건');
-
-          // 못 찾으면 name으로 검색
-          if (snapshot.empty) {
-            snapshot = await db.collection('teamMembers').where('name', '==', loginId).get();
-            console.log('[사용자 로드] name으로 검색:', snapshot.size, '건');
-          }
-
-          if (!snapshot.empty) {
-            state.currentUser = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
-            console.log('[사용자 로드] 성공:', state.currentUser.id, state.currentUser.name, state.currentUser.loginId);
+          // admin/관리자로 로그인한 경우 → teamMembers에서 실제 관리자(role=admin) 찾기
+          if (adminUser.id === 'admin' || adminUser.name === '관리자') {
+            console.log('[사용자 로드] 기본 admin 감지 - teamMembers에서 관리자 검색');
+            const snapshot = await db.collection('teamMembers').where('role', '==', 'admin').get();
+            if (!snapshot.empty) {
+              state.currentUser = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+              console.log('[사용자 로드] teamMembers 관리자 찾음:', state.currentUser.name, state.currentUser.loginId);
+            } else {
+              state.currentUser = adminUser;
+            }
+          } else {
+            // 이미 구체적인 사용자 정보가 있으면 그대로 사용
+            state.currentUser = adminUser;
           }
         }
 
-        // 기본값 설정 (관리자로 가정)
+        // 2. moyeora_admin_user가 없으면 다른 키 확인 (폴백)
         if (!state.currentUser) {
-          console.warn('[사용자 로드] 실패 - 기본값 사용. 로그인 정보를 찾을 수 없습니다.');
+          let loginId = sessionStorage.getItem('moyeora_login_id')
+                     || localStorage.getItem('moyeora_login_id');
+
+          if (loginId) {
+            let snapshot = await db.collection('teamMembers').where('loginId', '==', loginId).get();
+            if (snapshot.empty) {
+              snapshot = await db.collection('teamMembers').where('name', '==', loginId).get();
+            }
+            if (!snapshot.empty) {
+              state.currentUser = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+            }
+          }
+        }
+
+        // 3. 기본값 설정
+        if (!state.currentUser) {
+          console.warn('[사용자 로드] 실패 - 기본값 사용');
           state.currentUser = { id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' };
         }
 
-        // 사용자 로드 완료 후 현재 탭 새로고침 (업무계획 탭일 경우)
+        console.log('[사용자 로드] 최종:', state.currentUser.id, state.currentUser.name, state.currentUser.loginId);
+
+        // 사용자 로드 완료 후 현재 탭 새로고침
         if (state.currentTab === 'task-plan') {
-          console.log('[사용자 로드] 업무계획 탭 새로고침');
           renderTaskPlan();
         }
       } catch (e) {
