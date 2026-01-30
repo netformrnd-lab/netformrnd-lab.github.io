@@ -21934,13 +21934,19 @@
             </div>
 
             <!-- 하단 버튼 -->
-            <div style="padding: 20px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
-              ${task.meetingId ? `<button onclick="closeTaskDetailModal(); openMeetingDetailModal('${task.meetingId}')" style="padding: 12px 20px; border: 1px solid #7C3AED; border-radius: 10px; background: white; color: #7C3AED; cursor: pointer; font-size: 14px; font-weight: 600;">📅 연결된 미팅 보기</button>` : ''}
-              <button onclick="closeTaskDetailModal(); editTaskPlan('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: var(--gray-100); color: var(--gray-700); cursor: pointer; font-size: 14px; font-weight: 600;">수정하기</button>
-              ${task.status !== 'done' ? `
-                ${task.status === 'waiting' ? `<button onclick="closeTaskDetailModal(); updateTaskPlanStatus('${task.id}', 'doing')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DBEAFE; color: #1D4ED8; cursor: pointer; font-size: 14px; font-weight: 600;">시작하기</button>` : ''}
-                ${task.status === 'doing' ? `<button onclick="closeTaskDetailModal(); completeTaskPlan('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DCFCE7; color: #16A34A; cursor: pointer; font-size: 14px; font-weight: 600;">완료처리</button>` : ''}
-              ` : ''}
+            <div style="padding: 20px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap;">
+              <div style="display: flex; gap: 8px;">
+                <button onclick="closeTaskDetailModal(); deleteTaskPlan('${task.id}')" style="padding: 12px 20px; border: 1px solid var(--gray-300); border-radius: 10px; background: white; color: #DC2626; cursor: pointer; font-size: 14px; font-weight: 600;">삭제</button>
+              </div>
+              <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                ${task.meetingId ? `<button onclick="closeTaskDetailModal(); openMeetingDetailModal('${task.meetingId}')" style="padding: 12px 20px; border: 1px solid #7C3AED; border-radius: 10px; background: white; color: #7C3AED; cursor: pointer; font-size: 14px; font-weight: 600;">📅 미팅 보기</button>` : ''}
+                <button onclick="closeTaskDetailModal(); openQuickLogFromTask('${task.id}')" style="padding: 12px 20px; border: 1px solid var(--primary); border-radius: 10px; background: white; color: var(--primary); cursor: pointer; font-size: 14px; font-weight: 600;">📝 업무일지 등록</button>
+                <button onclick="closeTaskDetailModal(); editTaskPlan('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: var(--gray-100); color: var(--gray-700); cursor: pointer; font-size: 14px; font-weight: 600;">수정</button>
+                ${task.status !== 'done' ? `
+                  ${task.status === 'waiting' ? `<button onclick="closeTaskDetailModal(); updateTaskPlanStatus('${task.id}', 'doing')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DBEAFE; color: #1D4ED8; cursor: pointer; font-size: 14px; font-weight: 600;">시작하기</button>` : ''}
+                  ${task.status === 'doing' ? `<button onclick="closeTaskDetailModal(); openCompleteTaskModal('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DCFCE7; color: #16A34A; cursor: pointer; font-size: 14px; font-weight: 600;">완료처리</button>` : ''}
+                ` : ''}
+              </div>
             </div>
           </div>
         </div>
@@ -22383,6 +22389,339 @@
         loadTaskPlanData();
 
         // 업무기록 탭이 열려있으면 새로고침
+        if (state.currentTab === 'okr-record') {
+          renderOkrRecord();
+        }
+      } catch (error) {
+        console.error('완료 처리 오류:', error);
+        alert('완료 처리 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 업무에서 업무일지 바로 등록 모달
+    function openQuickLogFromTask(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      // 활동지표(행동) 옵션 생성
+      const activityLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
+      let activityOptions = '<option value="">활동지표 선택 (행동)</option>';
+      activityLags.forEach(lag => {
+        activityOptions += `<option value="${lag.id}">${lag.name}</option>`;
+      });
+
+      // 성과지표 옵션 생성
+      const resultLags = okrState.laggingIndicators.filter(l => l.type === 'output');
+      let resultOptions = '<option value="">성과지표 선택 (결과)</option>';
+      resultLags.forEach(lag => {
+        resultOptions += `<option value="${lag.id}">${lag.name}</option>`;
+      });
+
+      const modalHtml = `
+        <div id="quickLogModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center; padding: 20px;" onclick="if(event.target === this) closeQuickLogModal()">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 500px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="padding: 24px; border-bottom: 1px solid var(--gray-200);">
+              <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--gray-900);">📝 업무일지 등록</h3>
+              <p style="margin: 8px 0 0 0; font-size: 13px; color: var(--gray-500);">업무: ${task.title}</p>
+            </div>
+            <div style="padding: 24px;">
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">이 업무는 무엇인가요?</label>
+                <div style="display: flex; gap: 12px;">
+                  <label style="flex: 1; display: flex; align-items: center; gap: 8px; padding: 14px; border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer; transition: all 0.2s;" onclick="this.querySelector('input').checked = true; document.getElementById('quickLogActivitySelect').style.display = 'block'; document.getElementById('quickLogResultSelect').style.display = 'none';">
+                    <input type="radio" name="quickLogType" value="activity" style="accent-color: var(--primary);">
+                    <div>
+                      <div style="font-weight: 600; color: var(--gray-800);">🏃 행동 (활동)</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">선행지표에 기록</div>
+                    </div>
+                  </label>
+                  <label style="flex: 1; display: flex; align-items: center; gap: 8px; padding: 14px; border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer; transition: all 0.2s;" onclick="this.querySelector('input').checked = true; document.getElementById('quickLogActivitySelect').style.display = 'none'; document.getElementById('quickLogResultSelect').style.display = 'block';">
+                    <input type="radio" name="quickLogType" value="result" style="accent-color: #16A34A;">
+                    <div>
+                      <div style="font-weight: 600; color: var(--gray-800);">🎯 성과 (결과)</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">성과지표에 기록</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div id="quickLogActivitySelect" style="margin-bottom: 16px; display: none;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">활동지표 선택</label>
+                <select id="quickLogActivityId" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+                  ${activityOptions}
+                </select>
+              </div>
+              <div id="quickLogResultSelect" style="margin-bottom: 16px; display: none;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">성과지표 선택</label>
+                <select id="quickLogResultId" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+                  ${resultOptions}
+                </select>
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">수량/값</label>
+                <input type="number" id="quickLogValue" value="1" min="0" step="0.1" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">메모 (선택)</label>
+                <textarea id="quickLogMemo" placeholder="추가 메모..." style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; min-height: 60px; resize: vertical;"></textarea>
+              </div>
+            </div>
+            <div style="padding: 20px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
+              <button onclick="closeQuickLogModal()" style="padding: 12px 24px; border: 1px solid var(--gray-300); border-radius: 10px; background: white; color: var(--gray-700); cursor: pointer; font-size: 14px; font-weight: 600;">취소</button>
+              <button onclick="submitQuickLog('${taskId}')" style="padding: 12px 24px; border: none; border-radius: 10px; background: var(--primary); color: white; cursor: pointer; font-size: 14px; font-weight: 600;">등록하기</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    function closeQuickLogModal() {
+      const modal = document.getElementById('quickLogModal');
+      if (modal) modal.remove();
+    }
+
+    async function submitQuickLog(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const typeRadio = document.querySelector('input[name="quickLogType"]:checked');
+      if (!typeRadio) {
+        alert('행동인지 성과인지 선택해주세요.');
+        return;
+      }
+
+      const logType = typeRadio.value;
+      const value = parseFloat(document.getElementById('quickLogValue').value) || 1;
+      const memo = document.getElementById('quickLogMemo').value.trim();
+
+      let laggingIndicatorId = null;
+      let kpiId = null;
+
+      if (logType === 'activity') {
+        laggingIndicatorId = document.getElementById('quickLogActivityId').value;
+        if (!laggingIndicatorId) {
+          alert('활동지표를 선택해주세요.');
+          return;
+        }
+      } else {
+        laggingIndicatorId = document.getElementById('quickLogResultId').value;
+        if (!laggingIndicatorId) {
+          alert('성과지표를 선택해주세요.');
+          return;
+        }
+      }
+
+      // 선택된 지표의 kpiId 가져오기
+      const selectedLag = okrState.laggingIndicators.find(l => l.id === laggingIndicatorId);
+      if (selectedLag) {
+        kpiId = selectedLag.kpiId || null;
+      }
+
+      try {
+        const now = new Date();
+        const logData = {
+          date: okrToday,
+          memberId: state.currentUser?.uid || 'anonymous',
+          memberName: task.assignee || state.currentUser?.name || '사용자',
+          krId: task.krId || null,
+          kpiId: kpiId,
+          laggingIndicatorId: laggingIndicatorId,
+          resultValue: value,
+          version: 'A',
+          memo: memo || `[업무] ${task.title}`,
+          attachments: [],
+          registeredTime: formatTime(now),
+          registeredTimestamp: now.getTime(),
+          taskPlanId: taskId,
+          logType: logType,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('okr_dailyLogs').add(logData);
+        okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
+        okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+
+        closeQuickLogModal();
+        showToast('업무일지가 등록되었습니다.');
+
+        if (state.currentTab === 'okr-record') {
+          renderOkrRecord();
+        }
+      } catch (error) {
+        console.error('업무일지 등록 오류:', error);
+        alert('등록 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 업무 완료 모달 (행동/성과 선택)
+    function openCompleteTaskModal(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      // 활동지표(행동) 옵션 생성
+      const activityLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
+      let activityOptions = '<option value="">활동지표 선택</option>';
+      activityLags.forEach(lag => {
+        activityOptions += `<option value="${lag.id}">${lag.name}</option>`;
+      });
+
+      // 성과지표 옵션 생성
+      const resultLags = okrState.laggingIndicators.filter(l => l.type === 'output');
+      let resultOptions = '<option value="">성과지표 선택</option>';
+      resultLags.forEach(lag => {
+        resultOptions += `<option value="${lag.id}">${lag.name}</option>`;
+      });
+
+      const modalHtml = `
+        <div id="completeTaskModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center; padding: 20px;" onclick="if(event.target === this) closeCompleteTaskModal()">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 500px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="padding: 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #DCFCE7, #D1FAE5); border-radius: 16px 16px 0 0;">
+              <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: #16A34A;">✅ 업무 완료</h3>
+              <p style="margin: 8px 0 0 0; font-size: 13px; color: #166534;">${task.title}</p>
+            </div>
+            <div style="padding: 24px;">
+              <div style="background: #FEF3C7; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
+                <div style="font-size: 13px; color: #92400E; line-height: 1.5;">
+                  <strong>💡 KPI 연동 안내</strong><br>
+                  완료한 업무를 KPI에 기록하면 데이터가 자동으로 추적됩니다.<br>
+                  기록하지 않으면 완료 처리만 됩니다.
+                </div>
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">이 업무는 무엇인가요?</label>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                  <label style="display: flex; align-items: center; gap: 10px; padding: 14px; border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer;" onclick="this.querySelector('input').checked = true; document.getElementById('completeActivitySelect').style.display = 'none'; document.getElementById('completeResultSelect').style.display = 'none';">
+                    <input type="radio" name="completeLogType" value="none" checked style="accent-color: var(--gray-500);">
+                    <div>
+                      <div style="font-weight: 600; color: var(--gray-800);">⏭️ KPI 기록 안함</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">완료 처리만 합니다</div>
+                    </div>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; padding: 14px; border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer;" onclick="this.querySelector('input').checked = true; document.getElementById('completeActivitySelect').style.display = 'block'; document.getElementById('completeResultSelect').style.display = 'none';">
+                    <input type="radio" name="completeLogType" value="activity" style="accent-color: var(--primary);">
+                    <div>
+                      <div style="font-weight: 600; color: var(--gray-800);">🏃 행동 (활동지표)</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">행동한 것 - 선행지표에 기록</div>
+                    </div>
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 10px; padding: 14px; border: 2px solid var(--gray-200); border-radius: 10px; cursor: pointer;" onclick="this.querySelector('input').checked = true; document.getElementById('completeActivitySelect').style.display = 'none'; document.getElementById('completeResultSelect').style.display = 'block';">
+                    <input type="radio" name="completeLogType" value="result" style="accent-color: #16A34A;">
+                    <div>
+                      <div style="font-weight: 600; color: var(--gray-800);">🎯 성과 (성과지표)</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">달성한 결과 - 성과지표에 기록</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div id="completeActivitySelect" style="margin-bottom: 16px; display: none;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">활동지표 선택</label>
+                <select id="completeActivityId" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+                  ${activityOptions}
+                </select>
+              </div>
+              <div id="completeResultSelect" style="margin-bottom: 16px; display: none;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">성과지표 선택</label>
+                <select id="completeResultId" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+                  ${resultOptions}
+                </select>
+              </div>
+              <div id="completeValueInput" style="margin-bottom: 16px; display: none;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">수량/값</label>
+                <input type="number" id="completeValue" value="1" min="0" step="0.1" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+              </div>
+            </div>
+            <div style="padding: 20px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
+              <button onclick="closeCompleteTaskModal()" style="padding: 12px 24px; border: 1px solid var(--gray-300); border-radius: 10px; background: white; color: var(--gray-700); cursor: pointer; font-size: 14px; font-weight: 600;">취소</button>
+              <button onclick="submitCompleteTask('${taskId}')" style="padding: 12px 24px; border: none; border-radius: 10px; background: #16A34A; color: white; cursor: pointer; font-size: 14px; font-weight: 600;">완료 처리</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 라디오 버튼 변경 시 수량 입력 표시
+      document.querySelectorAll('input[name="completeLogType"]').forEach(radio => {
+        radio.addEventListener('change', () => {
+          const valueInput = document.getElementById('completeValueInput');
+          valueInput.style.display = radio.value === 'none' ? 'none' : 'block';
+        });
+      });
+    }
+
+    function closeCompleteTaskModal() {
+      const modal = document.getElementById('completeTaskModal');
+      if (modal) modal.remove();
+    }
+
+    async function submitCompleteTask(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const typeRadio = document.querySelector('input[name="completeLogType"]:checked');
+      const logType = typeRadio ? typeRadio.value : 'none';
+
+      try {
+        // 1. 업무 상태 변경
+        await db.collection('taskPlans').doc(taskId).update({
+          status: 'done',
+          completedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 2. KPI에 기록 (선택한 경우)
+        if (logType !== 'none') {
+          const value = parseFloat(document.getElementById('completeValue').value) || 1;
+          let laggingIndicatorId = null;
+          let kpiId = null;
+
+          if (logType === 'activity') {
+            laggingIndicatorId = document.getElementById('completeActivityId').value;
+            if (!laggingIndicatorId) {
+              alert('활동지표를 선택해주세요.');
+              return;
+            }
+          } else {
+            laggingIndicatorId = document.getElementById('completeResultId').value;
+            if (!laggingIndicatorId) {
+              alert('성과지표를 선택해주세요.');
+              return;
+            }
+          }
+
+          // 선택된 지표의 kpiId 가져오기
+          const selectedLag = okrState.laggingIndicators.find(l => l.id === laggingIndicatorId);
+          if (selectedLag) {
+            kpiId = selectedLag.kpiId || null;
+          }
+
+          const now = new Date();
+          const logData = {
+            date: okrToday,
+            memberId: state.currentUser?.uid || 'anonymous',
+            memberName: task.assignee || state.currentUser?.name || '사용자',
+            krId: task.krId || null,
+            kpiId: kpiId,
+            laggingIndicatorId: laggingIndicatorId,
+            resultValue: value,
+            version: 'A',
+            memo: `[업무완료] ${task.title}${task.description ? ' - ' + task.description : ''}`,
+            attachments: [],
+            registeredTime: formatTime(now),
+            registeredTimestamp: now.getTime(),
+            taskPlanId: taskId,
+            logType: logType,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          const docRef = await db.collection('okr_dailyLogs').add(logData);
+          okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
+          okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+        }
+
+        closeCompleteTaskModal();
+        showToast(logType === 'none' ? '업무가 완료 처리되었습니다.' : '업무가 완료되고 KPI에 기록되었습니다.');
+        loadTaskPlanData();
+
         if (state.currentTab === 'okr-record') {
           renderOkrRecord();
         }
