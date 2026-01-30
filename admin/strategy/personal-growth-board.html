@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>개인 그로스보드 - 전략센터</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #3182f6;
+      --primary-light: #eef4ff;
+      --gray-900: #191f28;
+      --gray-800: #333d4b;
+      --gray-700: #4e5968;
+      --gray-600: #6b7684;
+      --gray-500: #8b95a1;
+      --gray-400: #b0b8c1;
+      --gray-300: #d1d6db;
+      --gray-200: #e5e8eb;
+      --gray-100: #f2f4f6;
+      --gray-50: #f9fafb;
+      --success: #00c073;
+      --success-light: #e8f7f0;
+      --warning: #fc9600;
+      --warning-light: #fff8f0;
+      --danger: #f04452;
+      --purple: #6366F1;
+      --input-color: #10B981;
+      --output-color: #F59E0B;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: white;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* 가로 A4 인쇄 설정 */
+    @page {
+      size: A4 landscape;
+      margin: 10mm;
+    }
+    @media print {
+      body { background: white; }
+      .no-print { display: none !important; }
+      .page-break { page-break-before: always; }
+      .board-container { box-shadow: none; }
+    }
+
+    /* 로딩 화면 */
+    .loading-screen {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid var(--gray-200);
+      border-top: 4px solid var(--purple);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* 컨트롤 바 */
+    .control-bar {
+      background: linear-gradient(135deg, var(--purple), #8B5CF6);
+      color: white;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .control-bar h1 {
+      font-size: 18px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .control-group {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .control-select {
+      padding: 8px 12px;
+      border: none;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.2);
+      color: white;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .control-select option { color: var(--gray-800); background: white; }
+    .btn-print {
+      padding: 8px 16px;
+      border: 2px solid white;
+      border-radius: 8px;
+      background: transparent;
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-print:hover {
+      background: white;
+      color: var(--purple);
+    }
+
+    /* 보드 컨테이너 - 가로 A4 비율 */
+    .board-container {
+      width: 297mm;
+      min-height: 210mm;
+      margin: 20px auto;
+      background: white;
+      padding: 20px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    }
+
+    /* 헤더 섹션 */
+    .board-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--purple);
+    }
+    .board-title {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--gray-900);
+    }
+    .board-subtitle {
+      font-size: 12px;
+      color: var(--gray-500);
+      margin-top: 4px;
+    }
+    .board-meta {
+      text-align: right;
+      font-size: 12px;
+      color: var(--gray-600);
+    }
+    .quarter-badge {
+      display: inline-block;
+      padding: 6px 14px;
+      background: linear-gradient(135deg, var(--purple), #8B5CF6);
+      color: white;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    /* 메인 레이아웃 - 3열 그리드 */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 280px 1fr 280px;
+      gap: 16px;
+    }
+
+    /* 왼쪽: 분기별 비율 */
+    .ratio-section {
+      background: var(--gray-50);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--gray-800);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* 도넛 차트 */
+    .donut-chart {
+      position: relative;
+      width: 160px;
+      height: 160px;
+      margin: 0 auto 16px;
+    }
+    .donut-chart svg {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+    .donut-chart circle {
+      fill: none;
+      stroke-width: 30;
+    }
+    .donut-center {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+    }
+    .donut-center .total-count {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--gray-900);
+    }
+    .donut-center .total-label {
+      font-size: 11px;
+      color: var(--gray-500);
+    }
+
+    /* 비율 범례 */
+    .ratio-legend {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: white;
+      border-radius: 8px;
+    }
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    .legend-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--gray-700);
+      flex: 1;
+    }
+    .legend-value {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .legend-percent {
+      font-size: 12px;
+      color: var(--gray-500);
+      margin-left: 4px;
+    }
+
+    /* 가운데: 업무일지 테이블 */
+    .logs-section {
+      background: white;
+      border: 1px solid var(--gray-200);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .logs-header {
+      background: linear-gradient(135deg, var(--input-color), #34D399);
+      color: white;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logs-header h3 {
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .logs-table-wrapper {
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .logs-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .logs-table th {
+      padding: 10px 8px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--gray-600);
+      background: var(--gray-50);
+      border-bottom: 1px solid var(--gray-200);
+      position: sticky;
+      top: 0;
+    }
+    .logs-table td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--gray-100);
+      color: var(--gray-700);
+    }
+    .logs-table tr:hover {
+      background: var(--gray-50);
+    }
+    .version-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .version-A { background: #DBEAFE; color: #1D4ED8; }
+    .version-B { background: #FEF3C7; color: #B45309; }
+    .version-C { background: #D1FAE5; color: #047857; }
+
+    /* 오른쪽: KPI 기여도 */
+    .kpi-section {
+      background: var(--gray-50);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .kpi-card {
+      background: white;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
+      border-left: 3px solid var(--primary);
+    }
+    .kpi-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--gray-800);
+      margin-bottom: 6px;
+    }
+    .kpi-progress {
+      height: 6px;
+      background: var(--gray-200);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    .kpi-progress-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s;
+    }
+    .kpi-stats {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--gray-500);
+    }
+    .kpi-value {
+      font-weight: 600;
+      color: var(--gray-700);
+    }
+
+    /* 분기 요약 카드 */
+    .quarter-summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .quarter-card {
+      background: white;
+      border-radius: 10px;
+      padding: 12px;
+      text-align: center;
+      border: 1px solid var(--gray-200);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .quarter-card:hover, .quarter-card.active {
+      border-color: var(--purple);
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);
+    }
+    .quarter-card.active {
+      background: linear-gradient(135deg, #EEF2FF, #E0E7FF);
+    }
+    .quarter-label {
+      font-size: 11px;
+      color: var(--gray-500);
+      margin-bottom: 4px;
+    }
+    .quarter-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--gray-800);
+    }
+    .quarter-rate {
+      font-size: 10px;
+      color: var(--gray-500);
+      margin-top: 2px;
+    }
+
+    /* 하단 AB 테스트 요약 */
+    .ab-summary {
+      margin-top: 16px;
+      background: linear-gradient(135deg, #F0FDF4, #ECFDF5);
+      border-radius: 12px;
+      padding: 16px;
+      border: 1px solid #A7F3D0;
+    }
+    .ab-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .ab-card {
+      background: white;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .ab-version {
+      font-size: 16px;
+      font-weight: 800;
+      margin-bottom: 4px;
+    }
+    .ab-version.a { color: #1D4ED8; }
+    .ab-version.b { color: #B45309; }
+    .ab-version.c { color: #047857; }
+    .ab-count {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--gray-800);
+    }
+    .ab-label {
+      font-size: 10px;
+      color: var(--gray-500);
+    }
+  </style>
+</head>
+<body>
+  <!-- 로딩 화면 -->
+  <div id="loadingScreen" class="loading-screen">
+    <div class="loading-spinner"></div>
+    <p style="margin-top: 16px; color: var(--gray-500);">데이터를 불러오는 중...</p>
+  </div>
+
+  <!-- 컨트롤 바 (인쇄 시 숨김) -->
+  <div class="control-bar no-print">
+    <h1>개인 그로스보드</h1>
+    <div class="control-group">
+      <select id="memberSelect" class="control-select" onchange="updateBoard()">
+        <option value="">팀원 선택</option>
+      </select>
+      <select id="yearSelect" class="control-select" onchange="updateBoard()">
+        <option value="2026">2026년</option>
+        <option value="2025">2025년</option>
+      </select>
+      <select id="quarterSelect" class="control-select" onchange="updateBoard()">
+        <option value="all">전체 분기</option>
+        <option value="Q1">1분기</option>
+        <option value="Q2">2분기</option>
+        <option value="Q3">3분기</option>
+        <option value="Q4">4분기</option>
+      </select>
+      <button class="btn-print" onclick="window.print()">인쇄하기</button>
+    </div>
+  </div>
+
+  <!-- 보드 컨테이너 -->
+  <div class="board-container" id="boardContainer">
+    <div id="boardContent">
+      <!-- 동적으로 렌더링 -->
+    </div>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyAD_sydnJz8dCqx0NqXnPiLz-JWz3cYeXQ",
+      authDomain: "netformrnd-lab.firebaseapp.com",
+      projectId: "netformrnd-lab",
+      storageBucket: "netformrnd-lab.firebasestorage.app",
+      messagingSenderId: "853414818498",
+      appId: "1:853414818498:web:92fdd1db6e0a9e5cee75c8"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const auth = firebase.auth();
+
+    // 전역 상태
+    let state = {
+      teamMembers: [],
+      objective: null,
+      keyResults: [],
+      kpis: [],
+      laggingIndicators: [],
+      dailyLogs: [],
+      selectedMemberId: null,
+      selectedYear: new Date().getFullYear(),
+      selectedQuarter: 'all'
+    };
+
+    // KR 색상 및 아이콘
+    const krColors = ['#3182f6', '#00c073', '#fc9600', '#6366F1', '#EC4899'];
+    const krIcons = ['🚀', '💼', '🎯', '📈', '💡'];
+
+    // 초기화
+    auth.onAuthStateChanged(async (user) => {
+      if (user) {
+        await loadAllData();
+        renderBoard();
+        document.getElementById('loadingScreen').style.display = 'none';
+      } else {
+        window.location.href = '/admin/login.html';
+      }
+    });
+
+    // 데이터 로드
+    async function loadAllData() {
+      try {
+        // 팀원 목록
+        const membersSnap = await db.collection('teamMembers').get();
+        state.teamMembers = membersSnap.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(m => m.role !== 'guest');
+
+        // 팀원 선택 옵션 채우기
+        const memberSelect = document.getElementById('memberSelect');
+        state.teamMembers.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = m.name;
+          memberSelect.appendChild(opt);
+        });
+
+        // 목표
+        const objSnap = await db.collection('okr_objective').limit(1).get();
+        if (!objSnap.empty) {
+          state.objective = { id: objSnap.docs[0].id, ...objSnap.docs[0].data() };
+        }
+
+        // KR
+        const krSnap = await db.collection('okr_keyResults').orderBy('order').get();
+        state.keyResults = krSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // KPI
+        const kpiSnap = await db.collection('okr_kpis').orderBy('order').get();
+        state.kpis = kpiSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 성과지표
+        const lagSnap = await db.collection('okr_laggingIndicators').get();
+        state.laggingIndicators = lagSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 업무일지 (전체)
+        const logsSnap = await db.collection('okr_dailyLogs').orderBy('date', 'desc').get();
+        state.dailyLogs = logsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      } catch (error) {
+        console.error('데이터 로드 실패:', error);
+      }
+    }
+
+    // 분기 기간 계산
+    function getQuarterRange(year, quarter) {
+      const ranges = {
+        Q1: { start: `${year}-01-01`, end: `${year}-03-31` },
+        Q2: { start: `${year}-04-01`, end: `${year}-06-30` },
+        Q3: { start: `${year}-07-01`, end: `${year}-09-30` },
+        Q4: { start: `${year}-10-01`, end: `${year}-12-31` }
+      };
+      return ranges[quarter] || { start: `${year}-01-01`, end: `${year}-12-31` };
+    }
+
+    // 날짜로 분기 결정
+    function getQuarterFromDate(dateStr) {
+      const month = parseInt(dateStr.split('-')[1]);
+      if (month <= 3) return 'Q1';
+      if (month <= 6) return 'Q2';
+      if (month <= 9) return 'Q3';
+      return 'Q4';
+    }
+
+    // 보드 업데이트
+    function updateBoard() {
+      state.selectedMemberId = document.getElementById('memberSelect').value;
+      state.selectedYear = parseInt(document.getElementById('yearSelect').value);
+      state.selectedQuarter = document.getElementById('quarterSelect').value;
+      renderBoard();
+    }
+
+    // 보드 렌더링
+    function renderBoard() {
+      const container = document.getElementById('boardContent');
+
+      if (!state.selectedMemberId) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 80px 20px;">
+            <div style="font-size: 64px; margin-bottom: 16px;">👤</div>
+            <h2 style="font-size: 20px; color: var(--gray-700); margin-bottom: 8px;">팀원을 선택해주세요</h2>
+            <p style="color: var(--gray-500);">상단에서 팀원을 선택하면 개인 그로스보드가 표시됩니다.</p>
+          </div>
+        `;
+        return;
+      }
+
+      const member = state.teamMembers.find(m => m.id === state.selectedMemberId);
+      if (!member) return;
+
+      // 로그 필터링
+      let filteredLogs = state.dailyLogs.filter(log =>
+        log.memberId === state.selectedMemberId &&
+        log.date && log.date.startsWith(state.selectedYear.toString())
+      );
+
+      // 분기 필터
+      if (state.selectedQuarter !== 'all') {
+        const range = getQuarterRange(state.selectedYear, state.selectedQuarter);
+        filteredLogs = filteredLogs.filter(log => log.date >= range.start && log.date <= range.end);
+      }
+
+      // 활동형/성과형 분리
+      const inputLogs = filteredLogs.filter(log => {
+        const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        return lag && lag.type !== 'output';
+      });
+      const outputLogs = filteredLogs.filter(log => {
+        const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        return lag && lag.type === 'output';
+      });
+
+      const inputCount = inputLogs.reduce((sum, l) => sum + (parseFloat(l.resultValue) || 0), 0);
+      const outputCount = outputLogs.reduce((sum, l) => sum + (parseFloat(l.resultValue) || 0), 0);
+      const totalCount = inputCount + outputCount;
+      const inputPercent = totalCount > 0 ? Math.round((inputCount / totalCount) * 100) : 0;
+      const outputPercent = totalCount > 0 ? 100 - inputPercent : 0;
+
+      // 분기별 데이터 계산
+      const quarterData = ['Q1', 'Q2', 'Q3', 'Q4'].map(q => {
+        const range = getQuarterRange(state.selectedYear, q);
+        const qLogs = state.dailyLogs.filter(log =>
+          log.memberId === state.selectedMemberId &&
+          log.date >= range.start && log.date <= range.end
+        );
+        const qInput = qLogs.filter(log => {
+          const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+          return lag && lag.type !== 'output';
+        }).reduce((sum, l) => sum + (parseFloat(l.resultValue) || 0), 0);
+        const qOutput = qLogs.filter(log => {
+          const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+          return lag && lag.type === 'output';
+        }).reduce((sum, l) => sum + (parseFloat(l.resultValue) || 0), 0);
+        return { quarter: q, input: qInput, output: qOutput, total: qInput + qOutput };
+      });
+
+      // A/B/C 버전별 집계
+      const versionStats = { A: 0, B: 0, C: 0 };
+      inputLogs.forEach(log => {
+        const v = log.version || 'A';
+        versionStats[v] = (versionStats[v] || 0) + (parseFloat(log.resultValue) || 0);
+      });
+
+      // KPI별 기여도 계산
+      const kpiContributions = state.kpis.map(kpi => {
+        const kr = state.keyResults.find(k => k.id === kpi.keyResultId);
+        const krIdx = state.keyResults.findIndex(k => k.id === kpi.keyResultId);
+        const kpiLags = state.laggingIndicators.filter(l => l.kpiId === kpi.id);
+
+        let memberValue = 0;
+        let totalValue = 0;
+        let targetValue = 0;
+
+        kpiLags.forEach(lag => {
+          // 이 사용자의 기여
+          const memberLogs = filteredLogs.filter(l => l.laggingIndicatorId === lag.id);
+          memberValue += memberLogs.reduce((sum, l) => sum + (parseFloat(l.resultValue) || 0), 0);
+
+          // 전체 기여
+          const allLogs = state.dailyLogs.filter(l =>
+            l.laggingIndicatorId === lag.id &&
+            l.date && l.date.startsWith(state.selectedYear.toString())
+          );
+          totalValue += allLogs.reduce((sum, l) => sum + (parseFloat(l.resultValue) || 0), 0);
+
+          if (lag.target) targetValue += lag.target;
+        });
+
+        const rate = targetValue > 0 ? Math.round((memberValue / targetValue) * 100) : 0;
+        const contribution = totalValue > 0 ? Math.round((memberValue / totalValue) * 100) : 0;
+
+        return { kpi, kr, krIdx, memberValue, totalValue, targetValue, rate, contribution };
+      }).filter(k => k.memberValue > 0 || k.targetValue > 0);
+
+      // 업무일지 테이블 데이터 (활동형만, 최신순 20건)
+      const logTableData = inputLogs.slice(0, 30).map(log => {
+        const lag = state.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        const kpi = lag ? state.kpis.find(k => k.id === lag.kpiId) : null;
+        const kr = kpi ? state.keyResults.find(k => k.id === kpi.keyResultId) : null;
+        return { ...log, lag, kpi, kr };
+      });
+
+      // 도넛 차트 계산
+      const circumference = 2 * Math.PI * 50;
+      const inputDash = totalCount > 0 ? (inputPercent / 100) * circumference : 0;
+      const outputDash = totalCount > 0 ? (outputPercent / 100) * circumference : 0;
+
+      container.innerHTML = `
+        <!-- 헤더 -->
+        <div class="board-header">
+          <div>
+            <div class="board-title">${member.name}님의 그로스보드</div>
+            <div class="board-subtitle">활동/성과 분석 및 KPI 기여도</div>
+          </div>
+          <div class="board-meta">
+            <div class="quarter-badge">${state.selectedYear}년 ${state.selectedQuarter === 'all' ? '전체' : state.selectedQuarter}</div>
+            <div>생성일: ${new Date().toLocaleDateString('ko-KR')}</div>
+          </div>
+        </div>
+
+        <!-- 메인 그리드 -->
+        <div class="main-grid">
+          <!-- 왼쪽: 활동형/성과형 비율 -->
+          <div class="ratio-section">
+            <div class="section-title">활동형 vs 성과형 비율</div>
+
+            <!-- 도넛 차트 -->
+            <div class="donut-chart">
+              <svg viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="50" stroke="var(--input-color)"
+                  stroke-dasharray="${inputDash} ${circumference}" stroke-dashoffset="0"></circle>
+                <circle cx="60" cy="60" r="50" stroke="var(--output-color)"
+                  stroke-dasharray="${outputDash} ${circumference}" stroke-dashoffset="${-inputDash}"></circle>
+              </svg>
+              <div class="donut-center">
+                <div class="total-count">${totalCount.toLocaleString()}</div>
+                <div class="total-label">총 활동</div>
+              </div>
+            </div>
+
+            <!-- 범례 -->
+            <div class="ratio-legend">
+              <div class="legend-item">
+                <div style="display: flex; align-items: center;">
+                  <div class="legend-dot" style="background: var(--input-color);"></div>
+                  <span class="legend-label">활동형(Input)</span>
+                </div>
+                <div>
+                  <span class="legend-value" style="color: var(--input-color);">${inputCount.toLocaleString()}</span>
+                  <span class="legend-percent">(${inputPercent}%)</span>
+                </div>
+              </div>
+              <div class="legend-item">
+                <div style="display: flex; align-items: center;">
+                  <div class="legend-dot" style="background: var(--output-color);"></div>
+                  <span class="legend-label">성과형(Output)</span>
+                </div>
+                <div>
+                  <span class="legend-value" style="color: var(--output-color);">${outputCount.toLocaleString()}</span>
+                  <span class="legend-percent">(${outputPercent}%)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 분기별 요약 -->
+            <div style="margin-top: 16px;">
+              <div class="section-title" style="font-size: 12px;">분기별 현황</div>
+              <div style="display: flex; flex-direction: column; gap: 6px;">
+                ${quarterData.map(q => {
+                  const isActive = state.selectedQuarter === q.quarter || state.selectedQuarter === 'all';
+                  const qTotal = q.input + q.output;
+                  const qInputPct = qTotal > 0 ? Math.round((q.input / qTotal) * 100) : 0;
+                  return `
+                    <div style="background: ${isActive ? '#EEF2FF' : 'white'}; padding: 8px 10px; border-radius: 6px; border: 1px solid ${isActive ? 'var(--purple)' : 'var(--gray-200)'};">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <span style="font-size: 11px; font-weight: 600; color: var(--gray-700);">${q.quarter}</span>
+                        <span style="font-size: 12px; font-weight: 700; color: var(--gray-800);">${qTotal.toLocaleString()}건</span>
+                      </div>
+                      <div style="height: 4px; background: var(--gray-200); border-radius: 2px; overflow: hidden;">
+                        <div style="height: 100%; width: ${qInputPct}%; background: var(--input-color);"></div>
+                      </div>
+                      <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 9px; color: var(--gray-500);">
+                        <span>활동 ${q.input}건 (${qInputPct}%)</span>
+                        <span>성과 ${q.output}건</span>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+
+          <!-- 가운데: 업무일지 테이블 -->
+          <div class="logs-section">
+            <div class="logs-header">
+              <h3>활동형 업무일지 (A/B 테스트)</h3>
+              <span style="font-size: 11px; opacity: 0.9;">총 ${inputLogs.length}건</span>
+            </div>
+            <div class="logs-table-wrapper">
+              <table class="logs-table">
+                <thead>
+                  <tr>
+                    <th style="width: 80px;">날짜</th>
+                    <th style="width: 50px;">버전</th>
+                    <th>지표명</th>
+                    <th>KPI</th>
+                    <th style="width: 50px; text-align: right;">수량</th>
+                    <th>메모</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${logTableData.length === 0 ? `
+                    <tr>
+                      <td colspan="6" style="text-align: center; padding: 40px; color: var(--gray-400);">
+                        기록된 활동형 업무가 없습니다
+                      </td>
+                    </tr>
+                  ` : logTableData.map(log => `
+                    <tr>
+                      <td>${log.date || '-'}</td>
+                      <td>
+                        <span class="version-badge version-${log.version || 'A'}">${log.version || 'A'}</span>
+                      </td>
+                      <td style="font-weight: 500;">${log.lag ? log.lag.name : '-'}</td>
+                      <td style="color: var(--gray-500);">${log.kpi ? log.kpi.name : '-'}</td>
+                      <td style="text-align: right; font-weight: 600;">${log.resultValue || 0}</td>
+                      <td style="color: var(--gray-500); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${log.memo || '-'}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- A/B/C 버전 요약 -->
+            <div class="ab-summary">
+              <div class="section-title" style="margin-bottom: 10px;">A/B 테스트 버전별 현황</div>
+              <div class="ab-grid">
+                <div class="ab-card">
+                  <div class="ab-version a">A 버전</div>
+                  <div class="ab-count">${(versionStats.A || 0).toLocaleString()}</div>
+                  <div class="ab-label">건</div>
+                </div>
+                <div class="ab-card">
+                  <div class="ab-version b">B 버전</div>
+                  <div class="ab-count">${(versionStats.B || 0).toLocaleString()}</div>
+                  <div class="ab-label">건</div>
+                </div>
+                <div class="ab-card">
+                  <div class="ab-version c">C 버전</div>
+                  <div class="ab-count">${(versionStats.C || 0).toLocaleString()}</div>
+                  <div class="ab-label">건</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 오른쪽: KPI 기여도 -->
+          <div class="kpi-section">
+            <div class="section-title">KPI 기여도</div>
+
+            ${kpiContributions.length === 0 ? `
+              <div style="text-align: center; padding: 30px; color: var(--gray-400);">
+                <div style="font-size: 28px; margin-bottom: 8px;">📊</div>
+                <div style="font-size: 12px;">기여한 KPI가 없습니다</div>
+              </div>
+            ` : kpiContributions.slice(0, 6).map(kc => {
+              const color = krColors[kc.krIdx] || krColors[0];
+              const statusColor = kc.rate >= 100 ? 'var(--success)' : kc.rate >= 70 ? 'var(--primary)' : kc.rate >= 40 ? 'var(--warning)' : 'var(--gray-400)';
+              return `
+                <div class="kpi-card" style="border-left-color: ${color};">
+                  <div class="kpi-name">${krIcons[kc.krIdx] || ''} ${kc.kpi.name}</div>
+                  <div class="kpi-progress">
+                    <div class="kpi-progress-fill" style="width: ${Math.min(kc.rate, 100)}%; background: ${statusColor};"></div>
+                  </div>
+                  <div class="kpi-stats">
+                    <span>기여: <span class="kpi-value">${kc.memberValue.toLocaleString()}</span></span>
+                    <span>팀 기여율: <span class="kpi-value" style="color: ${color};">${kc.contribution}%</span></span>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+
+            ${kpiContributions.length > 6 ? `
+              <div style="text-align: center; padding: 8px; color: var(--gray-400); font-size: 11px;">
+                +${kpiContributions.length - 6}개 더 있음
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>
