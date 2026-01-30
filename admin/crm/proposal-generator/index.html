@@ -7,6 +7,9 @@
   <title>AI 제안서 생성기 - 모여라딜 CRM</title>
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
   <style>
     :root {
       --primary: #7c3aed;
@@ -103,12 +106,10 @@
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 12px;
-      font-size: 16px;
+      font-size: 15px;
       font-family: inherit;
       color: white;
-      text-align: center;
-      letter-spacing: 8px;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
     }
 
     .login-input:focus {
@@ -865,10 +866,15 @@
         <p class="login-logo-desc">모여라딜 CRM 전용</p>
       </div>
       <div class="login-card">
-        <h2 class="login-title">비밀번호를 입력하세요</h2>
-        <div class="login-error" id="loginError">비밀번호가 올바르지 않습니다</div>
-        <input type="password" class="login-input" id="passwordInput" placeholder="****" maxlength="10">
-        <button class="login-btn" onclick="handleLogin()">로그인</button>
+        <h2 class="login-title">🔐 관리자 로그인</h2>
+        <div class="login-error" id="loginError"></div>
+        <input type="text" class="login-input" id="loginId" placeholder="아이디">
+        <input type="password" class="login-input" id="loginPassword" placeholder="비밀번호" onkeypress="if(event.key==='Enter')handleLogin()">
+        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray-400); margin: 12px 0; cursor: pointer;">
+          <input type="checkbox" id="saveCredentials" style="width: 16px; height: 16px;">
+          아이디/비밀번호 저장
+        </label>
+        <button class="login-btn" id="loginBtn" onclick="handleLogin()">로그인</button>
       </div>
     </div>
   </div>
@@ -1013,43 +1019,127 @@
   </div>
 
   <script>
+    // Firebase 초기화
+    const firebaseConfig = {
+      apiKey: "AIzaSyDxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXx",
+      authDomain: "moyeora-deal.firebaseapp.com",
+      projectId: "moyeora-deal",
+      storageBucket: "moyeora-deal.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:123456789:web:abcdef123456"
+    };
+
+    // Firebase가 이미 초기화되지 않았다면 초기화
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
+    const db = firebase.firestore();
+
     // 전역 변수
     let apiKey = localStorage.getItem('claude_api_key') || '';
     let conversationHistory = [];
     let currentProposalType = null;
     let proposalData = {};
     let interactiveElements = [];
+    let teamMembers = [];
+    let currentUser = null;
 
-    // CRM센터와 동일한 비밀번호 체계
-    const VALID_PASSWORDS = ['1234', '0000', '9999'];
+    // 팀원 목록 로드
+    async function loadTeamMembers() {
+      try {
+        const snapshot = await db.collection('teamMembers').get();
+        teamMembers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log('팀원 목록 로드됨:', teamMembers.length, '명');
+      } catch (e) {
+        console.error('팀원 목록 로드 실패:', e);
+      }
+    }
 
     // 로그인 처리
-    function handleLogin() {
-      const password = document.getElementById('passwordInput').value;
-      if (VALID_PASSWORDS.includes(password)) {
-        document.getElementById('loginScreen').style.display = 'none';
-        document.getElementById('mainApp').classList.add('visible');
-        sessionStorage.setItem('proposal_generator_auth', 'true');
+    async function handleLogin() {
+      const loginId = document.getElementById('loginId').value.trim();
+      const loginPw = document.getElementById('loginPassword').value;
+      const errorEl = document.getElementById('loginError');
+      const loginBtn = document.getElementById('loginBtn');
 
-        if (!apiKey) {
-          setTimeout(() => showApiKeyModal(), 500);
-        }
+      if (!loginId || !loginPw) {
+        errorEl.textContent = '아이디와 비밀번호를 입력해주세요.';
+        errorEl.classList.add('show');
+        return;
+      }
+
+      // 로딩 상태
+      loginBtn.textContent = '로그인 중...';
+      loginBtn.disabled = true;
+
+      // 팀원 목록 로드 (최초 1회)
+      if (teamMembers.length === 0) {
+        await loadTeamMembers();
+      }
+
+      // admin 계정 체크
+      if (loginId === 'admin' && loginPw === 'ahdufk124!') {
+        handleLoginSuccess({ id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' });
+        return;
+      }
+
+      // 팀원 인증
+      const member = teamMembers.find(m => m.loginId === loginId && m.loginPw === loginPw);
+
+      if (member) {
+        handleLoginSuccess(member);
       } else {
-        document.getElementById('loginError').classList.add('show');
-        document.getElementById('passwordInput').value = '';
+        errorEl.textContent = '아이디 또는 비밀번호가 일치하지 않습니다.';
+        errorEl.classList.add('show');
+        document.getElementById('loginPassword').value = '';
+        loginBtn.textContent = '로그인';
+        loginBtn.disabled = false;
+      }
+    }
+
+    // 로그인 성공 처리
+    function handleLoginSuccess(user) {
+      // 아이디/비밀번호 저장
+      if (document.getElementById('saveCredentials').checked) {
+        localStorage.setItem('moyeora_proposal_saved_id', document.getElementById('loginId').value);
+        localStorage.setItem('moyeora_proposal_saved_pw', document.getElementById('loginPassword').value);
+      } else {
+        localStorage.removeItem('moyeora_proposal_saved_id');
+        localStorage.removeItem('moyeora_proposal_saved_pw');
+      }
+
+      currentUser = { id: user.id, name: user.name, role: user.role, loginId: user.loginId };
+      sessionStorage.setItem('moyeora_proposal_user', JSON.stringify(currentUser));
+
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('mainApp').classList.add('visible');
+
+      if (!apiKey) {
+        setTimeout(() => showApiKeyModal(), 500);
       }
     }
 
     // 세션 체크
-    if (sessionStorage.getItem('proposal_generator_auth') === 'true') {
-      document.getElementById('loginScreen').style.display = 'none';
-      document.getElementById('mainApp').classList.add('visible');
+    function checkLoginStatus() {
+      const savedUser = sessionStorage.getItem('moyeora_proposal_user');
+      if (savedUser) {
+        currentUser = JSON.parse(savedUser);
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('mainApp').classList.add('visible');
+      } else {
+        // 저장된 아이디/비밀번호 복원
+        const savedId = localStorage.getItem('moyeora_proposal_saved_id');
+        const savedPw = localStorage.getItem('moyeora_proposal_saved_pw');
+        if (savedId && savedPw) {
+          document.getElementById('loginId').value = savedId;
+          document.getElementById('loginPassword').value = savedPw;
+          document.getElementById('saveCredentials').checked = true;
+        }
+      }
     }
 
-    // 엔터키 로그인
-    document.getElementById('passwordInput').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') handleLogin();
-    });
+    // 페이지 로드 시 로그인 상태 확인
+    checkLoginStatus();
 
     // API 키 모달
     function showApiKeyModal() {

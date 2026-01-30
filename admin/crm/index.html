@@ -870,10 +870,15 @@
         <div class="login-logo-desc">CRM센터</div>
       </div>
       <div class="login-card">
-        <div class="login-title">관리자 로그인</div>
+        <div class="login-title">🔐 관리자 로그인</div>
         <div id="loginError" class="login-error"></div>
-        <input type="password" id="loginPassword" class="login-input" placeholder="비밀번호 입력" onkeypress="if(event.key==='Enter')handleLogin()">
-        <button class="login-btn" onclick="handleLogin()">로그인</button>
+        <input type="text" id="loginId" class="login-input" placeholder="아이디" style="margin-bottom: 12px;">
+        <input type="password" id="loginPassword" class="login-input" placeholder="비밀번호" onkeypress="if(event.key==='Enter')handleLogin()">
+        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray-600); margin: 12px 0; cursor: pointer;">
+          <input type="checkbox" id="saveCredentials" style="width: 16px; height: 16px;">
+          아이디/비밀번호 저장
+        </label>
+        <button class="login-btn" id="loginBtn" onclick="handleLogin()">로그인</button>
       </div>
     </div>
   </div>
@@ -2191,42 +2196,100 @@
     // 페이지 언로드 시 리스너 정리
     window.addEventListener('beforeunload', cleanupListeners);
 
-    // 비밀번호 로드
-    async function loadAdminPassword() {
+    // 팀원 목록 로드
+    let teamMembers = [];
+    async function loadTeamMembers() {
       try {
-        const doc = await db.collection('settings').doc('admin').get();
-        if (doc.exists && doc.data().password) {
-          adminPassword = doc.data().password;
-        }
+        const snapshot = await db.collection('teamMembers').get();
+        teamMembers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log('팀원 목록 로드됨:', teamMembers.length, '명');
       } catch (e) {
-        console.error('비밀번호 로드 실패:', e);
+        console.error('팀원 목록 로드 실패:', e);
       }
     }
 
     // 로그인 상태 확인
     function checkLoginStatus() {
-      const isLoggedIn = sessionStorage.getItem('moyeora_admin_logged_in') === 'true';
-      if (isLoggedIn) {
+      const savedUser = sessionStorage.getItem('moyeora_crm_user');
+      if (savedUser) {
+        state.currentUser = JSON.parse(savedUser);
         state.isLoggedIn = true;
         showApp();
       } else {
         showLogin();
+        // 저장된 아이디/비밀번호 복원
+        restoreSavedCredentials();
+      }
+    }
+
+    // 저장된 로그인 정보 복원
+    function restoreSavedCredentials() {
+      const savedId = localStorage.getItem('moyeora_crm_saved_id');
+      const savedPw = localStorage.getItem('moyeora_crm_saved_pw');
+      if (savedId && savedPw) {
+        document.getElementById('loginId').value = savedId;
+        document.getElementById('loginPassword').value = savedPw;
+        document.getElementById('saveCredentials').checked = true;
       }
     }
 
     // 로그인 처리
     async function handleLogin() {
-      const password = document.getElementById('loginPassword').value;
+      const loginId = document.getElementById('loginId').value.trim();
+      const loginPw = document.getElementById('loginPassword').value;
       const errorEl = document.getElementById('loginError');
+      const loginBtn = document.getElementById('loginBtn');
 
-      if (password === adminPassword) {
-        state.isLoggedIn = true;
-        sessionStorage.setItem('moyeora_admin_logged_in', 'true');
-        showApp();
-      } else {
-        errorEl.textContent = '비밀번호가 일치하지 않습니다.';
+      if (!loginId || !loginPw) {
+        errorEl.textContent = '아이디와 비밀번호를 입력해주세요.';
         errorEl.classList.add('show');
+        return;
       }
+
+      // 로딩 상태
+      loginBtn.textContent = '로그인 중...';
+      loginBtn.disabled = true;
+
+      // 팀원 목록 로드 (최초 1회)
+      if (teamMembers.length === 0) {
+        await loadTeamMembers();
+      }
+
+      // admin 계정 체크
+      if (loginId === 'admin' && loginPw === 'ahdufk124!') {
+        handleLoginSuccess({ id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' });
+        return;
+      }
+
+      // 팀원 인증
+      const member = teamMembers.find(m => m.loginId === loginId && m.loginPw === loginPw);
+
+      if (member) {
+        handleLoginSuccess(member);
+      } else {
+        errorEl.textContent = '아이디 또는 비밀번호가 일치하지 않습니다.';
+        errorEl.classList.add('show');
+        document.getElementById('loginPassword').value = '';
+        loginBtn.textContent = '로그인';
+        loginBtn.disabled = false;
+      }
+    }
+
+    // 로그인 성공 처리
+    function handleLoginSuccess(user) {
+      // 아이디/비밀번호 저장
+      if (document.getElementById('saveCredentials').checked) {
+        localStorage.setItem('moyeora_crm_saved_id', document.getElementById('loginId').value);
+        localStorage.setItem('moyeora_crm_saved_pw', document.getElementById('loginPassword').value);
+      } else {
+        localStorage.removeItem('moyeora_crm_saved_id');
+        localStorage.removeItem('moyeora_crm_saved_pw');
+      }
+
+      state.currentUser = { id: user.id, name: user.name, role: user.role, loginId: user.loginId };
+      state.isLoggedIn = true;
+      sessionStorage.setItem('moyeora_crm_user', JSON.stringify(state.currentUser));
+      showApp();
     }
 
     // 로그인 화면 표시
