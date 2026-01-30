@@ -14685,6 +14685,7 @@ function renderProductDB() {
                 <th style="text-align: right;">공구판매가</th>
                 <th style="text-align: right;">공급가(V+)</th>
                 <th style="text-align: right;">수수료율</th>
+                <th style="text-align: center;">Q&A</th>
                 <th>공구 연결</th>
                 <th></th>
               </tr>
@@ -14701,6 +14702,8 @@ function renderProductDB() {
                     return pid === p.id;
                   });
                 }).length;
+                // Q&A 개수
+                const qnaCount = (p.qna && Array.isArray(p.qna)) ? p.qna.length : 0;
 
                 return `
                   <tr>
@@ -14727,6 +14730,17 @@ function renderProductDB() {
                     <td style="text-align: right;">${Number(p.salePrice || 0).toLocaleString()}원</td>
                     <td style="text-align: right;">${Number(p.supplyPrice || 0) > 0 ? Number(p.supplyPrice).toLocaleString() + '원' : '-'}</td>
                     <td style="text-align: right;">${p.commission ? p.commission + '%' : '-'}</td>
+                    <td style="text-align: center;">
+                      ${qnaCount > 0 ? `
+                        <button class="btn btn-sm" style="background: #dbeafe; color: #1d4ed8; padding: 4px 8px;" onclick="openProductQnAModal('${p.id}')">
+                          💬 ${qnaCount}
+                        </button>
+                      ` : `
+                        <button class="btn btn-sm" style="background: var(--gray-100); color: var(--gray-500); padding: 4px 8px;" onclick="openProductQnAModal('${p.id}')">
+                          + 추가
+                        </button>
+                      `}
+                    </td>
                     <td>
                       ${linkedDeals > 0 ? `<span class="status-badge status-negotiating">${linkedDeals}건</span>` : '<span style="color: var(--gray-400);">-</span>'}
                     </td>
@@ -14767,11 +14781,21 @@ function downloadProductDBTemplate() {
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   ws['!cols'] = [{ wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 28 }, { wch: 12 }, { wch: 12 }, { wch: 15 }, { wch: 12 }];
 
+  // Q&A 시트
+  const qnaHeaders = ['대표상품', '질문', '답변'];
+  const qnaNotice = ['※ 대표상품명과 상품등록양식의 대표상품이 일치해야 연결됩니다', '', ''];
+  const qnaExample1 = ['스킨케어 세트', '유통기한이 어떻게 되나요?', '제조일로부터 24개월입니다.'];
+  const qnaExample2 = ['스킨케어 세트', '민감성 피부도 사용 가능한가요?', '네, 저자극 테스트를 완료한 제품입니다.'];
+  const qnaExample3 = ['스킨케어 세트', '사용 순서가 어떻게 되나요?', '토너 → 에센스 → 크림 순서로 사용해주세요.'];
+  const qnaExample4 = ['스킨케어 세트', '교환/환불 정책은?', '미개봉 상품에 한해 7일 이내 교환/환불 가능합니다.'];
+  const wsQna = XLSX.utils.aoa_to_sheet([qnaHeaders, qnaNotice, qnaExample1, qnaExample2, qnaExample3, qnaExample4]);
+  wsQna['!cols'] = [{ wch: 20 }, { wch: 40 }, { wch: 50 }];
+
   // 안내 시트
   const guideData = [
     ['📋 공급사 상품 DB 등록 양식 안내'],
     [''],
-    ['▶ 열 설명'],
+    ['▶ 상품등록양식 열 설명'],
     ['A. 공급사명 *', '등록된 공급사명과 동일하게 입력해야 자동 매칭됩니다.'],
     ['B. 브랜드명', '상품의 브랜드명 (예: "뷰티브랜드")'],
     ['C. 대표상품 *', '정산 시 같은 대표상품으로 묶어서 집계됩니다. (예: "스킨케어 세트")'],
@@ -14786,18 +14810,26 @@ function downloadProductDBTemplate() {
     ['✅ 수수료율 입력 시', '→ 공급가 자동 계산: 판매가 × (1 - 수수료율/100)'],
     ['💡 둘 다 입력 시 공급가 우선 적용'],
     [''],
+    ['▶ Q&A 시트 안내'],
+    ['A. 대표상품 *', '상품등록양식의 대표상품과 동일하게 입력 (Q&A 연결용)'],
+    ['B. 질문 *', '고객이 자주 묻는 질문'],
+    ['C. 답변 *', '질문에 대한 답변'],
+    ['💡 Q&A는 셀러 공구가이드 및 CS 챗봇에 활용됩니다'],
+    [''],
     ['▶ 대표상품 활용 예시'],
     ['공급사명', '브랜드명', '대표상품', '상품명(SKU)'],
     ['뷰티샵', '뷰티브랜드', '수분크림', '수분크림 50ml SKU-001'],
     ['뷰티샵', '뷰티브랜드', '수분크림', '수분크림 100ml SKU-002'],
     ['뷰티샵', '뷰티브랜드', '선크림', '선크림 SPF50 SKU-003'],
-    ['→ 정산 시 "수분크림"으로 2건, "선크림"으로 1건 집계됨']
+    ['→ 정산 시 "수분크림"으로 2건, "선크림"으로 1건 집계됨'],
+    ['→ Q&A도 "수분크림", "선크림"별로 연결됨']
   ];
   const wsGuide = XLSX.utils.aoa_to_sheet(guideData);
   wsGuide['!cols'] = [{ wch: 20 }, { wch: 60 }];
-  
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '상품등록양식');
+  XLSX.utils.book_append_sheet(wb, wsQna, 'Q&A');
   XLSX.utils.book_append_sheet(wb, wsGuide, '📖 작성안내');
   XLSX.writeFile(wb, '공급사상품_등록양식.xlsx');
   showToast('✅ 양식이 다운로드되었습니다.');
@@ -14901,23 +14933,35 @@ function openProductDBBulkModal() {
 async function previewProductDBExcel(e) {
   const file = e.target.files[0];
   if (!file) return;
-  
+
   const preview = document.getElementById('productdb-excel-preview');
   const content = document.getElementById('productdb-excel-preview-content');
-  
+
   try {
     const data = await parseProductDBExcelFile(file);
-    if (data.length === 0) {
+    const productRows = data.products || [];
+    const qnaData = data.qna || [];
+
+    if (productRows.length <= 1) {  // 헤더만 있는 경우
       content.innerHTML = '<p style="color: var(--danger);">데이터가 없습니다.</p>';
       preview.style.display = 'block';
       return;
     }
-    
-    const rows = data.slice(1);
-    window.productDBExcelData = rows;
-    
+
+    const rows = productRows.slice(1);  // 헤더 제외
+    window.productDBExcelData = { products: rows, qna: qnaData };
+
+    // Q&A 통계
+    const qnaCount = qnaData.length;
+    const qnaProductCount = new Set(qnaData.map(q => q.representativeProduct)).size;
+
     content.innerHTML = `
       <p style="margin-bottom: 8px; color: var(--success);">✓ ${rows.length}개 상품 확인됨</p>
+      ${qnaCount > 0 ? `
+        <p style="margin-bottom: 12px; color: var(--info);">
+          <strong>💬 Q&A:</strong> ${qnaCount}개 (${qnaProductCount}개 대표상품)
+        </p>
+      ` : ''}
       <table class="data-table" style="font-size: 12px;">
         <thead>
           <tr>
@@ -14933,11 +14977,11 @@ async function previewProductDBExcel(e) {
           ${rows.slice(0, 5).map(row => `
             <tr>
               <td>${row[0] || '-'}</td>
-              <td>${row[2] || '-'}</td>
-              <td>${row[3] ? Number(row[3]).toLocaleString() + '원' : '-'}</td>
+              <td>${row[3] || '-'}</td>
               <td>${row[4] ? Number(row[4]).toLocaleString() + '원' : '-'}</td>
               <td>${row[5] ? Number(row[5]).toLocaleString() + '원' : '-'}</td>
-              <td>${row[6] ? row[6] + '%' : '-'}</td>
+              <td>${row[6] ? Number(row[6]).toLocaleString() + '원' : '-'}</td>
+              <td>${row[7] ? row[7] + '%' : '-'}</td>
             </tr>
           `).join('')}
           ${rows.length > 5 ? `<tr><td colspan="6" style="text-align:center; color: var(--gray-500);">... 외 ${rows.length - 5}개</td></tr>` : ''}
@@ -14951,7 +14995,7 @@ async function previewProductDBExcel(e) {
   }
 }
 
-// 엑셀 파일 파싱
+// 엑셀 파일 파싱 (상품 + Q&A 시트)
 function parseProductDBExcelFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -14960,12 +15004,30 @@ function parseProductDBExcelFile(file) {
         const data = e.target.result;
         if (file.name.endsWith('.csv')) {
           const rows = data.split('\n').map(row => row.split(',').map(cell => cell.trim().replace(/^"|"$/g, '')));
-          resolve(rows.filter(row => row.some(cell => cell)));
+          resolve({ products: rows.filter(row => row.some(cell => cell)), qna: [] });
         } else {
           const workbook = XLSX.read(data, { type: 'binary' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-          resolve(rows);
+
+          // 상품 시트 (첫 번째 또는 '상품등록양식')
+          const productSheetName = workbook.SheetNames.find(n => n.includes('상품')) || workbook.SheetNames[0];
+          const productSheet = workbook.Sheets[productSheetName];
+          const productRows = XLSX.utils.sheet_to_json(productSheet, { header: 1 });
+
+          // Q&A 시트 파싱
+          let qnaData = [];
+          const qnaSheetName = workbook.SheetNames.find(n => n.toLowerCase().includes('q&a') || n.toLowerCase().includes('qna'));
+          if (qnaSheetName) {
+            const qnaSheet = workbook.Sheets[qnaSheetName];
+            const qnaRows = XLSX.utils.sheet_to_json(qnaSheet, { header: 1 });
+            // 헤더 제외하고 파싱 (대표상품, 질문, 답변)
+            qnaData = qnaRows.slice(1).filter(row => row[0] && row[1] && row[2]).map(row => ({
+              representativeProduct: String(row[0]).trim(),
+              question: String(row[1]).trim(),
+              answer: String(row[2]).trim()
+            }));
+          }
+
+          resolve({ products: productRows, qna: qnaData });
         }
       } catch (err) {
         reject(err);
@@ -14983,19 +15045,33 @@ function parseProductDBExcelFile(file) {
 // 공급사 상품 DB 일괄 업로드
 async function uploadProductDBExcel() {
   if (!canEdit()) { showNoPermission(); return; }
-  
-  if (!window.productDBExcelData || window.productDBExcelData.length === 0) {
+
+  if (!window.productDBExcelData || window.productDBExcelData.products?.length === 0) {
     showToast('업로드할 데이터가 없습니다.');
     return;
   }
-  
+
   try {
     const batch = db.batch();
     let count = 0;
+    const qnaByProduct = {};  // 대표상품별 Q&A 그룹화
 
-    for (const row of window.productDBExcelData) {
+    // Q&A 데이터 그룹화
+    if (window.productDBExcelData.qna && window.productDBExcelData.qna.length > 0) {
+      window.productDBExcelData.qna.forEach(q => {
+        if (!qnaByProduct[q.representativeProduct]) {
+          qnaByProduct[q.representativeProduct] = [];
+        }
+        qnaByProduct[q.representativeProduct].push({
+          question: q.question,
+          answer: q.answer
+        });
+      });
+    }
+
+    for (const row of window.productDBExcelData.products) {
       const supplierName = row[0];             // A: 공급사명
-      const brandName = row[1] || '';          // B: 브랜드명 (NEW)
+      const brandName = row[1] || '';          // B: 브랜드명
       const representativeProduct = row[2];    // C: 대표상품
       const productName = row[3];              // D: 상품명(SKU)
       if (!supplierName || !productName) continue;
@@ -15017,25 +15093,32 @@ async function uploadProductDBExcel() {
       // 공급사 매칭 (이름으로 찾기)
       const matchedSupplier = state.suppliers.find(s => s.name === supplierName);
 
+      // 대표상품에 해당하는 Q&A 가져오기
+      const repProd = representativeProduct || productName;
+      const productQna = qnaByProduct[repProd] || [];
+
       const docRef = db.collection('supplierProducts').doc();
       batch.set(docRef, {
         supplierId: matchedSupplier?.id || '',
         supplierName,
         brandName,
-        representativeProduct: representativeProduct || productName,  // 대표상품 (없으면 상품명으로)
+        representativeProduct: repProd,
         productName,
         originalPrice,
         supplyPrice: finalSupplyPrice,
         salePrice,
         commission,
+        qna: productQna,  // Q&A 배열 저장
         supplierType: matchedSupplier?.supplierType || 'external',
         createdAt: new Date().toISOString()
       });
       count++;
     }
-    
+
     await batch.commit();
-    showToast(`✅ ${count}개 상품이 등록되었습니다.`);
+
+    const qnaCount = Object.values(qnaByProduct).flat().length;
+    showToast(`✅ ${count}개 상품${qnaCount > 0 ? `, ${qnaCount}개 Q&A` : ''}가 등록되었습니다.`);
     closeModal();
     window.productDBExcelData = null;
   } catch (err) {
@@ -15047,14 +15130,154 @@ async function uploadProductDBExcel() {
 // 공급사 상품 삭제
 async function deleteProductDB(productId) {
   if (!canEdit()) { showNoPermission(); return; }
-  
+
   if (!confirm('이 상품을 삭제하시겠습니까?')) return;
-  
+
   try {
     await db.collection('supplierProducts').doc(productId).delete();
     showToast('✅ 상품이 삭제되었습니다.');
   } catch (err) {
     showToast('❌ 삭제에 실패했습니다.');
+  }
+}
+
+// 상품 Q&A 모달
+function openProductQnAModal(productId) {
+  const product = state.supplierProducts.find(p => p.id === productId);
+  if (!product) return;
+
+  const qnaList = product.qna || [];
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 700px;">
+      <div class="modal-header">
+        <h2 class="modal-title">💬 상품 Q&A</h2>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+
+      <div style="padding: 20px;">
+        <div style="background: var(--gray-50); padding: 12px 16px; border-radius: 8px; margin-bottom: 20px;">
+          <p style="font-size: 13px; color: var(--gray-600); margin: 0;">
+            <strong>상품:</strong> ${product.productName || '-'}<br>
+            <strong>대표상품:</strong> ${product.representativeProduct || '-'}
+          </p>
+        </div>
+
+        <div id="qna-list" style="margin-bottom: 20px;">
+          ${qnaList.length > 0 ? qnaList.map((q, idx) => `
+            <div class="qna-item" style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                <span style="background: var(--primary-light); color: var(--primary); padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">Q${idx + 1}</span>
+                <button onclick="removeQnAItem(${idx})" style="background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 16px;">&times;</button>
+              </div>
+              <div style="margin-bottom: 8px;">
+                <input type="text" class="form-input qna-question" value="${q.question.replace(/"/g, '&quot;')}" placeholder="질문" style="margin-bottom: 8px;">
+              </div>
+              <div style="display: flex; align-items: flex-start; gap: 8px;">
+                <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-top: 8px;">A</span>
+                <textarea class="form-input qna-answer" placeholder="답변" style="flex: 1; min-height: 60px; resize: vertical;">${q.answer}</textarea>
+              </div>
+            </div>
+          `).join('') : `
+            <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+              <p style="font-size: 14px;">등록된 Q&A가 없습니다.</p>
+            </div>
+          `}
+        </div>
+
+        <button class="btn btn-secondary" style="width: 100%;" onclick="addQnAItem()">
+          + Q&A 추가
+        </button>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+        <button type="button" class="btn btn-primary" onclick="saveProductQnA('${productId}')">저장</button>
+      </div>
+    </div>
+  `;
+
+  // Store current product ID for reference
+  window.currentQnAProductId = productId;
+}
+
+// Q&A 항목 추가
+function addQnAItem() {
+  const qnaList = document.getElementById('qna-list');
+  const existingItems = qnaList.querySelectorAll('.qna-item');
+  const idx = existingItems.length + 1;
+
+  // 빈 상태 메시지 제거
+  const emptyState = qnaList.querySelector('div[style*="text-align: center"]');
+  if (emptyState) emptyState.remove();
+
+  const newItem = document.createElement('div');
+  newItem.className = 'qna-item';
+  newItem.style.cssText = 'background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; margin-bottom: 12px;';
+  newItem.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+      <span style="background: var(--primary-light); color: var(--primary); padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">Q${idx}</span>
+      <button onclick="this.closest('.qna-item').remove()" style="background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 16px;">&times;</button>
+    </div>
+    <div style="margin-bottom: 8px;">
+      <input type="text" class="form-input qna-question" placeholder="질문" style="margin-bottom: 8px;">
+    </div>
+    <div style="display: flex; align-items: flex-start; gap: 8px;">
+      <span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-top: 8px;">A</span>
+      <textarea class="form-input qna-answer" placeholder="답변" style="flex: 1; min-height: 60px; resize: vertical;"></textarea>
+    </div>
+  `;
+  qnaList.appendChild(newItem);
+  newItem.querySelector('.qna-question').focus();
+}
+
+// Q&A 항목 제거
+function removeQnAItem(idx) {
+  const qnaList = document.getElementById('qna-list');
+  const items = qnaList.querySelectorAll('.qna-item');
+  if (items[idx]) {
+    items[idx].remove();
+    // 번호 재정렬
+    updateQnANumbers();
+  }
+}
+
+// Q&A 번호 업데이트
+function updateQnANumbers() {
+  const qnaList = document.getElementById('qna-list');
+  const items = qnaList.querySelectorAll('.qna-item');
+  items.forEach((item, idx) => {
+    const badge = item.querySelector('span[style*="primary-light"]');
+    if (badge) badge.textContent = `Q${idx + 1}`;
+  });
+}
+
+// Q&A 저장
+async function saveProductQnA(productId) {
+  if (!canEdit()) { showNoPermission(); return; }
+
+  const qnaList = document.getElementById('qna-list');
+  const items = qnaList.querySelectorAll('.qna-item');
+  const qnaData = [];
+
+  items.forEach(item => {
+    const question = item.querySelector('.qna-question')?.value?.trim();
+    const answer = item.querySelector('.qna-answer')?.value?.trim();
+    if (question && answer) {
+      qnaData.push({ question, answer });
+    }
+  });
+
+  try {
+    await db.collection('supplierProducts').doc(productId).update({
+      qna: qnaData
+    });
+    showToast(`✅ ${qnaData.length}개 Q&A가 저장되었습니다.`);
+    closeModal();
+  } catch (err) {
+    showToast('❌ 저장에 실패했습니다.');
+    console.error(err);
   }
 }
 
@@ -35101,20 +35324,40 @@ function renderPendingSupplierOnboardingCard(doc) {
   const sourceColor = doc.source === 'inbound_onboarding' ? '#10b981' : '#3b82f6';
   const productOption = doc.productInfoOption === 'now' ? '지금 등록' : '나중에 등록';
 
+  // 유입 경로 추적 정보
+  const tracking = doc.sourceTracking || {};
+  let trackingInfo = '';
+  if (tracking.inboundId) {
+    trackingInfo = `<span style="background: #e0f2fe; color: #0369a1; padding: 4px 12px; border-radius: 12px; font-size: 11px;">CRM: ${tracking.inboundId.substring(0, 8)}...</span>`;
+  } else if (tracking.proposalId) {
+    trackingInfo = `<span style="background: #fce7f3; color: #be185d; padding: 4px 12px; border-radius: 12px; font-size: 11px;">제안서: ${tracking.proposalId.substring(0, 8)}...</span>`;
+  }
+
   return `
     <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 12px; padding: 20px;">
       <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px;">
         <div>
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
             <span style="background: ${sourceColor}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">${sourceLabel}</span>
             <span style="background: #fef3c7; color: #b45309; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">상품정보: ${productOption}</span>
+            ${trackingInfo}
           </div>
           <div style="font-size: 13px; color: var(--gray-500);">제출일: ${formattedDate}</div>
+          ${tracking.inboundId ? `
+            <button onclick="viewInboundSource('${tracking.inboundId}')" style="margin-top: 8px; padding: 4px 10px; background: none; border: 1px solid var(--gray-300); border-radius: 6px; color: var(--gray-600); font-size: 11px; cursor: pointer;">
+              📋 원본 문의 보기
+            </button>
+          ` : ''}
         </div>
-        <div style="display: flex; gap: 8px;">
-          <button onclick="matchSupplierOnboardingToSupplier('${doc.id}')" class="btn btn-primary btn-sm">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button onclick="openSupplierMatchModal('${doc.id}')" class="btn btn-primary btn-sm">
             🔗 공급사 매칭
           </button>
+          ${doc.productInfoExcel ? `
+            <button onclick="importProductsFromOnboarding('${doc.id}')" class="btn btn-secondary btn-sm" style="background: #8b5cf6; border-color: #8b5cf6; color: white;">
+              📦 상품 이관
+            </button>
+          ` : ''}
           <button onclick="deletePendingSupplierOnboarding('${doc.id}')" class="btn btn-secondary btn-sm" style="background: #ef4444; border-color: #ef4444; color: white;">
             🗑️ 삭제
           </button>
@@ -35162,12 +35405,28 @@ function renderPendingSupplierOnboardingCard(doc) {
           </div>
         `}
       </div>
+
+      ${doc.checklist ? `
+        <div style="margin-top: 16px; padding: 12px; background: white; border: 1px solid var(--gray-200); border-radius: 8px;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📋 협업 조건</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px;">
+            ${doc.checklist.dealTiming ? `<span style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px;">공구일정: ${doc.checklist.dealTiming}</span>` : ''}
+            ${doc.checklist.sellerAssignment ? `<span style="background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 4px;">셀러배정: ${Array.isArray(doc.checklist.sellerAssignment) ? doc.checklist.sellerAssignment.join(', ') : doc.checklist.sellerAssignment}</span>` : ''}
+            ${doc.checklist.sampleSupport ? `<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px;">샘플: ${Array.isArray(doc.checklist.sampleSupport) ? doc.checklist.sampleSupport.join(', ') : doc.checklist.sampleSupport}</span>` : ''}
+          </div>
+          ${doc.checklist.additionalRequests ? `
+            <div style="margin-top: 8px; padding: 8px; background: var(--gray-50); border-radius: 4px; font-size: 11px; color: var(--gray-600);">
+              💬 ${doc.checklist.additionalRequests}
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
     </div>
   `;
 }
 
-// 공급사에 대기 서류 매칭
-async function matchSupplierOnboardingToSupplier(docId) {
+// 공급사 매칭 모달 열기
+function openSupplierMatchModal(docId) {
   const pendingDoc = state.pendingSupplierOnboardings.find(d => d.id === docId);
   if (!pendingDoc) {
     alert('서류를 찾을 수 없습니다.');
@@ -35175,54 +35434,393 @@ async function matchSupplierOnboardingToSupplier(docId) {
   }
 
   const suppliers = state.suppliers || [];
-  if (suppliers.length === 0) {
-    alert('등록된 공급사가 없습니다. 먼저 공급사를 등록해주세요.');
+  const m = document.getElementById('modal');
+  m.className = 'modal show';
+  m.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header" style="background: linear-gradient(135deg, #7c3aed, #a855f7); color: white; border-radius: 16px 16px 0 0;">
+        <h2 class="modal-title" style="color: white;">🔗 공급사 매칭</h2>
+        <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
+      </div>
+      <div style="padding: 24px;">
+        <!-- 서류 정보 요약 -->
+        <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--gray-500); margin-bottom: 8px;">제출된 서류</div>
+          <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            ${pendingDoc.productInfoExcel ? '<span style="background: #dcfce7; color: #166534; padding: 4px 12px; border-radius: 8px; font-size: 12px;">📊 상품정보</span>' : ''}
+            ${pendingDoc.businessLicense ? '<span style="background: #dbeafe; color: #1e40af; padding: 4px 12px; border-radius: 8px; font-size: 12px;">🏢 사업자등록증</span>' : ''}
+            ${pendingDoc.bankAccount ? '<span style="background: #fef3c7; color: #92400e; padding: 4px 12px; border-radius: 8px; font-size: 12px;">🏦 통장사본</span>' : ''}
+          </div>
+        </div>
+
+        <!-- 매칭 옵션 -->
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">매칭 방식 선택</label>
+
+          <!-- 기존 공급사에 매칭 -->
+          <div style="margin-bottom: 12px;">
+            <label style="display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer;" id="match-option-existing">
+              <input type="radio" name="match_option" value="existing" checked style="accent-color: #7c3aed; width: 18px; height: 18px;" onchange="updateMatchOptionStyle()">
+              <div style="flex: 1;">
+                <div style="font-weight: 600;">기존 공급사에 매칭</div>
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">이미 등록된 공급사에 서류를 연결합니다</div>
+              </div>
+            </label>
+          </div>
+
+          <!-- 새 공급사로 등록 -->
+          <div>
+            <label style="display: flex; align-items: center; gap: 12px; padding: 16px; background: var(--gray-50); border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer;" id="match-option-new">
+              <input type="radio" name="match_option" value="new" style="accent-color: #7c3aed; width: 18px; height: 18px;" onchange="updateMatchOptionStyle()">
+              <div style="flex: 1;">
+                <div style="font-weight: 600;">새 공급사로 등록</div>
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">새로운 공급사를 생성하고 서류를 연결합니다</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 기존 공급사 선택 (existing 선택 시) -->
+        <div id="existing-supplier-section">
+          <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">공급사 선택</label>
+          <select id="supplier-select" class="form-input" style="margin-bottom: 12px;">
+            <option value="">-- 공급사를 선택하세요 --</option>
+            ${suppliers.map(s => `<option value="${s.id}">${s.name} ${s.documentsSubmitted ? '(서류 제출됨)' : ''}</option>`).join('')}
+          </select>
+
+          <!-- 충돌 경고 -->
+          <div id="conflict-warning" style="display: none; background: #fef2f2; border: 1px solid #fecaca; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px; color: #dc2626; font-size: 13px; font-weight: 600;">
+              ⚠️ 기존 서류가 있습니다
+            </div>
+            <div style="font-size: 12px; color: #b91c1c; margin-top: 4px;">
+              이 공급사에는 이미 제출된 서류가 있습니다. 새 서류로 덮어쓰시겠습니까?
+            </div>
+          </div>
+        </div>
+
+        <!-- 새 공급사 정보 입력 (new 선택 시) -->
+        <div id="new-supplier-section" style="display: none;">
+          <div class="form-group">
+            <label class="form-label">공급사명 <span style="color: red;">*</span></label>
+            <input type="text" class="form-input" id="new-supplier-name" placeholder="공급사명을 입력하세요">
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div class="form-group">
+              <label class="form-label">담당자명</label>
+              <input type="text" class="form-input" id="new-supplier-contact" placeholder="담당자명">
+            </div>
+            <div class="form-group">
+              <label class="form-label">연락처</label>
+              <input type="text" class="form-input" id="new-supplier-phone" placeholder="010-0000-0000">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">이메일</label>
+            <input type="email" class="form-input" id="new-supplier-email" placeholder="email@example.com">
+          </div>
+        </div>
+
+        <!-- 상품 자동 이관 옵션 -->
+        ${pendingDoc.productInfoExcel ? `
+          <div style="margin-top: 16px; padding: 16px; background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 12px;">
+            <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+              <input type="checkbox" id="auto-import-products" checked style="margin-top: 2px; accent-color: #7c3aed; width: 18px; height: 18px;">
+              <div>
+                <div style="font-weight: 600; color: #7c3aed;">📦 상품 정보 자동 이관</div>
+                <div style="font-size: 12px; color: #6b21a8; margin-top: 2px;">온보딩에서 제출한 상품 정보를 상품 DB에 자동으로 등록합니다</div>
+              </div>
+            </label>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">취소</button>
+        <button type="button" class="btn btn-primary" onclick="executeSupplierMatch('${docId}')">매칭 실행</button>
+      </div>
+    </div>
+  `;
+
+  // 공급사 선택 시 충돌 확인
+  document.getElementById('supplier-select')?.addEventListener('change', function() {
+    const selectedId = this.value;
+    const supplier = suppliers.find(s => s.id === selectedId);
+    const warning = document.getElementById('conflict-warning');
+    if (supplier && supplier.documentsSubmitted) {
+      warning.style.display = 'block';
+    } else {
+      warning.style.display = 'none';
+    }
+  });
+}
+
+// 매칭 옵션 스타일 업데이트
+function updateMatchOptionStyle() {
+  const existing = document.getElementById('match-option-existing');
+  const newOpt = document.getElementById('match-option-new');
+  const existingSection = document.getElementById('existing-supplier-section');
+  const newSection = document.getElementById('new-supplier-section');
+
+  const selectedOption = document.querySelector('input[name="match_option"]:checked')?.value;
+
+  if (selectedOption === 'existing') {
+    existing.style.background = '#f5f3ff';
+    existing.style.borderColor = '#7c3aed';
+    newOpt.style.background = 'var(--gray-50)';
+    newOpt.style.borderColor = 'var(--gray-200)';
+    existingSection.style.display = 'block';
+    newSection.style.display = 'none';
+  } else {
+    existing.style.background = 'var(--gray-50)';
+    existing.style.borderColor = 'var(--gray-200)';
+    newOpt.style.background = '#f5f3ff';
+    newOpt.style.borderColor = '#7c3aed';
+    existingSection.style.display = 'none';
+    newSection.style.display = 'block';
+  }
+}
+
+// 매칭 실행
+async function executeSupplierMatch(docId) {
+  const pendingDoc = state.pendingSupplierOnboardings.find(d => d.id === docId);
+  if (!pendingDoc) {
+    alert('서류를 찾을 수 없습니다.');
     return;
   }
 
-  const supplierList = suppliers.map((s, i) => `${i + 1}. ${s.name}`).join('\n');
-  const selection = prompt(`매칭할 공급사 번호를 입력하세요:\n\n${supplierList}`);
-
-  if (!selection) return;
-
-  const index = parseInt(selection) - 1;
-  if (isNaN(index) || index < 0 || index >= suppliers.length) {
-    alert('올바른 번호를 입력해주세요.');
-    return;
-  }
-
-  const selectedSupplier = suppliers[index];
-
-  if (!confirm(`"${selectedSupplier.name}"에 서류를 매칭하시겠습니까?`)) {
-    return;
-  }
+  const matchOption = document.querySelector('input[name="match_option"]:checked')?.value;
+  const autoImport = document.getElementById('auto-import-products')?.checked;
+  let supplierId = null;
+  let supplierName = '';
 
   try {
-    // 공급사에 서류 정보 업데이트
-    await db.collection('suppliers').doc(selectedSupplier.id).update({
-      documentsSubmitted: true,
-      documentsApproved: false,
-      onboardingDocuments: {
-        productInfoOption: pendingDoc.productInfoOption,
-        productInfoExcel: pendingDoc.productInfoExcel || null,
-        businessLicense: pendingDoc.businessLicense || null,
-        bankAccount: pendingDoc.bankAccount || null,
-        submittedAt: pendingDoc.submittedAt,
-        source: pendingDoc.source
-      },
-      hasProductInfo: !!pendingDoc.productInfoExcel,
-      hasBusinessLicense: !!pendingDoc.businessLicense,
-      hasBankAccount: !!pendingDoc.bankAccount,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    if (matchOption === 'existing') {
+      supplierId = document.getElementById('supplier-select').value;
+      if (!supplierId) {
+        alert('공급사를 선택해주세요.');
+        return;
+      }
+      const supplier = state.suppliers.find(s => s.id === supplierId);
+      supplierName = supplier?.name || '';
+
+      // 기존 공급사에 서류 정보 업데이트
+      await db.collection('suppliers').doc(supplierId).update({
+        documentsSubmitted: true,
+        documentsApproved: false,
+        onboardingDocuments: {
+          productInfoOption: pendingDoc.productInfoOption,
+          productInfoExcel: pendingDoc.productInfoExcel || null,
+          productInfoDirect: pendingDoc.productInfoDirect || null,
+          businessLicense: pendingDoc.businessLicense || null,
+          bankAccount: pendingDoc.bankAccount || null,
+          qnaFile: pendingDoc.qnaFile || null,
+          orderFormFile: pendingDoc.orderFormFile || null,
+          checklist: pendingDoc.checklist || null,
+          sourceTracking: pendingDoc.sourceTracking || null,
+          submittedAt: pendingDoc.submittedAt,
+          source: pendingDoc.source
+        },
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } else {
+      // 새 공급사 생성
+      supplierName = document.getElementById('new-supplier-name').value.trim();
+      if (!supplierName) {
+        alert('공급사명을 입력해주세요.');
+        return;
+      }
+
+      const newSupplierData = {
+        name: supplierName,
+        contact: document.getElementById('new-supplier-contact').value.trim(),
+        phone: document.getElementById('new-supplier-phone').value.trim(),
+        email: document.getElementById('new-supplier-email').value.trim(),
+        status: 'contracted',
+        documentsSubmitted: true,
+        documentsApproved: false,
+        onboardingDocuments: {
+          productInfoOption: pendingDoc.productInfoOption,
+          productInfoExcel: pendingDoc.productInfoExcel || null,
+          productInfoDirect: pendingDoc.productInfoDirect || null,
+          businessLicense: pendingDoc.businessLicense || null,
+          bankAccount: pendingDoc.bankAccount || null,
+          qnaFile: pendingDoc.qnaFile || null,
+          orderFormFile: pendingDoc.orderFormFile || null,
+          checklist: pendingDoc.checklist || null,
+          sourceTracking: pendingDoc.sourceTracking || null,
+          submittedAt: pendingDoc.submittedAt,
+          source: pendingDoc.source
+        },
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      const docRef = await db.collection('suppliers').add(newSupplierData);
+      supplierId = docRef.id;
+    }
+
+    // 상품 자동 이관
+    if (autoImport && pendingDoc.productInfoExcel) {
+      await importProductsFromOnboardingInternal(pendingDoc, supplierId, supplierName);
+    }
 
     // 대기 서류 삭제
     await db.collection('pendingSupplierOnboardings').doc(docId).delete();
 
-    showToast(`✅ "${selectedSupplier.name}"에 서류가 매칭되었습니다.`);
+    closeModal();
+    showToast(`✅ "${supplierName}"에 서류가 매칭되었습니다.${autoImport ? ' 상품도 이관되었습니다.' : ''}`);
   } catch (error) {
     console.error('매칭 실패:', error);
     alert('매칭 중 오류가 발생했습니다.');
+  }
+}
+
+// 원본 문의 보기
+async function viewInboundSource(inboundId) {
+  // CRM 인바운드 컬렉션들에서 검색
+  const collections = ['supplierApplications', 'sellerApplications', 'supplierInquiries', 'sellerInquiries'];
+
+  for (const coll of collections) {
+    try {
+      const doc = await db.collection(coll).doc(inboundId).get();
+      if (doc.exists) {
+        const data = doc.data();
+        const m = document.getElementById('modal');
+        m.className = 'modal show';
+        m.innerHTML = `
+          <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+              <h2 class="modal-title">📋 원본 문의 정보</h2>
+              <button class="modal-close" onclick="closeModal()">×</button>
+            </div>
+            <div style="padding: 20px;">
+              <div style="background: var(--gray-50); padding: 16px; border-radius: 12px;">
+                ${data.companyName || data.name ? `<div style="margin-bottom: 8px;"><strong>이름:</strong> ${data.companyName || data.name}</div>` : ''}
+                ${data.contact || data.phone ? `<div style="margin-bottom: 8px;"><strong>연락처:</strong> ${data.contact || data.phone}</div>` : ''}
+                ${data.email ? `<div style="margin-bottom: 8px;"><strong>이메일:</strong> ${data.email}</div>` : ''}
+                ${data.message || data.note ? `<div style="margin-bottom: 8px;"><strong>메시지:</strong><br><div style="white-space: pre-wrap; margin-top: 4px; padding: 8px; background: white; border-radius: 4px;">${data.message || data.note}</div></div>` : ''}
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 12px;">
+                  컬렉션: ${coll} | ID: ${inboundId}
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="closeModal()">닫기</button>
+            </div>
+          </div>
+        `;
+        return;
+      }
+    } catch (e) {
+      console.error(`검색 실패 (${coll}):`, e);
+    }
+  }
+
+  alert('원본 문의를 찾을 수 없습니다.');
+}
+
+// 상품 이관 (독립 실행)
+async function importProductsFromOnboarding(docId) {
+  const pendingDoc = state.pendingSupplierOnboardings.find(d => d.id === docId);
+  if (!pendingDoc) {
+    alert('서류를 찾을 수 없습니다.');
+    return;
+  }
+
+  if (!pendingDoc.productInfoExcel) {
+    alert('상품 정보 파일이 없습니다.');
+    return;
+  }
+
+  const supplierName = prompt('상품을 등록할 공급사명을 입력하세요:');
+  if (!supplierName) return;
+
+  try {
+    await importProductsFromOnboardingInternal(pendingDoc, null, supplierName);
+    showToast(`✅ "${supplierName}" 상품이 상품 DB에 이관되었습니다.`);
+  } catch (error) {
+    console.error('상품 이관 실패:', error);
+    alert('상품 이관 중 오류가 발생했습니다.');
+  }
+}
+
+// 상품 이관 내부 함수
+async function importProductsFromOnboardingInternal(pendingDoc, supplierId, supplierName) {
+  if (!pendingDoc.productInfoExcel) return;
+
+  try {
+    // 엑셀 파일 다운로드 및 파싱
+    const response = await fetch(pendingDoc.productInfoExcel);
+    const blob = await response.blob();
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = e.target.result;
+          const workbook = XLSX.read(data, { type: 'binary' });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+          const batch = db.batch();
+          let count = 0;
+
+          // 헤더 제외하고 파싱 (공급사명, 브랜드명, 대표상품, 상품명, 정가, 공구판매가, 공급가, 수수료율)
+          for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length < 4) continue;
+
+            const productName = row[3];
+            if (!productName) continue;
+
+            const originalPrice = Number(row[4]) || 0;
+            const salePrice = Number(row[5]) || 0;
+            const supplyPrice = Number(row[6]) || 0;
+            let commission = Number(row[7]) || 0;
+
+            // 자동 계산
+            if (supplyPrice && !commission && salePrice) {
+              commission = parseFloat(((salePrice - supplyPrice) / salePrice * 100).toFixed(1));
+            }
+            let finalSupplyPrice = supplyPrice;
+            if (!supplyPrice && commission && salePrice) {
+              finalSupplyPrice = Math.round(salePrice * (1 - commission / 100));
+            }
+
+            const docRef = db.collection('supplierProducts').doc();
+            batch.set(docRef, {
+              supplierId: supplierId || '',
+              supplierName: supplierName,
+              brandName: String(row[1] || '').trim(),
+              representativeProduct: String(row[2] || '').trim(),
+              productName: String(productName).trim(),
+              originalPrice,
+              salePrice,
+              supplyPrice: finalSupplyPrice,
+              commission,
+              source: 'onboarding_import',
+              createdAt: new Date().toISOString()
+            });
+            count++;
+          }
+
+          if (count > 0) {
+            await batch.commit();
+            console.log(`${count}개 상품 이관 완료`);
+          }
+
+          resolve(count);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = () => reject(new Error('파일 읽기 실패'));
+      reader.readAsBinaryString(blob);
+    });
+  } catch (error) {
+    console.error('상품 이관 오류:', error);
+    throw error;
   }
 }
 
