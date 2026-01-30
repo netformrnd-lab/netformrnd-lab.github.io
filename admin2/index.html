@@ -4593,6 +4593,58 @@ function removeSelectedProduct(productId) {
   }
 }
 
+// 맞춤가이드 자동 생성: 선택된 상품의 대표상품 Q&A 수집
+function generateCustomGuide(selectedProducts) {
+  if (!selectedProducts || selectedProducts.length === 0) {
+    return null;
+  }
+
+  const guide = {
+    products: [],
+    qna: [],
+    generatedAt: new Date().toISOString()
+  };
+
+  const processedRepProducts = new Set();
+
+  selectedProducts.forEach(sp => {
+    const product = (state.supplierProducts || []).find(p => p.id === sp.productId);
+    if (!product) return;
+
+    const repProductName = product.representativeProduct || product.productName;
+
+    // 상품 정보 추가
+    guide.products.push({
+      productId: sp.productId,
+      productName: product.productName,
+      representativeProduct: repProductName,
+      brandName: product.brandName || '',
+      marginRate: sp.marginRate || 0
+    });
+
+    // 대표상품별 Q&A 수집 (중복 방지)
+    if (repProductName && !processedRepProducts.has(repProductName)) {
+      // 해당 대표상품의 Q&A가 있는 상품 찾기
+      const repProduct = (state.supplierProducts || []).find(p =>
+        p.representativeProduct === repProductName && p.qna && p.qna.length > 0
+      );
+
+      if (repProduct && repProduct.qna) {
+        guide.qna.push({
+          representativeProduct: repProductName,
+          items: repProduct.qna.map(q => ({
+            question: q.question,
+            answer: q.answer
+          }))
+        });
+        processedRepProducts.add(repProductName);
+      }
+    }
+  });
+
+  return guide.qna.length > 0 ? guide : null;
+}
+
 function submitDealForm(e, id) {
   // 🔒 권한 체크
   if (!canEdit()) { showNoPermission(); return; }
@@ -4619,7 +4671,10 @@ function submitDealForm(e, id) {
       supplyPrice: product ? Number(product.supplyPrice) || 0 : 0
     };
   });
-  
+
+  // 맞춤가이드 자동 생성: 선택된 상품의 대표상품 Q&A 수집
+  const customGuide = generateCustomGuide(selectedProducts);
+
   // 라디오 버튼에서 상태 값 가져오기
   const statusRadio = document.querySelector('input[name="deal-status"]:checked');
   
@@ -4636,6 +4691,7 @@ function submitDealForm(e, id) {
     eventCost: Number(document.getElementById('deal-eventCost')?.value) || 0, // 🎯 이벤트비용
     cafe24ProductNo: document.getElementById('deal-cafe24-product-no')?.value?.trim() || '', // 🎯 카페24 상품번호
     selectedProducts: selectedProducts,  // 이제 객체 배열: [{productId, productName, marginRate}]
+    customGuide: customGuide,  // 맞춤가이드 (대표상품 Q&A 기반)
     // 여정 체크리스트 (확장)
     journeySample: document.getElementById('journey-sample')?.checked || false,
     journeyPaymentLink: document.getElementById('journey-payment-link')?.checked || false,
