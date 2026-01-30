@@ -35355,7 +35355,7 @@ function renderPendingSupplierOnboardingCard(doc) {
           <button onclick="openSupplierMatchModal('${doc.id}')" class="btn btn-primary btn-sm">
             🔗 공급사 매칭
           </button>
-          ${doc.productInfoExcel ? `
+          ${(doc.productInfoExcel || (doc.productInfoDirect && doc.productInfoDirect.length > 0)) ? `
             <button onclick="importProductsFromOnboarding('${doc.id}')" class="btn btn-secondary btn-sm" style="background: #8b5cf6; border-color: #8b5cf6; color: white;">
               📦 상품 이관
             </button>
@@ -35729,8 +35729,9 @@ async function importProductsFromOnboarding(docId) {
     return;
   }
 
-  if (!pendingDoc.productInfoExcel) {
-    alert('상품 정보 파일이 없습니다.');
+  // 엑셀 또는 직접 입력 데이터가 있어야 함
+  if (!pendingDoc.productInfoExcel && !pendingDoc.productInfoDirect) {
+    alert('상품 정보가 없습니다.');
     return;
   }
 
@@ -35748,6 +35749,12 @@ async function importProductsFromOnboarding(docId) {
 
 // 상품 이관 내부 함수
 async function importProductsFromOnboardingInternal(pendingDoc, supplierId, supplierName) {
+  // 직접 입력 데이터 처리
+  if (pendingDoc.productInfoDirect && pendingDoc.productInfoDirect.length > 0) {
+    return importProductsFromDirectInput(pendingDoc, supplierId, supplierName);
+  }
+
+  // 엑셀 파일 처리
   if (!pendingDoc.productInfoExcel) return;
 
   try {
@@ -35761,12 +35768,42 @@ async function importProductsFromOnboardingInternal(pendingDoc, supplierId, supp
         try {
           const data = e.target.result;
           const workbook = XLSX.read(data, { type: 'binary' });
+
+          // 상품 시트 파싱
           const sheetName = workbook.SheetNames[0];
           const sheet = workbook.Sheets[sheetName];
           const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
+          // Q&A 시트 파싱
+          const qnaByRepProduct = {};
+          const qnaSheetName = workbook.SheetNames.find(n =>
+            n.toLowerCase().includes('q&a') || n.toLowerCase().includes('qna')
+          );
+          if (qnaSheetName) {
+            const qnaSheet = workbook.Sheets[qnaSheetName];
+            const qnaRows = XLSX.utils.sheet_to_json(qnaSheet, { header: 1 });
+            // 헤더 제외하고 파싱 (대표상품, 질문, 답변)
+            for (let i = 1; i < qnaRows.length; i++) {
+              const qRow = qnaRows[i];
+              if (!qRow || !qRow[0] || !qRow[1] || !qRow[2]) continue;
+              // 안내 문구 행 스킵
+              if (String(qRow[0]).startsWith('※')) continue;
+
+              const repProduct = String(qRow[0]).trim();
+              if (!qnaByRepProduct[repProduct]) {
+                qnaByRepProduct[repProduct] = [];
+              }
+              qnaByRepProduct[repProduct].push({
+                question: String(qRow[1]).trim(),
+                answer: String(qRow[2]).trim()
+              });
+            }
+            console.log(`Q&A 파싱 완료: ${Object.keys(qnaByRepProduct).length}개 대표상품`);
+          }
+
           const batch = db.batch();
           let count = 0;
+          const processedRepProducts = new Set(); // 대표상품별 Q&A는 첫 상품에만 저장
 
           // 헤더 제외하고 파싱 (공급사명, 브랜드명, 대표상품, 상품명, 정가, 공구판매가, 공급가, 수수료율)
           for (let i = 1; i < rows.length; i++) {
@@ -35790,12 +35827,12 @@ async function importProductsFromOnboardingInternal(pendingDoc, supplierId, supp
               finalSupplyPrice = Math.round(salePrice * (1 - commission / 100));
             }
 
-            const docRef = db.collection('supplierProducts').doc();
-            batch.set(docRef, {
+            const repProduct = String(row[2] || '').trim();
+            const productData = {
               supplierId: supplierId || '',
               supplierName: supplierName,
               brandName: String(row[1] || '').trim(),
-              representativeProduct: String(row[2] || '').trim(),
+              representativeProduct: repProduct,
               productName: String(productName).trim(),
               originalPrice,
               salePrice,
@@ -35803,13 +35840,23 @@ async function importProductsFromOnboardingInternal(pendingDoc, supplierId, supp
               commission,
               source: 'onboarding_import',
               createdAt: new Date().toISOString()
-            });
+            };
+
+            // 대표상품의 첫 번째 상품에 Q&A 추가
+            if (repProduct && qnaByRepProduct[repProduct] && !processedRepProducts.has(repProduct)) {
+              productData.qna = qnaByRepProduct[repProduct];
+              productData.isRepresentative = true; // 대표상품 플래그
+              processedRepProducts.add(repProduct);
+            }
+
+            const docRef = db.collection('supplierProducts').doc();
+            batch.set(docRef, productData);
             count++;
           }
 
           if (count > 0) {
             await batch.commit();
-            console.log(`${count}개 상품 이관 완료`);
+            console.log(`${count}개 상품 이관 완료 (Q&A 포함: ${processedRepProducts.size}개 대표상품)`);
           }
 
           resolve(count);
@@ -35822,6 +35869,92 @@ async function importProductsFromOnboardingInternal(pendingDoc, supplierId, supp
     });
   } catch (error) {
     console.error('상품 이관 오류:', error);
+    throw error;
+  }
+}
+
+// 직접 입력 데이터에서 상품 이관
+async function importProductsFromDirectInput(pendingDoc, supplierId, supplierName) {
+  const products = pendingDoc.productInfoDirect || [];
+  const qnaData = pendingDoc.qnaDirect || [];
+
+  if (products.length === 0) {
+    console.log('이관할 상품이 없습니다.');
+    return 0;
+  }
+
+  try {
+    // Q&A를 대표상품별로 그룹화
+    const qnaByRepProduct = {};
+    qnaData.forEach(q => {
+      const repProduct = q.representativeProduct || '';
+      if (repProduct) {
+        if (!qnaByRepProduct[repProduct]) {
+          qnaByRepProduct[repProduct] = [];
+        }
+        qnaByRepProduct[repProduct].push({
+          question: q.question,
+          answer: q.answer
+        });
+      }
+    });
+
+    const batch = db.batch();
+    let count = 0;
+    const processedRepProducts = new Set();
+
+    for (const product of products) {
+      if (!product.productName) continue;
+
+      const originalPrice = Number(product.retailPrice) || 0;
+      const salePrice = Number(product.salePrice) || 0;
+      const supplyPrice = Number(product.supplyPrice) || 0;
+      let commission = Number(product.commission) || 0;
+
+      // 자동 계산
+      if (supplyPrice && !commission && salePrice) {
+        commission = parseFloat(((salePrice - supplyPrice) / salePrice * 100).toFixed(1));
+      }
+      let finalSupplyPrice = supplyPrice;
+      if (!supplyPrice && commission && salePrice) {
+        finalSupplyPrice = Math.round(salePrice * (1 - commission / 100));
+      }
+
+      const repProduct = String(product.representativeProduct || '').trim();
+      const productData = {
+        supplierId: supplierId || '',
+        supplierName: supplierName,
+        brandName: String(product.brandName || '').trim(),
+        representativeProduct: repProduct,
+        productName: String(product.productName).trim(),
+        originalPrice,
+        salePrice,
+        supplyPrice: finalSupplyPrice,
+        commission,
+        source: 'onboarding_direct_import',
+        createdAt: new Date().toISOString()
+      };
+
+      // 대표상품의 첫 번째 상품에 Q&A 추가
+      if (repProduct && qnaByRepProduct[repProduct] && !processedRepProducts.has(repProduct)) {
+        productData.qna = qnaByRepProduct[repProduct];
+        productData.isRepresentative = true;
+        processedRepProducts.add(repProduct);
+      }
+
+      const docRef = db.collection('supplierProducts').doc();
+      batch.set(docRef, productData);
+      count++;
+    }
+
+    if (count > 0) {
+      await batch.commit();
+      console.log(`${count}개 상품 이관 완료 (직접 입력, Q&A 포함: ${processedRepProducts.size}개 대표상품)`);
+    }
+
+    return count;
+  } catch (error) {
+    console.error('직접 입력 상품 이관 오류:', error);
     throw error;
   }
 }
