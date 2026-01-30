@@ -21003,11 +21003,19 @@
       const currentUserLoginId = state.currentUser?.loginId || '';
       const memberFilter = taskPlanState.filter.member;
 
-      // 담당자 매칭 헬퍼 함수 (ID 기반 + 이름 폴백)
+      // 담당자 매칭 헬퍼 함수 (ID 기반 + 다중 폴백)
       const isAssignedToUser = (task, userId, userName, loginId) => {
-        if (task.assigneeId && task.assigneeId === userId) return true;
-        if (task.assigneeLoginId && task.assigneeLoginId === loginId) return true;
-        if (!task.assigneeId && task.assignee === userName) return true;
+        const taskAssignee = (task.assignee || '').trim();
+        const taskAssigneeId = (task.assigneeId || '').trim();
+        const taskLoginId = (task.assigneeLoginId || '').trim();
+        const uName = (userName || '').trim();
+        const uId = (userId || '').trim();
+        const uLoginId = (loginId || '').trim();
+
+        if (taskAssigneeId && uId && taskAssigneeId === uId) return true;
+        if (taskLoginId && uLoginId && taskLoginId === uLoginId) return true;
+        if (taskAssignee && uName && taskAssignee === uName) return true;
+        if (taskAssignee && uLoginId && taskAssignee === uLoginId) return true;
         return false;
       };
 
@@ -21016,8 +21024,12 @@
       if (viewMode === 'my') {
         filteredTasks = taskPlanState.tasks.filter(t => isAssignedToUser(t, currentUserId, currentUserName, currentUserLoginId));
       } else if (memberFilter !== 'all') {
-        // memberFilter는 팀원 ID
-        filteredTasks = taskPlanState.tasks.filter(t => t.assigneeId === memberFilter || t.assignee === memberFilter);
+        // memberFilter는 팀원 ID 또는 이름
+        filteredTasks = taskPlanState.tasks.filter(t =>
+          t.assigneeId === memberFilter ||
+          t.assignee === memberFilter ||
+          (t.assignee || '').trim() === memberFilter
+        );
       }
 
       const now = new Date();
@@ -21383,22 +21395,36 @@
       const sunday = new Date(monday);
       sunday.setDate(monday.getDate() + 6);
 
-      // 담당자 매칭 헬퍼 함수 (ID 기반 + 이름 폴백)
+      // 담당자 매칭 헬퍼 함수 (ID 기반 + 다중 폴백)
       const isAssignedToUser = (task, userId, userName, loginId) => {
-        // 1. ID 매칭 (우선)
-        if (task.assigneeId && task.assigneeId === userId) return true;
+        const taskAssignee = (task.assignee || '').trim();
+        const taskAssigneeId = (task.assigneeId || '').trim();
+        const taskLoginId = (task.assigneeLoginId || '').trim();
+        const uName = (userName || '').trim();
+        const uId = (userId || '').trim();
+        const uLoginId = (loginId || '').trim();
+
+        // 1. ID 매칭
+        if (taskAssigneeId && uId && taskAssigneeId === uId) return true;
         // 2. 로그인 ID 매칭
-        if (task.assigneeLoginId && task.assigneeLoginId === loginId) return true;
-        // 3. 이름 매칭 (기존 데이터 호환)
-        if (!task.assigneeId && task.assignee === userName) return true;
+        if (taskLoginId && uLoginId && taskLoginId === uLoginId) return true;
+        // 3. 이름 매칭 (기존 데이터 호환 - assigneeId 유무와 무관하게)
+        if (taskAssignee && uName && taskAssignee === uName) return true;
+        // 4. 이름 vs 로그인ID 매칭 (한국어 이름이 로그인ID인 경우)
+        if (taskAssignee && uLoginId && taskAssignee === uLoginId) return true;
+        // 5. assignee vs 현재 loginId 매칭
+        if (taskAssignee && uLoginId && taskAssignee === uLoginId) return true;
+
         return false;
       };
 
       // 디버그 로그
       console.log('[업무필터] viewMode:', viewMode, '| currentUser:', currentUserId, currentUserName, currentUserLoginId);
       console.log('[업무필터] 전체 업무:', taskPlanState.tasks.length, '개');
-      if (viewMode === 'my' && taskPlanState.tasks.length > 0) {
-        console.log('[업무필터] 첫 번째 업무:', taskPlanState.tasks[0].title, '| assignee:', taskPlanState.tasks[0].assignee, '| assigneeId:', taskPlanState.tasks[0].assigneeId);
+      if (taskPlanState.tasks.length > 0) {
+        const t = taskPlanState.tasks[0];
+        console.log('[업무필터] 샘플 업무:', t.title, '| assignee:', t.assignee, '| assigneeId:', t.assigneeId);
+        console.log('[업무필터] 매칭 테스트:', isAssignedToUser(t, currentUserId, currentUserName, currentUserLoginId));
       }
 
       let filtered = taskPlanState.tasks.filter(task => {
