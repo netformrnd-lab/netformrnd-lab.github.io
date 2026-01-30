@@ -2388,14 +2388,20 @@
     async function loadCurrentUser() {
       try {
         const loginId = sessionStorage.getItem('moyeora_login_id');
+        console.log('[사용자 로드] sessionStorage loginId:', loginId);
+
         if (loginId) {
           const snapshot = await db.collection('teamMembers').where('loginId', '==', loginId).get();
+          console.log('[사용자 로드] teamMembers 쿼리 결과:', snapshot.size, '건');
+
           if (!snapshot.empty) {
             state.currentUser = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+            console.log('[사용자 로드] 성공:', state.currentUser.id, state.currentUser.name, state.currentUser.loginId);
           }
         }
         // 기본값 설정 (관리자로 가정)
         if (!state.currentUser) {
+          console.warn('[사용자 로드] 실패 - 기본값 사용');
           state.currentUser = { id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' };
         }
       } catch (e) {
@@ -20953,9 +20959,9 @@
     // 업무 계획 렌더링
     function renderTaskPlan() {
       initDailyPrinciple();
-      // 기본값: 내 업무 모드, 현재 사용자 기준
+      // 기본값: 내 업무 모드, 현재 사용자 ID 기준
       taskPlanState.filter.viewMode = 'my';
-      taskPlanState.filter.member = state.currentUser?.name || 'all';
+      taskPlanState.filter.member = state.currentUser?.id || 'all';
       taskPlanState.filter.quickFilter = 'doing';
       loadTaskPlanData();
     }
@@ -20984,15 +20990,27 @@
     function updateTaskPlanSummary() {
       // 현재 뷰 모드와 필터에 맞는 업무만 카운트
       const viewMode = taskPlanState.filter.viewMode;
+      // ID 기반 매칭을 위한 현재 사용자 정보
+      const currentUserId = state.currentUser?.id || '';
       const currentUserName = state.currentUser?.name || '';
+      const currentUserLoginId = state.currentUser?.loginId || '';
       const memberFilter = taskPlanState.filter.member;
+
+      // 담당자 매칭 헬퍼 함수 (ID 기반 + 이름 폴백)
+      const isAssignedToUser = (task, userId, userName, loginId) => {
+        if (task.assigneeId && task.assigneeId === userId) return true;
+        if (task.assigneeLoginId && task.assigneeLoginId === loginId) return true;
+        if (!task.assigneeId && task.assignee === userName) return true;
+        return false;
+      };
 
       // 필터링된 업무 (내 업무 / 팀 업무에 따라)
       let filteredTasks = taskPlanState.tasks;
       if (viewMode === 'my') {
-        filteredTasks = taskPlanState.tasks.filter(t => t.assignee === currentUserName);
+        filteredTasks = taskPlanState.tasks.filter(t => isAssignedToUser(t, currentUserId, currentUserName, currentUserLoginId));
       } else if (memberFilter !== 'all') {
-        filteredTasks = taskPlanState.tasks.filter(t => t.assignee === memberFilter);
+        // memberFilter는 팀원 ID
+        filteredTasks = taskPlanState.tasks.filter(t => t.assigneeId === memberFilter || t.assignee === memberFilter);
       }
 
       const now = new Date();
@@ -21165,38 +21183,48 @@
       container.style.display = 'block';
     }
 
-    // 팀원 탭 버튼 업데이트
+    // 팀원 탭 버튼 업데이트 (ID 기반)
     function updateTaskPlanMemberTabs() {
       const container = document.getElementById('taskPlanMemberTabs');
       if (!container) return;
 
-      // 팀원 목록 수집
-      const members = [];
+      // 팀원 목록 수집 (ID 기반)
+      const memberMap = new Map(); // id -> { id, name, count }
       if (state.teamMembers && state.teamMembers.length > 0) {
-        state.teamMembers.forEach(m => members.push(m.name));
+        state.teamMembers.forEach(m => {
+          memberMap.set(m.id, { id: m.id, name: m.name, count: 0 });
+        });
       }
 
-      // 업무에서 추가 담당자 수집
+      // 업무별 담당자 카운트 (ID 또는 이름으로)
       taskPlanState.tasks.forEach(t => {
-        if (t.assignee && !members.includes(t.assignee)) {
-          members.push(t.assignee);
+        if (t.assigneeId && memberMap.has(t.assigneeId)) {
+          memberMap.get(t.assigneeId).count++;
+        } else if (t.assignee) {
+          // 기존 이름 기반 데이터 처리
+          const found = Array.from(memberMap.values()).find(m => m.name === t.assignee);
+          if (found) {
+            found.count++;
+          } else {
+            // 팀원 목록에 없는 담당자 (기존 데이터)
+            memberMap.set(t.assignee, { id: t.assignee, name: t.assignee, count: 1 });
+          }
         }
       });
 
       // 미지정 업무 개수
-      const unassignedCount = taskPlanState.tasks.filter(t => !t.assignee).length;
+      const unassignedCount = taskPlanState.tasks.filter(t => !t.assigneeId && !t.assignee).length;
 
       // select 드롭다운 업데이트
       const select = document.getElementById('taskPlanMemberSelect');
       if (select) {
         let options = `
-          <option value="all" ${taskPlanState.filter.member === 'all' ? 'selected' : ''}>👤 전체 (${taskPlanState.tasks.length})</option>
+          <option value="all" ${taskPlanState.filter.member === 'all' ? 'selected' : ''}>👥 전체 (${taskPlanState.tasks.length})</option>
           <option value="unassigned" ${taskPlanState.filter.member === 'unassigned' ? 'selected' : ''}>미지정 (${unassignedCount})</option>
         `;
 
-        members.forEach(member => {
-          const count = taskPlanState.tasks.filter(t => t.assignee === member).length;
-          options += `<option value="${member}" ${taskPlanState.filter.member === member ? 'selected' : ''}>${member} (${count})</option>`;
+        memberMap.forEach((member, id) => {
+          options += `<option value="${id}" ${taskPlanState.filter.member === id ? 'selected' : ''}>${member.name} (${member.count})</option>`;
         });
 
         select.innerHTML = options;
@@ -21223,8 +21251,8 @@
         teamBtn.style.boxShadow = 'none';
         // 팀원 선택 숨김
         if (memberSelect) memberSelect.style.display = 'none';
-        // 필터를 현재 사용자로 설정
-        taskPlanState.filter.member = state.currentUser?.name || 'all';
+        // 필터를 현재 사용자 ID로 설정 (ID 기반)
+        taskPlanState.filter.member = state.currentUser?.id || 'all';
       } else {
         // 팀 업무 모드
         teamBtn.style.background = 'white';
@@ -21241,6 +21269,7 @@
         taskPlanState.filter.member = 'all';
       }
 
+      updateTaskPlanMemberTabs(); // 드롭다운 업데이트
       updateTaskPlanSummary();
       filterTaskPlan();
     }
@@ -21332,7 +21361,10 @@
       if (!container) return;
 
       const { member, search, groupBy, quickFilter, viewMode } = taskPlanState.filter;
+      // ID 기반 매칭을 위한 현재 사용자 정보
+      const currentUserId = state.currentUser?.id || '';
       const currentUserName = state.currentUser?.name || '';
+      const currentUserLoginId = state.currentUser?.loginId || '';
       const now = new Date();
       now.setHours(0, 0, 0, 0);
       const todayStr = now.toISOString().split('T')[0];
@@ -21344,16 +21376,28 @@
       const sunday = new Date(monday);
       sunday.setDate(monday.getDate() + 6);
 
+      // 담당자 매칭 헬퍼 함수 (ID 기반 + 이름 폴백)
+      const isAssignedToUser = (task, userId, userName, loginId) => {
+        // 1. ID 매칭 (우선)
+        if (task.assigneeId && task.assigneeId === userId) return true;
+        // 2. 로그인 ID 매칭
+        if (task.assigneeLoginId && task.assigneeLoginId === loginId) return true;
+        // 3. 이름 매칭 (기존 데이터 호환)
+        if (!task.assigneeId && task.assignee === userName) return true;
+        return false;
+      };
+
       let filtered = taskPlanState.tasks.filter(task => {
         // 뷰 모드 필터 (내 업무 / 팀 업무)
         if (viewMode === 'my') {
-          if (task.assignee !== currentUserName) return false;
+          if (!isAssignedToUser(task, currentUserId, currentUserName, currentUserLoginId)) return false;
         } else {
           // 팀 업무 모드에서 팀원 필터
           if (member === 'unassigned') {
-            if (task.assignee) return false;
+            if (task.assigneeId || task.assignee) return false;
           } else if (member !== 'all') {
-            if (task.assignee !== member) return false;
+            // member는 이제 팀원 ID
+            if (task.assigneeId !== member && task.assignee !== member) return false;
           }
         }
 
@@ -21870,11 +21914,13 @@
         krOptions += `<option value="${kr.id}" ${task.krId === kr.id ? 'selected' : ''}>${kr.name}</option>`;
       });
 
-      // 담당자 옵션 생성
+      // 담당자 옵션 생성 (ID 기반)
       let assigneeOptions = '<option value="">담당자 선택</option>';
       if (state.teamMembers && state.teamMembers.length > 0) {
         state.teamMembers.forEach(member => {
-          assigneeOptions += `<option value="${member.name}" ${task.assignee === member.name ? 'selected' : ''}>${member.name}</option>`;
+          // value는 ID, 표시는 이름, data-name에 이름 저장
+          const isSelected = task.assigneeId === member.id || (!task.assigneeId && task.assignee === member.name);
+          assigneeOptions += `<option value="${member.id}" data-name="${member.name}" data-loginid="${member.loginId || ''}" ${isSelected ? 'selected' : ''}>${member.name}</option>`;
         });
       }
 
@@ -22125,11 +22171,17 @@
     async function saveTaskPlan() {
       const title = document.getElementById('taskPlanTitle').value.trim();
       const description = document.getElementById('taskPlanDesc').value.trim();
-      const assignee = document.getElementById('taskPlanAssignee').value;
       const deadline = document.getElementById('taskPlanDeadline').value;
       const krId = document.getElementById('taskPlanKr').value;
       const statusEl = document.getElementById('taskPlanStatus');
       const status = statusEl ? statusEl.value : 'waiting';
+
+      // 담당자 정보 추출 (ID 기반)
+      const assigneeSelect = document.getElementById('taskPlanAssignee');
+      const assigneeId = assigneeSelect.value; // 팀원 문서 ID
+      const selectedOption = assigneeSelect.options[assigneeSelect.selectedIndex];
+      const assignee = selectedOption?.dataset?.name || ''; // 표시용 이름
+      const assigneeLoginId = selectedOption?.dataset?.loginid || ''; // 로그인 ID
 
       if (!title) {
         alert('업무 제목을 입력해주세요.');
@@ -22139,7 +22191,9 @@
       const taskData = {
         title,
         description,
-        assignee,
+        assigneeId,        // 매칭용 ID (핵심)
+        assignee,          // 표시용 이름 (호환성)
+        assigneeLoginId,   // 로그인 ID (백업)
         deadline,
         krId,
         status,
