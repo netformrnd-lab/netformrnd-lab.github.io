@@ -1052,10 +1052,20 @@
         let productOption = null; // 'now' or 'later'
         let uploadedFiles = {};
         let supplierId = null;
+        let sourceTracking = {}; // 유입 경로 추적
 
-        // URL에서 공급사 ID 확인
+        // URL에서 파라미터 확인
         const urlParams = new URLSearchParams(window.location.search);
         supplierId = urlParams.get('id');
+
+        // 유입 경로 추적 파라미터 수집
+        sourceTracking = {
+            inboundId: urlParams.get('inboundId') || null,      // CRM 인바운드 ID
+            proposalId: urlParams.get('proposalId') || null,    // 제안서 ID
+            sourceType: urlParams.get('source') || (supplierId ? 'outbound' : 'inbound'), // crm, proposal, direct
+            referrer: document.referrer || null,
+            accessedAt: new Date().toISOString()
+        };
 
         // 공급사 정보 로드
         let supplierData = null;
@@ -1313,7 +1323,10 @@
                     docData.bankAccount = bankUrl;
                 }
 
-                // Firestore에 저장 - 모두 공급사 DB에 바로 저장
+                // 유입 경로 정보 추가
+                docData.sourceTracking = sourceTracking;
+
+                // Firestore에 저장
                 if (supplierId) {
                     // 기존 공급사에 서류 정보 업데이트 (아웃바운드)
                     docData.source = 'outbound_onboarding';
@@ -1325,19 +1338,11 @@
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 } else {
-                    // 공급사 ID 없이 제출된 경우 - 공급사 DB에 신규 등록 (인바운드)
+                    // 공급사 ID 없이 제출된 경우 - 대기 서류로 저장 (관리자 승인 필요)
                     docData.source = 'inbound_onboarding';
-                    await db.collection('suppliers').add({
-                        name: '온보딩 신청 공급사', // 나중에 CRM에서 수정
-                        contact: '',
-                        email: '',
-                        phone: '',
-                        status: 'onboarding_completed', // 온보딩 완료, 정보 입력 필요
-                        documentsSubmitted: true,
-                        documentsApproved: false,
-                        onboardingStatus: 'completed',
-                        onboardingDocuments: docData,
-                        registeredAt: new Date().toISOString(),
+                    await db.collection('pendingSupplierOnboardings').add({
+                        ...docData,
+                        status: 'pending', // 승인 대기
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 }
