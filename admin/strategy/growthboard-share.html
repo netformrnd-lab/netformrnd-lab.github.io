@@ -2418,127 +2418,125 @@
       `;
     }
 
-    // 팀 마인드맵 HTML 생성 (팀원별 기여, 행동→성과 연결)
+    // 팀 마인드맵 HTML 생성 (중앙 배치, 팀원별 기여, 행동→성과 연결)
     function renderTeamMindmapHtml() {
       if (!snapshotData || !snapshotData.objective) return '<div style="text-align: center; color: var(--gray-400); padding: 40px;">목표가 설정되지 않았습니다</div>';
 
       const versionColors = { 'A': '#6366F1', 'B': '#10B981', 'C': '#F59E0B' };
 
-      // KR별 마인드맵 생성
-      const krRows = snapshotData.keyResults.map((kr, krIdx) => {
+      // KR별 데이터 준비
+      const krDataList = snapshotData.keyResults.map((kr, krIdx) => {
         const kpisForKR = snapshotData.kpis.filter(kpi => kpi.keyResultId === kr.id);
         const lagsForKR = snapshotData.laggingIndicators.filter(l => kpisForKR.some(k => k.id === l.kpiId));
         const logsForKR = snapshotData.dailyLogs.filter(log => lagsForKR.some(lag => lag.id === log.laggingIndicatorId));
-
-        if (logsForKR.length === 0) return '';
 
         // 버전별 집계
         const versionStats = {};
         lagsForKR.filter(l => l.type !== 'output').forEach(lag => {
           const version = lag.version || 'A';
-          if (!versionStats[version]) {
-            versionStats[version] = { inputs: [], outputs: [], totalInput: 0, totalOutput: 0, members: {} };
-          }
+          if (!versionStats[version]) versionStats[version] = { totalInput: 0, totalOutput: 0, members: {} };
           const logs = snapshotData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
           logs.forEach(log => {
             const memberId = log.memberId || 'anonymous';
             const memberName = log.memberName || memberId;
-            if (!versionStats[version].members[memberId]) {
-              versionStats[version].members[memberId] = { name: memberName, inputs: 0, outputs: 0 };
-            }
+            if (!versionStats[version].members[memberId]) versionStats[version].members[memberId] = { name: memberName, inputs: 0, outputs: 0 };
             versionStats[version].members[memberId].inputs += (log.resultValue || 0);
             versionStats[version].totalInput += (log.resultValue || 0);
           });
-          const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-          if (total > 0) {
-            versionStats[version].inputs.push({ name: lag.name, total, unit: lag.unit || '건' });
-          }
         });
-
         lagsForKR.filter(l => l.type === 'output').forEach(lag => {
           const version = lag.version || 'A';
-          if (!versionStats[version]) {
-            versionStats[version] = { inputs: [], outputs: [], totalInput: 0, totalOutput: 0, members: {} };
-          }
+          if (!versionStats[version]) versionStats[version] = { totalInput: 0, totalOutput: 0, members: {} };
           const logs = snapshotData.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
           logs.forEach(log => {
             const memberId = log.memberId || 'anonymous';
             const memberName = log.memberName || memberId;
-            if (!versionStats[version].members[memberId]) {
-              versionStats[version].members[memberId] = { name: memberName, inputs: 0, outputs: 0 };
-            }
+            if (!versionStats[version].members[memberId]) versionStats[version].members[memberId] = { name: memberName, inputs: 0, outputs: 0 };
             versionStats[version].members[memberId].outputs += (log.resultValue || 0);
             versionStats[version].totalOutput += (log.resultValue || 0);
           });
-          const kpi = snapshotData.kpis.find(k => k.id === lag.kpiId);
-          const unit = kpi?.unit || lag.unit || '건';
-          const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-          if (total > 0) {
-            versionStats[version].outputs.push({ name: lag.name, total, unit });
-          }
         });
 
-        // 버전별 카드 HTML
-        const versionCards = Object.entries(versionStats)
-          .filter(([v, s]) => s.totalInput > 0 || s.totalOutput > 0)
-          .map(([version, stats]) => {
-            const color = versionColors[version] || '#6B7280';
-            const inputText = stats.inputs.map(i => i.name.substring(0, 8) + ' ' + i.total + i.unit).join(', ') || '없음';
-            const outputText = stats.outputs.map(o => o.name.substring(0, 8) + ' ' + o.total + o.unit).join(', ') || '없음';
+        return { kr, krIdx, logsForKR, versionStats };
+      }).filter(d => d.logsForKR.length > 0);
 
-            // 팀원별 기여 요약
-            const memberBadges = Object.values(stats.members)
-              .filter(m => m.inputs > 0 || m.outputs > 0)
-              .slice(0, 3)
-              .map(m => '<span style="background: var(--gray-100); padding: 2px 6px; border-radius: 4px; font-size: 9px; color: var(--gray-600);">' + m.name + '</span>')
-              .join(' ');
-
-            return '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">' +
-              '<span style="background: ' + color + '; color: white; padding: 3px 10px; border-radius: 5px; font-size: 11px; font-weight: 700;">🧪 ' + version + '</span>' +
-              '<div style="background: #ECFDF5; border-radius: 8px; padding: 10px 14px; min-width: 130px;">' +
-                '<div style="font-size: 10px; color: #059669; font-weight: 600;">📥 행동</div>' +
-                '<div style="font-size: 12px; font-weight: 700; color: var(--gray-800);">' + stats.totalInput + '건</div>' +
-                '<div style="font-size: 9px; color: var(--gray-500);">' + inputText.substring(0, 25) + '</div>' +
-              '</div>' +
-              '<div style="font-size: 18px; color: ' + color + '; font-weight: 700;">→</div>' +
-              '<div style="background: #FEF3C7; border-radius: 8px; padding: 10px 14px; min-width: 110px;">' +
-                '<div style="font-size: 10px; color: #D97706; font-weight: 600;">📤 성과</div>' +
-                '<div style="font-size: 12px; font-weight: 700; color: var(--success);">' + stats.totalOutput + '건</div>' +
-                '<div style="font-size: 9px; color: var(--gray-500);">' + outputText.substring(0, 25) + '</div>' +
-              '</div>' +
-              (memberBadges ? '<div style="margin-left: 8px;"><div style="font-size: 9px; color: var(--gray-500); margin-bottom: 2px;">👥 기여</div>' + memberBadges + '</div>' : '') +
-            '</div>';
-          }).join('');
-
-        if (!versionCards) return '';
-
-        return '<div style="display: flex; align-items: flex-start; gap: 0; margin-bottom: 20px;">' +
-          '<div style="background: ' + okrColors[krIdx] + '15; border: 2px solid ' + okrColors[krIdx] + '; border-radius: 12px; padding: 14px 18px; text-align: center; min-width: 140px;">' +
-            '<div style="font-size: 10px; color: ' + okrColors[krIdx] + '; font-weight: 600;">메인 KPI</div>' +
-            '<div style="font-size: 12px; font-weight: 700; color: var(--gray-800); margin: 6px 0;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
-            '<div style="font-size: 10px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
-          '</div>' +
-          '<div style="display: flex; align-items: center; padding: 0 10px;"><div style="width: 24px; height: 2px; background: ' + okrColors[krIdx] + ';"></div></div>' +
-          '<div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px; flex: 1;">' +
-            '<div style="font-size: 11px; font-weight: 600; color: var(--gray-600); margin-bottom: 12px;">🧪 AB테스트 버전별 행동→성과</div>' +
-            versionCards +
-          '</div>' +
-        '</div>';
-      }).filter(h => h).join('');
-
-      if (!krRows) {
+      if (krDataList.length === 0) {
         return '<div style="text-align: center; color: var(--gray-400); padding: 40px;">기록된 활동이 없습니다</div>';
       }
 
-      return '<div style="display: flex; align-items: flex-start; gap: 0; min-width: max-content;">' +
-        '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 150px;">' +
-          '<div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 16px 22px; border-radius: 14px; text-align: center; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);">' +
-            '<div style="font-size: 10px; opacity: 0.85;">🎯 목표</div>' +
-            '<div style="font-size: 13px; font-weight: 700; margin-top: 6px;">' + snapshotData.objective.name + '</div>' +
+      // KR을 왼쪽/오른쪽으로 분할
+      const leftKRs = krDataList.filter((_, i) => i % 2 === 0);
+      const rightKRs = krDataList.filter((_, i) => i % 2 === 1);
+
+      // KR 노드 HTML 생성
+      const renderKRNode = (data, direction) => {
+        const { kr, krIdx, logsForKR, versionStats } = data;
+        const isLeft = direction === 'left';
+        const branchColor = okrColors[krIdx];
+
+        const versionHtml = Object.entries(versionStats).filter(([v, s]) => s.totalInput > 0 || s.totalOutput > 0).map(([version, stats]) => {
+          const vColor = versionColors[version] || '#6B7280';
+          const memberList = Object.values(stats.members).filter(m => m.inputs > 0 || m.outputs > 0);
+          const memberBadges = memberList.slice(0, 2).map(m => m.name).join(', ') + (memberList.length > 2 ? ' 외' : '');
+
+          return '<div style="background: white; border: 2px solid ' + vColor + '30; border-radius: 10px; padding: 10px; margin-bottom: 8px; min-width: 200px;">' +
+            '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">' +
+              '<span style="background: ' + vColor + '; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;">🧪 ' + version + '</span>' +
+              '<span style="font-size: 9px; color: var(--gray-500);">' + memberList.length + '명</span>' +
+            '</div>' +
+            '<div style="display: flex; align-items: center; gap: 6px; font-size: 11px;">' +
+              '<div style="background: #EEF2FF; padding: 6px 10px; border-radius: 6px; flex: 1; text-align: center;">' +
+                '<div style="font-size: 9px; color: #4F46E5; font-weight: 600;">📥 행동</div>' +
+                '<div style="font-weight: 700; color: var(--gray-800);">' + stats.totalInput + '건</div>' +
+              '</div>' +
+              '<span style="color: ' + vColor + '; font-weight: 700;">→</span>' +
+              '<div style="background: #FEF3C7; padding: 6px 10px; border-radius: 6px; flex: 1; text-align: center;">' +
+                '<div style="font-size: 9px; color: #D97706; font-weight: 600;">📤 성과</div>' +
+                '<div style="font-weight: 700; color: var(--success);">' + stats.totalOutput + '건</div>' +
+              '</div>' +
+            '</div>' +
+            (memberBadges ? '<div style="margin-top: 6px; font-size: 9px; color: var(--gray-500);">👥 ' + memberBadges + '</div>' : '') +
+          '</div>';
+        }).join('');
+
+        if (isLeft) {
+          return '<div style="display: flex; align-items: center; justify-content: flex-end; margin-bottom: 20px;">' +
+            '<div style="display: flex; flex-direction: column; align-items: flex-end;">' + versionHtml + '</div>' +
+            '<div style="width: 40px; height: 2px; background: ' + branchColor + '; margin: 0 8px;"></div>' +
+            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 14px; padding: 14px 18px; text-align: center; min-width: 140px;">' +
+              '<div style="font-size: 10px; color: ' + branchColor + '; font-weight: 600;">메인 KPI ' + (krIdx + 1) + '</div>' +
+              '<div style="font-size: 12px; font-weight: 700; color: var(--gray-800); margin: 6px 0;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
+              '<div style="font-size: 9px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
+            '</div>' +
+          '</div>';
+        } else {
+          return '<div style="display: flex; align-items: center; justify-content: flex-start; margin-bottom: 20px;">' +
+            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 14px; padding: 14px 18px; text-align: center; min-width: 140px;">' +
+              '<div style="font-size: 10px; color: ' + branchColor + '; font-weight: 600;">메인 KPI ' + (krIdx + 1) + '</div>' +
+              '<div style="font-size: 12px; font-weight: 700; color: var(--gray-800); margin: 6px 0;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
+              '<div style="font-size: 9px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
+            '</div>' +
+            '<div style="width: 40px; height: 2px; background: ' + branchColor + '; margin: 0 8px;"></div>' +
+            '<div style="display: flex; flex-direction: column; align-items: flex-start;">' + versionHtml + '</div>' +
+          '</div>';
+        }
+      };
+
+      return '<div style="display: flex; align-items: stretch; justify-content: center; min-width: 900px; min-height: 400px;">' +
+        '<div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding-right: 20px;">' +
+          leftKRs.map(data => renderKRNode(data, 'left')).join('') +
+          (leftKRs.length === 0 ? '<div></div>' : '') +
+        '</div>' +
+        '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0;">' +
+          '<div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 30px; border-radius: 50%; text-align: center; box-shadow: 0 8px 40px rgba(99, 102, 241, 0.4); width: 180px; height: 180px; display: flex; flex-direction: column; justify-content: center; align-items: center;">' +
+            '<div style="font-size: 11px; opacity: 0.85; margin-bottom: 6px;">🎯 목표</div>' +
+            '<div style="font-size: 12px; font-weight: 700; line-height: 1.3; max-width: 130px;">' + snapshotData.objective.name + '</div>' +
           '</div>' +
         '</div>' +
-        '<div style="display: flex; align-items: center; min-height: 150px; padding: 0 10px;"><div style="width: 28px; height: 3px; background: linear-gradient(to right, var(--primary), var(--gray-300));"></div></div>' +
-        '<div style="flex: 1;">' + krRows + '</div>' +
+        '<div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding-left: 20px;">' +
+          rightKRs.map(data => renderKRNode(data, 'right')).join('') +
+          (rightKRs.length === 0 ? '<div></div>' : '') +
+        '</div>' +
       '</div>';
     }
 
@@ -2737,138 +2735,109 @@
       `;
     }
 
-    // 개인 마인드맵 HTML 생성 (AB테스트 버전별 행동→성과 연결)
+    // 개인 마인드맵 HTML 생성 (중앙 배치, AB테스트 버전별 행동→성과 연결)
     function renderPersonalMindmapHtml(memberLogs) {
       if (!snapshotData || !snapshotData.objective) return '<div style="text-align: center; color: var(--gray-400); padding: 40px;">목표가 설정되지 않았습니다</div>';
       if (!memberLogs || memberLogs.length === 0) return '<div style="text-align: center; color: var(--gray-400); padding: 30px;">기록된 활동이 없습니다</div>';
 
       const versionColors = { 'A': '#6366F1', 'B': '#10B981', 'C': '#F59E0B' };
 
-      // AB버전별 전체 통계 집계
-      const versionSummary = {};
-      snapshotData.laggingIndicators.forEach(lag => {
-        const version = lag.version || 'A';
-        if (!versionSummary[version]) {
-          versionSummary[version] = { inputs: 0, outputs: 0 };
-        }
-        const logs = memberLogs.filter(l => l.laggingIndicatorId === lag.id);
-        const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-        if (lag.type === 'output') {
-          versionSummary[version].outputs += total;
-        } else {
-          versionSummary[version].inputs += total;
-        }
-      });
-
-      // 버전 비교 요약 HTML
-      const versionCompareHtml = Object.keys(versionSummary).length > 0 ?
-        '<div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">' +
-        Object.entries(versionSummary).filter(([v, s]) => s.inputs > 0 || s.outputs > 0).map(([version, stats]) => {
-          const color = versionColors[version] || '#6B7280';
-          const rate = stats.inputs > 0 ? ((stats.outputs / stats.inputs) * 100).toFixed(1) : '0';
-          return '<div style="background: ' + color + '15; border: 2px solid ' + color + '; border-radius: 10px; padding: 12px 16px; min-width: 130px;">' +
-            '<div style="font-size: 11px; font-weight: 700; color: ' + color + '; margin-bottom: 8px;">🧪 ' + version + '버전</div>' +
-            '<div style="font-size: 10px; color: var(--gray-600); margin-bottom: 4px;">행동: <strong>' + stats.inputs + '</strong>건</div>' +
-            '<div style="font-size: 10px; color: var(--gray-600); margin-bottom: 4px;">성과: <strong style="color: ' + color + ';">' + stats.outputs + '</strong>건</div>' +
-            '<div style="font-size: 9px; color: var(--gray-500);">전환율: ' + rate + '%</div>' +
-          '</div>';
-        }).join('') + '</div>' : '';
-
-      // KR별 마인드맵 생성
-      const krRows = snapshotData.keyResults.map((kr, krIdx) => {
+      // KR별 데이터 준비
+      const krDataList = snapshotData.keyResults.map((kr, krIdx) => {
         const kpisForKR = snapshotData.kpis.filter(kpi => kpi.keyResultId === kr.id);
         const lagsForKR = snapshotData.laggingIndicators.filter(l => kpisForKR.some(k => k.id === l.kpiId));
         const logsForKR = memberLogs.filter(log => lagsForKR.some(lag => lag.id === log.laggingIndicatorId));
 
-        if (logsForKR.length === 0) return '';
-
-        // 버전별 행동→성과 흐름 생성
+        // 버전별 집계
         const versionStats = {};
         lagsForKR.filter(l => l.type !== 'output').forEach(lag => {
           const version = lag.version || 'A';
-          if (!versionStats[version]) {
-            versionStats[version] = { inputs: [], outputs: [], totalInput: 0, totalOutput: 0 };
-          }
-          const logs = memberLogs.filter(l => l.laggingIndicatorId === lag.id);
-          const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-          if (total > 0) {
-            versionStats[version].inputs.push({ name: lag.name, total, unit: lag.unit || '건' });
-            versionStats[version].totalInput += total;
-          }
+          if (!versionStats[version]) versionStats[version] = { totalInput: 0, totalOutput: 0 };
+          const total = memberLogs.filter(l => l.laggingIndicatorId === lag.id).reduce((sum, l) => sum + (l.resultValue || 0), 0);
+          versionStats[version].totalInput += total;
         });
-
         lagsForKR.filter(l => l.type === 'output').forEach(lag => {
           const version = lag.version || 'A';
-          if (!versionStats[version]) {
-            versionStats[version] = { inputs: [], outputs: [], totalInput: 0, totalOutput: 0 };
-          }
-          const logs = memberLogs.filter(l => l.laggingIndicatorId === lag.id);
-          const total = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-          const kpi = snapshotData.kpis.find(k => k.id === lag.kpiId);
-          const unit = kpi?.unit || lag.unit || '건';
-          if (total > 0) {
-            versionStats[version].outputs.push({ name: lag.name, total, unit });
-            versionStats[version].totalOutput += total;
-          }
+          if (!versionStats[version]) versionStats[version] = { totalInput: 0, totalOutput: 0 };
+          const total = memberLogs.filter(l => l.laggingIndicatorId === lag.id).reduce((sum, l) => sum + (l.resultValue || 0), 0);
+          versionStats[version].totalOutput += total;
         });
 
-        // 버전별 카드 HTML
-        const versionCards = Object.entries(versionStats)
-          .filter(([v, s]) => s.totalInput > 0 || s.totalOutput > 0)
-          .map(([version, stats]) => {
-            const color = versionColors[version] || '#6B7280';
-            const inputText = stats.inputs.map(i => i.name.substring(0, 8) + ' ' + i.total + i.unit).join(', ') || '없음';
-            const outputText = stats.outputs.map(o => o.name.substring(0, 8) + ' ' + o.total + o.unit).join(', ') || '없음';
+        return { kr, krIdx, logsForKR, versionStats };
+      }).filter(d => d.logsForKR.length > 0);
 
-            return '<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">' +
-              '<span style="background: ' + color + '; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700;">' + version + '</span>' +
-              '<div style="background: #ECFDF5; border-radius: 6px; padding: 8px 12px; min-width: 110px;">' +
-                '<div style="font-size: 9px; color: #059669; font-weight: 600;">📥 행동</div>' +
-                '<div style="font-size: 11px; font-weight: 700; color: var(--gray-800);">' + stats.totalInput + '건</div>' +
-                '<div style="font-size: 9px; color: var(--gray-500);">' + inputText.substring(0, 18) + '</div>' +
-              '</div>' +
-              '<div style="font-size: 16px; color: ' + color + ';">→</div>' +
-              '<div style="background: #FEF3C7; border-radius: 6px; padding: 8px 12px; min-width: 90px;">' +
-                '<div style="font-size: 9px; color: #D97706; font-weight: 600;">📤 성과</div>' +
-                '<div style="font-size: 11px; font-weight: 700; color: var(--success);">' + stats.totalOutput + '건</div>' +
-                '<div style="font-size: 9px; color: var(--gray-500);">' + outputText.substring(0, 18) + '</div>' +
-              '</div>' +
-            '</div>';
-          }).join('');
-
-        if (!versionCards) return '';
-
-        return '<div style="display: flex; align-items: flex-start; gap: 0; margin-bottom: 14px;">' +
-          '<div style="background: ' + okrColors[krIdx] + '15; border: 2px solid ' + okrColors[krIdx] + '; border-radius: 10px; padding: 10px 14px; text-align: center; min-width: 120px;">' +
-            '<div style="font-size: 9px; color: ' + okrColors[krIdx] + '; font-weight: 600;">메인 KPI</div>' +
-            '<div style="font-size: 11px; font-weight: 700; color: var(--gray-800); margin: 4px 0;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
-            '<div style="font-size: 9px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
-          '</div>' +
-          '<div style="display: flex; align-items: center; padding: 0 6px;"><div style="width: 18px; height: 2px; background: ' + okrColors[krIdx] + ';"></div></div>' +
-          '<div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 10px; padding: 10px; flex: 1;">' +
-            '<div style="font-size: 10px; font-weight: 600; color: var(--gray-600); margin-bottom: 8px;">🧪 버전별 행동→성과</div>' +
-            versionCards +
-          '</div>' +
-        '</div>';
-      }).filter(h => h).join('');
-
-      if (!krRows && !versionCompareHtml) {
+      if (krDataList.length === 0) {
         return '<div style="text-align: center; color: var(--gray-400); padding: 30px;">기록된 활동이 없습니다</div>';
       }
 
-      return '<div style="margin-bottom: 16px;">' +
-        '<div style="font-size: 11px; font-weight: 600; color: var(--gray-600); margin-bottom: 10px;">📊 버전별 성과 비교</div>' +
-        versionCompareHtml +
-      '</div>' +
-      '<div style="display: flex; align-items: flex-start; gap: 0;">' +
-        '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 120px;">' +
-          '<div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 12px 16px; border-radius: 10px; text-align: center; box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);">' +
-            '<div style="font-size: 9px; opacity: 0.85;">🎯 목표</div>' +
-            '<div style="font-size: 11px; font-weight: 700; margin-top: 4px;">' + snapshotData.objective.name + '</div>' +
+      // KR을 왼쪽/오른쪽으로 분할
+      const leftKRs = krDataList.filter((_, i) => i % 2 === 0);
+      const rightKRs = krDataList.filter((_, i) => i % 2 === 1);
+
+      // KR 노드 HTML 생성
+      const renderKRNode = (data, direction) => {
+        const { kr, krIdx, logsForKR, versionStats } = data;
+        const isLeft = direction === 'left';
+        const branchColor = okrColors[krIdx];
+
+        const versionHtml = Object.entries(versionStats).filter(([v, s]) => s.totalInput > 0 || s.totalOutput > 0).map(([version, stats]) => {
+          const vColor = versionColors[version] || '#6B7280';
+          return '<div style="background: white; border: 2px solid ' + vColor + '30; border-radius: 8px; padding: 8px; margin-bottom: 6px; min-width: 150px;">' +
+            '<div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">' +
+              '<span style="background: ' + vColor + '; color: white; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700;">🧪 ' + version + '</span>' +
+            '</div>' +
+            '<div style="display: flex; align-items: center; gap: 4px; font-size: 10px;">' +
+              '<div style="background: #EEF2FF; padding: 4px 8px; border-radius: 4px; flex: 1; text-align: center;">' +
+                '<div style="font-size: 8px; color: #4F46E5;">📥</div>' +
+                '<div style="font-weight: 700;">' + stats.totalInput + '건</div>' +
+              '</div>' +
+              '<span style="color: ' + vColor + '; font-weight: 700;">→</span>' +
+              '<div style="background: #FEF3C7; padding: 4px 8px; border-radius: 4px; flex: 1; text-align: center;">' +
+                '<div style="font-size: 8px; color: #D97706;">📤</div>' +
+                '<div style="font-weight: 700; color: var(--success);">' + stats.totalOutput + '건</div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        if (isLeft) {
+          return '<div style="display: flex; align-items: center; justify-content: flex-end; margin-bottom: 16px;">' +
+            '<div style="display: flex; flex-direction: column; align-items: flex-end;">' + versionHtml + '</div>' +
+            '<div style="width: 30px; height: 2px; background: ' + branchColor + '; margin: 0 6px;"></div>' +
+            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 12px; padding: 10px 14px; text-align: center; min-width: 110px;">' +
+              '<div style="font-size: 9px; color: ' + branchColor + '; font-weight: 600;">메인 KPI ' + (krIdx + 1) + '</div>' +
+              '<div style="font-size: 10px; font-weight: 700; color: var(--gray-800); margin: 4px 0;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
+              '<div style="font-size: 9px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
+            '</div>' +
+          '</div>';
+        } else {
+          return '<div style="display: flex; align-items: center; justify-content: flex-start; margin-bottom: 16px;">' +
+            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 12px; padding: 10px 14px; text-align: center; min-width: 110px;">' +
+              '<div style="font-size: 9px; color: ' + branchColor + '; font-weight: 600;">메인 KPI ' + (krIdx + 1) + '</div>' +
+              '<div style="font-size: 10px; font-weight: 700; color: var(--gray-800); margin: 4px 0;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
+              '<div style="font-size: 9px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
+            '</div>' +
+            '<div style="width: 30px; height: 2px; background: ' + branchColor + '; margin: 0 6px;"></div>' +
+            '<div style="display: flex; flex-direction: column; align-items: flex-start;">' + versionHtml + '</div>' +
+          '</div>';
+        }
+      };
+
+      return '<div style="display: flex; align-items: stretch; justify-content: center; min-width: 700px; min-height: 300px;">' +
+        '<div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding-right: 15px;">' +
+          leftKRs.map(data => renderKRNode(data, 'left')).join('') +
+          (leftKRs.length === 0 ? '<div></div>' : '') +
+        '</div>' +
+        '<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0;">' +
+          '<div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 22px; border-radius: 50%; text-align: center; box-shadow: 0 6px 30px rgba(99, 102, 241, 0.4); width: 140px; height: 140px; display: flex; flex-direction: column; justify-content: center; align-items: center;">' +
+            '<div style="font-size: 9px; opacity: 0.85; margin-bottom: 4px;">🎯 목표</div>' +
+            '<div style="font-size: 10px; font-weight: 700; line-height: 1.3; max-width: 100px;">' + snapshotData.objective.name + '</div>' +
           '</div>' +
         '</div>' +
-        '<div style="display: flex; align-items: center; min-height: 120px; padding: 0 6px;"><div style="width: 20px; height: 3px; background: linear-gradient(to right, var(--primary), var(--gray-300));"></div></div>' +
-        '<div style="flex: 1;">' + krRows + '</div>' +
+        '<div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding-left: 15px;">' +
+          rightKRs.map(data => renderKRNode(data, 'right')).join('') +
+          (rightKRs.length === 0 ? '<div></div>' : '') +
+        '</div>' +
       '</div>';
     }
 
