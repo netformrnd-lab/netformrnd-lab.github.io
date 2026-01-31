@@ -16571,6 +16571,10 @@
       const krContributions = okrState.keyResults.map((kr, krIdx) => {
         const kpisForKR = okrState.kpis.filter(k => k.keyResultId === kr.id);
         let totalLogs = 0;
+        let totalLogsCount = 0; // ★ 로그 개수 (비율 계산용)
+        let totalMoneyValue = 0; // ★ 금액 합계
+        let totalCountValue = 0; // ★ 건수 합계
+        let hasMoneyUnit = false; // ★ 금액 단위 포함 여부
         let inputLogs = [];
         let outputLogs = [];
 
@@ -16582,7 +16586,17 @@
           lagsForKPI.forEach(lag => {
             const logs = filteredLogs.filter(log => log.laggingIndicatorId === lag.id);
             const count = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+            const logsCount = logs.length; // ★ 로그 개수
             totalLogs += count;
+            totalLogsCount += logsCount; // ★ 비율 계산용
+
+            // ★ 금액/건수 분리
+            if (isMoneyUnit(lag.unit)) {
+              totalMoneyValue += count;
+              hasMoneyUnit = true;
+            } else {
+              totalCountValue += count;
+            }
 
             if (lag.type === 'output') {
               if (count > 0) outputs.push({ lag, count, logs });
@@ -16596,11 +16610,11 @@
           return { kpi, inputs, outputs };
         });
 
-        return { kr, krIdx, totalLogs, kpiDetails, inputLogs, outputLogs };
+        return { kr, krIdx, totalLogs, totalLogsCount, totalMoneyValue, totalCountValue, hasMoneyUnit, kpiDetails, inputLogs, outputLogs };
       });
 
-      // 전체 기여 합계
-      const totalContribution = krContributions.reduce((sum, kr) => sum + kr.totalLogs, 0);
+      // 전체 기여 합계 (로그 개수 기반)
+      const totalContribution = krContributions.reduce((sum, kr) => sum + kr.totalLogsCount, 0);
 
       // 기간 라벨
       const getPeriodText = (period) => {
@@ -16671,32 +16685,46 @@
           <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">📊 메인 KPI별 기여 비율</div>
           <div style="height: 32px; background: var(--gray-100); border-radius: 8px; overflow: hidden; display: flex;">
             ${krContributions.map((kr, idx) => {
-              const ratio = totalContribution > 0 ? (kr.totalLogs / totalContribution * 100) : 0;
+              const ratio = totalContribution > 0 ? (kr.totalLogsCount / totalContribution * 100) : 0;
               if (ratio === 0) return '';
-              return `<div style="height: 100%; width: ${ratio}%; background: ${okrColors[idx % 4]}; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 600; min-width: 40px;" title="${kr.kr.name}: ${kr.totalLogs}건 (${Math.round(ratio)}%)">${Math.round(ratio)}%</div>`;
+              // ★ 소수 3째자리까지 표시, 바 너비는 최소 0.1%로 표시
+              const displayRatio = ratio.toFixed(3);
+              const barWidth = Math.max(ratio, 0.5); // 바 너비는 최소 0.5%
+              return `<div style="height: 100%; width: ${barWidth}%; background: ${okrColors[idx % 4]}; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: 600; min-width: 50px;" title="${kr.kr.name}: ${kr.totalLogsCount}건 (${displayRatio}%)">${displayRatio}%</div>`;
             }).join('')}
             ${totalContribution === 0 ? '<div style="width: 100%; display: flex; align-items: center; justify-content: center; color: var(--gray-400); font-size: 12px;">기록 없음</div>' : ''}
           </div>
           <div style="display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap;">
-            ${krContributions.map((kr, idx) => `
+            ${krContributions.map((kr, idx) => {
+              // ★ 금액/건수 분리 표시
+              const valueDisplay = kr.hasMoneyUnit && kr.totalMoneyValue > 0
+                ? kr.totalMoneyValue.toLocaleString() + '원' + (kr.totalCountValue > 0 ? ' + ' + kr.totalCountValue + '건' : '')
+                : kr.totalCountValue + '건';
+              return `
               <div style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
                 <div style="width: 12px; height: 12px; border-radius: 3px; background: ${okrColors[idx % 4]};"></div>
                 <span style="color: var(--gray-600);">${kr.kr.name}</span>
-                <span style="font-weight: 600; color: var(--gray-800);">${kr.totalLogs}건</span>
+                <span style="font-weight: 600; color: var(--gray-800);">${valueDisplay}</span>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         </div>
 
         <!-- 3. 계층형 KPI 기여 상세 -->
-        ${krContributions.filter(kr => kr.totalLogs > 0).map((kr, idx) => `
+        ${krContributions.filter(kr => kr.totalLogs > 0).map((kr, idx) => {
+          // ★ 금액/건수 분리 표시
+          const krValueDisplay = kr.hasMoneyUnit && kr.totalMoneyValue > 0
+            ? kr.totalMoneyValue.toLocaleString() + '원' + (kr.totalCountValue > 0 ? ' + ' + kr.totalCountValue + '건' : '')
+            : kr.totalCountValue + '건';
+          const krRatio = totalContribution > 0 ? (kr.totalLogsCount / totalContribution * 100).toFixed(3) : '0.000';
+          return `
           <div class="card" style="margin-bottom: 16px; border-left: 4px solid ${okrColors[kr.krIdx % 4]};">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
               <div style="font-size: 16px; font-weight: 700; color: ${okrColors[kr.krIdx % 4]}; display: flex; align-items: center; gap: 8px;">
                 ${okrIcons[kr.krIdx % 4]} ${kr.kr.name}
               </div>
               <div style="font-size: 14px; font-weight: 600; color: var(--gray-600);">
-                기여: ${kr.totalLogs}건 (${totalContribution > 0 ? Math.round(kr.totalLogs / totalContribution * 100) : 0}%)
+                기여: ${krValueDisplay} (${krRatio}%)
               </div>
             </div>
 
@@ -16710,11 +16738,15 @@
                   <div style="margin-bottom: 10px;">
                     <div style="font-size: 11px; font-weight: 600; color: #059669; margin-bottom: 6px;">📥 행동지표</div>
                     <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                      ${kpiDetail.inputs.map(item => `
+                      ${kpiDetail.inputs.map(item => {
+                        // ★ 단위에 따른 표시 형식
+                        const unit = item.lag.unit || '건';
+                        const valueStr = isMoneyUnit(unit) ? item.count.toLocaleString() : item.count;
+                        return `
                         <div style="background: #ECFDF5; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: #047857;">
-                          ${item.lag.name} <strong>${item.count}${item.lag.unit || '건'}</strong>
+                          ${item.lag.name} <strong>${valueStr}${unit}</strong>
                         </div>
-                      `).join('')}
+                      `}).join('')}
                     </div>
                   </div>
                 ` : ''}
@@ -16723,18 +16755,22 @@
                   <div>
                     <div style="font-size: 11px; font-weight: 600; color: #D97706; margin-bottom: 6px;">📤 성과지표</div>
                     <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                      ${kpiDetail.outputs.map(item => `
+                      ${kpiDetail.outputs.map(item => {
+                        // ★ 단위에 따른 표시 형식
+                        const unit = item.lag.unit || '건';
+                        const valueStr = isMoneyUnit(unit) ? item.count.toLocaleString() : item.count;
+                        return `
                         <div style="background: #FEF3C7; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: #92400E;">
-                          ${item.lag.name} <strong>${item.count.toLocaleString()}${item.lag.unit || '원'}</strong>
+                          ${item.lag.name} <strong>${valueStr}${unit}</strong>
                         </div>
-                      `).join('')}
+                      `}).join('')}
                     </div>
                   </div>
                 ` : ''}
               </div>
             `).join('')}
           </div>
-        `).join('')}
+        `}).join('')}
 
         ${krContributions.filter(kr => kr.totalLogs > 0).length === 0 ? `
           <div class="card" style="text-align: center; padding: 40px; color: var(--gray-400);">
