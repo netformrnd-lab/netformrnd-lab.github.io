@@ -16471,8 +16471,109 @@
     let personalDashboardState = {
       selectedMemberId: null,
       periodFilter: 'all', // all, thisWeek, thisMonth
-      personalGoalsVisible: false // 개인 목표 섹션 토글 상태
+      personalGoalsVisible: false, // 개인 목표 섹션 토글 상태
+      mindmapVisible: false // 개인 마인드맵 토글 상태
     };
+
+    // 개인 마인드맵 토글
+    function togglePersonalMindmapView() {
+      personalDashboardState.mindmapVisible = !personalDashboardState.mindmapVisible;
+      const mindmapContainer = document.getElementById('personalMindmapContainer');
+      if (mindmapContainer) {
+        mindmapContainer.style.display = personalDashboardState.mindmapVisible ? 'block' : 'none';
+        if (personalDashboardState.mindmapVisible) {
+          renderPersonalMindmap();
+        }
+      }
+    }
+
+    // 개인 마인드맵 렌더링
+    function renderPersonalMindmap() {
+      const container = document.getElementById('personalMindmapContent');
+      if (!container || !okrState.objective) return;
+
+      const memberId = personalDashboardState.selectedMemberId || state.currentUser?.id;
+      const memberLogs = okrState.dailyLogs.filter(log => log.memberId === memberId);
+
+      container.innerHTML = `
+        <div class="personal-mindmap" style="padding: 20px; overflow-x: auto;">
+          <!-- 중앙: 팀원 -->
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 24px;">
+            <!-- 목표 -->
+            <div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 16px 32px; border-radius: 16px; text-align: center; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);">
+              <div style="font-size: 11px; opacity: 0.8; margin-bottom: 4px;">🎯 목표</div>
+              <div style="font-size: 14px; font-weight: 700;">${okrState.objective.name}</div>
+            </div>
+
+            <!-- 연결선 -->
+            <div style="width: 3px; height: 30px; background: linear-gradient(to bottom, var(--primary), #F59E0B);"></div>
+
+            <!-- 메인 KPI별 기여 -->
+            <div style="display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; width: 100%;">
+              ${okrState.keyResults.map((kr, krIdx) => {
+                const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
+                const lagsForKR = okrState.laggingIndicators.filter(l => kpisForKR.some(k => k.id === l.kpiId));
+                const logsForKR = memberLogs.filter(log => lagsForKR.some(lag => lag.id === log.laggingIndicatorId));
+                const totalValue = logsForKR.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+                if (logsForKR.length === 0) return '';
+
+                return \`
+                  <div style="flex: 1; min-width: 240px; max-width: 350px;">
+                    <!-- 메인 KPI -->
+                    <div style="background: \${okrColors[krIdx]}15; border: 2px solid \${okrColors[krIdx]}; border-radius: 14px; padding: 16px; text-align: center; margin-bottom: 16px;">
+                      <div style="font-size: 10px; color: \${okrColors[krIdx]}; font-weight: 600; margin-bottom: 4px;">메인 KPI</div>
+                      <div style="font-size: 13px; font-weight: 700; color: var(--gray-800); margin-bottom: 6px;">\${okrIcons[krIdx]} \${kr.name}</div>
+                      <div style="font-size: 11px; color: var(--gray-500);">기여: \${logsForKR.length}건</div>
+                    </div>
+
+                    <!-- 서브 KPI들 -->
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                      \${kpisForKR.map(kpi => {
+                        const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                        const inputLags = lagsForKPI.filter(l => l.type !== 'output');
+                        const outputLags = lagsForKPI.filter(l => l.type === 'output');
+
+                        const inputLogs = memberLogs.filter(log => inputLags.some(lag => lag.id === log.laggingIndicatorId));
+                        const outputLogs = memberLogs.filter(log => outputLags.some(lag => lag.id === log.laggingIndicatorId));
+
+                        if (inputLogs.length === 0 && outputLogs.length === 0) return '';
+
+                        return \`
+                          <div style="background: white; border: 1px solid var(--gray-200); border-radius: 10px; padding: 12px; border-left: 3px solid \${okrColors[krIdx]};">
+                            <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📌 \${kpi.name}</div>
+
+                            \${inputLogs.length > 0 ? \`
+                              <div style="margin-bottom: 6px;">
+                                <span style="font-size: 10px; color: #059669; font-weight: 600;">📥 행동지표</span>
+                                <span style="font-size: 11px; color: var(--gray-600); margin-left: 8px;">\${inputLogs.length}건</span>
+                              </div>
+                            \` : ''}
+
+                            \${outputLogs.length > 0 ? \`
+                              <div>
+                                <span style="font-size: 10px; color: #D97706; font-weight: 600;">📤 성과지표</span>
+                                <span style="font-size: 11px; color: var(--gray-600); margin-left: 8px;">\${outputLogs.length}건</span>
+                              </div>
+                            \` : ''}
+                          </div>
+                        \`;
+                      }).join('')}
+                    </div>
+                  </div>
+                \`;
+              }).join('')}
+            </div>
+
+            ${okrState.keyResults.every(kr => {
+              const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
+              const lagsForKR = okrState.laggingIndicators.filter(l => kpisForKR.some(k => k.id === l.kpiId));
+              return !memberLogs.some(log => lagsForKR.some(lag => lag.id === log.laggingIndicatorId));
+            }) ? '<div style="text-align: center; color: var(--gray-400); padding: 40px;">기록된 활동이 없습니다</div>' : ''}
+          </div>
+        </div>
+      `;
+    }
 
     // 개인 그로스보드 렌더링 (v2 - 계층형 기여도 뷰)
     function renderPersonalGrowthboard() {
@@ -16635,6 +16736,9 @@
             <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">KPI별 기여도와 업무일지를 한눈에 확인하세요</p>
           </div>
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <button onclick="togglePersonalMindmapView()" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: #F59E0B; color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              🗺️ 마인드맵
+            </button>
             <select id="personalMemberFilter" onchange="updatePersonalMemberFilter(this.value)" style="padding: 8px 12px; border: 2px solid var(--primary); border-radius: 8px; font-size: 13px; cursor: pointer; background: white; font-weight: 600; color: var(--primary);">
               ${teamMembers.map(m => `<option value="${m.id}" ${m.id === memberId ? 'selected' : ''}>${m.name}</option>`).join('')}
             </select>
@@ -16643,6 +16747,17 @@
               <option value="thisWeek" ${personalDashboardState.periodFilter === 'thisWeek' ? 'selected' : ''}>이번 주</option>
               <option value="thisMonth" ${personalDashboardState.periodFilter === 'thisMonth' ? 'selected' : ''}>이번 달</option>
             </select>
+          </div>
+        </div>
+
+        <!-- 개인 마인드맵 컨테이너 -->
+        <div id="personalMindmapContainer" style="display: none; margin-bottom: 16px;">
+          <div class="card" style="padding: 0; overflow: hidden;">
+            <div style="background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%); padding: 16px 20px; display: flex; justify-content: space-between; align-items: center;">
+              <div style="color: white; font-weight: 700; font-size: 16px;">🗺️ ${selectedMember.name}님의 기여 마인드맵</div>
+              <button onclick="togglePersonalMindmapView()" style="background: rgba(255,255,255,0.2); border: none; color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">✕ 닫기</button>
+            </div>
+            <div id="personalMindmapContent" style="padding: 20px; background: var(--gray-50); min-height: 300px;"></div>
           </div>
         </div>
 

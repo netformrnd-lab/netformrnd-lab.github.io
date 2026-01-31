@@ -973,10 +973,17 @@
       </div>
     </div>
 
-    <!-- KPI 현황 타이틀 -->
+    <!-- 탭 네비게이션 -->
     <div style="background: white; border-bottom: 2px solid var(--gray-200); box-shadow: 0 2px 4px rgba(0,0,0,0.04);">
-      <div style="max-width: 1200px; margin: 0 auto; padding: 20px 32px;">
-        <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: var(--gray-900);">📊 KPI 현황</h2>
+      <div style="max-width: 1200px; margin: 0 auto; padding: 16px 32px;">
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button id="tabTeam" onclick="switchShareTab('team')" style="padding: 10px 20px; font-size: 14px; font-weight: 600; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer;">
+            📈 팀 그로스보드
+          </button>
+          <button id="tabPersonal" onclick="switchShareTab('personal')" style="padding: 10px 20px; font-size: 14px; font-weight: 600; background: var(--gray-100); color: var(--gray-600); border: none; border-radius: 8px; cursor: pointer;">
+            👤 개인 그로스보드
+          </button>
+        </div>
       </div>
     </div>
 
@@ -2276,12 +2283,40 @@
       }
     }
 
+    // 현재 탭 상태
+    let currentShareTab = 'team';
+    let selectedShareMemberId = null;
+
+    // 탭 전환
+    function switchShareTab(tab) {
+      currentShareTab = tab;
+      const teamBtn = document.getElementById('tabTeam');
+      const personalBtn = document.getElementById('tabPersonal');
+
+      if (tab === 'team') {
+        teamBtn.style.background = 'var(--primary)';
+        teamBtn.style.color = 'white';
+        personalBtn.style.background = 'var(--gray-100)';
+        personalBtn.style.color = 'var(--gray-600)';
+        renderTeamGrowthboard();
+      } else {
+        teamBtn.style.background = 'var(--gray-100)';
+        teamBtn.style.color = 'var(--gray-600)';
+        personalBtn.style.background = 'var(--primary)';
+        personalBtn.style.color = 'white';
+        renderPersonalGrowthboard();
+      }
+    }
+
     function render() {
       const container = document.getElementById('content');
       if (!container || !snapshotData) return;
 
-      // KPI 현황만 표시 (개인 그로스보드 제거)
-      renderTeamGrowthboard();
+      if (currentShareTab === 'team') {
+        renderTeamGrowthboard();
+      } else {
+        renderPersonalGrowthboard();
+      }
     }
 
     // 팀 그로스보드 렌더링
@@ -2474,6 +2509,193 @@
       `;
     }
 
+    // 개인 그로스보드 렌더링
+    function renderPersonalGrowthboard() {
+      const container = document.getElementById('content');
+      if (!container || !snapshotData) return;
+
+      // 팀원 목록 (dailyLogs에서 memberId 추출)
+      const memberIds = [...new Set(snapshotData.dailyLogs.map(l => l.memberId).filter(id => id && id !== 'anonymous'))];
+      const teamMembers = memberIds.map(id => {
+        const log = snapshotData.dailyLogs.find(l => l.memberId === id);
+        return { id, name: log?.memberName || id };
+      });
+
+      if (teamMembers.length === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px;">
+            <div style="font-size: 64px; margin-bottom: 16px;">👥</div>
+            <div style="font-size: 18px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">기록된 활동이 없습니다</div>
+            <div style="font-size: 14px; color: var(--gray-500);">팀원들의 업무일지가 등록되면 여기에 표시됩니다</div>
+          </div>
+        `;
+        return;
+      }
+
+      // 선택된 팀원
+      if (!selectedShareMemberId || !teamMembers.find(m => m.id === selectedShareMemberId)) {
+        selectedShareMemberId = teamMembers[0]?.id;
+      }
+      const selectedMember = teamMembers.find(m => m.id === selectedShareMemberId);
+
+      // 해당 팀원의 로그
+      const memberLogs = snapshotData.dailyLogs.filter(log => log.memberId === selectedShareMemberId);
+
+      // KR별 기여도 계산
+      const krContributions = snapshotData.keyResults.map((kr, krIdx) => {
+        const kpisForKR = snapshotData.kpis.filter(kpi => kpi.keyResultId === kr.id);
+        let totalLogsCount = 0;
+        const unitValues = {};
+
+        const kpiDetails = kpisForKR.map(kpi => {
+          const lagsForKPI = snapshotData.laggingIndicators.filter(l => l.kpiId === kpi.id);
+          const inputs = [];
+          const outputs = [];
+
+          lagsForKPI.forEach(lag => {
+            const logs = memberLogs.filter(log => log.laggingIndicatorId === lag.id);
+            const count = logs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+            totalLogsCount += logs.length;
+
+            const unit = lag.type === 'output' ? (kpi.unit || lag.unit || '건') : (lag.unit || '건');
+            if (!unitValues[unit]) unitValues[unit] = 0;
+            unitValues[unit] += count;
+
+            if (lag.type === 'output') {
+              if (count > 0) outputs.push({ lag, count, kpiUnit: kpi.unit });
+            } else {
+              if (count > 0) inputs.push({ lag, count });
+            }
+          });
+
+          return { kpi, inputs, outputs };
+        });
+
+        return { kr, krIdx, totalLogsCount, unitValues, kpiDetails };
+      });
+
+      const totalContribution = krContributions.reduce((sum, kr) => sum + kr.totalLogsCount, 0);
+
+      container.innerHTML = `
+        <!-- 헤더 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">
+              👤 ${selectedMember?.name || '팀원'}님의 기여 현황
+            </h2>
+            <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">KPI별 기여도를 확인하세요</p>
+          </div>
+          <select onchange="selectedShareMemberId = this.value; renderPersonalGrowthboard();" style="padding: 8px 12px; border: 2px solid var(--primary); border-radius: 8px; font-size: 13px; cursor: pointer; background: white; font-weight: 600; color: var(--primary);">
+            ${teamMembers.map(m => `<option value="${m.id}" ${m.id === selectedShareMemberId ? 'selected' : ''}>${m.name}</option>`).join('')}
+          </select>
+        </div>
+
+        <!-- 메인 KPI별 기여 비율 -->
+        <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+          <div style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 12px;">📊 메인 KPI별 기여 비율</div>
+          <div style="height: 32px; background: var(--gray-100); border-radius: 8px; overflow: hidden; display: flex;">
+            ${krContributions.map((kr, idx) => {
+              const ratio = totalContribution > 0 ? (kr.totalLogsCount / totalContribution * 100) : 0;
+              if (ratio === 0) return '';
+              const displayRatio = ratio.toFixed(3);
+              const barWidth = Math.max(ratio, 0.5);
+              return `<div style="height: 100%; width: ${barWidth}%; background: ${okrColors[idx % 4]}; display: flex; align-items: center; justify-content: center; color: white; font-size: 10px; font-weight: 600; min-width: 50px;">${displayRatio}%</div>`;
+            }).join('')}
+            ${totalContribution === 0 ? '<div style="width: 100%; display: flex; align-items: center; justify-content: center; color: var(--gray-400); font-size: 12px;">기록 없음</div>' : ''}
+          </div>
+          <div style="display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap;">
+            ${krContributions.map((kr, idx) => {
+              const valueDisplay = Object.entries(kr.unitValues)
+                .filter(([unit, val]) => val > 0)
+                .map(([unit, val]) => {
+                  if (isMoneyUnit(unit)) return val.toLocaleString() + unit;
+                  if (unit === '%') return val.toFixed(3) + unit;
+                  return val + unit;
+                })
+                .join(' + ') || '0건';
+              return `
+              <div style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+                <div style="width: 12px; height: 12px; border-radius: 3px; background: ${okrColors[idx % 4]};"></div>
+                <span style="color: var(--gray-600);">${kr.kr.name}</span>
+                <span style="font-weight: 600; color: var(--gray-800);">${valueDisplay}</span>
+              </div>
+            `}).join('')}
+          </div>
+        </div>
+
+        <!-- 계층형 KPI 기여 상세 -->
+        ${krContributions.filter(kr => kr.totalLogsCount > 0).map((kr, idx) => {
+          const krValueDisplay = Object.entries(kr.unitValues)
+            .filter(([unit, val]) => val > 0)
+            .map(([unit, val]) => {
+              if (isMoneyUnit(unit)) return val.toLocaleString() + unit;
+              if (unit === '%') return val.toFixed(3) + unit;
+              return val + unit;
+            })
+            .join(' + ') || '0건';
+          const krRatio = totalContribution > 0 ? (kr.totalLogsCount / totalContribution * 100).toFixed(3) : '0.000';
+          return `
+          <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-left: 4px solid ${okrColors[kr.krIdx % 4]};">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div style="font-size: 16px; font-weight: 700; color: ${okrColors[kr.krIdx % 4]};">
+                ${okrIcons[kr.krIdx % 4]} ${kr.kr.name}
+              </div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--gray-600);">
+                기여: ${krValueDisplay} (${krRatio}%)
+              </div>
+            </div>
+
+            ${kr.kpiDetails.filter(kpi => kpi.inputs.length > 0 || kpi.outputs.length > 0).map(kpiDetail => `
+              <div style="background: var(--gray-50); border-radius: 10px; padding: 14px; margin-bottom: 10px;">
+                <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--gray-200);">
+                  📊 ${kpiDetail.kpi.name}
+                </div>
+
+                ${kpiDetail.inputs.length > 0 ? `
+                  <div style="margin-bottom: 10px;">
+                    <div style="font-size: 11px; font-weight: 600; color: #059669; margin-bottom: 6px;">📥 행동지표</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                      ${kpiDetail.inputs.map(item => {
+                        const unit = item.lag.unit || '건';
+                        const valueStr = isMoneyUnit(unit) ? item.count.toLocaleString() : item.count;
+                        return `
+                        <div style="background: #ECFDF5; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: #047857;">
+                          ${item.lag.name} <strong>${valueStr}${unit}</strong>
+                        </div>
+                      `}).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+
+                ${kpiDetail.outputs.length > 0 ? `
+                  <div>
+                    <div style="font-size: 11px; font-weight: 600; color: #D97706; margin-bottom: 6px;">📤 성과지표</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                      ${kpiDetail.outputs.map(item => {
+                        const unit = item.kpiUnit || item.lag.unit || '건';
+                        const valueStr = isMoneyUnit(unit) ? item.count.toLocaleString() : item.count;
+                        return `
+                        <div style="background: #FEF3C7; padding: 6px 12px; border-radius: 6px; font-size: 12px; color: #92400E;">
+                          ${item.lag.name} <strong>${valueStr}${unit}</strong>
+                        </div>
+                      `}).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+            `).join('')}
+          </div>
+        `}).join('')}
+
+        ${krContributions.filter(kr => kr.totalLogsCount > 0).length === 0 ? `
+          <div style="background: white; border-radius: 16px; padding: 40px; text-align: center; color: var(--gray-400);">
+            <div style="font-size: 48px; margin-bottom: 12px;">📝</div>
+            <div style="font-size: 16px; font-weight: 600; margin-bottom: 4px;">기록된 업무일지가 없습니다</div>
+          </div>
+        ` : ''}
+      `;
+    }
+
     // 자동 갱신용 전역 변수
     let autoRefreshInterval = null;
     let currentToken = null;
@@ -2537,8 +2759,8 @@
           const now = new Date();
           dateEl.textContent = `최종 업데이트: ${now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 
-          // 1분마다 자동 갱신
-          autoRefreshInterval = setInterval(refreshData, 60000); // 60초 = 1분
+          // 5분마다 자동 갱신
+          autoRefreshInterval = setInterval(refreshData, 300000); // 300초 = 5분
         } else {
           // 스냅샷 모드
           const date = new Date(result.createdAt);
