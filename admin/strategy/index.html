@@ -16776,75 +16776,186 @@
       const currentYear = now.getFullYear();
       const currentQuarter = Math.floor(now.getMonth() / 3) + 1;
 
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+      const memberName = member?.name || '팀원';
+      const memberLoginId = member?.loginId;
+
+      // 내가 담당하는 KPI 필터링 (주담당 또는 서브담당)
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === memberId ||
+        kpi.mainAssignee === memberLoginId ||
+        kpi.mainAssigneeName === memberName ||
+        (kpi.subAssignees || []).includes(memberId) ||
+        (kpi.subAssignees || []).includes(memberLoginId) ||
+        (kpi.subAssigneeNames || []).includes(memberName)
+      );
+
       // 해당 멤버의 현재 분기 목표 가져오기
       const existingGoals = (okrState.quarterlyGoals || []).filter(g =>
         g.memberId === memberId && g.year === currentYear && g.quarter === currentQuarter
       );
 
-      const member = (state.teamMembers || []).find(m => m.id === memberId);
-      const memberName = member?.name || '팀원';
+      // KPI별 지표 목록 생성
+      const kpiIndicators = myKpis.map(kpi => {
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+        const inputLags = lags.filter(l => l.type !== 'output');
+        const outputLags = lags.filter(l => l.type === 'output');
+        return { kpi, kr, inputLags, outputLags };
+      });
 
       showModal(`
-        <div style="max-width: 560px;">
-          <div style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; display: flex; align-items: center; gap: 10px;">
-            <span style="font-size: 28px;">🎯</span> 분기별 개인 목표 설정
+        <div style="max-width: 680px; padding: 28px;">
+          <div style="font-size: 22px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 32px;">🎯</span> 분기별 개인 목표 설정
           </div>
-          <div style="font-size: 14px; color: var(--gray-500); margin-bottom: 20px;">
+          <div style="font-size: 14px; color: var(--gray-500); margin-bottom: 24px;">
             ${memberName}님의 ${currentYear}년 ${currentQuarter}분기 목표
           </div>
 
-          <div style="display: flex; gap: 12px; margin-bottom: 20px;">
-            <select id="quarterlyGoalYear" style="padding: 10px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;">
+          <div style="display: flex; gap: 12px; margin-bottom: 24px;">
+            <select id="quarterlyGoalYear" onchange="refreshQuarterlyGoalKpis('${memberId}')" style="padding: 12px 18px; border: 2px solid var(--gray-200); border-radius: 10px; font-size: 14px; font-weight: 600;">
               ${[currentYear - 1, currentYear, currentYear + 1].map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}년</option>`).join('')}
             </select>
-            <select id="quarterlyGoalQuarter" style="padding: 10px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;">
+            <select id="quarterlyGoalQuarter" onchange="refreshQuarterlyGoalKpis('${memberId}')" style="padding: 12px 18px; border: 2px solid var(--gray-200); border-radius: 10px; font-size: 14px; font-weight: 600;">
               ${[1, 2, 3, 4].map(q => `<option value="${q}" ${q === currentQuarter ? 'selected' : ''}>${q}분기</option>`).join('')}
             </select>
-            <button onclick="loadQuarterlyGoalsForEdit('${memberId}')" style="padding: 10px 16px; background: var(--gray-100); color: var(--gray-700); border: none; border-radius: 8px; font-size: 13px; cursor: pointer;">불러오기</button>
           </div>
 
-          <div id="quarterlyGoalsList" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
-            ${existingGoals.length > 0 ? existingGoals.map((goal, idx) => `
-              <div class="quarterly-goal-item" data-id="${goal.id}" style="display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;">
-                <div style="flex: 1;">
-                  <input type="text" class="goal-title" value="${goal.title}" placeholder="목표 이름" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
-                  <div style="display: flex; gap: 8px;">
-                    <input type="number" class="goal-target" value="${goal.targetValue}" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
-                    <input type="number" class="goal-current" value="${goal.currentValue || 0}" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
-                    <input type="text" class="goal-unit" value="${goal.unit || ''}" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
-                  </div>
-                </div>
-                <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+          <!-- 담당 KPI 기반 목표 설정 -->
+          <div style="margin-bottom: 24px;">
+            <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              📊 담당 KPI별 분기 목표
+            </div>
+
+            ${myKpis.length > 0 ? `
+              <div id="quarterlyKpiGoalsList" style="display: flex; flex-direction: column; gap: 16px;">
+                ${kpiIndicators.map(({ kpi, kr, inputLags, outputLags }) => {
+                  const existingKpiGoal = existingGoals.find(g => g.kpiId === kpi.id);
+                  return `
+                    <div class="quarterly-kpi-goal" data-kpi-id="${kpi.id}" style="padding: 20px; background: linear-gradient(135deg, #F8FAFC, #F1F5F9); border: 1px solid var(--gray-200); border-radius: 14px;">
+                      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                        <div>
+                          <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">${kpi.name}</div>
+                          <div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">${kr?.name || ''} | 목표: ${kpi.targetValue || 0}${kpi.unit || ''}</div>
+                        </div>
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                          <input type="checkbox" class="kpi-goal-enabled" ${existingKpiGoal ? 'checked' : ''} onchange="toggleKpiGoalInputs(this)" style="width: 18px; height: 18px; cursor: pointer;">
+                          <span style="font-size: 12px; color: var(--gray-600);">목표 설정</span>
+                        </label>
+                      </div>
+
+                      <div class="kpi-goal-inputs" style="display: ${existingKpiGoal ? 'block' : 'none'};">
+                        <!-- 행동지표 목표 -->
+                        ${inputLags.length > 0 ? `
+                          <div style="margin-bottom: 14px;">
+                            <div style="font-size: 12px; font-weight: 600; color: #10B981; margin-bottom: 10px;">📋 행동지표 목표</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                              ${inputLags.map(lag => {
+                                const existingLagGoal = existingGoals.find(g => g.lagId === lag.id);
+                                return `
+                                  <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: white; border-radius: 10px; border: 1px solid #D1FAE5;">
+                                    <span style="font-size: 13px; color: var(--gray-700); min-width: 80px;">${lag.name}</span>
+                                    <input type="number" class="lag-goal-target" data-lag-id="${lag.id}" data-lag-type="input" value="${existingLagGoal?.targetValue || ''}" placeholder="목표" style="width: 70px; padding: 8px 10px; border: 1px solid var(--gray-200); border-radius: 8px; font-size: 13px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--gray-500);">${lag.unit || '건'}</span>
+                                  </div>
+                                `;
+                              }).join('')}
+                            </div>
+                          </div>
+                        ` : ''}
+
+                        <!-- 성과지표 목표 -->
+                        ${outputLags.length > 0 ? `
+                          <div>
+                            <div style="font-size: 12px; font-weight: 600; color: #F59E0B; margin-bottom: 10px;">💰 성과지표 목표</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                              ${outputLags.map(lag => {
+                                const existingLagGoal = existingGoals.find(g => g.lagId === lag.id);
+                                return `
+                                  <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: white; border-radius: 10px; border: 1px solid #FEF3C7;">
+                                    <span style="font-size: 13px; color: var(--gray-700); min-width: 80px;">${lag.name}</span>
+                                    <input type="number" class="lag-goal-target" data-lag-id="${lag.id}" data-lag-type="output" value="${existingLagGoal?.targetValue || ''}" placeholder="목표" style="width: 70px; padding: 8px 10px; border: 1px solid var(--gray-200); border-radius: 8px; font-size: 13px; text-align: center;">
+                                    <span style="font-size: 12px; color: var(--gray-500);">${lag.unit || kpi.unit || ''}</span>
+                                  </div>
+                                `;
+                              }).join('')}
+                            </div>
+                          </div>
+                        ` : ''}
+
+                        ${inputLags.length === 0 && outputLags.length === 0 ? '<div style="font-size: 13px; color: var(--gray-400);">등록된 지표가 없습니다</div>' : ''}
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
               </div>
-            `).join('') : `
-              <div class="quarterly-goal-item" style="display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;">
-                <div style="flex: 1;">
-                  <input type="text" class="goal-title" value="" placeholder="목표 이름 (예: 영어 공부)" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
-                  <div style="display: flex; gap: 8px;">
-                    <input type="number" class="goal-target" value="" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
-                    <input type="number" class="goal-current" value="0" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
-                    <input type="text" class="goal-unit" value="" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
-                  </div>
-                </div>
-                <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+            ` : `
+              <div style="padding: 32px; background: var(--gray-50); border-radius: 12px; text-align: center;">
+                <div style="font-size: 40px; margin-bottom: 12px;">📋</div>
+                <div style="font-size: 14px; color: var(--gray-500);">담당하는 KPI가 없습니다</div>
+                <div style="font-size: 12px; color: var(--gray-400); margin-top: 4px;">KPI 설정에서 담당자로 지정해주세요</div>
               </div>
             `}
           </div>
 
-          <button onclick="addQuarterlyGoalItem()" style="width: 100%; padding: 12px; background: var(--gray-100); color: var(--gray-600); border: 2px dashed var(--gray-300); border-radius: 8px; font-size: 13px; cursor: pointer; margin-bottom: 20px;">+ 목표 추가</button>
-
-          <div style="background: var(--info-light); padding: 12px 16px; border-radius: 10px; margin-bottom: 20px;">
-            <div style="font-size: 13px; color: var(--gray-600);">
-              <strong>안내:</strong> 분기별 개인 목표는 회사 KPI와 별개로 개인 성취를 위한 목표입니다.
+          <div style="background: linear-gradient(135deg, #EEF2FF, #E0E7FF); padding: 16px 20px; border-radius: 12px; margin-bottom: 28px;">
+            <div style="font-size: 13px; color: var(--gray-700);">
+              <strong>💡 안내:</strong> 담당 KPI의 행동지표/성과지표별로 분기 목표를 설정하세요. 업무일지 기록이 자동으로 집계됩니다.
             </div>
           </div>
 
-          <div style="display: flex; gap: 12px; justify-content: flex-end;">
-            <button onclick="closeModal()" style="padding: 12px 24px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
-            <button onclick="saveQuarterlyGoals('${memberId}')" style="padding: 12px 24px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">저장</button>
+          <div style="display: flex; gap: 16px; justify-content: flex-end; padding-top: 8px;">
+            <button onclick="closeModal()" style="padding: 14px 28px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;">취소</button>
+            <button onclick="saveQuarterlyGoals('${memberId}')" style="padding: 14px 28px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">저장</button>
           </div>
         </div>
       `);
+    }
+
+    // KPI 목표 입력 토글
+    function toggleKpiGoalInputs(checkbox) {
+      const container = checkbox.closest('.quarterly-kpi-goal');
+      const inputs = container.querySelector('.kpi-goal-inputs');
+      if (inputs) {
+        inputs.style.display = checkbox.checked ? 'block' : 'none';
+      }
+    }
+
+    // 분기/연도 변경 시 목표 새로고침
+    function refreshQuarterlyGoalKpis(memberId) {
+      const yearSelect = document.getElementById('quarterlyGoalYear');
+      const quarterSelect = document.getElementById('quarterlyGoalQuarter');
+      if (!yearSelect || !quarterSelect) return;
+
+      const year = parseInt(yearSelect.value);
+      const quarter = parseInt(quarterSelect.value);
+
+      const existingGoals = (okrState.quarterlyGoals || []).filter(g =>
+        g.memberId === memberId && g.year === year && g.quarter === quarter
+      );
+
+      // 기존 목표가 있으면 체크박스와 값 업데이트
+      document.querySelectorAll('.quarterly-kpi-goal').forEach(card => {
+        const kpiId = card.dataset.kpiId;
+        const existingKpiGoal = existingGoals.find(g => g.kpiId === kpiId);
+        const checkbox = card.querySelector('.kpi-goal-enabled');
+        const inputs = card.querySelector('.kpi-goal-inputs');
+
+        if (checkbox && inputs) {
+          checkbox.checked = !!existingKpiGoal;
+          inputs.style.display = existingKpiGoal ? 'block' : 'none';
+        }
+
+        // 각 지표 목표값 업데이트
+        card.querySelectorAll('.lag-goal-target').forEach(input => {
+          const lagId = input.dataset.lagId;
+          const existingLagGoal = existingGoals.find(g => g.lagId === lagId);
+          input.value = existingLagGoal?.targetValue || '';
+        });
+      });
+
+      showToast(`${year}년 ${quarter}분기 목표를 불러왔습니다`, 'info');
     }
 
     // 분기별 목표 항목 추가
@@ -16924,7 +17035,7 @@
       }
     }
 
-    // 분기별 개인 목표 저장
+    // 분기별 개인 목표 저장 (KPI/지표 기반)
     async function saveQuarterlyGoals(memberId) {
       const yearSelect = document.getElementById('quarterlyGoalYear');
       const quarterSelect = document.getElementById('quarterlyGoalQuarter');
@@ -16933,23 +17044,37 @@
       const year = parseInt(yearSelect.value);
       const quarter = parseInt(quarterSelect.value);
 
-      const items = document.querySelectorAll('.quarterly-goal-item');
+      // 체크된 KPI의 지표별 목표값 수집
       const goals = [];
+      document.querySelectorAll('.quarterly-kpi-goal').forEach(card => {
+        const checkbox = card.querySelector('.kpi-goal-enabled');
+        if (!checkbox?.checked) return;
 
-      items.forEach(item => {
-        const title = item.querySelector('.goal-title')?.value?.trim();
-        const targetValue = parseFloat(item.querySelector('.goal-target')?.value) || 0;
-        const currentValue = parseFloat(item.querySelector('.goal-current')?.value) || 0;
-        const unit = item.querySelector('.goal-unit')?.value?.trim() || '';
-        const existingId = item.dataset.id;
+        const kpiId = card.dataset.kpiId;
+        const kpi = okrState.kpis.find(k => k.id === kpiId);
 
-        if (title) {
-          goals.push({ title, targetValue, currentValue, unit, existingId });
-        }
+        card.querySelectorAll('.lag-goal-target').forEach(input => {
+          const targetValue = parseFloat(input.value) || 0;
+          if (targetValue > 0) {
+            const lagId = input.dataset.lagId;
+            const lagType = input.dataset.lagType;
+            const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+
+            goals.push({
+              kpiId,
+              kpiName: kpi?.name || '',
+              lagId,
+              lagName: lag?.name || '',
+              lagType,
+              targetValue,
+              unit: lag?.unit || kpi?.unit || '건'
+            });
+          }
+        });
       });
 
       if (goals.length === 0) {
-        showToast('최소 1개 이상의 목표를 입력해주세요', 'error');
+        showToast('최소 1개 이상의 지표 목표를 입력해주세요', 'error');
         return;
       }
 
@@ -16966,17 +17091,21 @@
           batch.delete(db.collection('okr_quarterlyGoals').doc(goal.id));
         });
 
-        // 새 목표 추가
+        // 새 목표 추가 (지표별)
         goals.forEach(goal => {
           const docRef = db.collection('okr_quarterlyGoals').doc();
           batch.set(docRef, {
             memberId,
             year,
             quarter,
-            title: goal.title,
+            kpiId: goal.kpiId,
+            kpiName: goal.kpiName,
+            lagId: goal.lagId,
+            lagName: goal.lagName,
+            lagType: goal.lagType,
             targetValue: goal.targetValue,
-            currentValue: goal.currentValue,
             unit: goal.unit,
+            title: `${goal.lagName} (${goal.lagType === 'output' ? '성과' : '행동'})`,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
         });
@@ -17347,38 +17476,92 @@
           </div>
         </div>
 
-        <!-- 분기별 개인 목표 카드 -->
-        ${memberQuarterlyGoals.length > 0 ? `
-          <div class="card" style="margin-bottom: 16px; background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-              <div style="font-size: 15px; font-weight: 700;">🎯 ${currentYear}년 ${currentQuarter}분기 개인 목표</div>
-              <button onclick="openQuarterlyGoalModal('${memberId}')" style="background: rgba(255,255,255,0.2); border: none; color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">편집</button>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
-              ${memberQuarterlyGoals.map(goal => {
-                const rate = goal.targetValue > 0 ? Math.round((goal.currentValue || 0) / goal.targetValue * 100) : 0;
-                return `
-                  <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 12px; backdrop-filter: blur(10px);">
-                    <div style="font-size: 12px; opacity: 0.9; margin-bottom: 6px;">${goal.title}</div>
-                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
-                      <div><span style="font-size: 18px; font-weight: 800;">${goal.currentValue || 0}</span><span style="font-size: 11px; opacity: 0.8;">/${goal.targetValue}${goal.unit || ''}</span></div>
-                      <span style="font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: ${rate >= 100 ? '#FFF' : rate >= 50 ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)'}; color: ${rate >= 100 ? '#059669' : 'white'};">${rate}%</span>
-                    </div>
-                    <div style="margin-top: 8px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; overflow: hidden;">
-                      <div style="height: 100%; width: ${Math.min(rate, 100)}%; background: white; border-radius: 2px;"></div>
-                    </div>
+        <!-- 분기별 개인 목표 카드 (지표 기반 자동 집계) -->
+        ${(() => {
+          // 분기 기간 계산
+          const quarterStart = new Date(currentYear, (currentQuarter - 1) * 3, 1);
+          const quarterEnd = new Date(currentYear, currentQuarter * 3, 0);
+          const quarterStartStr = quarterStart.toISOString().split('T')[0];
+          const quarterEndStr = quarterEnd.toISOString().split('T')[0];
+
+          // 분기 내 로그 필터링
+          const quarterLogs = filteredLogs.filter(log =>
+            log.date >= quarterStartStr && log.date <= quarterEndStr
+          );
+
+          // 각 목표의 실제 달성값 계산 (업무일지 기반)
+          const goalsWithProgress = memberQuarterlyGoals.map(goal => {
+            const currentValue = goal.lagId
+              ? quarterLogs.filter(log => log.laggingIndicatorId === goal.lagId)
+                  .reduce((sum, l) => sum + (l.resultValue || 0), 0)
+              : (goal.currentValue || 0);
+            const rate = goal.targetValue > 0 ? Math.round(currentValue / goal.targetValue * 100) : 0;
+            return { ...goal, currentValue, rate };
+          });
+
+          if (goalsWithProgress.length === 0) {
+            return `
+              <div class="card" style="margin-bottom: 16px; background: var(--gray-50); border: 2px dashed var(--gray-300); text-align: center; padding: 24px;">
+                <div style="font-size: 32px; margin-bottom: 8px;">🎯</div>
+                <div style="font-size: 14px; color: var(--gray-600); margin-bottom: 12px;">${currentYear}년 ${currentQuarter}분기 개인 목표가 없습니다</div>
+                <button onclick="openQuarterlyGoalModal('${memberId}')" style="padding: 10px 20px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">분기 목표 설정하기</button>
+              </div>
+            `;
+          }
+
+          // 행동/성과 분리
+          const inputGoals = goalsWithProgress.filter(g => g.lagType !== 'output');
+          const outputGoals = goalsWithProgress.filter(g => g.lagType === 'output');
+
+          return `
+            <div class="card" style="margin-bottom: 16px; background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white; padding: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div style="font-size: 16px; font-weight: 700;">🎯 ${currentYear}년 ${currentQuarter}분기 개인 목표</div>
+                <button onclick="openQuarterlyGoalModal('${memberId}')" style="background: rgba(255,255,255,0.2); border: none; color: white; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600;">편집</button>
+              </div>
+
+              ${inputGoals.length > 0 ? `
+                <div style="margin-bottom: 14px;">
+                  <div style="font-size: 12px; opacity: 0.85; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">📋 행동지표 목표</div>
+                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;">
+                    ${inputGoals.map(goal => `
+                      <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 14px; backdrop-filter: blur(10px);">
+                        <div style="font-size: 11px; opacity: 0.85; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${goal.lagName || goal.title}</div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                          <div><span style="font-size: 20px; font-weight: 800;">${goal.currentValue}</span><span style="font-size: 11px; opacity: 0.7;">/${goal.targetValue}${goal.unit || ''}</span></div>
+                          <span style="font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: ${goal.rate >= 100 ? '#FFF' : goal.rate >= 50 ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)'}; color: ${goal.rate >= 100 ? '#059669' : 'white'};">${goal.rate}%</span>
+                        </div>
+                        <div style="margin-top: 10px; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; overflow: hidden;">
+                          <div style="height: 100%; width: ${Math.min(goal.rate, 100)}%; background: white; border-radius: 3px; transition: width 0.3s;"></div>
+                        </div>
+                      </div>
+                    `).join('')}
                   </div>
-                `;
-              }).join('')}
+                </div>
+              ` : ''}
+
+              ${outputGoals.length > 0 ? `
+                <div>
+                  <div style="font-size: 12px; opacity: 0.85; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">💰 성과지표 목표</div>
+                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;">
+                    ${outputGoals.map(goal => `
+                      <div style="background: rgba(255,255,255,0.2); border-radius: 12px; padding: 14px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3);">
+                        <div style="font-size: 11px; opacity: 0.85; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${goal.lagName || goal.title}</div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                          <div><span style="font-size: 20px; font-weight: 800;">${goal.currentValue}</span><span style="font-size: 11px; opacity: 0.7;">/${goal.targetValue}${goal.unit || ''}</span></div>
+                          <span style="font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: ${goal.rate >= 100 ? '#FFF' : goal.rate >= 50 ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)'}; color: ${goal.rate >= 100 ? '#059669' : 'white'};">${goal.rate}%</span>
+                        </div>
+                        <div style="margin-top: 10px; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; overflow: hidden;">
+                          <div style="height: 100%; width: ${Math.min(goal.rate, 100)}%; background: white; border-radius: 3px; transition: width 0.3s;"></div>
+                        </div>
+                      </div>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : ''}
             </div>
-          </div>
-        ` : `
-          <div class="card" style="margin-bottom: 16px; background: var(--gray-50); border: 2px dashed var(--gray-300); text-align: center; padding: 24px;">
-            <div style="font-size: 32px; margin-bottom: 8px;">🎯</div>
-            <div style="font-size: 14px; color: var(--gray-600); margin-bottom: 12px;">${currentYear}년 ${currentQuarter}분기 개인 목표가 없습니다</div>
-            <button onclick="openQuarterlyGoalModal('${memberId}')" style="padding: 10px 20px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">분기 목표 설정하기</button>
-          </div>
-        `}
+          `;
+        })()}
 
         <!-- 개인 마인드맵 컨테이너 -->
         <div id="personalMindmapContainer" style="display: none; margin-bottom: 16px;">
