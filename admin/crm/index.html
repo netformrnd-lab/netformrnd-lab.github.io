@@ -1629,8 +1629,8 @@
               <select id="supplierStatusFilter" onchange="filterSuppliers()" style="padding: 6px 12px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">
                 <option value="all">전체</option>
                 <option value="pending">계약 대기</option>
+                <option value="sent">발송중</option>
                 <option value="contracted">계약 완료</option>
-                <option value="active">활성</option>
               </select>
               <button onclick="exportSuppliersCSV()" style="padding: 6px 12px; background: var(--gray-100); border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px; cursor: pointer;">
                 📥 내보내기
@@ -4060,8 +4060,8 @@
         filteredSuppliers = state.suppliers.filter(s => {
           const status = s.contractStatus || 'pending';
           if (filter === 'pending') return status === 'pending';
+          if (filter === 'sent') return status === 'sent';
           if (filter === 'contracted') return status === 'contracted';
-          if (filter === 'active') return s.status === 'active' && status === 'contracted';
           return true;
         });
       }
@@ -4075,6 +4075,8 @@
       const getContractBadge = (status) => {
         if (status === 'contracted') {
           return '<span class="status-badge status-approved">계약완료</span>';
+        } else if (status === 'sent') {
+          return '<span class="status-badge" style="background: #dbeafe; color: #1d4ed8;">발송중</span>';
         } else if (status === 'pending') {
           return '<span class="status-badge status-pending">계약대기</span>';
         } else {
@@ -4091,9 +4093,18 @@
               상세
             </button>
           `;
-        } else {
+        } else if (contractStatus === 'sent') {
           return `
             <button onclick="initiateOnlineContract('${s.id}')" style="padding: 4px 8px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: 600;">
+              ✅ 서명확인
+            </button>
+            <button onclick="viewSupplierDetail('${s.id}')" style="padding: 4px 8px; background: var(--gray-100); border: none; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: 4px;">
+              상세
+            </button>
+          `;
+        } else {
+          return `
+            <button onclick="initiateOnlineContract('${s.id}')" style="padding: 4px 8px; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; border-radius: 4px; font-size: 11px; cursor: pointer; font-weight: 600;">
               📝 계약하기
             </button>
             <button onclick="viewSupplierDetail('${s.id}')" style="padding: 4px 8px; background: var(--gray-100); border: none; border-radius: 4px; font-size: 11px; cursor: pointer; margin-left: 4px;">
@@ -4153,7 +4164,7 @@
       showToast('CSV 파일이 다운로드되었습니다.', 'success');
     }
 
-    // 온라인 계약 시작
+    // 모두싸인 계약 진행
     async function initiateOnlineContract(supplierId) {
       const supplier = state.suppliers.find(s => s.id === supplierId);
       if (!supplier) {
@@ -4161,129 +4172,159 @@
         return;
       }
 
+      const contactName = supplier.contact || supplier.contactPerson || '-';
+      const contractStatus = supplier.contractStatus || 'pending';
+
       const modal = document.getElementById('onboardingModal');
       modal.style.display = 'flex';
       modal.innerHTML = `
-        <div style="background: white; max-width: 600px; width: 95%; border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); max-height: 90vh; overflow-y: auto;">
-          <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #10b981, #059669); border-radius: 16px 16px 0 0;">
+        <div style="background: white; max-width: 500px; width: 95%; border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.3); max-height: 90vh; overflow-y: auto;">
+          <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #2563eb, #1d4ed8); border-radius: 16px 16px 0 0;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <h2 style="font-size: 18px; font-weight: 700; color: white;">📝 온라인 계약 진행</h2>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <img src="https://www.modusign.co.kr/favicon.ico" style="width: 24px; height: 24px; border-radius: 4px;" onerror="this.style.display='none'">
+                <h2 style="font-size: 18px; font-weight: 700; color: white;">모두싸인 계약</h2>
+              </div>
               <button onclick="closeOnboardingModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 18px;">×</button>
             </div>
           </div>
 
           <div style="padding: 24px;">
-            <!-- 공급사 정보 요약 -->
+            <!-- 공급사 정보 (복사 가능) -->
             <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 20px;">
-              <h4 style="font-size: 14px; color: var(--gray-600); margin-bottom: 12px;">📋 공급사 정보</h4>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                <div>
-                  <div style="font-size: 11px; color: var(--gray-500);">공급사명</div>
-                  <div style="font-weight: 600;">${supplier.name || '-'}</div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h4 style="font-size: 14px; color: var(--gray-600);">📋 공급사 정보</h4>
+                <button onclick="copySupplierInfo('${supplier.name || ''}', '${contactName}', '${supplier.email || ''}', '${supplier.phone || ''}')" style="padding: 4px 10px; background: var(--primary); color: white; border: none; border-radius: 6px; font-size: 11px; cursor: pointer;">
+                  📋 전체 복사
+                </button>
+              </div>
+              <div style="display: grid; gap: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; border: 1px solid var(--gray-200);">
+                  <div>
+                    <div style="font-size: 10px; color: var(--gray-500);">공급사명</div>
+                    <div style="font-weight: 600;" id="copy-name">${supplier.name || '-'}</div>
+                  </div>
+                  <button onclick="copyText('${supplier.name || ''}')" style="padding: 4px 8px; background: var(--gray-100); border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">복사</button>
                 </div>
-                <div>
-                  <div style="font-size: 11px; color: var(--gray-500);">담당자</div>
-                  <div>${supplier.contact || supplier.contactPerson || '-'}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; border: 1px solid var(--gray-200);">
+                  <div>
+                    <div style="font-size: 10px; color: var(--gray-500);">담당자</div>
+                    <div style="font-weight: 500;">${contactName}</div>
+                  </div>
+                  <button onclick="copyText('${contactName}')" style="padding: 4px 8px; background: var(--gray-100); border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">복사</button>
                 </div>
-                <div>
-                  <div style="font-size: 11px; color: var(--gray-500);">연락처</div>
-                  <div>${supplier.phone || '-'}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; border: 1px solid var(--gray-200);">
+                  <div>
+                    <div style="font-size: 10px; color: var(--gray-500);">이메일</div>
+                    <div style="font-weight: 500; color: var(--primary);">${supplier.email || '-'}</div>
+                  </div>
+                  <button onclick="copyText('${supplier.email || ''}')" style="padding: 4px 8px; background: var(--gray-100); border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">복사</button>
                 </div>
-                <div>
-                  <div style="font-size: 11px; color: var(--gray-500);">이메일</div>
-                  <div>${supplier.email || '-'}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: white; border-radius: 8px; border: 1px solid var(--gray-200);">
+                  <div>
+                    <div style="font-size: 10px; color: var(--gray-500);">연락처</div>
+                    <div style="font-weight: 500;">${supplier.phone || '-'}</div>
+                  </div>
+                  <button onclick="copyText('${supplier.phone || ''}')" style="padding: 4px 8px; background: var(--gray-100); border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">복사</button>
                 </div>
               </div>
             </div>
 
-            <!-- 계약 유형 선택 -->
-            <div style="margin-bottom: 20px;">
-              <label style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 8px;">계약 유형</label>
-              <div style="display: flex; gap: 8px;">
-                <label style="flex: 1; padding: 12px; border: 2px solid var(--primary); border-radius: 8px; cursor: pointer; text-align: center; background: rgba(99, 102, 241, 0.05);">
-                  <input type="radio" name="contractType" value="standard" checked style="display: none;">
-                  <div style="font-weight: 600; color: var(--primary);">📄 표준 계약</div>
-                  <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">기본 공급 계약</div>
-                </label>
-                <label style="flex: 1; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; cursor: pointer; text-align: center;" onclick="this.querySelector('input').checked=true; document.querySelectorAll('[name=contractType]').forEach(r => r.parentElement.style.borderColor = r.checked ? 'var(--primary)' : 'var(--gray-300)')">
-                  <input type="radio" name="contractType" value="exclusive" style="display: none;">
-                  <div style="font-weight: 600; color: var(--gray-700);">⭐ 독점 계약</div>
-                  <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">단독 공급 계약</div>
-                </label>
+            <!-- 모두싸인 바로가기 -->
+            <a href="https://app.modusign.co.kr/documents" target="_blank" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 15px; margin-bottom: 16px;">
+              <span>모두싸인 열기</span>
+              <span style="font-size: 18px;">→</span>
+            </a>
+
+            <!-- 안내 메시지 -->
+            <div style="background: rgba(37, 99, 235, 0.1); padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(37, 99, 235, 0.2);">
+              <div style="font-size: 12px; color: #1d4ed8; line-height: 1.6;">
+                <strong>진행 방법:</strong><br>
+                1. 위 정보를 복사하여 모두싸인에서 계약서 발송<br>
+                2. 발송 완료 후 아래 버튼 클릭
               </div>
             </div>
 
-            <!-- 수수료율 설정 -->
-            <div style="margin-bottom: 20px;">
-              <label style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 8px;">수수료율 (%)</label>
-              <input type="number" id="contract-commission" value="15" min="0" max="50" step="0.5" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
-              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">기본 수수료율: 15%</div>
-            </div>
-
-            <!-- 계약 기간 -->
-            <div style="margin-bottom: 20px;">
-              <label style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 8px;">계약 기간</label>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                <div>
-                  <label style="font-size: 11px; color: var(--gray-500);">시작일</label>
-                  <input type="date" id="contract-start" value="${new Date().toISOString().split('T')[0]}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
-                </div>
-                <div>
-                  <label style="font-size: 11px; color: var(--gray-500);">종료일</label>
-                  <input type="date" id="contract-end" value="${new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0]}" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px;">
-                </div>
+            <!-- 계약 상태에 따른 버튼 -->
+            ${contractStatus === 'sent' ? `
+              <div style="display: flex; gap: 12px;">
+                <button onclick="closeOnboardingModal()" style="flex: 1; padding: 14px; background: var(--gray-100); border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  닫기
+                </button>
+                <button onclick="completeModusignContract('${supplierId}')" style="flex: 2; padding: 14px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 15px;">
+                  ✅ 서명 완료 확인
+                </button>
               </div>
-            </div>
-
-            <!-- 메모 -->
-            <div style="margin-bottom: 20px;">
-              <label style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 8px;">메모 (선택)</label>
-              <textarea id="contract-notes" placeholder="계약 관련 특이사항을 입력하세요" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; min-height: 80px; resize: vertical;"></textarea>
-            </div>
-
-            <!-- 액션 버튼 -->
-            <div style="display: flex; gap: 12px;">
-              <button onclick="closeOnboardingModal()" style="flex: 1; padding: 14px; background: var(--gray-100); border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
-                취소
-              </button>
-              <button onclick="completeOnlineContract('${supplierId}')" style="flex: 2; padding: 14px; background: linear-gradient(135deg, #10b981, #059669); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 15px;">
-                ✅ 계약 완료 처리
-              </button>
-            </div>
+            ` : `
+              <div style="display: flex; gap: 12px;">
+                <button onclick="closeOnboardingModal()" style="flex: 1; padding: 14px; background: var(--gray-100); border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  닫기
+                </button>
+                <button onclick="markContractSent('${supplierId}')" style="flex: 2; padding: 14px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 15px;">
+                  📤 계약서 발송 완료
+                </button>
+              </div>
+            `}
           </div>
         </div>
       `;
     }
 
-    // 온라인 계약 완료 처리
-    async function completeOnlineContract(supplierId) {
-      try {
-        const contractType = document.querySelector('[name=contractType]:checked')?.value || 'standard';
-        const commission = parseFloat(document.getElementById('contract-commission')?.value) || 15;
-        const startDate = document.getElementById('contract-start')?.value;
-        const endDate = document.getElementById('contract-end')?.value;
-        const notes = document.getElementById('contract-notes')?.value?.trim() || '';
+    // 텍스트 복사
+    function copyText(text) {
+      if (!text || text === '-') {
+        showToast('복사할 내용이 없습니다.', 'error');
+        return;
+      }
+      navigator.clipboard.writeText(text).then(() => {
+        showToast('복사되었습니다!', 'success');
+      }).catch(() => {
+        showToast('복사 실패', 'error');
+      });
+    }
 
-        // 공급사 정보 업데이트
+    // 공급사 정보 전체 복사
+    function copySupplierInfo(name, contact, email, phone) {
+      const info = `공급사명: ${name}\n담당자: ${contact}\n이메일: ${email}\n연락처: ${phone}`;
+      navigator.clipboard.writeText(info).then(() => {
+        showToast('공급사 정보가 복사되었습니다!', 'success');
+      }).catch(() => {
+        showToast('복사 실패', 'error');
+      });
+    }
+
+    // 계약서 발송 완료 처리
+    async function markContractSent(supplierId) {
+      try {
+        await db.collection('suppliers').doc(supplierId).update({
+          contractStatus: 'sent',
+          contractSentAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        closeOnboardingModal();
+        showToast('📤 계약서 발송이 기록되었습니다. 서명 완료 후 확인해주세요.', 'success');
+        renderSuppliersTable();
+      } catch (error) {
+        console.error('계약 발송 기록 오류:', error);
+        showToast('처리 중 오류가 발생했습니다.', 'error');
+      }
+    }
+
+    // 모두싸인 계약 완료 처리
+    async function completeModusignContract(supplierId) {
+      try {
         await db.collection('suppliers').doc(supplierId).update({
           contractStatus: 'contracted',
-          contractType: contractType,
-          commission: commission,
-          contractStartDate: startDate,
-          contractEndDate: endDate,
-          contractNotes: notes,
           contractedAt: firebase.firestore.FieldValue.serverTimestamp(),
           status: 'active'
         });
 
         closeOnboardingModal();
         showToast('🎉 계약이 완료되었습니다! 입점이 확정되었습니다.', 'success');
-
-        // 테이블 새로고침
         renderSuppliersTable();
       } catch (error) {
         console.error('계약 완료 오류:', error);
-        showToast('계약 처리 중 오류가 발생했습니다.', 'error');
+        showToast('처리 중 오류가 발생했습니다.', 'error');
       }
     }
 
