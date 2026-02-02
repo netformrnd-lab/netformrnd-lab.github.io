@@ -1494,6 +1494,9 @@
               </div>
             </div>
             <div style="display: flex; gap: 8px;">
+              <button onclick="openTeamWeeklyPlansModal()" style="background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                👥 팀 주간 계획
+              </button>
               <button onclick="openWeeklyPlanModal()" style="background: white; border: 1px solid var(--primary); color: var(--primary); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">
                 📅 주간 계획 수립
               </button>
@@ -15335,6 +15338,7 @@
       todayLogs: [],
       personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
       personalGoals: [],    // 새 개인 목표 (지표별 기간 설정)
+      weeklyPlans: [],      // 주간 계획 (Firebase 저장)
       meetings: [],  // 미팅 일지
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
       expandedKRs: [],
@@ -15434,6 +15438,14 @@
         // 개인 목표 로드 (새 구조 - 지표별 기간 설정)
         const personalGoalsSnapshot = await db.collection('okr_personalGoals').get();
         okrState.personalGoals = personalGoalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 주간 계획 로드 (최근 8주)
+        const eightWeeksAgo = new Date();
+        eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+        const weeklyPlansSnapshot = await db.collection('okr_weeklyPlans')
+          .where('weekStart', '>=', eightWeeksAgo.toISOString().split('T')[0])
+          .get();
+        okrState.weeklyPlans = weeklyPlansSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 미팅 일지 로드 (최근 90일)
         const ninetyDaysAgo = new Date();
@@ -21869,9 +21881,12 @@
         return { ...g, lag };
       }).filter(g => g.lag);
 
-      // 저장된 주간 계획 가져오기
-      const savedPlan = JSON.parse(localStorage.getItem('weeklyPlan_' + state.currentUser?.id) || '{}');
+      // 저장된 주간 계획 가져오기 (Firebase)
       const currentWeekKey = monday.toISOString().split('T')[0];
+      const weeklyPlanDoc = okrState.weeklyPlans.find(wp =>
+        wp.memberId === state.currentUser?.id && wp.weekStart === currentWeekKey
+      );
+      const savedPlan = { [currentWeekKey]: weeklyPlanDoc?.plan || {} };
 
       showModal(`
         <div style="padding: 24px; max-width: 900px; max-height: 85vh; overflow-y: auto;">
@@ -21952,44 +21967,79 @@
       `);
     }
 
-    // 주간 계획 저장
-    function saveWeeklyPlan() {
+    // 주간 계획 저장 (Firebase)
+    async function saveWeeklyPlan() {
       const now = new Date();
       const dayOfWeek = now.getDay();
       const monday = new Date(now);
       monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      const weekKey = monday.toISOString().split('T')[0];
+      const weekStart = monday.toISOString().split('T')[0];
+      const memberId = state.currentUser?.id;
+      const memberName = state.currentUser?.name || '';
+
+      if (!memberId) {
+        showToast('로그인 정보가 없습니다', 'error');
+        return;
+      }
 
       const weekDays = ['월', '화', '수', '목', '금'];
       const plan = {};
-      plan[weekKey] = {};
 
       weekDays.forEach(day => {
         const textarea = document.getElementById('weeklyPlan_' + day);
         if (textarea) {
-          plan[weekKey][day] = textarea.value.trim();
+          plan[day] = textarea.value.trim();
         }
       });
 
-      const savedPlan = JSON.parse(localStorage.getItem('weeklyPlan_' + state.currentUser?.id) || '{}');
-      savedPlan[weekKey] = plan[weekKey];
-      localStorage.setItem('weeklyPlan_' + state.currentUser?.id, JSON.stringify(savedPlan));
+      try {
+        // 기존 주간 계획 찾기
+        const existing = okrState.weeklyPlans.find(wp =>
+          wp.memberId === memberId && wp.weekStart === weekStart
+        );
 
-      updateWeeklyPlanPreview();
-      closeModal();
-      showToast('주간 계획이 저장되었습니다!', 'success');
+        if (existing) {
+          // 업데이트
+          await db.collection('okr_weeklyPlans').doc(existing.id).update({
+            plan: plan,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          // 신규 생성
+          await db.collection('okr_weeklyPlans').add({
+            memberId: memberId,
+            memberName: memberName,
+            weekStart: weekStart,
+            plan: plan,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        await loadOkrData();
+        updateWeeklyPlanPreview();
+        closeModal();
+        showToast('주간 계획이 저장되었습니다!', 'success');
+      } catch (e) {
+        console.error('주간 계획 저장 오류:', e);
+        showToast('저장 실패: ' + e.message, 'error');
+      }
     }
 
-    // 주간 계획 미리보기 업데이트
+    // 주간 계획 미리보기 업데이트 (Firebase 데이터 사용)
     function updateWeeklyPlanPreview() {
       const now = new Date();
       const dayOfWeek = now.getDay();
       const monday = new Date(now);
       monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      const weekKey = monday.toISOString().split('T')[0];
+      const weekStart = monday.toISOString().split('T')[0];
+      const memberId = state.currentUser?.id;
 
-      const savedPlan = JSON.parse(localStorage.getItem('weeklyPlan_' + state.currentUser?.id) || '{}');
-      const weekPlan = savedPlan[weekKey] || {};
+      // Firebase에서 주간 계획 찾기
+      const weeklyPlan = okrState.weeklyPlans.find(wp =>
+        wp.memberId === memberId && wp.weekStart === weekStart
+      );
+      const weekPlan = weeklyPlan?.plan || {};
 
       const dayElements = {
         '월': document.getElementById('weeklyMon'),
@@ -22018,6 +22068,102 @@
       if (titleEl && state.currentUser?.name) {
         titleEl.textContent = state.currentUser.name + '님의 이번 주 목표';
       }
+    }
+
+    // 팀 주간 계획 조회 모달
+    function openTeamWeeklyPlansModal() {
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+      const weekStart = monday.toISOString().split('T')[0];
+      const weekDays = ['월', '화', '수', '목', '금'];
+
+      // 이번 주 팀원들의 주간 계획
+      const teamPlans = okrState.weeklyPlans.filter(wp => wp.weekStart === weekStart);
+      const teamMembers = state.teamMembers || [];
+
+      showModal(`
+        <div style="padding: 24px; max-width: 1000px; max-height: 85vh; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                👥 팀 주간 계획 현황
+              </div>
+              <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                ${monday.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} ~ ${new Date(monday.getTime() + 4 * 24 * 60 * 60 * 1000).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} (이번 주)
+              </p>
+            </div>
+            <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          ${teamMembers.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-500);">등록된 팀원이 없습니다</div>
+          ` : `
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${teamMembers.map(member => {
+                const memberPlan = teamPlans.find(p => p.memberId === member.id);
+                const plan = memberPlan?.plan || {};
+                const hasPlan = Object.values(plan).some(v => v && v.trim());
+                const totalTasks = Object.values(plan).reduce((sum, v) => sum + (v ? v.split('\\n').filter(l => l.trim()).length : 0), 0);
+
+                return `
+                  <div style="background: ${hasPlan ? 'white' : 'var(--gray-50)'}; border: 1px solid ${hasPlan ? 'var(--primary)' : 'var(--gray-200)'}; border-radius: 12px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="width: 36px; height: 36px; border-radius: 50%; background: ${hasPlan ? 'var(--primary)' : 'var(--gray-300)'}; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700;">
+                          ${member.name?.charAt(0) || '?'}
+                        </div>
+                        <div>
+                          <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">${member.name}</div>
+                          <div style="font-size: 11px; color: var(--gray-500);">${member.position || ''} ${member.department || ''}</div>
+                        </div>
+                      </div>
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        ${hasPlan ? `
+                          <span style="background: #DCFCE7; color: #059669; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;">✓ 등록완료</span>
+                          <span style="color: var(--primary); font-size: 13px; font-weight: 700;">${totalTasks}건</span>
+                        ` : `
+                          <span style="background: #FEF3C7; color: #92400E; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;">⚠️ 미등록</span>
+                        `}
+                      </div>
+                    </div>
+                    ${hasPlan ? `
+                      <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;">
+                        ${weekDays.map(day => {
+                          const dayPlan = plan[day] || '';
+                          const lines = dayPlan ? dayPlan.split('\\n').filter(l => l.trim()) : [];
+                          return `
+                            <div style="background: var(--gray-50); border-radius: 8px; padding: 10px; min-height: 60px;">
+                              <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 6px; text-align: center;">${day}</div>
+                              ${lines.length > 0 ? `
+                                <div style="font-size: 11px; color: var(--gray-700); line-height: 1.5;">
+                                  ${lines.slice(0, 3).map(l => `• ${l.length > 15 ? l.slice(0, 15) + '...' : l}`).join('<br>')}
+                                  ${lines.length > 3 ? `<br><span style="color: var(--gray-400);">+${lines.length - 3}개 더</span>` : ''}
+                                </div>
+                              ` : `
+                                <div style="font-size: 11px; color: var(--gray-400); text-align: center;">-</div>
+                              `}
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>
+                    ` : `
+                      <div style="text-align: center; padding: 12px; color: var(--gray-400); font-size: 12px;">
+                        아직 이번 주 계획이 등록되지 않았습니다
+                      </div>
+                    `}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 20px; margin-top: 20px; border-top: 1px solid var(--gray-200);">
+            <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
+          </div>
+        </div>
+      `);
     }
 
     // ========================================
