@@ -21827,6 +21827,25 @@
 
     // 빠른 추가 모달
     function openQuickAddModal() {
+      // 현재 로그인한 사용자 정보
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+
+      // 내가 담당인 KPI만 필터링 (주 담당 또는 서브 담당)
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member?.loginId ||
+        kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member?.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+
+      // 내가 담당인 KPI에 연결된 메인 KPI(KR) 목록
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+      const myKeyResults = okrState.keyResults.filter(kr => myKrIds.includes(kr.id));
+
       showModal(`
         <div style="padding: 24px;">
           <div style="font-size: 18px; font-weight: 700; margin-bottom: 20px;">➕ 빠른 업무 추가</div>
@@ -21834,7 +21853,9 @@
             <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">메인 KPI 선택 *</label>
             <select id="quickAddKR" onchange="updateQuickAddKPIs()" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px; font-family: inherit;">
               <option value="">메인 KPI 선택</option>
-              ${okrState.keyResults.map(kr => `<option value="${kr.id}">${kr.name}</option>`).join('')}
+              ${myKeyResults.length > 0
+                ? myKeyResults.map(kr => `<option value="${kr.id}">${kr.name}</option>`).join('')
+                : '<option value="" disabled>⚠️ 담당 KPI가 없습니다</option>'}
             </select>
           </div>
           <div style="margin-bottom: 16px;">
@@ -21876,10 +21897,27 @@
       const krId = document.getElementById('quickAddKR')?.value;
       const kpiSelect = document.getElementById('quickAddKPI');
       if (!kpiSelect) return;
-      const kpisForKR = okrState.kpis.filter(k => k.keyResultId === krId);
+
+      // 현재 로그인한 사용자 정보
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+
+      // 내가 담당인 KPI만 필터링
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member?.loginId ||
+        kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member?.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+
+      // 선택한 KR에 연결된 담당 KPI만 표시
+      const kpisForKR = okrState.kpis.filter(k => k.keyResultId === krId && myKpiIds.includes(k.id));
       kpiSelect.innerHTML = kpisForKR.length > 0
         ? kpisForKR.map(kpi => `<option value="${kpi.id}">${kpi.name}</option>`).join('')
-        : '<option value="">KPI가 없습니다</option>';
+        : '<option value="" disabled>⚠️ 담당 서브 KPI가 없습니다</option>';
     }
 
     async function saveQuickAdd() {
@@ -23289,11 +23327,34 @@
       // 첨부파일 초기화
       taskPlanState.attachments = task.attachments ? [...task.attachments] : [];
 
-      // KR 옵션 생성
+      // 현재 로그인한 사용자 정보
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+
+      // 내가 담당인 KPI만 필터링 (주 담당 또는 서브 담당)
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member?.loginId ||
+        kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member?.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+
+      // 내가 담당인 KPI에 연결된 메인 KPI(KR) 목록
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+      const myKeyResults = okrState.keyResults.filter(kr => myKrIds.includes(kr.id));
+
+      // KR 옵션 생성 (담당 KPI가 연결된 KR만 표시)
       let krOptions = '<option value="">메인 KPI 연결 안함</option>';
-      okrState.keyResults.forEach(kr => {
-        krOptions += `<option value="${kr.id}" ${task.krId === kr.id ? 'selected' : ''}>${kr.name}</option>`;
-      });
+      if (myKeyResults.length > 0) {
+        myKeyResults.forEach(kr => {
+          krOptions += `<option value="${kr.id}" ${task.krId === kr.id ? 'selected' : ''}>${kr.name}</option>`;
+        });
+      } else {
+        krOptions += '<option value="" disabled>⚠️ 담당 KPI가 없습니다</option>';
+      }
 
       // 담당자 옵션 생성 (ID 기반)
       let assigneeOptions = '<option value="">담당자 선택</option>';
@@ -23427,7 +23488,7 @@
       }
     }
 
-    // 메인 KPI 선택 시 서브 KPI 옵션 업데이트
+    // 메인 KPI 선택 시 서브 KPI 옵션 업데이트 (담당 KPI만 표시)
     function updateTaskPlanKpiOptions() {
       const krId = document.getElementById('taskPlanKr').value;
       const kpiSelect = document.getElementById('taskPlanKpi');
@@ -23440,14 +23501,34 @@
 
       if (!krId) return;
 
-      const kpisForKr = okrState.kpis.filter(kpi => kpi.keyResultId === krId);
-      kpisForKr.forEach(kpi => {
-        const lagsCount = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id).length;
-        kpiSelect.innerHTML += `<option value="${kpi.id}">${kpi.name} (${lagsCount}개 지표)</option>`;
-      });
+      // 현재 로그인한 사용자 정보
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+
+      // 내가 담당인 KPI만 필터링
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member?.loginId ||
+        kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member?.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+
+      // 선택한 KR에 연결된 담당 KPI만 표시
+      const kpisForKr = okrState.kpis.filter(kpi => kpi.keyResultId === krId && myKpiIds.includes(kpi.id));
+      if (kpisForKr.length > 0) {
+        kpisForKr.forEach(kpi => {
+          const lagsCount = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id).length;
+          kpiSelect.innerHTML += `<option value="${kpi.id}">${kpi.name} (${lagsCount}개 지표)</option>`;
+        });
+      } else {
+        kpiSelect.innerHTML += '<option value="" disabled>⚠️ 담당 서브 KPI가 없습니다</option>';
+      }
     }
 
-    // 서브 KPI 선택 시 지표 옵션 업데이트
+    // 서브 KPI 선택 시 지표 옵션 업데이트 (담당 KPI의 지표만 표시됨 - KPI가 이미 필터링됨)
     function updateTaskPlanLagOptions() {
       const kpiId = document.getElementById('taskPlanKpi').value;
       const lagSelect = document.getElementById('taskPlanLag');
