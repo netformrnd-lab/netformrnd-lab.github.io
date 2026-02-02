@@ -23162,11 +23162,24 @@
       return `${dateStr} (${diffDays}일 남음)`;
     }
 
-    // KR 정보 가져오기
+    // KR 정보 가져오기 (지표 연결 포함)
     function getTaskKrInfo(task) {
       if (!task.krId) return null;
       const kr = okrState.keyResults.find(k => k.id === task.krId);
-      return kr ? kr.name : null;
+      if (!kr) return null;
+
+      let info = kr.name;
+
+      // 지표가 연결된 경우 표시
+      if (task.laggingIndicatorId && task.linkedLagName) {
+        const typeIcon = task.linkedLagType === 'output' ? '📤' : '📥';
+        info = `${typeIcon} ${task.linkedLagName}`;
+      } else if (task.kpiId) {
+        const kpi = okrState.kpis.find(k => k.id === task.kpiId);
+        if (kpi) info = kpi.name;
+      }
+
+      return info;
     }
 
     // 업무 등록 모달 열기
@@ -23244,12 +23257,32 @@
                   <input type="date" id="taskPlanDeadline" value="${task.deadline || ''}" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
                 </div>
               </div>
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">메인 KPI 연결</label>
-                <select id="taskPlanKr" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; background: white;">
-                  ${krOptions}
-                </select>
-                <div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">연결된 KR의 진행률에 반영됩니다</div>
+              <!-- KPI 연결 섹션 -->
+              <div style="margin-bottom: 16px; padding: 16px; background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 12px; border: 1px solid var(--primary);">
+                <div style="font-size: 13px; font-weight: 700; color: var(--primary); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+                  🎯 KPI 연결 <span style="font-size: 11px; font-weight: 400; color: var(--gray-500);">(OKR 성과에 자동 반영)</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                  <div>
+                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">메인 KPI</label>
+                    <select id="taskPlanKr" onchange="updateTaskPlanKpiOptions()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                      ${krOptions}
+                    </select>
+                  </div>
+                  <div>
+                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">서브 KPI</label>
+                    <select id="taskPlanKpi" onchange="updateTaskPlanLagOptions()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                      <option value="">서브 KPI 선택</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">연결 지표 (행동/성과)</label>
+                  <select id="taskPlanLag" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                    <option value="">지표 선택 (선택사항)</option>
+                  </select>
+                  <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">💡 지표를 선택하면 업무 완료 시 자동으로 OKR에 기록됩니다</div>
+                </div>
               </div>
               ${isEdit ? `
                 <div style="margin-bottom: 16px;">
@@ -23278,6 +23311,61 @@
       // 클립보드 붙여넣기 이벤트 등록
       const modal = document.getElementById('taskPlanModal');
       modal.addEventListener('paste', handleTaskPlanPaste);
+
+      // 기존 값으로 KPI/지표 옵션 초기화 (수정 시)
+      if (task.krId) {
+        setTimeout(() => {
+          updateTaskPlanKpiOptions();
+          if (task.kpiId) {
+            const kpiSelect = document.getElementById('taskPlanKpi');
+            if (kpiSelect) kpiSelect.value = task.kpiId;
+            updateTaskPlanLagOptions();
+            if (task.laggingIndicatorId) {
+              const lagSelect = document.getElementById('taskPlanLag');
+              if (lagSelect) lagSelect.value = task.laggingIndicatorId;
+            }
+          }
+        }, 100);
+      }
+    }
+
+    // 메인 KPI 선택 시 서브 KPI 옵션 업데이트
+    function updateTaskPlanKpiOptions() {
+      const krId = document.getElementById('taskPlanKr').value;
+      const kpiSelect = document.getElementById('taskPlanKpi');
+      const lagSelect = document.getElementById('taskPlanLag');
+
+      if (!kpiSelect) return;
+
+      kpiSelect.innerHTML = '<option value="">서브 KPI 선택</option>';
+      lagSelect.innerHTML = '<option value="">지표 선택 (선택사항)</option>';
+
+      if (!krId) return;
+
+      const kpisForKr = okrState.kpis.filter(kpi => kpi.keyResultId === krId);
+      kpisForKr.forEach(kpi => {
+        const lagsCount = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id).length;
+        kpiSelect.innerHTML += `<option value="${kpi.id}">${kpi.name} (${lagsCount}개 지표)</option>`;
+      });
+    }
+
+    // 서브 KPI 선택 시 지표 옵션 업데이트
+    function updateTaskPlanLagOptions() {
+      const kpiId = document.getElementById('taskPlanKpi').value;
+      const lagSelect = document.getElementById('taskPlanLag');
+
+      if (!lagSelect) return;
+
+      lagSelect.innerHTML = '<option value="">지표 선택 (선택사항)</option>';
+
+      if (!kpiId) return;
+
+      const lagsForKpi = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
+      lagsForKpi.forEach(lag => {
+        const typeIcon = lag.type === 'output' ? '📤' : '📥';
+        const typeLabel = lag.type === 'output' ? '성과' : '행동';
+        lagSelect.innerHTML += `<option value="${lag.id}">${typeIcon} ${lag.name} (${typeLabel})</option>`;
+      });
     }
 
     // 첨부파일 미리보기 렌더링
@@ -23446,6 +23534,8 @@
       const description = document.getElementById('taskPlanDesc').value.trim();
       const deadline = document.getElementById('taskPlanDeadline').value;
       const krId = document.getElementById('taskPlanKr').value;
+      const kpiId = document.getElementById('taskPlanKpi')?.value || '';
+      const laggingIndicatorId = document.getElementById('taskPlanLag')?.value || '';
       const statusEl = document.getElementById('taskPlanStatus');
       const status = statusEl ? statusEl.value : 'waiting';
 
@@ -23461,6 +23551,17 @@
         return;
       }
 
+      // 연결된 지표 정보 조회
+      let linkedLagName = '';
+      let linkedLagType = '';
+      if (laggingIndicatorId) {
+        const lag = okrState.laggingIndicators.find(l => l.id === laggingIndicatorId);
+        if (lag) {
+          linkedLagName = lag.name;
+          linkedLagType = lag.type || 'input';
+        }
+      }
+
       const taskData = {
         title,
         description,
@@ -23468,7 +23569,11 @@
         assignee,          // 표시용 이름 (호환성)
         assigneeLoginId,   // 로그인 ID (백업)
         deadline,
-        krId,
+        krId,              // 메인 KPI (KR)
+        kpiId,             // 서브 KPI
+        laggingIndicatorId, // 연결된 지표
+        linkedLagName,     // 지표 이름 (표시용)
+        linkedLagType,     // 지표 유형 (input/output)
         status,
         attachments: taskPlanState.attachments,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -23543,36 +23648,41 @@
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // 2. 업무기록에 자동 기록 (메인 KPI 연결된 경우)
-        if (task.krId) {
-          const kr = okrState.keyResults.find(k => k.id === task.krId);
-          if (kr) {
-            const now = new Date();
-            const registeredTime = formatTime(now);
+        // 2. 업무기록에 자동 기록 (KPI 연결된 경우)
+        if (task.krId || task.laggingIndicatorId) {
+          const kr = task.krId ? okrState.keyResults.find(k => k.id === task.krId) : null;
+          const now = new Date();
+          const registeredTime = formatTime(now);
 
-            const logData = {
-              date: okrToday,
-              memberId: state.currentUser?.id || state.currentUser?.uid || 'anonymous',
-              memberName: task.assignee || state.currentUser?.name || '사용자',
-              krId: task.krId,
-              kpiId: null,
-              laggingIndicatorId: null,
-              resultValue: 1,
-              version: 'A',
-              memo: `[업무완료] ${task.title}${task.description ? ' - ' + task.description : ''}`,
-              attachments: [],
-              registeredTime: registeredTime,
-              registeredTimestamp: now.getTime(),
-              taskPlanId: taskId,
-              createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            };
-
-            const docRef = await db.collection('okr_dailyLogs').add(logData);
-
-            // 로컬 상태 업데이트
-            okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
-            okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+          // 연결된 지표 정보 조회
+          let lagInfo = null;
+          if (task.laggingIndicatorId) {
+            lagInfo = okrState.laggingIndicators.find(l => l.id === task.laggingIndicatorId);
           }
+
+          const logData = {
+            date: okrToday,
+            memberId: state.currentUser?.id || state.currentUser?.uid || 'anonymous',
+            memberName: task.assignee || state.currentUser?.name || '사용자',
+            krId: task.krId || '',
+            kpiId: task.kpiId || '',
+            laggingIndicatorId: task.laggingIndicatorId || '',
+            laggingIndicatorName: lagInfo?.name || task.linkedLagName || '',
+            resultValue: 1,
+            version: lagInfo?.version || 'A',
+            memo: `[업무완료] ${task.title}${task.description ? ' - ' + task.description : ''}`,
+            attachments: task.attachments || [],
+            registeredTime: registeredTime,
+            registeredTimestamp: now.getTime(),
+            taskPlanId: taskId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          const docRef = await db.collection('okr_dailyLogs').add(logData);
+
+          // 로컬 상태 업데이트
+          okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
+          okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
         }
 
         showToast('업무가 완료 처리되었습니다.');
