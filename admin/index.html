@@ -2109,9 +2109,9 @@
               <span id="issues-badge" style="background: #ef4444; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; margin-left: auto;">0</span>
             </div>
             <div class="folder-content" id="issues-folder-content">
-              <div class="menu-item" data-tab="pendingDocuments" onclick="switchTab('pendingDocuments')">
-                <span class="item-icon">📄</span>대기 서류
-                <span id="pending-docs-count" style="margin-left: auto; background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 8px; font-size: 10px;">0</span>
+              <div class="menu-item" onclick="window.location.href='/admin/crm/index.html#tab-onboardingDocs'">
+                <span class="item-icon">📄</span>대기 서류 → CRM
+                <span id="pending-docs-count" style="margin-left: auto; background: #dbeafe; color: #1d4ed8; padding: 2px 6px; border-radius: 8px; font-size: 10px;">→</span>
               </div>
               <div class="menu-item" data-tab="settlementIssues" onclick="switchTab('settlementIssues')">
                 <span class="item-icon">⚠️</span>정산 지연
@@ -4150,13 +4150,28 @@ function toggleSellerMenu(event) {
 
 // 공급사 관리 탭 전환 (탭 UI 통합)
 function switchSupplierTab(tabName) {
+  // CRM센터로 이관된 탭들 - 리다이렉트
+  if (['productDB', 'productList', 'supplierApplications', 'pendingSupplierOnboardings'].includes(tabName)) {
+    const hashMap = {
+      'productDB': '#tab-onboardingDocs',
+      'productList': '#tab-onboardingDocs',
+      'supplierApplications': '#tab-onboardingDocs',
+      'pendingSupplierOnboardings': '#tab-onboardingDocs'
+    };
+    showToast('📍 이 기능은 CRM센터에서 관리됩니다. 이동합니다...', 'info');
+    setTimeout(() => {
+      window.location.href = '/admin/crm/index.html' + hashMap[tabName];
+    }, 500);
+    return;
+  }
+
   // 사이드바 active 상태는 suppliers로 유지
   state.currentTab = tabName;
 
   // 사이드바에서 공급사 관리 항목 활성화
   document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.remove('active');
-    if (item.dataset.tab === 'suppliers' && ['suppliers', 'productDB', 'productList', 'supplierApplications', 'pendingSupplierOnboardings'].includes(tabName)) {
+    if (item.dataset.tab === 'suppliers') {
       item.classList.add('active');
     }
   });
@@ -4164,26 +4179,27 @@ function switchSupplierTab(tabName) {
   // 해당 탭 렌더링
   if (tabName === 'suppliers') {
     renderSuppliers();
-  } else if (tabName === 'productDB') {
-    renderProductDB();
-  } else if (tabName === 'productList') {
-    renderProductList();
-  } else if (tabName === 'supplierApplications') {
-    renderSupplierApplications();
-  } else if (tabName === 'pendingSupplierOnboardings') {
-    renderPendingSupplierOnboardings();
   }
 }
 
 // 셀러 관리 탭 전환 (탭 UI 통합)
 function switchSellerTab(tabName) {
+  // CRM센터로 이관된 탭들 - 리다이렉트
+  if (['sellerApplications', 'pendingOnboardings'].includes(tabName)) {
+    showToast('📍 이 기능은 CRM센터에서 관리됩니다. 이동합니다...', 'info');
+    setTimeout(() => {
+      window.location.href = '/admin/crm/index.html#tab-onboardingDocs';
+    }, 500);
+    return;
+  }
+
   // 사이드바 active 상태는 sellers로 유지
   state.currentTab = tabName;
 
   // 사이드바에서 셀러 관리 항목 활성화
   document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.remove('active');
-    if (item.dataset.tab === 'sellers' && ['sellers', 'sellerList', 'sellerApplications', 'pendingOnboardings'].includes(tabName)) {
+    if (item.dataset.tab === 'sellers' && ['sellers', 'sellerList'].includes(tabName)) {
       item.classList.add('active');
     }
   });
@@ -4193,10 +4209,6 @@ function switchSellerTab(tabName) {
     renderSellers();
   } else if (tabName === 'sellerList') {
     renderSellerList();
-  } else if (tabName === 'sellerApplications') {
-    renderSellerApplications();
-  } else if (tabName === 'pendingOnboardings') {
-    renderPendingOnboardings();
   }
 }
 
@@ -7748,10 +7760,11 @@ function renderDeals() {
 
 function renderSuppliers() {
   const app = document.getElementById('app');
-  
-  // 계약 완료된 공급사 / 미완료 공급사 분리
-  const contractedSuppliers = state.suppliers.filter(s => s.contractStatus === 'completed');
-  const pendingSuppliers = state.suppliers.filter(s => s.contractStatus !== 'completed');
+
+  // 계약 완료된 공급사 / 미완료 공급사 분리 (completed, contracted 모두 인식)
+  const isContracted = (s) => s.contractStatus === 'completed' || s.contractStatus === 'contracted';
+  const contractedSuppliers = state.suppliers.filter(s => isContracted(s));
+  const pendingSuppliers = state.suppliers.filter(s => !isContracted(s));
   
   // 총 상품 수
   const totalProducts = (state.supplierProducts || []).length;
@@ -7835,9 +7848,10 @@ function renderSuppliers() {
   
   app.innerHTML = `
     <div class="page-header">
-      <h1 class="page-title">공급사 관리</h1>
-      <p class="page-desc">총 ${state.suppliers.length}개의 공급사를 관리합니다</p>
+      <h1 class="page-title">입점 공급사 관리</h1>
+      <p class="page-desc">계약 완료된 ${contractedSuppliers.length}개의 입점 공급사를 관리합니다 (입점 전 공급사는 CRM센터에서 관리)</p>
       <div class="header-actions">
+        <button class="btn btn-secondary" onclick="window.location.href='/admin/crm/index.html#tab-partners'" style="margin-right: 8px;">CRM센터 →</button>
         <button class="btn btn-primary" onclick="openSupplierModal()">+ 새 공급사</button>
       </div>
     </div>
@@ -7845,19 +7859,10 @@ function renderSuppliers() {
     <!-- 탭 UI -->
     <div style="display: flex; gap: 4px; margin-bottom: 16px; background: var(--gray-100); padding: 4px; border-radius: var(--btn-radius); flex-wrap: wrap;">
       <button onclick="switchSupplierTab('suppliers')" id="supplier-tab-suppliers" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-        📦 공급사 DB
+        📦 입점 공급사 (계약완료)
       </button>
-      <button onclick="switchSupplierTab('productDB')" id="supplier-tab-productDB" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
-        🏷️ 상품 DB
-      </button>
-      <button onclick="switchSupplierTab('productList')" id="supplier-tab-productList" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
-        📋 상품 리스트
-      </button>
-      <button onclick="switchSupplierTab('supplierApplications')" id="supplier-tab-supplierApplications" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
-        📝 입점 신청
-      </button>
-      <button onclick="switchSupplierTab('pendingSupplierOnboardings')" id="supplier-tab-pendingSupplierOnboardings" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
-        📄 대기 서류 ${(state.pendingSupplierOnboardings || []).length > 0 ? '<span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px; margin-left: 6px;">' + (state.pendingSupplierOnboardings || []).length + '</span>' : ''}
+      <button onclick="window.location.href='/admin/crm/index.html#tab-onboardingDocs'" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; background: linear-gradient(135deg, #dbeafe, #e0e7ff); color: #4338ca;">
+        📝 입점신청/서류 → CRM
       </button>
     </div>
 
@@ -8114,50 +8119,20 @@ function renderSuppliers() {
     </div>
     ` : ''}
     
-    <!-- 협의중 공급사 -->
-    <div class="card">
-      <h2 class="card-title" style="color: var(--gray-600);">⏳ 협의중 공급사</h2>
-      ${pendingSuppliers.length === 0 ? `
-        <div class="empty-state">
-          <div class="icon">🏭</div>
-          <div class="text">협의중인 공급사가 없습니다</div>
+    <!-- 협의중/입점 대기 공급사 → CRM센터 안내 -->
+    ${pendingSuppliers.length > 0 ? `
+    <div class="card" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border: 1px solid #93c5fd;">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+          <h2 class="card-title" style="color: #1d4ed8; margin-bottom: 4px;">⏳ 협의중/입점대기 공급사: ${pendingSuppliers.length}개</h2>
+          <p style="font-size: 13px; color: #3b82f6;">입점 전 단계의 공급사는 CRM센터에서 관리됩니다.</p>
         </div>
-      ` : `
-        <div style="overflow-x: auto;">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>공급사명</th>
-                <th>유형</th>
-                <th>등록상품</th>
-                <th>담당자</th>
-                <th>연락처</th>
-                <th>상품문의</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${pendingSuppliers.map(s => {
-                const productCount = (state.supplierProducts || []).filter(p => p.supplierId === s.id).length;
-                return `
-                  <tr>
-                    <td><strong>${s.name}</strong></td>
-                    <td><span class="status-badge ${s.supplierType === 'inhouse' ? 'status-confirmed' : 'status-negotiating'}">${s.supplierType === 'inhouse' ? '자사' : '타사'}</span></td>
-                    <td><span class="status-badge" style="background: var(--gray-100); color: var(--gray-600);">${productCount}개</span></td>
-                    <td>${s.managerName || '-'}${s.managerTitle ? ` (${s.managerTitle})` : ''}</td>
-                    <td>${s.managerPhone || s.contact || '-'}</td>
-                    <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.inquiryMethod || '-'}</td>
-                    <td class="actions">
-                      <button class="btn btn-secondary btn-sm" onclick="openSupplierModal(state.suppliers.find(sup=>sup.id==='${s.id}'))">수정</button>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-      `}
+        <button onclick="window.location.href='/admin/crm/index.html#tab-partners'" style="padding: 12px 20px; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
+          CRM센터에서 관리 →
+        </button>
+      </div>
     </div>
+    ` : ''}
   `;
 }
 
