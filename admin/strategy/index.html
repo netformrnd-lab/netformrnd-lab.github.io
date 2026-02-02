@@ -10662,6 +10662,7 @@
 
     // 미팅 완료 처리
     async function completeMeeting(meetingId) {
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
       const postSummary = document.getElementById('postSummary')?.value.trim();
       const postDecisionsStr = document.getElementById('postDecisions')?.value.trim();
       const postActionItemsStr = document.getElementById('postActionItems')?.value.trim();
@@ -10685,6 +10686,13 @@
               task: match[2],
               status: 'pending'
             });
+          } else if (line) {
+            // [@담당자] 형식이 아닌 경우 담당자 미지정
+            postActionItems.push({
+              assignee: '',
+              task: line,
+              status: 'pending'
+            });
           }
         });
       }
@@ -10702,6 +10710,11 @@
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
+        // ★ 액션 아이템 자동 업무 등록
+        if (postActionItems.length > 0) {
+          await autoRegisterActionItemsAsTasks(meetingId, meeting, postActionItems);
+        }
+
         showToast('미팅이 완료되었습니다', 'success');
         await loadOkrData();
         renderOkrDashboard();
@@ -10709,6 +10722,65 @@
       } catch (error) {
         console.error('미팅 완료 처리 오류:', error);
         showToast('미팅 완료 처리 중 오류가 발생했습니다', 'error');
+      }
+    }
+
+    // 액션 아이템 자동 업무 등록
+    async function autoRegisterActionItemsAsTasks(meetingId, meeting, actionItems) {
+      // 연결할 메인 KPI (미팅에 연결된 KR 사용)
+      const krIds = meeting?.krIds || (meeting?.krId ? [meeting.krId] : []);
+      const defaultKrId = krIds.length > 0 ? krIds[0] : '';
+
+      // 마감일 기본값: 1주일 후
+      const defaultDeadline = new Date();
+      defaultDeadline.setDate(defaultDeadline.getDate() + 7);
+      const deadlineStr = defaultDeadline.toISOString().split('T')[0];
+
+      let registeredCount = 0;
+
+      for (const item of actionItems) {
+        // 담당자 이름으로 ID 찾기
+        let assigneeId = '';
+        let assigneeLoginId = '';
+        if (item.assignee && state.teamMembers) {
+          const member = state.teamMembers.find(m =>
+            m.name === item.assignee ||
+            m.loginId === item.assignee
+          );
+          if (member) {
+            assigneeId = member.id;
+            assigneeLoginId = member.loginId || '';
+          }
+        }
+
+        const taskData = {
+          title: item.task,
+          description: `[미팅] ${meeting?.title || ''} (${meeting?.date || ''})에서 도출된 액션 아이템`,
+          assignee: item.assignee || '',
+          assigneeId: assigneeId,
+          assigneeLoginId: assigneeLoginId,
+          deadline: deadlineStr,
+          krId: defaultKrId,
+          kpiId: '',
+          laggingIndicatorId: '',
+          status: 'waiting',
+          attachments: [],
+          meetingId: meetingId,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        try {
+          await db.collection('taskPlans').add(taskData);
+          registeredCount++;
+        } catch (e) {
+          console.error('액션 아이템 업무 등록 오류:', e);
+        }
+      }
+
+      if (registeredCount > 0) {
+        showToast(`📋 ${registeredCount}개 액션 아이템이 업무에 자동 등록되었습니다`, 'info');
+        await loadTaskPlanData();
       }
     }
 
