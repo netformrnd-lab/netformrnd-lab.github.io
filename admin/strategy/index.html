@@ -9056,10 +9056,18 @@
         return;
       }
 
-      // 현재 월 계산
+      // 현재 월/분기 계산
       const now = new Date();
-      const currentMonth = now.toISOString().slice(0, 7); // YYYY-MM 형식
+      const currentMonth = now.toISOString().slice(0, 7);
       const monthLabel = now.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long' });
+      const quarter = Math.floor(now.getMonth() / 3) + 1;
+      const quarterLabel = `${now.getFullYear()}년 ${quarter}분기`;
+
+      // 현재 분기 시작/끝 날짜
+      const quarterStart = new Date(now.getFullYear(), (quarter - 1) * 3, 1);
+      const quarterEnd = new Date(now.getFullYear(), quarter * 3, 0);
+      const quarterStartStr = quarterStart.toISOString().split('T')[0];
+      const quarterEndStr = quarterEnd.toISOString().split('T')[0];
 
       // 행동지표(Input)와 성과지표(Output) 분리
       const inputLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
@@ -9096,8 +9104,41 @@
       // 기존 목표 가져오기
       const memberGoals = (okrState.personalGoals || []).filter(g => g.memberId === currentMemberId);
 
+      // 분기별 KR 목표 및 달성 현황 계산
+      const isCurrentUser = currentMemberId === state.currentUser?.id;
+      const memberLogs = okrState.dailyLogs.filter(log =>
+        (log.memberId === currentMemberId || (isCurrentUser && (log.memberId === 'anonymous' || !log.memberId))) &&
+        log.date >= quarterStartStr && log.date <= quarterEndStr
+      );
+
+      const krProgressList = okrState.keyResults.map((kr, idx) => {
+        const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
+        const lagsForKR = okrState.laggingIndicators.filter(l => kpisForKR.some(k => k.id === l.kpiId));
+
+        // 행동지표 달성 (분기 내)
+        const inputLagsForKR = lagsForKR.filter(l => l.type !== 'output');
+        const inputTotal = memberLogs.filter(log => inputLagsForKR.some(l => l.id === log.laggingIndicatorId))
+          .reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+        // 성과지표 달성 (분기 내)
+        const outputLagsForKR = lagsForKR.filter(l => l.type === 'output');
+        const outputTotal = memberLogs.filter(log => outputLagsForKR.some(l => l.id === log.laggingIndicatorId))
+          .reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+        return {
+          kr,
+          idx,
+          targetValue: kr.targetValue || 0,
+          unit: kr.unit || '',
+          inputTotal,
+          outputTotal,
+          inputCount: inputLagsForKR.length,
+          outputCount: outputLagsForKR.length
+        };
+      });
+
       showModal(`
-        <div style="padding: 24px; max-width: 800px; max-height: 80vh; overflow-y: auto;">
+        <div style="padding: 24px; max-width: 1200px; max-height: 85vh; overflow-y: auto;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <div>
               <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
@@ -9110,92 +9151,108 @@
             <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
           </div>
 
+          <!-- 분기별 KPI 목표 현황 (상단 고정) -->
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 14px; padding: 18px; margin-bottom: 20px; color: white;">
+            <div style="font-size: 14px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 8px;">
+              📊 ${quarterLabel} KPI 목표 현황
+              <span style="font-size: 11px; background: rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 10px;">${quarterStartStr.slice(5)} ~ ${quarterEndStr.slice(5)}</span>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+              ${krProgressList.map(item => {
+                const rate = item.targetValue > 0 ? Math.round((item.outputTotal / item.targetValue) * 100) : 0;
+                return `
+                  <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 14px; backdrop-filter: blur(10px);">
+                    <div style="font-size: 11px; opacity: 0.9; margin-bottom: 6px;">${okrIcons[item.idx % 4]} ${item.kr.name}</div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
+                      <div>
+                        <span style="font-size: 20px; font-weight: 800;">${item.outputTotal.toLocaleString()}</span>
+                        <span style="font-size: 11px; opacity: 0.8;">/${item.targetValue.toLocaleString()} ${item.unit}</span>
+                      </div>
+                      <span style="font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: ${rate >= 100 ? '#10B981' : rate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.2)'};">${rate}%</span>
+                    </div>
+                    <div style="font-size: 10px; opacity: 0.8;">행동 ${item.inputTotal}건 · 성과 ${item.outputTotal}${item.unit || '건'}</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+
           <!-- 안내 배너 -->
-          <div style="background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid var(--primary);">
+          <div style="background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 12px; padding: 14px; margin-bottom: 20px; border: 1px solid var(--primary);">
             <div style="font-size: 13px; color: var(--primary); font-weight: 600; margin-bottom: 4px;">💡 월간 목표 설정 가이드</div>
-            <div style="font-size: 12px; color: var(--gray-600); line-height: 1.6;">
-              • <strong>행동지표</strong>: 이번 달 실행할 업무 횟수 (예: 공구 10건, 셀러확보 5건)<br>
-              • <strong>성과지표</strong>: 이번 달 달성할 결과 목표 (예: 매출 1억원, 입점 3곳)
+            <div style="font-size: 12px; color: var(--gray-600); line-height: 1.5;">
+              • <strong>행동지표</strong>: 이번 달 실행할 업무 횟수 (예: 공구 10건, 셀러확보 5건) &nbsp;|&nbsp; <strong>성과지표</strong>: 이번 달 달성할 결과 목표 (예: 매출 1억원, 입점 3곳)
             </div>
           </div>
 
-          <!-- 행동지표(Input) 목표 설정 - KPI별 그룹화 -->
-          <div style="margin-bottom: 24px;">
-            <div style="font-size: 15px; font-weight: 700; color: #059669; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-              📥 행동지표(Input) 목표 <span style="font-size: 12px; font-weight: 500; color: var(--gray-500);">- 이번 달 실행 목표</span>
-            </div>
-            <div style="background: #F0FDF4; border-radius: 12px; padding: 16px;">
-              ${Object.keys(inputByKR).length === 0 ? `
-                <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 행동지표가 없습니다</div>
-              ` : Object.values(inputByKR).map(group => {
-                const idx = group.krIdx;
-                return `
-                <div style="margin-bottom: 16px; padding: 14px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
-                  <div style="font-size: 13px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
-                    ${okrIcons[idx % 4]} ${group.kr.name}
-                    <span style="font-size: 11px; background: ${okrColors[idx % 4]}20; padding: 2px 8px; border-radius: 10px;">${group.lags.length}개</span>
-                  </div>
-                  ${group.lags.map(lag => {
-                    const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
-                    return `
-                      <div style="display: flex; align-items: center; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;">
-                        <div style="flex: 1; min-width: 0;">
-                          <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">📋 ${lag.name}</div>
-                        </div>
-                        <input type="hidden" id="goalPeriod_${lag.id}" value="monthly">
-                        <div style="display: flex; align-items: center; gap: 4px;">
-                          <span style="font-size: 11px; color: var(--gray-500);">월</span>
+          <!-- 행동지표 + 성과지표 가로 배치 -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <!-- 행동지표(Input) 목표 설정 -->
+            <div>
+              <div style="font-size: 15px; font-weight: 700; color: #059669; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                📥 행동지표(Input) 목표
+              </div>
+              <div style="background: #F0FDF4; border-radius: 12px; padding: 14px; max-height: 400px; overflow-y: auto;">
+                ${Object.keys(inputByKR).length === 0 ? `
+                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 행동지표가 없습니다</div>
+                ` : Object.values(inputByKR).map(group => {
+                  const idx = group.krIdx;
+                  return `
+                  <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
+                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
+                      ${okrIcons[idx % 4]} ${group.kr.name}
+                    </div>
+                    ${group.lags.map(lag => {
+                      const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
+                      return `
+                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px;">
+                          <div style="flex: 1; font-size: 11px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
+                          <input type="hidden" id="goalPeriod_${lag.id}" value="monthly">
                           <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
-                            style="width: 70px; padding: 6px 10px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; text-align: right;">
-                          <span style="font-size: 12px; color: var(--gray-500);">${lag.unit || '건'}</span>
+                            style="width: 60px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 5px; font-size: 12px; text-align: right;">
+                          <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || '건'}</span>
                         </div>
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-              `}).join('')}
-            </div>
-          </div>
-
-          <!-- 성과지표(Output) 목표 설정 - KPI별 그룹화 -->
-          <div style="margin-bottom: 24px;">
-            <div style="font-size: 15px; font-weight: 700; color: #D97706; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-              📤 성과지표(Output) 목표 <span style="font-size: 12px; font-weight: 500; color: var(--gray-500);">- 이번 달 달성 목표</span>
-            </div>
-            <div style="background: #FFFBEB; border-radius: 12px; padding: 16px;">
-              ${Object.keys(outputByKR).length === 0 ? `
-                <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 성과지표가 없습니다</div>
-              ` : Object.values(outputByKR).map(group => {
-                const idx = group.krIdx;
-                return `
-                <div style="margin-bottom: 16px; padding: 14px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
-                  <div style="font-size: 13px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
-                    ${okrIcons[idx % 4]} ${group.kr.name}
-                    <span style="font-size: 11px; background: ${okrColors[idx % 4]}20; padding: 2px 8px; border-radius: 10px;">${group.lags.length}개</span>
+                      `;
+                    }).join('')}
                   </div>
-                  ${group.lags.map(lag => {
-                    const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
-                    return `
-                      <div style="display: flex; align-items: center; gap: 12px; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;">
-                        <div style="flex: 1; min-width: 0;">
-                          <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">💰 ${lag.name}</div>
-                        </div>
-                        <input type="hidden" id="goalPeriod_${lag.id}" value="monthly">
-                        <div style="display: flex; align-items: center; gap: 4px;">
-                          <span style="font-size: 11px; color: var(--gray-500);">월</span>
+                `}).join('')}
+              </div>
+            </div>
+
+            <!-- 성과지표(Output) 목표 설정 -->
+            <div>
+              <div style="font-size: 15px; font-weight: 700; color: #D97706; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                📤 성과지표(Output) 목표
+              </div>
+              <div style="background: #FFFBEB; border-radius: 12px; padding: 14px; max-height: 400px; overflow-y: auto;">
+                ${Object.keys(outputByKR).length === 0 ? `
+                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 성과지표가 없습니다</div>
+                ` : Object.values(outputByKR).map(group => {
+                  const idx = group.krIdx;
+                  return `
+                  <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
+                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
+                      ${okrIcons[idx % 4]} ${group.kr.name}
+                    </div>
+                    ${group.lags.map(lag => {
+                      const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
+                      return `
+                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px;">
+                          <div style="flex: 1; font-size: 11px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
+                          <input type="hidden" id="goalPeriod_${lag.id}" value="monthly">
                           <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
-                            style="width: 100px; padding: 6px 10px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px; text-align: right;">
-                          <span style="font-size: 12px; color: var(--gray-500);">${lag.unit || lag.kpi?.unit || '원'}</span>
+                            style="width: 80px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 5px; font-size: 12px; text-align: right;">
+                          <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || lag.kpi?.unit || '원'}</span>
                         </div>
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-              `}).join('')}
+                      `;
+                    }).join('')}
+                  </div>
+                `}).join('')}
+              </div>
             </div>
           </div>
 
-          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 20px; border-top: 1px solid var(--gray-200); margin-top: 20px;">
             <button class="btn btn-secondary" onclick="closeModal()">취소</button>
             <button class="btn btn-primary" onclick="savePersonalGoals('${currentMemberId}')">💾 월간 목표 저장</button>
           </div>
