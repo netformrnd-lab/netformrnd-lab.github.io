@@ -5589,27 +5589,71 @@ function viewSupplierOnboarding(supplierId) {
   const docs = onboarding.documents || supplier.onboardingDocuments || {};
   const app = onboarding.application || {};
   const checklist = docs.checklist || {};
+  const products = docs.productInfoDirect || [];
+  const qna = docs.qnaDirect || [];
+
+  // 체크리스트 라벨 매핑
+  const dealTimingLabels = {
+    'asap': '빠른 시일 내',
+    'within1month': '1개월 이내',
+    'within3months': '3개월 이내',
+    'flexible': '협의 가능',
+    'undecided': '미정'
+  };
+  const sellerAssignmentLabels = {
+    'allSellers': '전체 셀러 공개',
+    'selectedSellers': '선별 셀러만',
+    'exclusiveSeller': '단독 셀러',
+    'brandDecides': '브랜드가 직접 선정'
+  };
+  const sampleSupportLabels = {
+    'free': '무료 제공',
+    'paid': '유료 제공',
+    'varies': '협의 필요',
+    'notAvailable': '샘플 없음'
+  };
+  const contentSupportLabels = {
+    'photoVideo': '사진/영상 제공',
+    'productOnly': '제품만 제공',
+    'sellerCreates': '셀러가 직접 제작',
+    'together': '함께 제작'
+  };
+  const shippingLabels = {
+    'direct': '직접 배송',
+    'thirdParty': '3PL 위탁',
+    'dropship': '드랍쉬핑',
+    'consult': '협의 필요'
+  };
+
+  // 라벨 변환 함수
+  const getLabel = (value, labelMap) => {
+    if (Array.isArray(value)) {
+      return value.map(v => labelMap[v] || v).join(', ');
+    }
+    return labelMap[value] || value || '-';
+  };
 
   const m = document.getElementById('modal');
   m.className = 'modal show';
   m.innerHTML = `
-    <div class="modal-content" style="max-width: 700px;">
+    <div class="modal-content" style="max-width: 750px;">
       <div class="modal-header" style="background: linear-gradient(135deg, #8b5cf6, #a855f7);">
         <h2 class="modal-title" style="color: white;">📋 ${supplier.name} 온보딩 데이터</h2>
         <button class="modal-close" onclick="closeModal()" style="color: white;">×</button>
       </div>
       <div style="padding: 20px; max-height: 70vh; overflow-y: auto;">
 
-        ${app.companyName ? `
+        ${app.companyName || app.productInfo || app.notes ? `
         <div style="margin-bottom: 20px; padding: 16px; background: #f0fdf4; border-radius: 12px; border: 1px solid #bbf7d0;">
           <h3 style="font-size: 14px; font-weight: 600; color: #166534; margin-bottom: 12px;">📝 입점신청 정보</h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">
-            <div><span style="color: var(--gray-500);">회사명:</span> <strong>${app.companyName || '-'}</strong></div>
-            <div><span style="color: var(--gray-500);">담당자:</span> ${app.managerName || '-'}</div>
-            <div><span style="color: var(--gray-500);">연락처:</span> ${app.phone || '-'}</div>
-            <div><span style="color: var(--gray-500);">이메일:</span> ${app.email || '-'}</div>
+            ${app.companyName ? `<div><span style="color: var(--gray-500);">회사명:</span> <strong>${app.companyName}</strong></div>` : ''}
+            ${app.managerName ? `<div><span style="color: var(--gray-500);">담당자:</span> ${app.managerName}</div>` : ''}
+            ${app.phone ? `<div><span style="color: var(--gray-500);">연락처:</span> ${app.phone}</div>` : ''}
+            ${app.email ? `<div><span style="color: var(--gray-500);">이메일:</span> ${app.email}</div>` : ''}
           </div>
-          ${app.productInfo ? `<div style="margin-top: 8px; font-size: 13px;"><span style="color: var(--gray-500);">상품정보:</span> ${app.productInfo}</div>` : ''}
+          ${app.productInfo ? `<div style="margin-top: 12px; padding: 10px; background: white; border-radius: 6px; font-size: 13px;"><span style="color: var(--gray-500);">상품정보:</span><br><span style="white-space: pre-wrap;">${app.productInfo}</span></div>` : ''}
+          ${app.notes ? `<div style="margin-top: 8px; padding: 10px; background: white; border-radius: 6px; font-size: 13px;"><span style="color: var(--gray-500);">메모:</span><br><span style="white-space: pre-wrap;">${app.notes}</span></div>` : ''}
         </div>
         ` : ''}
 
@@ -5623,15 +5667,33 @@ function viewSupplierOnboarding(supplierId) {
           </div>
         </div>
 
-        ${docs.productInfoDirect?.length > 0 ? `
+        ${products.length > 0 ? `
         <div style="margin-bottom: 20px; padding: 16px; background: #fef3c7; border-radius: 12px; border: 1px solid #fcd34d;">
-          <h3 style="font-size: 14px; font-weight: 600; color: #92400e; margin-bottom: 12px;">📦 등록 상품 (${docs.productInfoDirect.length}개)</h3>
+          <h3 style="font-size: 14px; font-weight: 600; color: #92400e; margin-bottom: 12px;">📦 등록 상품 (${products.length}개)</h3>
+          <div style="max-height: 250px; overflow-y: auto;">
+            ${products.map((p, i) => `
+              <div style="padding: 12px; background: white; border-radius: 8px; margin-bottom: 8px; font-size: 12px; border: 1px solid #fde68a;">
+                <div style="font-weight: 600; color: #92400e; margin-bottom: 6px;">${i+1}. ${p.productName || p.name || '-'}</div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; color: var(--gray-600);">
+                  <span>소비자가: <strong>${(p.retailPrice || p.originalPrice || 0).toLocaleString()}원</strong></span>
+                  <span>판매가: <strong style="color: #dc2626;">${(p.salePrice || 0).toLocaleString()}원</strong></span>
+                  <span>공급가: <strong style="color: #059669;">${(p.supplyPrice || 0).toLocaleString()}원</strong></span>
+                </div>
+                ${p.representativeProduct ? `<div style="margin-top: 4px; color: var(--gray-500);">대표상품: ${p.representativeProduct}</div>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        ${qna.length > 0 ? `
+        <div style="margin-bottom: 20px; padding: 16px; background: #fef2f2; border-radius: 12px; border: 1px solid #fecaca;">
+          <h3 style="font-size: 14px; font-weight: 600; color: #dc2626; margin-bottom: 12px;">❓ 상품 Q&A (${qna.length}개)</h3>
           <div style="max-height: 200px; overflow-y: auto;">
-            ${docs.productInfoDirect.map((p, i) => `
-              <div style="padding: 8px; background: white; border-radius: 6px; margin-bottom: 6px; font-size: 12px;">
-                <strong>${i+1}. ${p.productName || p.name || '-'}</strong>
-                <span style="color: var(--gray-500); margin-left: 8px;">소비자가: ${(p.retailPrice || p.originalPrice || 0).toLocaleString()}원</span>
-                <span style="color: var(--primary); margin-left: 8px;">공급가: ${(p.supplyPrice || 0).toLocaleString()}원</span>
+            ${qna.map((q, i) => `
+              <div style="padding: 10px; background: white; border-radius: 6px; margin-bottom: 6px; font-size: 12px;">
+                <div style="font-weight: 600; margin-bottom: 4px;">Q${i+1}. ${q.question || '-'}</div>
+                <div style="color: var(--gray-600);">A. ${q.answer || '-'}</div>
               </div>
             `).join('')}
           </div>
@@ -5641,14 +5703,38 @@ function viewSupplierOnboarding(supplierId) {
         ${Object.keys(checklist).length > 0 ? `
         <div style="padding: 16px; background: #faf5ff; border-radius: 12px; border: 1px solid #e9d5ff;">
           <h3 style="font-size: 14px; font-weight: 600; color: #7c3aed; margin-bottom: 12px;">✅ 협업 조건 체크리스트</h3>
-          <div style="font-size: 13px; color: var(--gray-700);">
-            ${checklist.dealTiming ? `<div style="margin-bottom: 6px;"><span style="color: var(--gray-500);">공구 희망:</span> ${checklist.dealTiming}</div>` : ''}
-            ${checklist.sellerAssignment?.length ? `<div style="margin-bottom: 6px;"><span style="color: var(--gray-500);">셀러 배정:</span> ${checklist.sellerAssignment.join(', ')}</div>` : ''}
-            ${checklist.sampleSupport?.length ? `<div style="margin-bottom: 6px;"><span style="color: var(--gray-500);">샘플 지원:</span> ${checklist.sampleSupport.join(', ')}</div>` : ''}
-            ${checklist.contentSupport?.length ? `<div style="margin-bottom: 6px;"><span style="color: var(--gray-500);">콘텐츠 지원:</span> ${checklist.contentSupport.join(', ')}</div>` : ''}
-            ${checklist.shippingPolicy ? `<div style="margin-bottom: 6px;"><span style="color: var(--gray-500);">배송:</span> ${checklist.shippingPolicy}</div>` : ''}
-            ${checklist.additionalNotes ? `<div><span style="color: var(--gray-500);">비고:</span> ${checklist.additionalNotes}</div>` : ''}
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;">
+            ${checklist.dealTiming ? `
+            <div style="padding: 10px; background: white; border-radius: 6px;">
+              <div style="color: var(--gray-500); font-size: 11px; margin-bottom: 4px;">🗓 공구 희망 시기</div>
+              <div style="font-weight: 600;">${getLabel(checklist.dealTiming, dealTimingLabels)}</div>
+            </div>` : ''}
+            ${checklist.sellerAssignment?.length ? `
+            <div style="padding: 10px; background: white; border-radius: 6px;">
+              <div style="color: var(--gray-500); font-size: 11px; margin-bottom: 4px;">👤 셀러 배정 방식</div>
+              <div style="font-weight: 600;">${getLabel(checklist.sellerAssignment, sellerAssignmentLabels)}</div>
+            </div>` : ''}
+            ${checklist.sampleSupport?.length ? `
+            <div style="padding: 10px; background: white; border-radius: 6px;">
+              <div style="color: var(--gray-500); font-size: 11px; margin-bottom: 4px;">🎁 샘플 지원</div>
+              <div style="font-weight: 600;">${getLabel(checklist.sampleSupport, sampleSupportLabels)}</div>
+            </div>` : ''}
+            ${checklist.contentSupport?.length ? `
+            <div style="padding: 10px; background: white; border-radius: 6px;">
+              <div style="color: var(--gray-500); font-size: 11px; margin-bottom: 4px;">📸 콘텐츠 지원</div>
+              <div style="font-weight: 600;">${getLabel(checklist.contentSupport, contentSupportLabels)}</div>
+            </div>` : ''}
+            ${checklist.shippingPolicy ? `
+            <div style="padding: 10px; background: white; border-radius: 6px;">
+              <div style="color: var(--gray-500); font-size: 11px; margin-bottom: 4px;">🚚 배송 방식</div>
+              <div style="font-weight: 600;">${getLabel(checklist.shippingPolicy, shippingLabels)}</div>
+            </div>` : ''}
           </div>
+          ${checklist.additionalNotes ? `
+          <div style="margin-top: 12px; padding: 10px; background: white; border-radius: 6px;">
+            <div style="color: var(--gray-500); font-size: 11px; margin-bottom: 4px;">📝 추가 요청사항</div>
+            <div style="font-size: 13px; white-space: pre-wrap;">${checklist.additionalNotes}</div>
+          </div>` : ''}
         </div>
         ` : ''}
 
