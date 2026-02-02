@@ -17588,10 +17588,32 @@
       const favoriteLagIds = okrState.favorites || [];
       const today = new Date().toISOString().split('T')[0];
 
+      // 현재 로그인한 사용자 정보
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+
+      // 내가 담당인 KPI만 필터링 (주 담당 또는 서브 담당)
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member.loginId ||
+        kpi.mainAssigneeName === member.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+
+      // 내가 담당인 KPI에 연결된 메인 KPI(KR) 목록
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+      const myKeyResults = okrState.keyResults.filter(kr => myKrIds.includes(kr.id));
+
+      // 내가 담당인 KPI의 지표만 필터링
+      const myLaggingIndicators = okrState.laggingIndicators.filter(lag => myKpiIds.includes(lag.kpiId));
+
       // 선택된 KPI에 해당하는 지표들 필터링
       const filteredLags = selectedRecordKrId === 'all'
-        ? okrState.laggingIndicators
-        : okrState.laggingIndicators.filter(lag => {
+        ? myLaggingIndicators
+        : myLaggingIndicators.filter(lag => {
             const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
             return kpi?.keyResultId === selectedRecordKrId;
           });
@@ -17610,9 +17632,13 @@
             <div style="display: flex; align-items: center; gap: 10px;">
               <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">📋 지표 선택</div>
               <select id="okrRecordKRFilter" onchange="setRecordKrFilter(this.value)" style="padding: 8px 12px; border: 2px solid var(--primary); border-radius: 8px; font-size: 12px; background: #EEF2FF; font-weight: 600; color: var(--primary);">
-                <option value="all" ${selectedRecordKrId === 'all' ? 'selected' : ''}>전체 KPI</option>
-                ${okrState.keyResults.map((kr, idx) => `<option value="${kr.id}" ${selectedRecordKrId === kr.id ? 'selected' : ''} style="color: ${okrColors[idx]};">${okrIcons[idx] || '📊'} ${kr.name}</option>`).join('')}
+                <option value="all" ${selectedRecordKrId === 'all' ? 'selected' : ''}>내 담당 전체</option>
+                ${myKeyResults.map(kr => {
+                  const idx = okrState.keyResults.findIndex(k => k.id === kr.id);
+                  return `<option value="${kr.id}" ${selectedRecordKrId === kr.id ? 'selected' : ''} style="color: ${okrColors[idx]};">${okrIcons[idx] || '📊'} ${kr.name}</option>`;
+                }).join('')}
               </select>
+              ${myLaggingIndicators.length === 0 ? `<span style="font-size: 11px; color: #F59E0B; margin-left: 8px;">⚠️ 담당 지표가 없습니다</span>` : ''}
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 12px; color: var(--gray-500);">📅 기록일:</span>
