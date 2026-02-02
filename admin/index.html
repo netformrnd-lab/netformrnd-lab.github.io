@@ -4150,17 +4150,11 @@ function toggleSellerMenu(event) {
 
 // 공급사 관리 탭 전환 (탭 UI 통합)
 function switchSupplierTab(tabName) {
-  // CRM센터로 이관된 탭들 - 리다이렉트
-  if (['productDB', 'productList', 'supplierApplications', 'pendingSupplierOnboardings'].includes(tabName)) {
-    const hashMap = {
-      'productDB': '#tab-onboardingDocs',
-      'productList': '#tab-onboardingDocs',
-      'supplierApplications': '#tab-onboardingDocs',
-      'pendingSupplierOnboardings': '#tab-onboardingDocs'
-    };
-    showToast('📍 이 기능은 CRM센터에서 관리됩니다. 이동합니다...', 'info');
+  // CRM센터로 이관된 탭들 - 입점신청/대기서류만 리다이렉트
+  if (['supplierApplications', 'pendingSupplierOnboardings'].includes(tabName)) {
+    showToast('📍 입점신청/대기서류는 CRM센터에서 관리됩니다. 이동합니다...', 'info');
     setTimeout(() => {
-      window.location.href = '/admin/crm/index.html' + hashMap[tabName];
+      window.location.href = '/admin/crm/index.html#tab-onboardingDocs';
     }, 500);
     return;
   }
@@ -4179,6 +4173,10 @@ function switchSupplierTab(tabName) {
   // 해당 탭 렌더링
   if (tabName === 'suppliers') {
     renderSuppliers();
+  } else if (tabName === 'productDB') {
+    renderProductDB();
+  } else if (tabName === 'productList') {
+    renderProductList();
   }
 }
 
@@ -7849,7 +7847,7 @@ function renderSuppliers() {
   app.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">입점 공급사 관리</h1>
-      <p class="page-desc">계약 완료된 ${contractedSuppliers.length}개의 입점 공급사를 관리합니다 (입점 전 공급사는 CRM센터에서 관리)</p>
+      <p class="page-desc">총 ${state.suppliers.length}개의 공급사를 관리합니다 (계약완료: ${contractedSuppliers.length}개 / 계약진행중: ${pendingSuppliers.length}개)</p>
       <div class="header-actions">
         <button class="btn btn-secondary" onclick="window.location.href='/admin/crm/index.html#tab-partners'" style="margin-right: 8px;">CRM센터 →</button>
         <button class="btn btn-primary" onclick="openSupplierModal()">+ 새 공급사</button>
@@ -7859,7 +7857,13 @@ function renderSuppliers() {
     <!-- 탭 UI -->
     <div style="display: flex; gap: 4px; margin-bottom: 16px; background: var(--gray-100); padding: 4px; border-radius: var(--btn-radius); flex-wrap: wrap;">
       <button onclick="switchSupplierTab('suppliers')" id="supplier-tab-suppliers" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-        📦 입점 공급사 (계약완료)
+        📦 입점 공급사
+      </button>
+      <button onclick="switchSupplierTab('productDB')" id="supplier-tab-productDB" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
+        📋 상품 DB
+      </button>
+      <button onclick="switchSupplierTab('productList')" id="supplier-tab-productList" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; background: transparent; color: var(--gray-500);">
+        🛒 상품 리스트
       </button>
       <button onclick="window.location.href='/admin/crm/index.html#tab-onboardingDocs'" style="flex: 1; padding: 10px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; background: linear-gradient(135deg, #dbeafe, #e0e7ff); color: #4338ca;">
         📝 입점신청/서류 → CRM
@@ -8119,17 +8123,84 @@ function renderSuppliers() {
     </div>
     ` : ''}
     
-    <!-- 협의중/입점 대기 공급사 → CRM센터 안내 -->
+    <!-- 계약 대기 공급사 (서류승인 완료, 계약 진행중) -->
     ${pendingSuppliers.length > 0 ? `
-    <div class="card" style="background: linear-gradient(135deg, #eff6ff, #dbeafe); border: 1px solid #93c5fd;">
-      <div style="display: flex; align-items: center; justify-content: space-between;">
-        <div>
-          <h2 class="card-title" style="color: #1d4ed8; margin-bottom: 4px;">⏳ 협의중/입점대기 공급사: ${pendingSuppliers.length}개</h2>
-          <p style="font-size: 13px; color: #3b82f6;">입점 전 단계의 공급사는 CRM센터에서 관리됩니다.</p>
-        </div>
-        <button onclick="window.location.href='/admin/crm/index.html#tab-partners'" style="padding: 12px 20px; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px;">
-          CRM센터에서 관리 →
-        </button>
+    <div class="card" style="margin-bottom: 16px; border: 2px solid #93c5fd;">
+      <h2 class="card-title" style="color: #2563eb;">📝 계약 진행중 공급사 (서류승인 완료)</h2>
+      <p style="font-size: 12px; color: var(--gray-500); margin-bottom: 12px;">서류승인 완료 후 계약 진행 단계입니다</p>
+      <div style="overflow-x: auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>공급사명</th>
+              <th>유형</th>
+              <th>계약상태</th>
+              <th style="text-align: center;">서류 체크리스트</th>
+              <th style="text-align: center;">드라이브</th>
+              <th>담당자</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pendingSuppliers.map(s => {
+              const contractStatusLabels = {
+                'pending': '⏳ 계약 대기',
+                'sent': '📤 계약서 발송됨',
+                'contracted': '✅ 계약 완료',
+                'completed': '✅ 계약 완료'
+              };
+              const contractStatusColors = {
+                'pending': '#ea580c',
+                'sent': '#2563eb',
+                'contracted': '#059669',
+                'completed': '#059669'
+              };
+              return \`
+                <tr>
+                  <td><strong>\${s.name}</strong></td>
+                  <td><span class="status-badge \${s.supplierType === 'inhouse' ? 'status-confirmed' : 'status-negotiating'}">\${s.supplierType === 'inhouse' ? '자사' : '타사'}</span></td>
+                  <td>
+                    <select class="form-input" style="padding: 4px 8px; font-size: 12px; min-width: 110px; color: \${contractStatusColors[s.contractStatus] || '#ea580c'}; font-weight: 600;" onchange="updateSupplierField('\${s.id}', 'contractStatus', this.value); setTimeout(renderSuppliers, 300);">
+                      <option value="pending" \${s.contractStatus === 'pending' ? 'selected' : ''}>⏳ 계약 대기</option>
+                      <option value="sent" \${s.contractStatus === 'sent' ? 'selected' : ''}>📤 계약서 발송</option>
+                      <option value="contracted" \${s.contractStatus === 'contracted' ? 'selected' : ''}>✅ 계약 완료</option>
+                      <option value="completed" \${s.contractStatus === 'completed' ? 'selected' : ''}>✅ 계약 완료</option>
+                    </select>
+                  </td>
+                  <td style="text-align: center;">
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;">
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: \${s.hasProductInfo ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="상품등록">
+                        <input type="checkbox" \${s.hasProductInfo ? 'checked' : ''} onchange="updateSupplierField('\${s.id}', 'hasProductInfo', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: \${s.hasProductInfo ? '#166534' : '#991b1b'};">상품등록</span>
+                      </label>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: \${s.hasBusinessLicense ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="사업자등록증">
+                        <input type="checkbox" \${s.hasBusinessLicense ? 'checked' : ''} onchange="updateSupplierField('\${s.id}', 'hasBusinessLicense', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: \${s.hasBusinessLicense ? '#166534' : '#991b1b'};">사업자</span>
+                      </label>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: \${s.hasBankAccount ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="통장사본">
+                        <input type="checkbox" \${s.hasBankAccount ? 'checked' : ''} onchange="updateSupplierField('\${s.id}', 'hasBankAccount', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: \${s.hasBankAccount ? '#166534' : '#991b1b'};">통장</span>
+                      </label>
+                      <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; font-size: 12px; padding: 4px 8px; background: \${s.hasContract ? '#dcfce7' : '#fef2f2'}; border-radius: 4px;" title="계약서">
+                        <input type="checkbox" \${s.hasContract ? 'checked' : ''} onchange="updateSupplierField('\${s.id}', 'hasContract', this.checked)" style="width: 16px; height: 16px;">
+                        <span style="color: \${s.hasContract ? '#166534' : '#991b1b'};">계약</span>
+                      </label>
+                    </div>
+                  </td>
+                  <td style="text-align: center;">
+                    <button onclick="openSupplierGDrive('\${s.id}')" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: linear-gradient(135deg, #4285f4, #34a853); border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;" title="구글 드라이브 열기" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 2L4.5 12.5l2.5 4.3 5-8.5 5 8.5 2.5-4.3L12 2zm-5 17.5l2.5-4.3h9l2.5 4.3H7z"/></svg>
+                    </button>
+                  </td>
+                  <td>\${s.managerName || '-'}\${s.managerPhone ? \` (\${s.managerPhone})\` : ''}</td>
+                  <td class="actions">
+                    <button class="btn btn-secondary btn-sm" onclick="openSupplierModal(state.suppliers.find(sup=>sup.id==='\${s.id}'))">수정</button>
+                  </td>
+                </tr>
+              \`;
+            }).join('')}
+          </tbody>
+        </table>
       </div>
     </div>
     ` : ''}
