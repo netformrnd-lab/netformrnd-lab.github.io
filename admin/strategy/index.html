@@ -1339,17 +1339,22 @@
 
     <!-- 메인 컨텐츠 -->
     <main class="main-content">
-      <!-- 상단 센터 바로가기 -->
-      <div style="display: flex; gap: 4px; margin-bottom: 20px; padding: 4px; background: var(--gray-200); border-radius: 12px; width: fit-content;">
-        <a href="/admin/" style="display: flex; align-items: center; gap: 6px; padding: 10px 20px; background: transparent; border-radius: 10px; text-decoration: none; color: var(--gray-600); font-size: 13px; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
-          운영센터
-        </a>
-        <a href="/admin/strategy/" style="display: flex; align-items: center; gap: 6px; padding: 10px 20px; background: var(--primary); border-radius: 10px; text-decoration: none; color: white; font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(49, 130, 246, 0.3);">
-          전략센터
-        </a>
-        <a href="/admin/crm/" style="display: flex; align-items: center; gap: 6px; padding: 10px 20px; background: transparent; border-radius: 10px; text-decoration: none; color: var(--gray-600); font-size: 13px; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
-          CRM센터
-        </a>
+      <!-- 상단 센터 바로가기 + 로그인 정보 -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div style="display: flex; gap: 4px; padding: 4px; background: var(--gray-200); border-radius: 12px; width: fit-content;">
+          <a href="/admin/" style="display: flex; align-items: center; gap: 6px; padding: 10px 20px; background: transparent; border-radius: 10px; text-decoration: none; color: var(--gray-600); font-size: 13px; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
+            운영센터
+          </a>
+          <a href="/admin/strategy/" style="display: flex; align-items: center; gap: 6px; padding: 10px 20px; background: var(--primary); border-radius: 10px; text-decoration: none; color: white; font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(49, 130, 246, 0.3);">
+            전략센터
+          </a>
+          <a href="/admin/crm/" style="display: flex; align-items: center; gap: 6px; padding: 10px 20px; background: transparent; border-radius: 10px; text-decoration: none; color: var(--gray-600); font-size: 13px; font-weight: 500; transition: all 0.2s;" onmouseover="this.style.background='var(--gray-100)'" onmouseout="this.style.background='transparent'">
+            CRM센터
+          </a>
+        </div>
+        <div id="loginUserInfo" style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--gray-100); border-radius: 8px; font-size: 13px; color: var(--gray-700);">
+          <!-- 동적으로 렌더링 -->
+        </div>
       </div>
 
       <!-- 영업현황 -->
@@ -2467,6 +2472,9 @@
 
         console.log('[사용자 로드] 최종:', state.currentUser.id, state.currentUser.name, state.currentUser.loginId);
 
+        // 로그인 정보 표시
+        renderLoginUserInfo();
+
         // 사용자 로드 완료 후 현재 탭 새로고침
         if (state.currentTab === 'task-plan') {
           renderTaskPlan();
@@ -2474,7 +2482,28 @@
       } catch (e) {
         console.error('사용자 정보 로드 실패:', e);
         state.currentUser = { id: 'admin', name: '관리자', role: 'admin', loginId: 'admin' };
+        renderLoginUserInfo();
       }
+    }
+
+    // 로그인 정보 표시
+    function renderLoginUserInfo() {
+      const container = document.getElementById('loginUserInfo');
+      if (!container) return;
+
+      const user = state.currentUser;
+      if (!user) {
+        container.innerHTML = '로그인 정보 없음';
+        return;
+      }
+
+      const roleText = user.role === 'admin' ? '관리자' : user.role === 'manager' ? '매니저' : user.role || '멤버';
+      const loginId = user.loginId || user.name || 'unknown';
+
+      container.innerHTML = `
+        <span style="font-weight: 700; color: var(--gray-800);">${user.name || '사용자'}</span>
+        <span style="color: var(--gray-500); font-size: 12px;">(${loginId} / ${roleText})</span>
+      `;
     }
 
     // 탭 전환
@@ -17388,12 +17417,19 @@
           // 선택한 팀원의 정보 가져오기
           const selectedMember = teamMembers.find(m => m.id === workLogState.memberFilter);
           if (selectedMember) {
+            // 선택한 팀원이 현재 로그인 사용자인지 확인
+            const isCurrentUser = selectedMember.id === currentUserId ||
+              selectedMember.loginId === state.currentUser?.loginId ||
+              selectedMember.name === state.currentUser?.name;
+
             // ID, loginId, name 등 여러 필드로 비교
             logs = logs.filter(l =>
               l.memberId === selectedMember.id ||
               l.memberId === selectedMember.loginId ||
               l.memberId === selectedMember.name ||
-              l.memberName === selectedMember.name
+              l.memberName === selectedMember.name ||
+              // 본인 선택 시 anonymous/빈 memberId도 포함
+              (isCurrentUser && (l.memberId === 'anonymous' || !l.memberId))
             );
           } else {
             logs = logs.filter(l => l.memberId === workLogState.memberFilter);
@@ -17747,11 +17783,15 @@
         // 선택한 팀원의 정보 가져오기
         const selectedMember = teamMembers.find(m => m.id === workLogState.memberFilter);
         if (selectedMember) {
+          const isCurrentUser = selectedMember.id === currentUserId ||
+            selectedMember.loginId === state.currentUser?.loginId ||
+            selectedMember.name === state.currentUser?.name;
           logs = logs.filter(l =>
             l.memberId === selectedMember.id ||
             l.memberId === selectedMember.loginId ||
             l.memberId === selectedMember.name ||
-            l.memberName === selectedMember.name
+            l.memberName === selectedMember.name ||
+            (isCurrentUser && (l.memberId === 'anonymous' || !l.memberId))
           );
         } else {
           logs = logs.filter(l => l.memberId === workLogState.memberFilter);
@@ -17895,11 +17935,15 @@
         // 선택한 팀원의 정보 가져오기
         const selectedMember = teamMembers.find(m => m.id === workLogState.memberFilter);
         if (selectedMember) {
+          const isCurrentUser = selectedMember.id === currentUserId ||
+            selectedMember.loginId === state.currentUser?.loginId ||
+            selectedMember.name === state.currentUser?.name;
           logs = logs.filter(l =>
             l.memberId === selectedMember.id ||
             l.memberId === selectedMember.loginId ||
             l.memberId === selectedMember.name ||
-            l.memberName === selectedMember.name
+            l.memberName === selectedMember.name ||
+            (isCurrentUser && (l.memberId === 'anonymous' || !l.memberId))
           );
         } else {
           logs = logs.filter(l => l.memberId === workLogState.memberFilter);
