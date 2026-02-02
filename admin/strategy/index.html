@@ -1490,15 +1490,18 @@
               <span style="font-size: 24px;">🎯</span>
               <div>
                 <div id="weeklyGoalTitle" style="font-size: 16px; font-weight: 700; color: var(--primary);">나의 이번 주 목표</div>
-                <div id="weeklyGoalSubtitle" style="font-size: 12px; color: var(--gray-600); margin-top: 2px;">월간 목표 기반 주간 업무 계획</div>
+                <div id="weeklyGoalSubtitle" style="font-size: 12px; color: var(--gray-600); margin-top: 2px;">주간 목표 기반 업무 계획</div>
               </div>
             </div>
             <div style="display: flex; gap: 8px;">
+              <button onclick="openTeamWeeklyPlansModal()" style="background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                👥 팀 주간 계획
+              </button>
               <button onclick="openWeeklyPlanModal()" style="background: white; border: 1px solid var(--primary); color: var(--primary); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">
                 📅 주간 계획 수립
               </button>
               <button onclick="openPersonalGoalsModal()" style="background: var(--primary); color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">
-                + 월간 목표 설정
+                + 주간 목표 설정
               </button>
             </div>
           </div>
@@ -9084,11 +9087,14 @@
       const quarterStartStr = quarterStart.toISOString().split('T')[0];
       const quarterEndStr = quarterEnd.toISOString().split('T')[0];
 
-      // 내 담당 KPI만 필터링 (kpi.memberId === currentMemberId)
+      // 내 담당 KPI만 필터링 (주 담당 또는 서브 담당)
       const myKpis = okrState.kpis.filter(kpi =>
-        kpi.memberId === currentMemberId ||
-        kpi.memberId === member.loginId ||
-        (kpi.memberName && kpi.memberName === member.name)
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member.loginId ||
+        kpi.mainAssigneeName === member.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member.name)
       );
       const myKpiIds = myKpis.map(k => k.id);
 
@@ -10656,6 +10662,7 @@
 
     // 미팅 완료 처리
     async function completeMeeting(meetingId) {
+      const meeting = okrState.meetings.find(m => m.id === meetingId);
       const postSummary = document.getElementById('postSummary')?.value.trim();
       const postDecisionsStr = document.getElementById('postDecisions')?.value.trim();
       const postActionItemsStr = document.getElementById('postActionItems')?.value.trim();
@@ -10679,6 +10686,13 @@
               task: match[2],
               status: 'pending'
             });
+          } else if (line) {
+            // [@담당자] 형식이 아닌 경우 담당자 미지정
+            postActionItems.push({
+              assignee: '',
+              task: line,
+              status: 'pending'
+            });
           }
         });
       }
@@ -10696,6 +10710,11 @@
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
+        // ★ 액션 아이템 자동 업무 등록
+        if (postActionItems.length > 0) {
+          await autoRegisterActionItemsAsTasks(meetingId, meeting, postActionItems);
+        }
+
         showToast('미팅이 완료되었습니다', 'success');
         await loadOkrData();
         renderOkrDashboard();
@@ -10703,6 +10722,65 @@
       } catch (error) {
         console.error('미팅 완료 처리 오류:', error);
         showToast('미팅 완료 처리 중 오류가 발생했습니다', 'error');
+      }
+    }
+
+    // 액션 아이템 자동 업무 등록
+    async function autoRegisterActionItemsAsTasks(meetingId, meeting, actionItems) {
+      // 연결할 메인 KPI (미팅에 연결된 KR 사용)
+      const krIds = meeting?.krIds || (meeting?.krId ? [meeting.krId] : []);
+      const defaultKrId = krIds.length > 0 ? krIds[0] : '';
+
+      // 마감일 기본값: 1주일 후
+      const defaultDeadline = new Date();
+      defaultDeadline.setDate(defaultDeadline.getDate() + 7);
+      const deadlineStr = defaultDeadline.toISOString().split('T')[0];
+
+      let registeredCount = 0;
+
+      for (const item of actionItems) {
+        // 담당자 이름으로 ID 찾기
+        let assigneeId = '';
+        let assigneeLoginId = '';
+        if (item.assignee && state.teamMembers) {
+          const member = state.teamMembers.find(m =>
+            m.name === item.assignee ||
+            m.loginId === item.assignee
+          );
+          if (member) {
+            assigneeId = member.id;
+            assigneeLoginId = member.loginId || '';
+          }
+        }
+
+        const taskData = {
+          title: item.task,
+          description: `[미팅] ${meeting?.title || ''} (${meeting?.date || ''})에서 도출된 액션 아이템`,
+          assignee: item.assignee || '',
+          assigneeId: assigneeId,
+          assigneeLoginId: assigneeLoginId,
+          deadline: deadlineStr,
+          krId: defaultKrId,
+          kpiId: '',
+          laggingIndicatorId: '',
+          status: 'waiting',
+          attachments: [],
+          meetingId: meetingId,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        try {
+          await db.collection('taskPlans').add(taskData);
+          registeredCount++;
+        } catch (e) {
+          console.error('액션 아이템 업무 등록 오류:', e);
+        }
+      }
+
+      if (registeredCount > 0) {
+        showToast(`📋 ${registeredCount}개 액션 아이템이 업무에 자동 등록되었습니다`, 'info');
+        await loadTaskPlanData();
       }
     }
 
@@ -15332,6 +15410,7 @@
       todayLogs: [],
       personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
       personalGoals: [],    // 새 개인 목표 (지표별 기간 설정)
+      weeklyPlans: [],      // 주간 계획 (Firebase 저장)
       meetings: [],  // 미팅 일지
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
       expandedKRs: [],
@@ -15431,6 +15510,14 @@
         // 개인 목표 로드 (새 구조 - 지표별 기간 설정)
         const personalGoalsSnapshot = await db.collection('okr_personalGoals').get();
         okrState.personalGoals = personalGoalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 주간 계획 로드 (최근 8주)
+        const eightWeeksAgo = new Date();
+        eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+        const weeklyPlansSnapshot = await db.collection('okr_weeklyPlans')
+          .where('weekStart', '>=', eightWeeksAgo.toISOString().split('T')[0])
+          .get();
+        okrState.weeklyPlans = weeklyPlansSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 미팅 일지 로드 (최근 90일)
         const ninetyDaysAgo = new Date();
@@ -17501,10 +17588,32 @@
       const favoriteLagIds = okrState.favorites || [];
       const today = new Date().toISOString().split('T')[0];
 
+      // 현재 로그인한 사용자 정보
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+
+      // 내가 담당인 KPI만 필터링 (주 담당 또는 서브 담당)
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member.loginId ||
+        kpi.mainAssigneeName === member.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+
+      // 내가 담당인 KPI에 연결된 메인 KPI(KR) 목록
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+      const myKeyResults = okrState.keyResults.filter(kr => myKrIds.includes(kr.id));
+
+      // 내가 담당인 KPI의 지표만 필터링
+      const myLaggingIndicators = okrState.laggingIndicators.filter(lag => myKpiIds.includes(lag.kpiId));
+
       // 선택된 KPI에 해당하는 지표들 필터링
       const filteredLags = selectedRecordKrId === 'all'
-        ? okrState.laggingIndicators
-        : okrState.laggingIndicators.filter(lag => {
+        ? myLaggingIndicators
+        : myLaggingIndicators.filter(lag => {
             const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
             return kpi?.keyResultId === selectedRecordKrId;
           });
@@ -17523,9 +17632,13 @@
             <div style="display: flex; align-items: center; gap: 10px;">
               <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">📋 지표 선택</div>
               <select id="okrRecordKRFilter" onchange="setRecordKrFilter(this.value)" style="padding: 8px 12px; border: 2px solid var(--primary); border-radius: 8px; font-size: 12px; background: #EEF2FF; font-weight: 600; color: var(--primary);">
-                <option value="all" ${selectedRecordKrId === 'all' ? 'selected' : ''}>전체 KPI</option>
-                ${okrState.keyResults.map((kr, idx) => `<option value="${kr.id}" ${selectedRecordKrId === kr.id ? 'selected' : ''} style="color: ${okrColors[idx]};">${okrIcons[idx] || '📊'} ${kr.name}</option>`).join('')}
+                <option value="all" ${selectedRecordKrId === 'all' ? 'selected' : ''}>내 담당 전체</option>
+                ${myKeyResults.map(kr => {
+                  const idx = okrState.keyResults.findIndex(k => k.id === kr.id);
+                  return `<option value="${kr.id}" ${selectedRecordKrId === kr.id ? 'selected' : ''} style="color: ${okrColors[idx]};">${okrIcons[idx] || '📊'} ${kr.name}</option>`;
+                }).join('')}
               </select>
+              ${myLaggingIndicators.length === 0 ? `<span style="font-size: 11px; color: #F59E0B; margin-left: 8px;">⚠️ 담당 지표가 없습니다</span>` : ''}
             </div>
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 12px; color: var(--gray-500);">📅 기록일:</span>
@@ -21859,16 +21972,19 @@
         return date.toISOString().split('T')[0];
       });
 
-      // 월간 목표에서 행동지표 가져오기
+      // 주간 목표에서 행동지표 가져오기
       const memberGoals = (okrState.personalGoals || []).filter(g => g.memberId === state.currentUser?.id && g.indicatorType === 'input');
       const inputLags = memberGoals.map(g => {
         const lag = okrState.laggingIndicators.find(l => l.id === g.indicatorId);
         return { ...g, lag };
       }).filter(g => g.lag);
 
-      // 저장된 주간 계획 가져오기
-      const savedPlan = JSON.parse(localStorage.getItem('weeklyPlan_' + state.currentUser?.id) || '{}');
+      // 저장된 주간 계획 가져오기 (Firebase)
       const currentWeekKey = monday.toISOString().split('T')[0];
+      const weeklyPlanDoc = okrState.weeklyPlans.find(wp =>
+        wp.memberId === state.currentUser?.id && wp.weekStart === currentWeekKey
+      );
+      const savedPlan = { [currentWeekKey]: weeklyPlanDoc?.plan || {} };
 
       showModal(`
         <div style="padding: 24px; max-width: 900px; max-height: 85vh; overflow-y: auto;">
@@ -21889,22 +22005,21 @@
             <div style="font-size: 13px; color: #92400E; font-weight: 600;">💡 주간 계획 수립 방법</div>
             <div style="font-size: 12px; color: #78350F; margin-top: 4px; line-height: 1.6;">
               매주 월요일에 이번 주 목표를 확인하고 요일별로 업무를 분배하세요.<br>
-              월간 목표를 4주로 나눠 주간 목표를 설정하면 효율적입니다.
+              주간 목표를 요일별로 나눠 구체적인 계획을 세우세요.
             </div>
           </div>
 
-          <!-- 월간 목표 기반 주간 목표 -->
+          <!-- 주간 목표 현황 -->
           ${inputLags.length > 0 ? `
             <div style="margin-bottom: 24px;">
-              <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px;">📊 이번 주 목표 (월간 목표 ÷ 4)</div>
+              <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px;">📊 이번 주 목표</div>
               <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
                 ${inputLags.map(g => {
-                  const weeklyTarget = Math.ceil((g.targetValue || 0) / 4);
                   return `
                     <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 10px; padding: 12px;">
                       <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">${g.indicatorName}</div>
                       <div style="display: flex; align-items: baseline; gap: 6px; margin-top: 6px;">
-                        <span style="font-size: 20px; font-weight: 800; color: #059669;">${weeklyTarget}</span>
+                        <span style="font-size: 20px; font-weight: 800; color: #059669;">${g.targetValue || 0}</span>
                         <span style="font-size: 12px; color: var(--gray-500);">${g.unit || '건'}/주</span>
                       </div>
                     </div>
@@ -21914,9 +22029,9 @@
             </div>
           ` : `
             <div style="text-align: center; padding: 30px; background: var(--gray-50); border-radius: 12px; margin-bottom: 24px;">
-              <div style="font-size: 14px; color: var(--gray-500);">월간 목표가 설정되지 않았습니다</div>
+              <div style="font-size: 14px; color: var(--gray-500);">주간 목표가 설정되지 않았습니다</div>
               <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal(), 300);" style="margin-top: 12px; background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                월간 목표 설정하기
+                주간 목표 설정하기
               </button>
             </div>
           `}
@@ -21950,44 +22065,79 @@
       `);
     }
 
-    // 주간 계획 저장
-    function saveWeeklyPlan() {
+    // 주간 계획 저장 (Firebase)
+    async function saveWeeklyPlan() {
       const now = new Date();
       const dayOfWeek = now.getDay();
       const monday = new Date(now);
       monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      const weekKey = monday.toISOString().split('T')[0];
+      const weekStart = monday.toISOString().split('T')[0];
+      const memberId = state.currentUser?.id;
+      const memberName = state.currentUser?.name || '';
+
+      if (!memberId) {
+        showToast('로그인 정보가 없습니다', 'error');
+        return;
+      }
 
       const weekDays = ['월', '화', '수', '목', '금'];
       const plan = {};
-      plan[weekKey] = {};
 
       weekDays.forEach(day => {
         const textarea = document.getElementById('weeklyPlan_' + day);
         if (textarea) {
-          plan[weekKey][day] = textarea.value.trim();
+          plan[day] = textarea.value.trim();
         }
       });
 
-      const savedPlan = JSON.parse(localStorage.getItem('weeklyPlan_' + state.currentUser?.id) || '{}');
-      savedPlan[weekKey] = plan[weekKey];
-      localStorage.setItem('weeklyPlan_' + state.currentUser?.id, JSON.stringify(savedPlan));
+      try {
+        // 기존 주간 계획 찾기
+        const existing = okrState.weeklyPlans.find(wp =>
+          wp.memberId === memberId && wp.weekStart === weekStart
+        );
 
-      updateWeeklyPlanPreview();
-      closeModal();
-      showToast('주간 계획이 저장되었습니다!', 'success');
+        if (existing) {
+          // 업데이트
+          await db.collection('okr_weeklyPlans').doc(existing.id).update({
+            plan: plan,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          // 신규 생성
+          await db.collection('okr_weeklyPlans').add({
+            memberId: memberId,
+            memberName: memberName,
+            weekStart: weekStart,
+            plan: plan,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+
+        await loadOkrData();
+        updateWeeklyPlanPreview();
+        closeModal();
+        showToast('주간 계획이 저장되었습니다!', 'success');
+      } catch (e) {
+        console.error('주간 계획 저장 오류:', e);
+        showToast('저장 실패: ' + e.message, 'error');
+      }
     }
 
-    // 주간 계획 미리보기 업데이트
+    // 주간 계획 미리보기 업데이트 (Firebase 데이터 사용)
     function updateWeeklyPlanPreview() {
       const now = new Date();
       const dayOfWeek = now.getDay();
       const monday = new Date(now);
       monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      const weekKey = monday.toISOString().split('T')[0];
+      const weekStart = monday.toISOString().split('T')[0];
+      const memberId = state.currentUser?.id;
 
-      const savedPlan = JSON.parse(localStorage.getItem('weeklyPlan_' + state.currentUser?.id) || '{}');
-      const weekPlan = savedPlan[weekKey] || {};
+      // Firebase에서 주간 계획 찾기
+      const weeklyPlan = okrState.weeklyPlans.find(wp =>
+        wp.memberId === memberId && wp.weekStart === weekStart
+      );
+      const weekPlan = weeklyPlan?.plan || {};
 
       const dayElements = {
         '월': document.getElementById('weeklyMon'),
@@ -22016,6 +22166,102 @@
       if (titleEl && state.currentUser?.name) {
         titleEl.textContent = state.currentUser.name + '님의 이번 주 목표';
       }
+    }
+
+    // 팀 주간 계획 조회 모달
+    function openTeamWeeklyPlansModal() {
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+      const weekStart = monday.toISOString().split('T')[0];
+      const weekDays = ['월', '화', '수', '목', '금'];
+
+      // 이번 주 팀원들의 주간 계획
+      const teamPlans = okrState.weeklyPlans.filter(wp => wp.weekStart === weekStart);
+      const teamMembers = state.teamMembers || [];
+
+      showModal(`
+        <div style="padding: 24px; max-width: 1000px; max-height: 85vh; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                👥 팀 주간 계획 현황
+              </div>
+              <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                ${monday.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} ~ ${new Date(monday.getTime() + 4 * 24 * 60 * 60 * 1000).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} (이번 주)
+              </p>
+            </div>
+            <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          ${teamMembers.length === 0 ? `
+            <div style="text-align: center; padding: 40px; color: var(--gray-500);">등록된 팀원이 없습니다</div>
+          ` : `
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+              ${teamMembers.map(member => {
+                const memberPlan = teamPlans.find(p => p.memberId === member.id);
+                const plan = memberPlan?.plan || {};
+                const hasPlan = Object.values(plan).some(v => v && v.trim());
+                const totalTasks = Object.values(plan).reduce((sum, v) => sum + (v ? v.split('\\n').filter(l => l.trim()).length : 0), 0);
+
+                return `
+                  <div style="background: ${hasPlan ? 'white' : 'var(--gray-50)'}; border: 1px solid ${hasPlan ? 'var(--primary)' : 'var(--gray-200)'}; border-radius: 12px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="width: 36px; height: 36px; border-radius: 50%; background: ${hasPlan ? 'var(--primary)' : 'var(--gray-300)'}; color: white; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700;">
+                          ${member.name?.charAt(0) || '?'}
+                        </div>
+                        <div>
+                          <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">${member.name}</div>
+                          <div style="font-size: 11px; color: var(--gray-500);">${member.position || ''} ${member.department || ''}</div>
+                        </div>
+                      </div>
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        ${hasPlan ? `
+                          <span style="background: #DCFCE7; color: #059669; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;">✓ 등록완료</span>
+                          <span style="color: var(--primary); font-size: 13px; font-weight: 700;">${totalTasks}건</span>
+                        ` : `
+                          <span style="background: #FEF3C7; color: #92400E; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;">⚠️ 미등록</span>
+                        `}
+                      </div>
+                    </div>
+                    ${hasPlan ? `
+                      <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;">
+                        ${weekDays.map(day => {
+                          const dayPlan = plan[day] || '';
+                          const lines = dayPlan ? dayPlan.split('\\n').filter(l => l.trim()) : [];
+                          return `
+                            <div style="background: var(--gray-50); border-radius: 8px; padding: 10px; min-height: 60px;">
+                              <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 6px; text-align: center;">${day}</div>
+                              ${lines.length > 0 ? `
+                                <div style="font-size: 11px; color: var(--gray-700); line-height: 1.5;">
+                                  ${lines.slice(0, 3).map(l => `• ${l.length > 15 ? l.slice(0, 15) + '...' : l}`).join('<br>')}
+                                  ${lines.length > 3 ? `<br><span style="color: var(--gray-400);">+${lines.length - 3}개 더</span>` : ''}
+                                </div>
+                              ` : `
+                                <div style="font-size: 11px; color: var(--gray-400); text-align: center;">-</div>
+                              `}
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>
+                    ` : `
+                      <div style="text-align: center; padding: 12px; color: var(--gray-400); font-size: 12px;">
+                        아직 이번 주 계획이 등록되지 않았습니다
+                      </div>
+                    `}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 20px; margin-top: 20px; border-top: 1px solid var(--gray-200);">
+            <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
+          </div>
+        </div>
+      `);
     }
 
     // ========================================
@@ -23014,11 +23260,24 @@
       return `${dateStr} (${diffDays}일 남음)`;
     }
 
-    // KR 정보 가져오기
+    // KR 정보 가져오기 (지표 연결 포함)
     function getTaskKrInfo(task) {
       if (!task.krId) return null;
       const kr = okrState.keyResults.find(k => k.id === task.krId);
-      return kr ? kr.name : null;
+      if (!kr) return null;
+
+      let info = kr.name;
+
+      // 지표가 연결된 경우 표시
+      if (task.laggingIndicatorId && task.linkedLagName) {
+        const typeIcon = task.linkedLagType === 'output' ? '📤' : '📥';
+        info = `${typeIcon} ${task.linkedLagName}`;
+      } else if (task.kpiId) {
+        const kpi = okrState.kpis.find(k => k.id === task.kpiId);
+        if (kpi) info = kpi.name;
+      }
+
+      return info;
     }
 
     // 업무 등록 모달 열기
@@ -23096,12 +23355,32 @@
                   <input type="date" id="taskPlanDeadline" value="${task.deadline || ''}" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
                 </div>
               </div>
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">메인 KPI 연결</label>
-                <select id="taskPlanKr" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; background: white;">
-                  ${krOptions}
-                </select>
-                <div style="font-size: 12px; color: var(--gray-500); margin-top: 4px;">연결된 KR의 진행률에 반영됩니다</div>
+              <!-- KPI 연결 섹션 -->
+              <div style="margin-bottom: 16px; padding: 16px; background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 12px; border: 1px solid var(--primary);">
+                <div style="font-size: 13px; font-weight: 700; color: var(--primary); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+                  🎯 KPI 연결 <span style="font-size: 11px; font-weight: 400; color: var(--gray-500);">(OKR 성과에 자동 반영)</span>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                  <div>
+                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">메인 KPI</label>
+                    <select id="taskPlanKr" onchange="updateTaskPlanKpiOptions()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                      ${krOptions}
+                    </select>
+                  </div>
+                  <div>
+                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">서브 KPI</label>
+                    <select id="taskPlanKpi" onchange="updateTaskPlanLagOptions()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                      <option value="">서브 KPI 선택</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">연결 지표 (행동/성과)</label>
+                  <select id="taskPlanLag" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                    <option value="">지표 선택 (선택사항)</option>
+                  </select>
+                  <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">💡 지표를 선택하면 업무 완료 시 자동으로 OKR에 기록됩니다</div>
+                </div>
               </div>
               ${isEdit ? `
                 <div style="margin-bottom: 16px;">
@@ -23130,6 +23409,61 @@
       // 클립보드 붙여넣기 이벤트 등록
       const modal = document.getElementById('taskPlanModal');
       modal.addEventListener('paste', handleTaskPlanPaste);
+
+      // 기존 값으로 KPI/지표 옵션 초기화 (수정 시)
+      if (task.krId) {
+        setTimeout(() => {
+          updateTaskPlanKpiOptions();
+          if (task.kpiId) {
+            const kpiSelect = document.getElementById('taskPlanKpi');
+            if (kpiSelect) kpiSelect.value = task.kpiId;
+            updateTaskPlanLagOptions();
+            if (task.laggingIndicatorId) {
+              const lagSelect = document.getElementById('taskPlanLag');
+              if (lagSelect) lagSelect.value = task.laggingIndicatorId;
+            }
+          }
+        }, 100);
+      }
+    }
+
+    // 메인 KPI 선택 시 서브 KPI 옵션 업데이트
+    function updateTaskPlanKpiOptions() {
+      const krId = document.getElementById('taskPlanKr').value;
+      const kpiSelect = document.getElementById('taskPlanKpi');
+      const lagSelect = document.getElementById('taskPlanLag');
+
+      if (!kpiSelect) return;
+
+      kpiSelect.innerHTML = '<option value="">서브 KPI 선택</option>';
+      lagSelect.innerHTML = '<option value="">지표 선택 (선택사항)</option>';
+
+      if (!krId) return;
+
+      const kpisForKr = okrState.kpis.filter(kpi => kpi.keyResultId === krId);
+      kpisForKr.forEach(kpi => {
+        const lagsCount = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id).length;
+        kpiSelect.innerHTML += `<option value="${kpi.id}">${kpi.name} (${lagsCount}개 지표)</option>`;
+      });
+    }
+
+    // 서브 KPI 선택 시 지표 옵션 업데이트
+    function updateTaskPlanLagOptions() {
+      const kpiId = document.getElementById('taskPlanKpi').value;
+      const lagSelect = document.getElementById('taskPlanLag');
+
+      if (!lagSelect) return;
+
+      lagSelect.innerHTML = '<option value="">지표 선택 (선택사항)</option>';
+
+      if (!kpiId) return;
+
+      const lagsForKpi = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
+      lagsForKpi.forEach(lag => {
+        const typeIcon = lag.type === 'output' ? '📤' : '📥';
+        const typeLabel = lag.type === 'output' ? '성과' : '행동';
+        lagSelect.innerHTML += `<option value="${lag.id}">${typeIcon} ${lag.name} (${typeLabel})</option>`;
+      });
     }
 
     // 첨부파일 미리보기 렌더링
@@ -23298,6 +23632,8 @@
       const description = document.getElementById('taskPlanDesc').value.trim();
       const deadline = document.getElementById('taskPlanDeadline').value;
       const krId = document.getElementById('taskPlanKr').value;
+      const kpiId = document.getElementById('taskPlanKpi')?.value || '';
+      const laggingIndicatorId = document.getElementById('taskPlanLag')?.value || '';
       const statusEl = document.getElementById('taskPlanStatus');
       const status = statusEl ? statusEl.value : 'waiting';
 
@@ -23313,6 +23649,17 @@
         return;
       }
 
+      // 연결된 지표 정보 조회
+      let linkedLagName = '';
+      let linkedLagType = '';
+      if (laggingIndicatorId) {
+        const lag = okrState.laggingIndicators.find(l => l.id === laggingIndicatorId);
+        if (lag) {
+          linkedLagName = lag.name;
+          linkedLagType = lag.type || 'input';
+        }
+      }
+
       const taskData = {
         title,
         description,
@@ -23320,7 +23667,11 @@
         assignee,          // 표시용 이름 (호환성)
         assigneeLoginId,   // 로그인 ID (백업)
         deadline,
-        krId,
+        krId,              // 메인 KPI (KR)
+        kpiId,             // 서브 KPI
+        laggingIndicatorId, // 연결된 지표
+        linkedLagName,     // 지표 이름 (표시용)
+        linkedLagType,     // 지표 유형 (input/output)
         status,
         attachments: taskPlanState.attachments,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -23395,36 +23746,41 @@
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // 2. 업무기록에 자동 기록 (메인 KPI 연결된 경우)
-        if (task.krId) {
-          const kr = okrState.keyResults.find(k => k.id === task.krId);
-          if (kr) {
-            const now = new Date();
-            const registeredTime = formatTime(now);
+        // 2. 업무기록에 자동 기록 (KPI 연결된 경우)
+        if (task.krId || task.laggingIndicatorId) {
+          const kr = task.krId ? okrState.keyResults.find(k => k.id === task.krId) : null;
+          const now = new Date();
+          const registeredTime = formatTime(now);
 
-            const logData = {
-              date: okrToday,
-              memberId: state.currentUser?.id || state.currentUser?.uid || 'anonymous',
-              memberName: task.assignee || state.currentUser?.name || '사용자',
-              krId: task.krId,
-              kpiId: null,
-              laggingIndicatorId: null,
-              resultValue: 1,
-              version: 'A',
-              memo: `[업무완료] ${task.title}${task.description ? ' - ' + task.description : ''}`,
-              attachments: [],
-              registeredTime: registeredTime,
-              registeredTimestamp: now.getTime(),
-              taskPlanId: taskId,
-              createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            };
-
-            const docRef = await db.collection('okr_dailyLogs').add(logData);
-
-            // 로컬 상태 업데이트
-            okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
-            okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+          // 연결된 지표 정보 조회
+          let lagInfo = null;
+          if (task.laggingIndicatorId) {
+            lagInfo = okrState.laggingIndicators.find(l => l.id === task.laggingIndicatorId);
           }
+
+          const logData = {
+            date: okrToday,
+            memberId: state.currentUser?.id || state.currentUser?.uid || 'anonymous',
+            memberName: task.assignee || state.currentUser?.name || '사용자',
+            krId: task.krId || '',
+            kpiId: task.kpiId || '',
+            laggingIndicatorId: task.laggingIndicatorId || '',
+            laggingIndicatorName: lagInfo?.name || task.linkedLagName || '',
+            resultValue: 1,
+            version: lagInfo?.version || 'A',
+            memo: `[업무완료] ${task.title}${task.description ? ' - ' + task.description : ''}`,
+            attachments: task.attachments || [],
+            registeredTime: registeredTime,
+            registeredTimestamp: now.getTime(),
+            taskPlanId: taskId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+
+          const docRef = await db.collection('okr_dailyLogs').add(logData);
+
+          // 로컬 상태 업데이트
+          okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
+          okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
         }
 
         showToast('업무가 완료 처리되었습니다.');
