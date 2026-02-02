@@ -8061,32 +8061,60 @@
             return;
           }
 
-          // sourceTracking에서 추가 정보 가져오기
+          // sourceTracking에서 원본 입점신청 정보 가져오기
           const sourceTracking = pendingDoc.sourceTracking || {};
-          let sourceInquiry = null;
+          let sourceApplication = null;
           if (sourceTracking.inboundId) {
-            sourceInquiry = (state.supplierInquiries || []).find(i => i.id === sourceTracking.inboundId) ||
-                           (state.proposalRequests || []).find(p => p.id === sourceTracking.inboundId) ||
-                           (state.supplierApplications || []).find(a => a.id === sourceTracking.inboundId);
+            sourceApplication = (state.supplierApplications || []).find(a => a.id === sourceTracking.inboundId) ||
+                               (state.supplierInquiries || []).find(i => i.id === sourceTracking.inboundId) ||
+                               (state.proposalRequests || []).find(p => p.id === sourceTracking.inboundId);
           }
 
+          // 새 공급사 - 모든 데이터 통합
           const newSupplier = {
             name: name,
-            contact: document.getElementById('new-supplier-contact-crm')?.value?.trim() || '',
-            phone: document.getElementById('new-supplier-phone-crm')?.value?.trim() || '',
-            email: document.getElementById('new-supplier-email-crm')?.value?.trim() || '',
+            contact: document.getElementById('new-supplier-contact-crm')?.value?.trim() || sourceApplication?.managerName || '',
+            phone: document.getElementById('new-supplier-phone-crm')?.value?.trim() || sourceApplication?.phone || '',
+            email: document.getElementById('new-supplier-email-crm')?.value?.trim() || sourceApplication?.email || '',
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
             status: 'active',
             dealCount: 0,
-            contractStatus: 'pending', // 계약 대기 상태
-            // 원본 문의 연결 정보
+            contractStatus: 'pending',
+            // 원본 추적 정보
             sourceTracking: sourceTracking,
-            sourceInquiryId: sourceTracking.inboundId || null,
-            sourceType: sourceTracking.type || null,
-            // 추가 정보 (원본에서 가져온 것)
-            businessType: sourceInquiry?.businessType || pendingDoc.businessType || '',
-            address: sourceInquiry?.address || pendingDoc.address || '',
-            notes: sourceInquiry?.notes || pendingDoc.notes || ''
+            sourceApplicationId: sourceTracking.inboundId || null,
+            sourceType: sourceTracking.sourceType || null,
+            // 원본 입점신청에서 가져온 정보
+            businessType: sourceApplication?.businessType || pendingDoc.businessType || '',
+            address: sourceApplication?.address || pendingDoc.address || '',
+            notes: sourceApplication?.notes || pendingDoc.notes || '',
+            // 전체 온보딩 데이터 저장 (모든 여정 기록)
+            onboardingData: {
+              // 원본 입점신청 정보
+              application: sourceApplication ? {
+                companyName: sourceApplication.companyName || sourceApplication.name,
+                managerName: sourceApplication.managerName,
+                phone: sourceApplication.phone,
+                email: sourceApplication.email,
+                productInfo: sourceApplication.productInfo,
+                notes: sourceApplication.notes,
+                submittedAt: sourceApplication.createdAt
+              } : null,
+              // 온보딩 서류 제출 정보
+              documents: {
+                productInfoOption: pendingDoc.productInfoOption,
+                inputMethod: pendingDoc.inputMethod,
+                productInfoExcel: pendingDoc.productInfoExcel || null,
+                productInfoDirect: pendingDoc.productInfoDirect || [],
+                qnaDirect: pendingDoc.qnaDirect || [],
+                businessLicense: pendingDoc.businessLicense || null,
+                bankAccount: pendingDoc.bankAccount || null,
+                orderFormFile: pendingDoc.orderFormFile || null,
+                checklist: pendingDoc.checklist || null,
+                submittedAt: pendingDoc.submittedAt || null
+              },
+              completedAt: new Date().toISOString()
+            }
           };
 
           const docRef = await db.collection('suppliers').add(newSupplier);
@@ -8094,17 +8122,23 @@
           showToast(`새 공급사 "${name}"이(가) 등록되었습니다.`, 'success');
         }
 
-        // 공급사에 서류 정보 업데이트
+        // 공급사에 서류 완료 상태 업데이트
         const updateData = {
           documentsSubmitted: true,
           onboardingStatus: 'completed',
+          // 전체 온보딩 데이터 (신규가 아닌 기존 공급사 매칭의 경우)
           onboardingDocuments: {
+            productInfoOption: pendingDoc.productInfoOption,
+            inputMethod: pendingDoc.inputMethod,
             productInfoExcel: pendingDoc.productInfoExcel || null,
+            productInfoDirect: pendingDoc.productInfoDirect || [],
+            qnaDirect: pendingDoc.qnaDirect || [],
             businessLicense: pendingDoc.businessLicense || null,
             bankAccount: pendingDoc.bankAccount || null,
             orderFormFile: pendingDoc.orderFormFile || null,
             checklist: pendingDoc.checklist || null,
-            submittedAt: pendingDoc.submittedAt || new Date().toISOString()
+            submittedAt: pendingDoc.submittedAt || new Date().toISOString(),
+            sourceTracking: pendingDoc.sourceTracking || null
           }
         };
 
