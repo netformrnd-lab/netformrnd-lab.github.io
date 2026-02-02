@@ -7326,30 +7326,55 @@
 
       // 유입 경로 추적 정보
       const tracking = doc.sourceTracking || {};
-      let trackingInfo = '';
+
+      // 원본 CRM 문의에서 회사 정보 가져오기
+      let companyInfo = null;
       if (tracking.inboundId) {
-        trackingInfo = `<span style="background: #e0f2fe; color: #0369a1; padding: 4px 12px; border-radius: 12px; font-size: 11px;">CRM: ${tracking.inboundId.substring(0, 8)}...</span>`;
-      } else if (tracking.proposalId) {
-        trackingInfo = `<span style="background: #fce7f3; color: #be185d; padding: 4px 12px; border-radius: 12px; font-size: 11px;">제안서: ${tracking.proposalId.substring(0, 8)}...</span>`;
+        // supplierInquiries, proposalRequests, supplierApplications에서 찾기
+        companyInfo = (state.supplierInquiries || []).find(i => i.id === tracking.inboundId) ||
+                      (state.proposalRequests || []).find(p => p.id === tracking.inboundId) ||
+                      (state.supplierApplications || []).find(a => a.id === tracking.inboundId);
       }
+
+      // 회사명, 담당자, 연락처 추출
+      const companyName = companyInfo?.companyName || companyInfo?.name || doc.companyName || '';
+      const managerName = companyInfo?.managerName || doc.managerName || '';
+      const contact = companyInfo?.contact || companyInfo?.phone || doc.contact || '';
+      const email = companyInfo?.email || doc.email || '';
 
       const isSupplier = onboardingType === 'supplier';
 
       return `
         <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 12px; padding: 20px;">
+          <!-- 회사 정보 헤더 -->
           <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
-            <div>
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
-                <span style="background: ${sourceColor}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">${sourceLabel}</span>
-                ${isSupplier ? `<span style="background: #fef3c7; color: #b45309; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">상품정보: ${productOption}</span>` : ''}
-                ${trackingInfo}
+            <div style="flex: 1; min-width: 250px;">
+              ${companyName ? `
+                <h3 style="font-size: 18px; font-weight: 700; color: var(--gray-900); margin: 0 0 8px 0; display: flex; align-items: center; gap: 8px;">
+                  🏢 ${companyName}
+                  <span style="background: ${sourceColor}; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">${sourceLabel}</span>
+                </h3>
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">
+                  ${managerName ? `<span>👤 ${managerName}</span>` : ''}
+                  ${contact ? `<a href="tel:${contact.replace(/-/g, '')}" style="color: var(--info); text-decoration: none;">📞 ${contact}</a>` : ''}
+                  ${email ? `<a href="mailto:${email}" style="color: var(--info); text-decoration: none;">📧 ${email}</a>` : ''}
+                </div>
+              ` : `
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <span style="background: #fef3c7; color: #b45309; padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 600;">⚠️ 회사 정보 미확인</span>
+                  <span style="background: ${sourceColor}; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">${sourceLabel}</span>
+                </div>
+                <p style="font-size: 12px; color: var(--gray-500); margin: 0;">원본 문의를 확인하거나 사업자등록증을 확인해주세요</p>
+              `}
+              <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+                ${isSupplier ? `<span style="background: #fef3c7; color: #b45309; padding: 3px 10px; border-radius: 12px; font-size: 11px;">상품정보: ${productOption}</span>` : ''}
+                <span style="font-size: 12px; color: var(--gray-500);">📅 ${formattedDate}</span>
+                ${tracking.inboundId ? `
+                  <button onclick="viewInboundSource('${tracking.inboundId}')" style="padding: 4px 10px; background: #e0f2fe; border: none; border-radius: 6px; color: #0369a1; font-size: 11px; cursor: pointer; font-weight: 500;">
+                    📋 원본 문의 ID: ${tracking.inboundId.substring(0, 8)}...
+                  </button>
+                ` : ''}
               </div>
-              <div style="font-size: 13px; color: var(--gray-500);">제출일: ${formattedDate}</div>
-              ${tracking.inboundId ? `
-                <button onclick="viewInboundSource('${tracking.inboundId}')" style="margin-top: 8px; padding: 4px 10px; background: none; border: 1px solid var(--gray-300); border-radius: 6px; color: var(--gray-600); font-size: 11px; cursor: pointer;">
-                  📋 원본 문의 보기
-                </button>
-              ` : ''}
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
               ${isSupplier ? `
@@ -7953,9 +7978,103 @@
 
     // 원본 문의 보기
     function viewInboundSource(inboundId) {
-      // 인바운드 관리 탭으로 이동하고 해당 문의 하이라이트
-      showToast('원본 문의 ID: ' + inboundId, 'info');
-      // 나중에 구현: 해당 문의로 스크롤 및 하이라이트
+      // 여러 컬렉션에서 원본 문의 찾기
+      const inquiry = (state.supplierInquiries || []).find(i => i.id === inboundId) ||
+                      (state.proposalRequests || []).find(p => p.id === inboundId) ||
+                      (state.supplierApplications || []).find(a => a.id === inboundId) ||
+                      (state.sellerInquiries || []).find(i => i.id === inboundId) ||
+                      (state.sellerApplications || []).find(a => a.id === inboundId);
+
+      if (!inquiry) {
+        showToast('원본 문의를 찾을 수 없습니다. ID: ' + inboundId, 'error');
+        return;
+      }
+
+      // 날짜 포맷
+      const formatDate = (timestamp) => {
+        if (!timestamp) return '-';
+        const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+        return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      };
+
+      // 상태 배지
+      const getStatusBadge = (status) => {
+        switch(status) {
+          case 'processing': return '<span style="background: #fef3c7; color: #d97706; padding: 4px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;">처리중</span>';
+          case 'sent': return '<span style="background: #dbeafe; color: #2563eb; padding: 4px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;">전달완료</span>';
+          case 'approved': case 'completed': return '<span style="background: #d1fae5; color: #059669; padding: 4px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;">승인</span>';
+          default: return '<span style="background: #fce7f3; color: #db2777; padding: 4px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;">신규</span>';
+        }
+      };
+
+      const modal = document.getElementById('onboardingModal');
+      modal.style.display = 'flex';
+      modal.innerHTML = `
+        <div style="background: white; max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto; border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.3);">
+          <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #0369a1, #0ea5e9); border-radius: 16px 16px 0 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <h2 style="font-size: 18px; font-weight: 700; color: white;">📋 원본 문의 상세</h2>
+              <button onclick="closeOnboardingModal()" style="background: none; border: none; font-size: 24px; color: white; cursor: pointer;">&times;</button>
+            </div>
+          </div>
+          <div style="padding: 24px;">
+            <!-- 상태 및 기본 정보 -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+              ${getStatusBadge(inquiry.status)}
+              <span style="font-size: 12px; color: var(--gray-500);">접수일: ${formatDate(inquiry.createdAt)}</span>
+            </div>
+
+            <!-- 회사 정보 -->
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 16px;">
+              <h3 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0 0 12px 0;">🏢 ${inquiry.companyName || inquiry.name || '회사명 미입력'}</h3>
+              <div style="display: grid; gap: 8px; font-size: 14px;">
+                ${inquiry.managerName ? `<div><span style="color: var(--gray-500);">담당자:</span> <strong>${inquiry.managerName}</strong></div>` : ''}
+                ${inquiry.contact || inquiry.phone ? `<div><span style="color: var(--gray-500);">연락처:</span> <a href="tel:${(inquiry.contact || inquiry.phone).replace(/-/g, '')}" style="color: var(--info); font-weight: 600;">${inquiry.contact || inquiry.phone}</a></div>` : ''}
+                ${inquiry.email ? `<div><span style="color: var(--gray-500);">이메일:</span> <a href="mailto:${inquiry.email}" style="color: var(--info); font-weight: 600;">${inquiry.email}</a></div>` : ''}
+                ${inquiry.website ? `<div><span style="color: var(--gray-500);">홈페이지:</span> <a href="${inquiry.website.startsWith('http') ? inquiry.website : 'https://' + inquiry.website}" target="_blank" style="color: var(--info);">${inquiry.website}</a></div>` : ''}
+              </div>
+            </div>
+
+            <!-- 문의 내용 -->
+            ${inquiry.note || inquiry.message ? `
+              <div style="margin-bottom: 16px;">
+                <h4 style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">💬 문의 내용</h4>
+                <div style="background: white; border: 1px solid var(--gray-200); padding: 12px; border-radius: 8px; font-size: 14px; color: var(--gray-700); white-space: pre-wrap; line-height: 1.6;">
+                  ${inquiry.note || inquiry.message}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- 첨부파일 -->
+            ${inquiry.fileUrl ? `
+              <div style="margin-bottom: 16px;">
+                <h4 style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📎 첨부파일</h4>
+                <a href="${inquiry.fileUrl}" target="_blank" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--gray-100); border-radius: 8px; color: var(--primary); text-decoration: none; font-size: 13px; font-weight: 500;">
+                  📄 ${inquiry.fileName || '파일 보기'}
+                </a>
+              </div>
+            ` : ''}
+
+            <!-- CS 메모 -->
+            ${inquiry.csMemo ? `
+              <div style="margin-bottom: 16px;">
+                <h4 style="font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📝 CS 메모</h4>
+                <div style="background: #fef3c7; border: 1px solid #fde68a; padding: 12px; border-radius: 8px; font-size: 13px; color: #92400e; white-space: pre-wrap;">
+                  ${inquiry.csMemo}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- 문의 ID -->
+            <div style="padding: 12px; background: var(--gray-100); border-radius: 8px; font-size: 12px; color: var(--gray-500); text-align: center;">
+              문의 ID: ${inboundId}
+            </div>
+          </div>
+          <div style="padding: 16px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
+            <button onclick="closeOnboardingModal()" style="padding: 12px 24px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">닫기</button>
+          </div>
+        </div>
+      `;
     }
 
     // ==================== 온보딩 대기 서류 관리 함수 끝 ====================
