@@ -9056,12 +9056,27 @@
         return;
       }
 
-      // 현재 월/분기 계산
+      // 현재 주/분기 계산
       const now = new Date();
-      const currentMonth = now.toISOString().slice(0, 7);
-      const monthLabel = now.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long' });
       const quarter = Math.floor(now.getMonth() / 3) + 1;
       const quarterLabel = `${now.getFullYear()}년 ${quarter}분기`;
+
+      // 현재 주 계산 (월요일 시작)
+      const dayOfWeek = now.getDay();
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() + mondayOffset);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      const weekStartStr = weekStart.toISOString().split('T')[0];
+      const weekEndStr = weekEnd.toISOString().split('T')[0];
+      const weekLabel = `${weekStart.getMonth() + 1}/${weekStart.getDate()} ~ ${weekEnd.getMonth() + 1}/${weekEnd.getDate()}`;
+      const currentWeek = weekStartStr.slice(0, 7) + '-W' + getWeekNumber(weekStart);
+
+      function getWeekNumber(d) {
+        const onejan = new Date(d.getFullYear(), 0, 1);
+        return Math.ceil((((d - onejan) / 86400000) + onejan.getDay() + 1) / 7);
+      }
 
       // 현재 분기 시작/끝 날짜
       const quarterStart = new Date(now.getFullYear(), (quarter - 1) * 3, 1);
@@ -9069,11 +9084,20 @@
       const quarterStartStr = quarterStart.toISOString().split('T')[0];
       const quarterEndStr = quarterEnd.toISOString().split('T')[0];
 
-      // 행동지표(Input)와 성과지표(Output) 분리
-      const inputLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
-      const outputLags = okrState.laggingIndicators.filter(l => l.type === 'output');
+      // 내 담당 KPI만 필터링 (kpi.memberId === currentMemberId)
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.memberId === currentMemberId ||
+        kpi.memberId === member.loginId ||
+        (kpi.memberName && kpi.memberName === member.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
 
-      // 메인 KPI별로 행동지표 그룹화
+      // 내 담당 지표만 필터링
+      const myLags = okrState.laggingIndicators.filter(l => myKpiIds.includes(l.kpiId));
+      const inputLags = myLags.filter(l => l.type !== 'output');
+      const outputLags = myLags.filter(l => l.type === 'output');
+
+      // 메인 KPI(KR)별로 행동지표 그룹화 + 서브 KPI별로 세분화
       const inputByKR = {};
       inputLags.forEach(lag => {
         const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
@@ -9081,13 +9105,14 @@
         const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
         if (!kr) return;
         const krIdx = okrState.keyResults.findIndex(k => k.id === kr.id);
-        if (!inputByKR[kr.id]) {
-          inputByKR[kr.id] = { kr, kpi, lags: [], krIdx };
+        const groupKey = `${kr.id}_${kpi.id}`;
+        if (!inputByKR[groupKey]) {
+          inputByKR[groupKey] = { kr, kpi, lags: [], krIdx };
         }
-        inputByKR[kr.id].lags.push({ ...lag, kpi });
+        inputByKR[groupKey].lags.push({ ...lag, kpi });
       });
 
-      // 메인 KPI별로 성과지표 그룹화
+      // 메인 KPI(KR)별로 성과지표 그룹화 + 서브 KPI별로 세분화
       const outputByKR = {};
       outputLags.forEach(lag => {
         const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
@@ -9095,46 +9120,63 @@
         const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
         if (!kr) return;
         const krIdx = okrState.keyResults.findIndex(k => k.id === kr.id);
-        if (!outputByKR[kr.id]) {
-          outputByKR[kr.id] = { kr, kpi, lags: [], krIdx };
+        const groupKey = `${kr.id}_${kpi.id}`;
+        if (!outputByKR[groupKey]) {
+          outputByKR[groupKey] = { kr, kpi, lags: [], krIdx };
         }
-        outputByKR[kr.id].lags.push({ ...lag, kpi });
+        outputByKR[groupKey].lags.push({ ...lag, kpi });
       });
 
-      // 기존 목표 가져오기
-      const memberGoals = (okrState.personalGoals || []).filter(g => g.memberId === currentMemberId);
+      // 기존 목표 가져오기 (이번 주 것만)
+      const memberGoals = (okrState.personalGoals || []).filter(g =>
+        g.memberId === currentMemberId &&
+        (g.period === currentWeek || g.period === 'weekly')
+      );
 
-      // 분기별 KR 목표 및 달성 현황 계산
+      // 분기별 내 담당 KPI 목표 및 달성 현황 계산
       const isCurrentUser = currentMemberId === state.currentUser?.id;
       const memberLogs = okrState.dailyLogs.filter(log =>
         (log.memberId === currentMemberId || (isCurrentUser && (log.memberId === 'anonymous' || !log.memberId))) &&
         log.date >= quarterStartStr && log.date <= quarterEndStr
       );
 
-      const krProgressList = okrState.keyResults.map((kr, idx) => {
-        const kpisForKR = okrState.kpis.filter(kpi => kpi.keyResultId === kr.id);
-        const lagsForKR = okrState.laggingIndicators.filter(l => kpisForKR.some(k => k.id === l.kpiId));
+      // 내 담당 서브 KPI별 진척 현황
+      const kpiProgressList = myKpis.map(kpi => {
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        const krIdx = kr ? okrState.keyResults.findIndex(k => k.id === kr.id) : 0;
+        const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
 
         // 행동지표 달성 (분기 내)
-        const inputLagsForKR = lagsForKR.filter(l => l.type !== 'output');
-        const inputTotal = memberLogs.filter(log => inputLagsForKR.some(l => l.id === log.laggingIndicatorId))
+        const inputLagsForKPI = lagsForKPI.filter(l => l.type !== 'output');
+        const inputTotal = memberLogs.filter(log => inputLagsForKPI.some(l => l.id === log.laggingIndicatorId))
           .reduce((sum, l) => sum + (l.resultValue || 0), 0);
 
         // 성과지표 달성 (분기 내)
-        const outputLagsForKR = lagsForKR.filter(l => l.type === 'output');
-        const outputTotal = memberLogs.filter(log => outputLagsForKR.some(l => l.id === log.laggingIndicatorId))
+        const outputLagsForKPI = lagsForKPI.filter(l => l.type === 'output');
+        const outputTotal = memberLogs.filter(log => outputLagsForKPI.some(l => l.id === log.laggingIndicatorId))
           .reduce((sum, l) => sum + (l.resultValue || 0), 0);
 
         return {
+          kpi,
           kr,
-          idx,
-          targetValue: kr.targetValue || 0,
-          unit: kr.unit || '',
+          krIdx,
+          targetValue: kpi.targetValue || kr?.targetValue || 0,
+          unit: kpi.unit || kr?.unit || '',
           inputTotal,
           outputTotal,
-          inputCount: inputLagsForKR.length,
-          outputCount: outputLagsForKR.length
+          inputCount: inputLagsForKPI.length,
+          outputCount: outputLagsForKPI.length
         };
+      });
+
+      // 메인 KPI(KR)별로 그룹화
+      const progressByKR = {};
+      kpiProgressList.forEach(item => {
+        if (!item.kr) return;
+        if (!progressByKR[item.kr.id]) {
+          progressByKR[item.kr.id] = { kr: item.kr, krIdx: item.krIdx, kpis: [] };
+        }
+        progressByKR[item.kr.id].kpis.push(item);
       });
 
       showModal(`
@@ -9142,46 +9184,55 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <div>
               <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
-                🎯 ${member.name}님의 월간 목표 설정
+                🎯 ${member.name}님의 주간 목표 설정
               </div>
               <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
-                📅 <strong>${monthLabel}</strong> 목표를 설정하세요 <span style="color: #F59E0B;">(매월 초 설정 권장)</span>
+                📅 <strong>${weekLabel}</strong> 이번 주 목표를 설정하세요 <span style="color: #10B981;">(매주 월요일 설정 권장)</span>
               </p>
             </div>
             <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
           </div>
 
-          <!-- 분기별 KPI 목표 현황 (상단 고정) -->
+          <!-- 분기별 내 담당 KPI 목표 현황 (상단 고정) -->
           <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 14px; padding: 18px; margin-bottom: 20px; color: white;">
             <div style="font-size: 14px; font-weight: 700; margin-bottom: 14px; display: flex; align-items: center; gap: 8px;">
-              📊 ${quarterLabel} KPI 목표 현황
+              📊 ${quarterLabel} 내 담당 KPI 현황
               <span style="font-size: 11px; background: rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 10px;">${quarterStartStr.slice(5)} ~ ${quarterEndStr.slice(5)}</span>
             </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
-              ${krProgressList.map(item => {
-                const rate = item.targetValue > 0 ? Math.round((item.outputTotal / item.targetValue) * 100) : 0;
-                return `
-                  <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 14px; backdrop-filter: blur(10px);">
-                    <div style="font-size: 11px; opacity: 0.9; margin-bottom: 6px;">${okrIcons[item.idx % 4]} ${item.kr.name}</div>
-                    <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;">
-                      <div>
-                        <span style="font-size: 20px; font-weight: 800;">${item.outputTotal.toLocaleString()}</span>
-                        <span style="font-size: 11px; opacity: 0.8;">/${item.targetValue.toLocaleString()} ${item.unit}</span>
+            ${Object.keys(progressByKR).length === 0 ? `
+              <div style="text-align: center; padding: 20px; opacity: 0.8;">배정된 KPI가 없습니다. 목표설정에서 KPI를 배정받으세요.</div>
+            ` : Object.values(progressByKR).map(group => `
+              <div style="margin-bottom: 16px;">
+                <div style="font-size: 12px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                  ${okrIcons[group.krIdx % 4]} ${group.kr.name}
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+                  ${group.kpis.map(item => {
+                    const rate = item.targetValue > 0 ? Math.round((item.outputTotal / item.targetValue) * 100) : 0;
+                    return `
+                      <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 12px; backdrop-filter: blur(10px);">
+                        <div style="font-size: 11px; opacity: 0.9; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${item.kpi.name}">${item.kpi.name}</div>
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+                          <div>
+                            <span style="font-size: 18px; font-weight: 800;">${item.outputTotal.toLocaleString()}</span>
+                            <span style="font-size: 10px; opacity: 0.8;">/${item.targetValue.toLocaleString()} ${item.unit}</span>
+                          </div>
+                          <span style="font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: ${rate >= 100 ? '#10B981' : rate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.2)'};">${rate}%</span>
+                        </div>
+                        <div style="font-size: 9px; opacity: 0.7;">행동 ${item.inputTotal}건 · 성과 ${item.outputTotal}${item.unit || '건'}</div>
                       </div>
-                      <span style="font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: ${rate >= 100 ? '#10B981' : rate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.2)'};">${rate}%</span>
-                    </div>
-                    <div style="font-size: 10px; opacity: 0.8;">행동 ${item.inputTotal}건 · 성과 ${item.outputTotal}${item.unit || '건'}</div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            `).join('')}
           </div>
 
           <!-- 안내 배너 -->
-          <div style="background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 12px; padding: 14px; margin-bottom: 20px; border: 1px solid var(--primary);">
-            <div style="font-size: 13px; color: var(--primary); font-weight: 600; margin-bottom: 4px;">💡 월간 목표 설정 가이드</div>
+          <div style="background: linear-gradient(135deg, #ECFDF5, #D1FAE5); border-radius: 12px; padding: 14px; margin-bottom: 20px; border: 1px solid #10B981;">
+            <div style="font-size: 13px; color: #059669; font-weight: 600; margin-bottom: 4px;">💡 주간 목표 설정 가이드</div>
             <div style="font-size: 12px; color: var(--gray-600); line-height: 1.5;">
-              • <strong>행동지표</strong>: 이번 달 실행할 업무 횟수 (예: 공구 10건, 셀러확보 5건) &nbsp;|&nbsp; <strong>성과지표</strong>: 이번 달 달성할 결과 목표 (예: 매출 1억원, 입점 3곳)
+              • <strong>행동지표</strong>: 이번 주 실행할 업무 횟수 (예: 공구 3건, 미팅 5회) &nbsp;|&nbsp; <strong>성과지표</strong>: 이번 주 달성할 결과 목표 (예: 매출 2천만원, 입점 1곳)
             </div>
           </div>
 
@@ -9194,20 +9245,19 @@
               </div>
               <div style="background: #F0FDF4; border-radius: 12px; padding: 14px; max-height: 400px; overflow-y: auto;">
                 ${Object.keys(inputByKR).length === 0 ? `
-                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 행동지표가 없습니다</div>
+                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">내 담당 행동지표가 없습니다</div>
                 ` : Object.values(inputByKR).map(group => {
                   const idx = group.krIdx;
                   return `
                   <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
-                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
-                      ${okrIcons[idx % 4]} ${group.kr.name}
-                    </div>
+                    <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 2px;">${okrIcons[idx % 4]} ${group.kr.name}</div>
+                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px;">${group.kpi.name}</div>
                     ${group.lags.map(lag => {
                       const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
                       return `
                         <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px;">
                           <div style="flex: 1; font-size: 11px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
-                          <input type="hidden" id="goalPeriod_${lag.id}" value="monthly">
+                          <input type="hidden" id="goalPeriod_${lag.id}" value="${currentWeek}">
                           <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
                             style="width: 60px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 5px; font-size: 12px; text-align: right;">
                           <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || '건'}</span>
@@ -9226,23 +9276,22 @@
               </div>
               <div style="background: #FFFBEB; border-radius: 12px; padding: 14px; max-height: 400px; overflow-y: auto;">
                 ${Object.keys(outputByKR).length === 0 ? `
-                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">등록된 성과지표가 없습니다</div>
+                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">내 담당 성과지표가 없습니다</div>
                 ` : Object.values(outputByKR).map(group => {
                   const idx = group.krIdx;
                   return `
                   <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
-                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
-                      ${okrIcons[idx % 4]} ${group.kr.name}
-                    </div>
+                    <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 2px;">${okrIcons[idx % 4]} ${group.kr.name}</div>
+                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px;">${group.kpi.name}</div>
                     ${group.lags.map(lag => {
                       const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
                       return `
                         <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px;">
                           <div style="flex: 1; font-size: 11px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
-                          <input type="hidden" id="goalPeriod_${lag.id}" value="monthly">
+                          <input type="hidden" id="goalPeriod_${lag.id}" value="${currentWeek}">
                           <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
                             style="width: 80px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 5px; font-size: 12px; text-align: right;">
-                          <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || lag.kpi?.unit || '원'}</span>
+                          <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || '건'}</span>
                         </div>
                       `;
                     }).join('')}
@@ -9254,14 +9303,14 @@
 
           <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 20px; border-top: 1px solid var(--gray-200); margin-top: 20px;">
             <button class="btn btn-secondary" onclick="closeModal()">취소</button>
-            <button class="btn btn-primary" onclick="savePersonalGoals('${currentMemberId}')">💾 월간 목표 저장</button>
+            <button class="btn btn-primary" onclick="savePersonalGoals('${currentMemberId}', '${currentWeek}')">💾 주간 목표 저장</button>
           </div>
         </div>
       `);
     }
 
-    // 개인 목표 일괄 저장
-    async function savePersonalGoals(memberId) {
+    // 개인 목표 일괄 저장 (주간 기준)
+    async function savePersonalGoals(memberId, weekPeriod = null) {
       const allLags = okrState.laggingIndicators;
       const batch = db.batch();
       const goalsToSave = [];
@@ -9272,7 +9321,7 @@
         const valueEl = document.getElementById(`goalValue_${lag.id}`);
 
         if (periodEl && valueEl) {
-          const period = periodEl.value;
+          const period = periodEl.value || weekPeriod;
           const targetValue = parseFloat(valueEl.value) || 0;
 
           if (targetValue > 0) {
@@ -9283,15 +9332,17 @@
               indicatorType: lag.type === 'output' ? 'output' : 'input',
               period: period,
               targetValue: targetValue,
-              unit: lag.unit || (lag.type === 'output' ? '원' : '건')
+              unit: lag.unit || '건'
             });
           }
         }
       });
 
       try {
-        // 기존 목표 삭제
-        const existingGoals = (okrState.personalGoals || []).filter(g => g.memberId === memberId);
+        // 이번 주 목표만 삭제 (다른 주 목표는 유지)
+        const existingGoals = (okrState.personalGoals || []).filter(g =>
+          g.memberId === memberId && g.period === weekPeriod
+        );
         existingGoals.forEach(goal => {
           batch.delete(db.collection('okr_personalGoals').doc(goal.id));
         });
@@ -9310,9 +9361,9 @@
         await loadOkrData();
         renderPersonalGrowthboard();
         closeModal();
-        showToast(`개인 목표가 저장되었습니다! (${goalsToSave.length}개 지표)`, 'success');
+        showToast(`주간 목표가 저장되었습니다! (${goalsToSave.length}개 지표)`, 'success');
       } catch (e) {
-        console.error('개인 목표 저장 오류:', e);
+        console.error('주간 목표 저장 오류:', e);
         showToast('저장 실패', 'error');
       }
     }
