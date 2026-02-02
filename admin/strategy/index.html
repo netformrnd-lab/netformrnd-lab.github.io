@@ -15435,12 +15435,17 @@
       todayLogs: [],
       personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
       personalGoals: [],    // 새 개인 목표 (지표별 기간 설정)
+      quarterlyGoals: [],   // 분기별 개인 목표 (개인그로스보드용)
       weeklyPlans: [],      // 주간 계획 (Firebase 저장)
       meetings: [],  // 미팅 일지
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
       expandedKRs: [],
       searchQuery: '',
       showFavoritesOnly: false,
+      // 연도별 관리
+      selectedYear: new Date().getFullYear(),  // 선택된 연도
+      availableYears: [],  // 사용 가능한 연도 목록
+      allObjectives: [],   // 전체 연도별 목표
       // KPI 필터 설정 (localStorage 유지)
       kpiFilter: JSON.parse(localStorage.getItem('okrKpiFilter') || JSON.stringify({
         period: 'all',      // all, thisWeek, thisMonth, custom
@@ -15492,27 +15497,48 @@
     // OKR 데이터 로드
     async function loadOkrData() {
       try {
-        // O (목표)
-        const objSnapshot = await db.collection('okr_objective').limit(1).get();
-        okrState.objective = objSnapshot.docs.length > 0
-          ? { id: objSnapshot.docs[0].id, ...objSnapshot.docs[0].data() }
-          : null;
+        // O (목표) - 모든 연도의 목표 로드
+        const objSnapshot = await db.collection('okr_objective').get();
+        okrState.allObjectives = objSnapshot.docs.map(doc => {
+          const data = doc.data();
+          // year 필드가 없으면 startDate에서 추출
+          const year = data.year || (data.startDate ? new Date(data.startDate).getFullYear() : new Date().getFullYear());
+          return { id: doc.id, ...data, year };
+        });
 
-        // KR
+        // 사용 가능한 연도 목록 (중복 제거, 정렬)
+        okrState.availableYears = [...new Set(okrState.allObjectives.map(o => o.year))].sort((a, b) => b - a);
+
+        // 선택된 연도가 없거나 목록에 없으면 가장 최신 연도로 설정
+        if (!okrState.availableYears.includes(okrState.selectedYear)) {
+          okrState.selectedYear = okrState.availableYears[0] || new Date().getFullYear();
+        }
+
+        // 선택된 연도의 목표
+        okrState.objective = okrState.allObjectives.find(o => o.year === okrState.selectedYear) || null;
+
+        // KR - 선택된 연도의 objective에 연결된 것만
         const krSnapshot = await db.collection('okr_keyResults').orderBy('order').get();
-        okrState.keyResults = krSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const allKRs = krSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        okrState.keyResults = okrState.objective
+          ? allKRs.filter(kr => kr.objectiveId === okrState.objective.id)
+          : [];
 
-        // KPI
+        // KPI - 선택된 연도의 KR에 연결된 것만
         const kpiSnapshot = await db.collection('okr_kpis').orderBy('order').get();
-        okrState.kpis = kpiSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const allKPIs = kpiSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const krIds = okrState.keyResults.map(kr => kr.id);
+        okrState.kpis = allKPIs.filter(kpi => krIds.includes(kpi.keyResultId));
 
         // 총 성과지표 (NEW)
         const totalMetricsSnapshot = await db.collection('okr_totalMetrics').get();
         okrState.totalMetrics = totalMetricsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 성과지표(단위별) - 기존 laggingIndicators
+        // 성과지표(단위별) - 선택된 연도의 KPI에 연결된 것만
         const lagSnapshot = await db.collection('okr_laggingIndicators').get();
-        okrState.laggingIndicators = lagSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const allLags = lagSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const kpiIds = okrState.kpis.map(kpi => kpi.id);
+        okrState.laggingIndicators = allLags.filter(lag => kpiIds.includes(lag.kpiId));
 
         // 하위지표 (NEW)
         const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
@@ -15536,6 +15562,10 @@
         const personalGoalsSnapshot = await db.collection('okr_personalGoals').get();
         okrState.personalGoals = personalGoalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
+        // 분기별 개인 목표 로드
+        const quarterlyGoalsSnapshot = await db.collection('okr_quarterlyGoals').get();
+        okrState.quarterlyGoals = quarterlyGoalsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
         // 주간 계획 로드 (최근 8주)
         const eightWeeksAgo = new Date();
         eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
@@ -15554,7 +15584,7 @@
         okrState.meetings = meetingSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 초기 데이터 없으면 시드
-        if (!okrState.objective) {
+        if (okrState.allObjectives.length === 0) {
           await seedOkrInitialData();
         }
 
@@ -15576,6 +15606,7 @@
 
         const objRef = await db.collection('okr_objective').add({
           name: '26년도 PMF를 찾는 단계, 빠른 데이터 추출 및 개선하여 연 10억 매출 달성',
+          year: 2026,
           startDate: '2026-01-01',
           endDate: '2026-12-31',
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -16746,6 +16777,229 @@
       mindmapVisible: false // 개인 마인드맵 토글 상태
     };
 
+    // 분기별 개인 목표 설정 모달 열기
+    function openQuarterlyGoalModal(memberId) {
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentQuarter = Math.floor(now.getMonth() / 3) + 1;
+
+      // 해당 멤버의 현재 분기 목표 가져오기
+      const existingGoals = (okrState.quarterlyGoals || []).filter(g =>
+        g.memberId === memberId && g.year === currentYear && g.quarter === currentQuarter
+      );
+
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+      const memberName = member?.name || '팀원';
+
+      showModal(`
+        <div style="max-width: 560px;">
+          <div style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin-bottom: 8px; display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 28px;">🎯</span> 분기별 개인 목표 설정
+          </div>
+          <div style="font-size: 14px; color: var(--gray-500); margin-bottom: 20px;">
+            ${memberName}님의 ${currentYear}년 ${currentQuarter}분기 목표
+          </div>
+
+          <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+            <select id="quarterlyGoalYear" style="padding: 10px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;">
+              ${[currentYear - 1, currentYear, currentYear + 1].map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}년</option>`).join('')}
+            </select>
+            <select id="quarterlyGoalQuarter" style="padding: 10px 16px; border: 2px solid var(--gray-200); border-radius: 8px; font-size: 14px;">
+              ${[1, 2, 3, 4].map(q => `<option value="${q}" ${q === currentQuarter ? 'selected' : ''}>${q}분기</option>`).join('')}
+            </select>
+            <button onclick="loadQuarterlyGoalsForEdit('${memberId}')" style="padding: 10px 16px; background: var(--gray-100); color: var(--gray-700); border: none; border-radius: 8px; font-size: 13px; cursor: pointer;">불러오기</button>
+          </div>
+
+          <div id="quarterlyGoalsList" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            ${existingGoals.length > 0 ? existingGoals.map((goal, idx) => `
+              <div class="quarterly-goal-item" data-id="${goal.id}" style="display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;">
+                <div style="flex: 1;">
+                  <input type="text" class="goal-title" value="${goal.title}" placeholder="목표 이름" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
+                  <div style="display: flex; gap: 8px;">
+                    <input type="number" class="goal-target" value="${goal.targetValue}" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                    <input type="number" class="goal-current" value="${goal.currentValue || 0}" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                    <input type="text" class="goal-unit" value="${goal.unit || ''}" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                  </div>
+                </div>
+                <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+              </div>
+            `).join('') : `
+              <div class="quarterly-goal-item" style="display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;">
+                <div style="flex: 1;">
+                  <input type="text" class="goal-title" value="" placeholder="목표 이름 (예: 영어 공부)" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
+                  <div style="display: flex; gap: 8px;">
+                    <input type="number" class="goal-target" value="" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                    <input type="number" class="goal-current" value="0" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                    <input type="text" class="goal-unit" value="" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                  </div>
+                </div>
+                <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+              </div>
+            `}
+          </div>
+
+          <button onclick="addQuarterlyGoalItem()" style="width: 100%; padding: 12px; background: var(--gray-100); color: var(--gray-600); border: 2px dashed var(--gray-300); border-radius: 8px; font-size: 13px; cursor: pointer; margin-bottom: 20px;">+ 목표 추가</button>
+
+          <div style="background: var(--info-light); padding: 12px 16px; border-radius: 10px; margin-bottom: 20px;">
+            <div style="font-size: 13px; color: var(--gray-600);">
+              <strong>안내:</strong> 분기별 개인 목표는 회사 KPI와 별개로 개인 성취를 위한 목표입니다.
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px; justify-content: flex-end;">
+            <button onclick="closeModal()" style="padding: 12px 24px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+            <button onclick="saveQuarterlyGoals('${memberId}')" style="padding: 12px 24px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">저장</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // 분기별 목표 항목 추가
+    function addQuarterlyGoalItem() {
+      const container = document.getElementById('quarterlyGoalsList');
+      if (!container) return;
+
+      const newItem = document.createElement('div');
+      newItem.className = 'quarterly-goal-item';
+      newItem.style.cssText = 'display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;';
+      newItem.innerHTML = `
+        <div style="flex: 1;">
+          <input type="text" class="goal-title" value="" placeholder="목표 이름" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
+          <div style="display: flex; gap: 8px;">
+            <input type="number" class="goal-target" value="" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+            <input type="number" class="goal-current" value="0" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+            <input type="text" class="goal-unit" value="" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+          </div>
+        </div>
+        <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+      `;
+      container.appendChild(newItem);
+    }
+
+    // 분기별 목표 항목 삭제
+    function removeQuarterlyGoalItem(btn) {
+      const item = btn.closest('.quarterly-goal-item');
+      if (item) item.remove();
+    }
+
+    // 특정 분기 목표 불러오기
+    async function loadQuarterlyGoalsForEdit(memberId) {
+      const yearSelect = document.getElementById('quarterlyGoalYear');
+      const quarterSelect = document.getElementById('quarterlyGoalQuarter');
+      if (!yearSelect || !quarterSelect) return;
+
+      const year = parseInt(yearSelect.value);
+      const quarter = parseInt(quarterSelect.value);
+
+      const goals = (okrState.quarterlyGoals || []).filter(g =>
+        g.memberId === memberId && g.year === year && g.quarter === quarter
+      );
+
+      const container = document.getElementById('quarterlyGoalsList');
+      if (!container) return;
+
+      if (goals.length === 0) {
+        container.innerHTML = `
+          <div class="quarterly-goal-item" style="display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;">
+            <div style="flex: 1;">
+              <input type="text" class="goal-title" value="" placeholder="목표 이름" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
+              <div style="display: flex; gap: 8px;">
+                <input type="number" class="goal-target" value="" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                <input type="number" class="goal-current" value="0" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                <input type="text" class="goal-unit" value="" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+              </div>
+            </div>
+            <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+          </div>
+        `;
+        showToast(`${year}년 ${quarter}분기 목표가 없습니다`, 'info');
+      } else {
+        container.innerHTML = goals.map(goal => `
+          <div class="quarterly-goal-item" data-id="${goal.id}" style="display: flex; gap: 8px; align-items: flex-start; padding: 12px; background: var(--gray-50); border-radius: 10px;">
+            <div style="flex: 1;">
+              <input type="text" class="goal-title" value="${goal.title}" placeholder="목표 이름" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 14px; margin-bottom: 8px;">
+              <div style="display: flex; gap: 8px;">
+                <input type="number" class="goal-target" value="${goal.targetValue}" placeholder="목표값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                <input type="number" class="goal-current" value="${goal.currentValue || 0}" placeholder="현재값" style="width: 80px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+                <input type="text" class="goal-unit" value="${goal.unit || ''}" placeholder="단위" style="width: 60px; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 13px;">
+              </div>
+            </div>
+            <button onclick="removeQuarterlyGoalItem(this)" style="padding: 8px; background: var(--danger-light); color: var(--danger); border: none; border-radius: 6px; cursor: pointer; font-size: 12px;">삭제</button>
+          </div>
+        `).join('');
+        showToast(`${year}년 ${quarter}분기 목표를 불러왔습니다`, 'success');
+      }
+    }
+
+    // 분기별 개인 목표 저장
+    async function saveQuarterlyGoals(memberId) {
+      const yearSelect = document.getElementById('quarterlyGoalYear');
+      const quarterSelect = document.getElementById('quarterlyGoalQuarter');
+      if (!yearSelect || !quarterSelect) return;
+
+      const year = parseInt(yearSelect.value);
+      const quarter = parseInt(quarterSelect.value);
+
+      const items = document.querySelectorAll('.quarterly-goal-item');
+      const goals = [];
+
+      items.forEach(item => {
+        const title = item.querySelector('.goal-title')?.value?.trim();
+        const targetValue = parseFloat(item.querySelector('.goal-target')?.value) || 0;
+        const currentValue = parseFloat(item.querySelector('.goal-current')?.value) || 0;
+        const unit = item.querySelector('.goal-unit')?.value?.trim() || '';
+        const existingId = item.dataset.id;
+
+        if (title) {
+          goals.push({ title, targetValue, currentValue, unit, existingId });
+        }
+      });
+
+      if (goals.length === 0) {
+        showToast('최소 1개 이상의 목표를 입력해주세요', 'error');
+        return;
+      }
+
+      try {
+        showToast('목표 저장 중...', 'info');
+
+        const batch = db.batch();
+
+        // 기존 해당 분기 목표 삭제
+        const existingGoals = (okrState.quarterlyGoals || []).filter(g =>
+          g.memberId === memberId && g.year === year && g.quarter === quarter
+        );
+        existingGoals.forEach(goal => {
+          batch.delete(db.collection('okr_quarterlyGoals').doc(goal.id));
+        });
+
+        // 새 목표 추가
+        goals.forEach(goal => {
+          const docRef = db.collection('okr_quarterlyGoals').doc();
+          batch.set(docRef, {
+            memberId,
+            year,
+            quarter,
+            title: goal.title,
+            targetValue: goal.targetValue,
+            currentValue: goal.currentValue,
+            unit: goal.unit,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+
+        await batch.commit();
+
+        closeModal();
+        await loadOkrData();
+        renderPersonalGrowthboard();
+        showToast(`${year}년 ${quarter}분기 목표가 저장되었습니다`, 'success');
+      } catch (e) {
+        console.error('분기별 목표 저장 오류:', e);
+        showToast('목표 저장 중 오류가 발생했습니다', 'error');
+      }
+    }
+
     // 개인 마인드맵 토글
     function togglePersonalMindmapView() {
       personalDashboardState.mindmapVisible = !personalDashboardState.mindmapVisible;
@@ -17063,6 +17317,16 @@
         return period === 'daily' ? '오늘' : period === 'weekly' ? '이번 주' : '이번 달';
       };
 
+      // 현재 분기 계산
+      const now = new Date();
+      const currentQuarter = Math.floor(now.getMonth() / 3) + 1;
+      const currentYear = now.getFullYear();
+
+      // 분기별 개인 목표 데이터
+      const memberQuarterlyGoals = (okrState.quarterlyGoals || []).filter(g =>
+        g.memberId === memberId && g.year === currentYear && g.quarter === currentQuarter
+      );
+
       container.innerHTML = `
         <!-- 헤더 -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
@@ -17070,9 +17334,12 @@
             <h2 style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin: 0;">
               👤 ${selectedMember.name}님의 기여 현황
             </h2>
-            <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">KPI별 기여도와 업무일지를 한눈에 확인하세요</p>
+            <p style="color: var(--gray-500); margin-top: 4px; font-size: 13px;">KPI별 기여도와 개인 목표를 한눈에 확인하세요</p>
           </div>
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <button onclick="openQuarterlyGoalModal('${memberId}')" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              🎯 분기목표 설정
+            </button>
             <button onclick="togglePersonalMindmapView()" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: #F59E0B; color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
               🗺️ 마인드맵
             </button>
@@ -17086,6 +17353,39 @@
             </select>
           </div>
         </div>
+
+        <!-- 분기별 개인 목표 카드 -->
+        ${memberQuarterlyGoals.length > 0 ? `
+          <div class="card" style="margin-bottom: 16px; background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div style="font-size: 15px; font-weight: 700;">🎯 ${currentYear}년 ${currentQuarter}분기 개인 목표</div>
+              <button onclick="openQuarterlyGoalModal('${memberId}')" style="background: rgba(255,255,255,0.2); border: none; color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">편집</button>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+              ${memberQuarterlyGoals.map(goal => {
+                const rate = goal.targetValue > 0 ? Math.round((goal.currentValue || 0) / goal.targetValue * 100) : 0;
+                return `
+                  <div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 12px; backdrop-filter: blur(10px);">
+                    <div style="font-size: 12px; opacity: 0.9; margin-bottom: 6px;">${goal.title}</div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                      <div><span style="font-size: 18px; font-weight: 800;">${goal.currentValue || 0}</span><span style="font-size: 11px; opacity: 0.8;">/${goal.targetValue}${goal.unit || ''}</span></div>
+                      <span style="font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: ${rate >= 100 ? '#FFF' : rate >= 50 ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)'}; color: ${rate >= 100 ? '#059669' : 'white'};">${rate}%</span>
+                    </div>
+                    <div style="margin-top: 8px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; overflow: hidden;">
+                      <div style="height: 100%; width: ${Math.min(rate, 100)}%; background: white; border-radius: 2px;"></div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : `
+          <div class="card" style="margin-bottom: 16px; background: var(--gray-50); border: 2px dashed var(--gray-300); text-align: center; padding: 24px;">
+            <div style="font-size: 32px; margin-bottom: 8px;">🎯</div>
+            <div style="font-size: 14px; color: var(--gray-600); margin-bottom: 12px;">${currentYear}년 ${currentQuarter}분기 개인 목표가 없습니다</div>
+            <button onclick="openQuarterlyGoalModal('${memberId}')" style="padding: 10px 20px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">분기 목표 설정하기</button>
+          </div>
+        `}
 
         <!-- 개인 마인드맵 컨테이너 -->
         <div id="personalMindmapContainer" style="display: none; margin-bottom: 16px;">
@@ -21132,22 +21432,31 @@
         </div>
       ` : '';
 
-      // 목표 연도 추출
-      const objectiveYear = okrState.objective?.startDate ? new Date(okrState.objective.startDate).getFullYear() : new Date().getFullYear();
+      // 사용 가능한 연도 목록
+      const availableYears = okrState.availableYears.length > 0 ? okrState.availableYears : [new Date().getFullYear()];
+      const selectedYear = okrState.selectedYear;
 
       container.innerHTML = `
         ${lockBadge}
 
-        <!-- 연도 표시 배지 -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <!-- 연도 선택 헤더 -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
           <div style="display: flex; align-items: center; gap: 12px;">
-            <div style="background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white; padding: 10px 20px; border-radius: 12px; font-size: 18px; font-weight: 800; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
-              📅 ${objectiveYear}년
+            <div style="background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white; padding: 8px 16px; border-radius: 10px; font-size: 14px; font-weight: 700;">
+              연도별 목표 관리
             </div>
-            <div style="font-size: 14px; color: var(--gray-500);">연간 목표 설정</div>
+            <select id="okrYearSelect" onchange="changeOkrYear(parseInt(this.value))" style="padding: 10px 16px; border: 2px solid var(--primary); border-radius: 10px; font-size: 16px; font-weight: 700; color: var(--primary); background: white; cursor: pointer; min-width: 120px;">
+              ${availableYears.map(year => `<option value="${year}" ${year === selectedYear ? 'selected' : ''}>${year}년</option>`).join('')}
+            </select>
           </div>
+          ${isAdmin ? `
+            <button onclick="openAddYearModal()" style="padding: 10px 16px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+              <span>+</span> 새 연도 추가
+            </button>
+          ` : ''}
         </div>
 
+        <!-- 현재 연도 목표 카드 -->
         <div style="background: linear-gradient(135deg, var(--primary-light, #EBF5FF), #DDD6FE); border: 2px solid var(--primary); border-radius: 16px; padding: 24px; margin-bottom: 24px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">🎯 최종 목표 (O)</div>
@@ -21206,6 +21515,92 @@
           ${okrState.keyResults.length === 0 ? '<div class="card" style="text-align: center; padding: 40px; color: var(--gray-400);">KR을 추가해주세요</div>' : ''}
         </div>
       `;
+    }
+
+    // 연도 변경
+    async function changeOkrYear(year) {
+      okrState.selectedYear = year;
+      showToast(`${year}년 목표로 전환 중...`, 'info');
+      await loadOkrData();
+      renderOkrSettings();
+      renderGrowthboard();
+      renderPersonalGrowthboard();
+      showToast(`${year}년 목표가 로드되었습니다`, 'success');
+    }
+
+    // 새 연도 추가 모달 열기
+    function openAddYearModal() {
+      const currentYear = new Date().getFullYear();
+      const suggestedYear = Math.max(...okrState.availableYears, currentYear) + 1;
+
+      showModal(`
+        <div style="max-width: 480px;">
+          <div style="font-size: 20px; font-weight: 700; color: var(--gray-900); margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 28px;">📅</span> 새 연도 목표 추가
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 8px;">연도 선택</label>
+            <select id="newYearSelect" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 10px; font-size: 16px; font-weight: 600;">
+              ${[currentYear - 1, currentYear, currentYear + 1, currentYear + 2].filter(y => !okrState.availableYears.includes(y)).map(y => `<option value="${y}" ${y === suggestedYear ? 'selected' : ''}>${y}년</option>`).join('')}
+            </select>
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="font-size: 14px; font-weight: 600; color: var(--gray-700); display: block; margin-bottom: 8px;">목표 이름</label>
+            <input type="text" id="newYearObjectiveName" placeholder="예: 27년도 목표" style="width: 100%; padding: 12px 16px; border: 2px solid var(--gray-200); border-radius: 10px; font-size: 15px;">
+          </div>
+
+          <div style="background: var(--info-light); padding: 12px 16px; border-radius: 10px; margin-bottom: 20px;">
+            <div style="font-size: 13px; color: var(--gray-600);">
+              <strong>안내:</strong> 새 연도를 추가하면 빈 목표가 생성됩니다. 이후 메인 KPI와 세부 KPI를 추가하세요.
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px; justify-content: flex-end;">
+            <button onclick="closeModal()" style="padding: 12px 24px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">취소</button>
+            <button onclick="addNewYear()" style="padding: 12px 24px; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">추가</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // 새 연도 추가 실행
+    async function addNewYear() {
+      const yearSelect = document.getElementById('newYearSelect');
+      const nameInput = document.getElementById('newYearObjectiveName');
+
+      if (!yearSelect) return;
+
+      const year = parseInt(yearSelect.value);
+      const name = nameInput?.value?.trim() || `${year}년도 목표`;
+
+      // 중복 체크
+      if (okrState.availableYears.includes(year)) {
+        showToast(`${year}년 목표가 이미 존재합니다`, 'error');
+        return;
+      }
+
+      try {
+        showToast(`${year}년 목표 생성 중...`, 'info');
+
+        await db.collection('okr_objective').add({
+          name: name,
+          year: year,
+          startDate: `${year}-01-01`,
+          endDate: `${year}-12-31`,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        closeModal();
+        okrState.selectedYear = year;
+        await loadOkrData();
+        renderOkrSettings();
+        showToast(`${year}년 목표가 추가되었습니다`, 'success');
+      } catch (e) {
+        console.error('연도 추가 오류:', e);
+        showToast('연도 추가 중 오류가 발생했습니다', 'error');
+      }
     }
 
     // OKR 실험분석 렌더링
