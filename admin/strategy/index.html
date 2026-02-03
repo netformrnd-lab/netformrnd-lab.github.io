@@ -15806,11 +15806,12 @@
         const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
         okrState.subIndicators = subIndicatorsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 업무일지 (최근 30일)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // 업무일지 (목표 시작일부터 전체 로드 - 팀 그로스보드용)
+        // 목표 시작일이 있으면 그 날짜부터, 없으면 올해 1월 1일부터
+        const currentYear = new Date().getFullYear();
+        const objectiveStartDate = okrState.objective?.startDate || `${currentYear}-01-01`;
         const logSnapshot = await db.collection('okr_dailyLogs')
-          .where('date', '>=', thirtyDaysAgo.toISOString().split('T')[0])
+          .where('date', '>=', objectiveStartDate)
           .orderBy('date', 'desc')
           .get();
         okrState.dailyLogs = logSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -15977,7 +15978,7 @@
 
     function calcOkrKPIRate(kpiId) {
       const kpi = okrState.kpis.find(k => k.id === kpiId);
-      if (!kpi || !kpi.targetValue) return '0.000';
+      if (!kpi) return '0.000';
 
       // 새로운 계층 구조 확인: 총 성과지표가 있는 경우
       const totalMetricsForKPI = okrState.totalMetrics.filter(tm => tm.kpiId === kpiId);
@@ -15990,8 +15991,13 @@
         return (isNaN(avgRate) || !isFinite(avgRate)) ? '0.000' : avgRate.toFixed(3);
       }
 
-      // 기존 구조: 성과형(output) 지표만 KPI 달성률에 반영
-      const resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
+      // 기존 구조: 성과형(output) 지표 우선, 없으면 모든 지표 사용 (fallback)
+      let resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
+
+      // ★ FIXED: output 지표가 없으면 모든 지표를 사용 (행동지표 포함)
+      if (resultLags.length === 0) {
+        resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
+      }
 
       const totalValue = resultLags.reduce((sum, lag) => {
         const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
@@ -16001,8 +16007,21 @@
         return sum + calcLagValue(lag, logSum);
       }, 0);
 
+      // ★ FIXED: targetValue 없으면 지표별 목표 합계 또는 현재값 기준으로 계산
+      let targetValue = kpi.targetValue;
+      if (!targetValue || targetValue === 0) {
+        // 지표별 target 합계 사용
+        const lagTargetSum = resultLags.reduce((sum, lag) => sum + (lag.target || 0), 0);
+        if (lagTargetSum > 0) {
+          targetValue = lagTargetSum;
+        } else {
+          // 목표가 전혀 없으면 현재값이 100% 기여도 (활동량 표시)
+          return totalValue > 0 ? '100.000' : '0.000';
+        }
+      }
+
       // 소수 3째자리까지
-      const rate = Math.min((totalValue / kpi.targetValue) * 100, 100);
+      const rate = Math.min((totalValue / targetValue) * 100, 100);
       return rate.toFixed(3);
     }
 
