@@ -8799,20 +8799,114 @@
       const taskId = event.dataTransfer.getData('taskId');
       if (!taskId) return;
 
-      // 업무의 배치 정보 업데이트
+      // 업무 정보 가져오기
+      const task = (state.taskPlans || []).find(t => t.id === taskId);
+      if (!task) return;
+
+      const taskDeadline = task.deadline || task.dueDate;
+
+      // ★ 완료 목표일 검증 (마감 2일 전까지 완료해야 함)
+      if (targetDay !== 'unassigned' && taskDeadline) {
+        const targetDate = getDayDate(targetDay);
+        const completionTarget = getCompletionTargetDate(taskDeadline);
+
+        if (targetDate > completionTarget) {
+          // 완료 목표일 초과 → 지연 사유 모달 표시
+          showDelayReasonModal(taskId, targetDay, taskDeadline, completionTarget);
+          return;
+        }
+      }
+
+      // 정상 배치 진행
+      await saveTaskAssignment(taskId, targetDay);
+    }
+
+    // ★ 지연 사유 입력 모달
+    function showDelayReasonModal(taskId, targetDay, deadline, completionTarget) {
+      const task = (state.taskPlans || []).find(t => t.id === taskId);
+      const completionStr = completionTarget.toISOString().split('T')[0];
+      const deadlineStr = new Date(deadline).toISOString().split('T')[0];
+
+      const modalHtml = `
+        <div id="delayReasonModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #F59E0B; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ⚠️ 완료 목표일 초과
+            </div>
+            <div style="background: #FEF3C7; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #92400E; margin-bottom: 8px;">
+                <strong>${task?.title || '업무'}</strong>
+              </div>
+              <div style="font-size: 12px; color: #B45309;">
+                완료 목표: <strong>${completionStr}</strong> (마감 2일 전)<br>
+                실제 마감: ${deadlineStr}
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
+              <input type="text" id="delayReasonInput" placeholder="예: 긴급 CS 대응으로 재배치" maxlength="50"
+                     style="width: 100%; padding: 12px; border: 2px solid #F59E0B; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">한 줄로 간략히 (최대 50자)</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="closeDelayReasonModal()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmDelayedAssignment('${taskId}', '${targetDay}')" style="flex: 1; padding: 12px; background: #F59E0B; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                배치하기
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      document.getElementById('delayReasonInput').focus();
+    }
+
+    function closeDelayReasonModal() {
+      document.getElementById('delayReasonModal')?.remove();
+    }
+
+    async function confirmDelayedAssignment(taskId, targetDay) {
+      const delayReason = document.getElementById('delayReasonInput')?.value.trim();
+      if (!delayReason) {
+        alert('지연 사유를 입력해주세요.');
+        return;
+      }
+      closeDelayReasonModal();
+      await saveTaskAssignment(taskId, targetDay, delayReason);
+    }
+
+    // ★ 업무 배치 저장 (공통)
+    async function saveTaskAssignment(taskId, targetDay, delayReason = null) {
       weeklyGoalState.taskAssignments[taskId] = targetDay;
 
-      // Firebase에 저장 (assignedDay 필드 업데이트)
       try {
-        const taskRef = db.collection('taskPlans').doc(taskId);
-        await taskRef.update({
+        const updateData = {
           assignedDay: targetDay === 'unassigned' ? null : targetDay,
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
 
-        // UI 새로고침
+        // 지연 사유가 있으면 추가
+        if (delayReason) {
+          updateData.delayReason = delayReason;
+        }
+
+        const taskRef = db.collection('taskPlans').doc(taskId);
+        await taskRef.update(updateData);
+
+        // state.taskPlans에도 반영
+        const taskIndex = (state.taskPlans || []).findIndex(t => t.id === taskId);
+        if (taskIndex >= 0) {
+          state.taskPlans[taskIndex].assignedDay = updateData.assignedDay;
+          if (delayReason) state.taskPlans[taskIndex].delayReason = delayReason;
+        }
+
         renderWeeklyTaskBoard();
-        showToast(targetDay === 'unassigned' ? '업무 배치가 해제되었습니다' : `${getDayLabel(targetDay)}요일에 배치되었습니다`, 'success');
+        const msg = targetDay === 'unassigned'
+          ? '업무 배치가 해제되었습니다'
+          : `${getDayLabel(targetDay)}요일에 배치되었습니다${delayReason ? ' (지연)' : ''}`;
+        showToast(msg, 'success');
       } catch (error) {
         console.error('업무 배치 저장 오류:', error);
         showToast('배치 저장 중 오류가 발생했습니다', 'error');
@@ -8822,6 +8916,33 @@
     function getDayLabel(day) {
       const labels = { mon: '월', tue: '화', wed: '수', thu: '목', fri: '금' };
       return labels[day] || day;
+    }
+
+    // ★ 완료 목표일 계산 (마감일 2일 전)
+    function getCompletionTargetDate(deadline) {
+      if (!deadline) return null;
+      const deadlineDate = new Date(deadline);
+      deadlineDate.setDate(deadlineDate.getDate() - 2);
+      return deadlineDate;
+    }
+
+    // ★ D-day 계산 (완료 목표일 기준, 2일 여유)
+    function getTaskDday(deadline) {
+      if (!deadline) return null;
+      const completionTarget = getCompletionTargetDate(deadline);
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const diffDays = Math.ceil((completionTarget - now) / (1000 * 60 * 60 * 24));
+      return diffDays;
+    }
+
+    // ★ 요일을 날짜로 변환 (이번 주 기준)
+    function getDayDate(day) {
+      const { monday } = getThisWeekDates();
+      const dayOffsets = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4 };
+      const targetDate = new Date(monday);
+      targetDate.setDate(monday.getDate() + (dayOffsets[day] || 0));
+      return targetDate;
     }
 
     // 이번 주 월요일~금요일 날짜 계산
@@ -8911,6 +9032,27 @@
     function createDraggableTaskCard(task, needsAssign) {
       const delayReason = task.delayReason ? `<div class="task-delay">⚡ ${task.delayReason}</div>` : '';
       const taskDeadline = task.deadline || task.dueDate;
+
+      // ★ D-day 계산 (완료 목표일 기준 = 마감 2일 전)
+      let ddayBadge = '';
+      if (taskDeadline) {
+        const dday = getTaskDday(taskDeadline);
+        if (dday !== null) {
+          let badgeColor = '#10B981'; // 녹색 (여유)
+          let badgeText = `D-${dday}`;
+          if (dday < 0) {
+            badgeColor = '#EF4444'; // 빨강 (초과)
+            badgeText = `D+${Math.abs(dday)}`;
+          } else if (dday === 0) {
+            badgeColor = '#F59E0B'; // 주황 (오늘)
+            badgeText = 'D-Day';
+          } else if (dday <= 1) {
+            badgeColor = '#F59E0B'; // 주황 (임박)
+          }
+          ddayBadge = `<span style="font-size: 9px; font-weight: 700; background: ${badgeColor}20; color: ${badgeColor}; padding: 1px 5px; border-radius: 4px; margin-left: 4px;">${badgeText}</span>`;
+        }
+      }
+
       return `
         <div class="draggable-task ${needsAssign ? 'needs-assign' : ''}"
              draggable="true"
@@ -8918,7 +9060,7 @@
              ondragend="dragEnd(event)"
              onclick="openTaskPlanDetail('${task.id}')">
           <div class="task-title">${task.title || '제목 없음'}</div>
-          <div class="task-meta">${taskDeadline ? formatDate(taskDeadline) : ''}</div>
+          <div class="task-meta">${taskDeadline ? formatDate(taskDeadline) : ''}${ddayBadge}</div>
           ${delayReason}
         </div>
       `;
@@ -23359,14 +23501,11 @@
           batch.set(newKpiRef, data);
         }
 
-        // 2. 기존 Metrics 삭제 (배치에 추가)
+        // ★ 2. 지표 처리 (ID 유지 - 업무일지 연결 보존)
         const existingLags = okrState.laggingIndicators.filter(l => l.kpiId === savedKpiId);
-        for (const lag of existingLags) {
-          const lagRef = db.collection('okr_laggingIndicators').doc(lag.id);
-          batch.delete(lagRef);
-        }
+        const existingLagIds = existingLags.map(l => l.id);
 
-        // 3. 새 Metrics 추가 (배치에 추가)
+        // 폼에서 지표 정보 수집
         const versions = document.querySelectorAll('.okr-lag-version');
         const names = document.querySelectorAll('.okr-lag-name');
         const types = document.querySelectorAll('.okr-lag-type');
@@ -23375,35 +23514,65 @@
         const units = document.querySelectorAll('.okr-lag-unit');
         const descriptions = document.querySelectorAll('.okr-lag-description');
 
+        const keptLagIds = []; // 유지된 지표 ID 추적
+
         for (let i = 0; i < versions.length; i++) {
           const version = versions[i].value.trim();
           const lagName = names[i].value.trim();
           const lagType = types[i]?.value || 'input';
+          const existingLagId = lagIds[i]?.value || '';
           const valuePerUnit = parseInt(valuePerUnits[i]?.value) || 0;
           const lagUnit = units[i]?.value || '';
           const description = descriptions[i]?.value || '';
 
           if (version && lagName) {
-            const newLagRef = db.collection('okr_laggingIndicators').doc();
-            batch.set(newLagRef, {
+            const lagData = {
               kpiId: savedKpiId,
               version,
               name: lagName,
-              type: lagType,  // ★ type 필드 저장 (input/output)
+              type: lagType,
               valuePerUnit: lagType === 'output' ? valuePerUnit : 0,
-              unit: lagUnit || '건',  // ★ 모든 타입에 단위 저장
+              unit: lagUnit || '건',
               description: description,
-              totalValue: 0,
-              logCount: 0,
               isActive: true,
-              createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+
+            if (existingLagId && existingLagIds.includes(existingLagId)) {
+              // ★ 기존 지표 UPDATE (ID 유지 → 업무일지 연결 유지)
+              const lagRef = db.collection('okr_laggingIndicators').doc(existingLagId);
+              batch.update(lagRef, lagData);
+              keptLagIds.push(existingLagId);
+              console.log(`✅ 지표 UPDATE (ID 유지): ${existingLagId} - ${lagName}`);
+            } else {
+              // ★ 새 지표 CREATE
+              lagData.totalValue = 0;
+              lagData.logCount = 0;
+              lagData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+              const newLagRef = db.collection('okr_laggingIndicators').doc();
+              batch.set(newLagRef, lagData);
+              console.log(`✅ 지표 CREATE (신규): ${newLagRef.id} - ${lagName}`);
+            }
           }
+        }
+
+        // ★ 3. 삭제된 지표만 DELETE (폼에서 제거된 것들)
+        const deletedLagIds = existingLagIds.filter(id => !keptLagIds.includes(id));
+        for (const lagId of deletedLagIds) {
+          const lag = existingLags.find(l => l.id === lagId);
+          // 연결된 업무일지 확인
+          const connectedLogs = okrState.dailyLogs.filter(log => log.laggingIndicatorId === lagId);
+          if (connectedLogs.length > 0) {
+            console.warn(`⚠️ 지표 ${lagId} (${lag?.name})에 ${connectedLogs.length}개 업무일지 연결됨 - 삭제 진행`);
+          }
+          const lagRef = db.collection('okr_laggingIndicators').doc(lagId);
+          batch.delete(lagRef);
+          console.log(`🗑️ 지표 DELETE: ${lagId} - ${lag?.name}`);
         }
 
         // 4. 배치 실행 (원자적 - 하나라도 실패 시 전체 롤백)
         await batch.commit();
-        console.log('✅ KPI 및 Metrics 동기화 저장 완료');
+        console.log('✅ KPI 및 Metrics 동기화 저장 완료 (ID 유지됨)');
 
         // 필터 상태 확인 - 팀원 필터가 설정되어 있고 수정된 KPI가 필터에서 제외될 경우
         const currentMemberFilter = okrState.kpiFilter.memberId;
