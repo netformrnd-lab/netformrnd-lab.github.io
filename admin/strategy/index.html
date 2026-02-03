@@ -18119,7 +18119,8 @@
       viewMode: 'record', // record, summary, calendar
       memberFilter: 'me', // me, all, specific member id
       selectedDate: null,
-      calendarMonth: new Date()
+      calendarMonth: new Date(),
+      unlinkedFilter: false // 미분류만 보기
     };
 
     function renderOkrRecord() {
@@ -18177,6 +18178,12 @@
             logs = logs.filter(l => l.memberId === workLogState.memberFilter);
           }
         }
+
+        // 미분류 필터 적용
+        if (workLogState.unlinkedFilter) {
+          logs = logs.filter(l => !l.laggingIndicatorId);
+        }
+
         return logs;
       };
 
@@ -18247,6 +18254,12 @@
                 <option value="all" ${workLogState.memberFilter === 'all' ? 'selected' : ''}>👥 전체</option>
                 ${teamMembers.map(m => `<option value="${m.id}" ${workLogState.memberFilter === m.id ? 'selected' : ''}>${m.name}</option>`).join('')}
               </select>
+              <!-- 미분류 필터 -->
+              ${(() => {
+                const unlinkedCount = filteredLogs.filter(l => !l.laggingIndicatorId).length;
+                if (unlinkedCount === 0 && !workLogState.unlinkedFilter) return '';
+                return '<button onclick="toggleUnlinkedFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.unlinkedFilter ? '#F59E0B' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.unlinkedFilter ? '#FEF3C7' : 'white') + '; color: ' + (workLogState.unlinkedFilter ? '#B45309' : 'var(--gray-600)') + '; transition: all 0.2s;">⚠️ 미분류 ' + unlinkedCount + '건</button>';
+              })()}
             </div>
           </div>
         </div>
@@ -18282,6 +18295,11 @@
 
     function setWorkLogMemberFilter(value) {
       workLogState.memberFilter = value;
+      renderOkrRecord();
+    }
+
+    function toggleUnlinkedFilter() {
+      workLogState.unlinkedFilter = !workLogState.unlinkedFilter;
       renderOkrRecord();
     }
 
@@ -18851,15 +18869,27 @@
             <button class="modal-close" onclick="closeModal()">×</button>
           </div>
           <div style="padding: 24px;">
-            <!-- 지표 정보 -->
-            <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
-              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 24px;">${getOkrLagIcon(lag?.name || '')}</span>
-                <div>
-                  <div style="font-size: 15px; font-weight: 700; color: var(--gray-800);">${lag?.name || '업무'}</div>
-                  <div style="font-size: 12px; color: var(--gray-500);">${kr?.name || ''} > ${kpi?.name || ''}</div>
-                </div>
-              </div>
+            <!-- 지표 선택 (미분류 시 강조) -->
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">
+                📊 지표 ${!lag ? '<span style="color: #DC2626; font-size: 11px;">(⚠️ 미분류 - 지표를 선택해주세요)</span>' : ''}
+              </label>
+              <select id="editLogIndicator" class="form-input" style="width: 100%; padding: 12px; border-radius: 10px; ${!lag ? 'border: 2px solid #F59E0B; background: #FEF3C7;' : ''}">
+                <option value="">-- 지표 선택 --</option>
+                ${okrState.keyResults.map(kr => {
+                  const kpisForKr = okrState.kpis.filter(k => k.keyResultId === kr.id);
+                  if (kpisForKr.length === 0) return '';
+                  return kpisForKr.map(kpi => {
+                    const lagsForKpi = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+                    if (lagsForKpi.length === 0) return '';
+                    return lagsForKpi.map(l => {
+                      const isSelected = l.id === log.laggingIndicatorId;
+                      const typeLabel = l.type === 'output' ? '성과' : '행동';
+                      return '<option value="' + l.id + '" data-kpi="' + kpi.id + '" data-kr="' + kr.id + '" ' + (isSelected ? 'selected' : '') + '>[' + typeLabel + '] ' + kr.name + ' > ' + kpi.name + ' > ' + l.name + '</option>';
+                    }).join('');
+                  }).join('');
+                }).join('')}
+              </select>
             </div>
 
             <!-- 등록자 -->
@@ -18927,8 +18957,20 @@
       const newValue = parseFloat(document.getElementById('editLogValue').value) || 0;
       const newMemo = document.getElementById('editLogMemo').value.trim();
 
+      // 지표 선택
+      const indicatorSelect = document.getElementById('editLogIndicator');
+      const indicatorOption = indicatorSelect.options[indicatorSelect.selectedIndex];
+      const newIndicatorId = indicatorSelect.value;
+      const newKpiId = indicatorOption?.dataset?.kpi || '';
+      const newKrId = indicatorOption?.dataset?.kr || '';
+      const newIndicator = okrState.laggingIndicators.find(l => l.id === newIndicatorId);
+
       // 변경 사항 확인
       const changes = {};
+      if (log.laggingIndicatorId !== newIndicatorId && newIndicatorId) {
+        const oldLag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+        changes.indicator = { from: oldLag?.name || '(미분류)', to: newIndicator?.name || '(미분류)' };
+      }
       if (log.memberId !== newMemberId && newMemberId) {
         changes.memberId = { from: log.memberId || '(없음)', to: newMemberId };
       }
@@ -18954,6 +18996,13 @@
           updatedBy: state.currentUser?.id || 'anonymous',
           updatedByName: state.currentUser?.name || '익명'
         };
+
+        // 지표 변경 시
+        if (newIndicatorId && log.laggingIndicatorId !== newIndicatorId) {
+          updateData.laggingIndicatorId = newIndicatorId;
+          updateData.kpiId = newKpiId;
+          updateData.krId = newKrId;
+        }
 
         // 등록자 변경 시
         if (newMemberId) {
