@@ -1391,6 +1391,9 @@
               </div>
             </div>
             <div style="display: flex; gap: 8px;">
+              <button onclick="openWeeklyGoalVsActualModal()" style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); border: none; color: white; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(16,185,129,0.3);">
+                📊 목표 vs 실제
+              </button>
               <button onclick="openTeamWeeklyPlansModal()" style="background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">
                 👥 팀 주간 계획
               </button>
@@ -23102,6 +23105,416 @@
         container.style.display = 'none';
         if (icon) icon.textContent = '▼';
       }
+    }
+
+    // ========================================
+    // B안: 주간 목표 vs 실제 비교 모달 (실시간 집계)
+    // ========================================
+
+    // 실시간 리스너 해제용 변수
+    let weeklyGoalVsActualUnsubscribe = null;
+
+    // 주간 목표 vs 실제 비교 모달 열기
+    function openWeeklyGoalVsActualModal() {
+      const member = (state.teamMembers || []).find(m => m.id === state.currentUser?.id);
+      const memberName = member?.name || state.currentUser?.name || '사용자';
+      const memberId = state.currentUser?.id;
+
+      if (!memberId) {
+        showToast('로그인 정보가 없습니다', 'error');
+        return;
+      }
+
+      // 이번 주 날짜 계산
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+
+      const weekStartStr = monday.toISOString().split('T')[0];
+      const weekEndStr = sunday.toISOString().split('T')[0];
+
+      // 현재 주차 계산 (ISO 8601)
+      const getISOWeek = (date) => {
+        const d = new Date(date);
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+        const week1 = new Date(d.getFullYear(), 0, 4);
+        return Math.ceil((((d - week1) / 86400000) + 1) / 7);
+      };
+      const weekNum = getISOWeek(now);
+      const weekLabel = `${now.getFullYear()}년 ${weekNum}주차`;
+
+      // 내 주간 목표 가져오기 (기간 매칭)
+      const myGoals = (okrState.personalGoals || []).filter(g => {
+        if (g.memberId !== memberId) return false;
+        // period가 주차 형식인 경우 (예: "2026-W05")
+        if (g.period && g.period.includes('-W')) {
+          const goalWeekNum = parseInt(g.period.split('-W')[1]);
+          const goalYear = parseInt(g.period.split('-W')[0]);
+          return goalYear === now.getFullYear() && goalWeekNum === weekNum;
+        }
+        // period가 날짜인 경우
+        return g.period === weekStartStr || !g.period;
+      });
+
+      // 지표 정보 매핑 및 KPI/KR 그룹화
+      const goalsWithDetails = myGoals.map(goal => {
+        const lag = okrState.laggingIndicators.find(l => l.id === goal.indicatorId);
+        const kpi = lag ? okrState.kpis.find(k => k.id === lag.kpiId) : null;
+        const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+        return { ...goal, lag, kpi, kr };
+      }).filter(g => g.lag); // 유효한 지표만
+
+      // KR별 그룹화
+      const groupedByKR = {};
+      goalsWithDetails.forEach(g => {
+        const krId = g.kr?.id || 'unknown';
+        if (!groupedByKR[krId]) {
+          groupedByKR[krId] = { kr: g.kr, kpi: g.kpi, goals: [] };
+        }
+        groupedByKR[krId].goals.push(g);
+      });
+
+      // 모달 표시
+      showModal(`
+        <div id="weeklyGoalVsActualModal" style="padding: 24px; max-width: 1100px; max-height: 85vh; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                📊 ${memberName}님의 주간 목표 vs 실제
+              </div>
+              <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                ${weekLabel} (${monday.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} ~ ${sunday.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })})
+                <span style="margin-left: 8px; padding: 2px 8px; background: #10B981; color: white; border-radius: 10px; font-size: 10px;">실시간 집계</span>
+              </p>
+            </div>
+            <button onclick="closeWeeklyGoalVsActualModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          <!-- 안내 배너 -->
+          <div style="background: linear-gradient(135deg, #ECFDF5, #D1FAE5); border-radius: 12px; padding: 14px; margin-bottom: 20px; border: 1px solid #10B981;">
+            <div style="font-size: 13px; color: #059669; font-weight: 600; margin-bottom: 4px;">📌 실시간 동기화 안내</div>
+            <div style="font-size: 12px; color: var(--gray-600); line-height: 1.5;">
+              • <strong>좌측</strong>: 설정한 주간 목표 (okr_personalGoals) &nbsp;|&nbsp; <strong>우측</strong>: 업무일지 실시간 집계 (okr_dailyLogs)<br>
+              • 데이터 무결성: 지표 ID 기준 매칭으로 꼬임 방지 &nbsp;|&nbsp; 업무일지 기록 시 자동 반영
+            </div>
+          </div>
+
+          ${Object.keys(groupedByKR).length === 0 ? `
+            <div style="text-align: center; padding: 60px; background: var(--gray-50); border-radius: 16px;">
+              <div style="font-size: 48px; margin-bottom: 16px;">🎯</div>
+              <div style="font-size: 16px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">이번 주 목표가 설정되지 않았습니다</div>
+              <div style="font-size: 13px; color: var(--gray-500); margin-bottom: 20px;">주간 목표를 먼저 설정해주세요</div>
+              <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal(), 300);" style="background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                + 주간 목표 설정하기
+              </button>
+            </div>
+          ` : `
+            <!-- 좌우 분할 레이아웃 -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+              <!-- 좌측: 주간 목표 목록 -->
+              <div>
+                <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                  🎯 주간 목표 (설정값)
+                  <span style="font-size: 11px; font-weight: 500; color: var(--gray-500);">okr_personalGoals</span>
+                </div>
+                <div id="weeklyGoalsListContainer" style="background: #F0FDF4; border-radius: 12px; padding: 16px; max-height: 500px; overflow-y: auto;">
+                  ${renderWeeklyGoalsList(groupedByKR)}
+                </div>
+              </div>
+
+              <!-- 우측: 업무일지 실시간 집계 -->
+              <div>
+                <div style="font-size: 15px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                  📈 실제 달성 (실시간 집계)
+                  <span style="font-size: 11px; font-weight: 500; color: var(--gray-500);">okr_dailyLogs</span>
+                </div>
+                <div id="weeklyActualListContainer" style="background: #EFF6FF; border-radius: 12px; padding: 16px; max-height: 500px; overflow-y: auto;">
+                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">
+                    <div class="spinner" style="margin: 0 auto 10px;"></div>
+                    실시간 데이터 로딩 중...
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 달성률 요약 -->
+            <div id="weeklyProgressSummary" style="margin-top: 20px; padding: 16px; background: var(--gray-50); border-radius: 12px; border: 1px solid var(--gray-200);">
+              <div style="text-align: center; color: var(--gray-400);">집계 중...</div>
+            </div>
+          `}
+
+          <div style="display: flex; justify-content: space-between; gap: 12px; padding-top: 20px; border-top: 1px solid var(--gray-200); margin-top: 20px;">
+            <button onclick="refreshWeeklyActualData()" style="background: white; border: 1px solid var(--gray-300); color: var(--gray-700); padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+              🔄 새로고침
+            </button>
+            <div style="display: flex; gap: 12px;">
+              <button onclick="shareWeeklyGoalVsActual()" style="background: white; border: 1px solid #10B981; color: #059669; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                📤 공유하기
+              </button>
+              <button class="btn btn-primary" onclick="closeWeeklyGoalVsActualModal()">닫기</button>
+            </div>
+          </div>
+        </div>
+      `);
+
+      // Firestore onSnapshot으로 실시간 집계 시작
+      startWeeklyActualRealtimeListener(memberId, weekStartStr, weekEndStr, goalsWithDetails);
+    }
+
+    // 주간 목표 목록 렌더링
+    function renderWeeklyGoalsList(groupedByKR) {
+      const krIds = Object.keys(groupedByKR);
+      if (krIds.length === 0) return '<div style="text-align: center; padding: 20px; color: var(--gray-400);">목표 없음</div>';
+
+      return krIds.map((krId, idx) => {
+        const group = groupedByKR[krId];
+        const krName = group.kr?.name || '기타';
+        const kpiName = group.kpi?.name || '';
+        const colors = ['#8B5CF6', '#06B6D4', '#10B981', '#F59E0B'];
+        const color = colors[idx % 4];
+
+        return `
+          <div style="margin-bottom: 12px; padding: 14px; background: white; border-radius: 10px; border-left: 4px solid ${color};">
+            <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 2px;">${krName}</div>
+            <div style="font-size: 12px; font-weight: 600; color: ${color}; margin-bottom: 10px;">${kpiName}</div>
+            ${group.goals.map(g => `
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px;" data-indicator-id="${g.indicatorId}">
+                <div>
+                  <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">${g.indicatorName || g.lag?.name || '미지정'}</div>
+                  <div style="font-size: 10px; color: var(--gray-400);">${g.indicatorType === 'output' ? '성과지표' : '행동지표'}</div>
+                </div>
+                <div style="text-align: right;">
+                  <div style="font-size: 18px; font-weight: 800; color: #059669;">${g.targetValue || 0}</div>
+                  <div style="font-size: 10px; color: var(--gray-500);">${g.unit || '건'}/주</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Firestore onSnapshot 실시간 리스너 시작
+    function startWeeklyActualRealtimeListener(memberId, weekStart, weekEnd, goalsWithDetails) {
+      // 기존 리스너 해제
+      if (weeklyGoalVsActualUnsubscribe) {
+        weeklyGoalVsActualUnsubscribe();
+        weeklyGoalVsActualUnsubscribe = null;
+      }
+
+      // 목표에 포함된 지표 ID 목록
+      const indicatorIds = goalsWithDetails.map(g => g.indicatorId);
+
+      if (indicatorIds.length === 0) {
+        updateWeeklyActualDisplay({}, goalsWithDetails);
+        return;
+      }
+
+      // Firestore onSnapshot으로 실시간 업데이트
+      weeklyGoalVsActualUnsubscribe = db.collection('okr_dailyLogs')
+        .where('memberId', '==', memberId)
+        .where('date', '>=', weekStart)
+        .where('date', '<=', weekEnd)
+        .onSnapshot(snapshot => {
+          const logs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+          // 지표별 집계 (데이터 무결성: indicatorId 기준 매칭)
+          const actualByIndicator = {};
+          indicatorIds.forEach(id => {
+            actualByIndicator[id] = { count: 0, sum: 0, logs: [] };
+          });
+
+          logs.forEach(log => {
+            const indicatorId = log.laggingIndicatorId;
+            // 안전한 매칭: 목표에 포함된 지표만 집계
+            if (indicatorId && actualByIndicator[indicatorId] !== undefined) {
+              actualByIndicator[indicatorId].count += 1;
+              actualByIndicator[indicatorId].sum += parseFloat(log.resultValue) || 0;
+              actualByIndicator[indicatorId].logs.push(log);
+            }
+          });
+
+          updateWeeklyActualDisplay(actualByIndicator, goalsWithDetails);
+        }, error => {
+          console.error('실시간 집계 오류:', error);
+          const container = document.getElementById('weeklyActualListContainer');
+          if (container) {
+            container.innerHTML = `
+              <div style="text-align: center; padding: 20px; color: #DC2626;">
+                <div style="font-size: 24px; margin-bottom: 8px;">⚠️</div>
+                <div>실시간 집계 오류</div>
+                <div style="font-size: 11px; margin-top: 4px;">${error.message}</div>
+              </div>
+            `;
+          }
+        });
+    }
+
+    // 실제 달성 현황 표시 업데이트
+    function updateWeeklyActualDisplay(actualByIndicator, goalsWithDetails) {
+      const container = document.getElementById('weeklyActualListContainer');
+      const summaryContainer = document.getElementById('weeklyProgressSummary');
+
+      if (!container) return;
+
+      // KR별 그룹화 (목표와 동일 구조)
+      const groupedByKR = {};
+      goalsWithDetails.forEach(g => {
+        const krId = g.kr?.id || 'unknown';
+        if (!groupedByKR[krId]) {
+          groupedByKR[krId] = { kr: g.kr, kpi: g.kpi, goals: [] };
+        }
+        groupedByKR[krId].goals.push(g);
+      });
+
+      const krIds = Object.keys(groupedByKR);
+      const colors = ['#8B5CF6', '#06B6D4', '#10B981', '#F59E0B'];
+
+      let totalTarget = 0;
+      let totalActual = 0;
+      let completedGoals = 0;
+      let totalGoals = 0;
+
+      const html = krIds.map((krId, idx) => {
+        const group = groupedByKR[krId];
+        const krName = group.kr?.name || '기타';
+        const kpiName = group.kpi?.name || '';
+        const color = colors[idx % 4];
+
+        return `
+          <div style="margin-bottom: 12px; padding: 14px; background: white; border-radius: 10px; border-left: 4px solid ${color};">
+            <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 2px;">${krName}</div>
+            <div style="font-size: 12px; font-weight: 600; color: ${color}; margin-bottom: 10px;">${kpiName}</div>
+            ${group.goals.map(g => {
+              const actual = actualByIndicator[g.indicatorId] || { count: 0, sum: 0 };
+              const target = g.targetValue || 0;
+              const achieved = actual.sum;
+              const progress = target > 0 ? Math.min(100, Math.round((achieved / target) * 100)) : 0;
+              const isComplete = achieved >= target && target > 0;
+
+              totalTarget += target;
+              totalActual += achieved;
+              totalGoals++;
+              if (isComplete) completedGoals++;
+
+              // 진행률에 따른 색상
+              let progressColor = '#EF4444'; // 빨강 (0-50%)
+              if (progress >= 80) progressColor = '#10B981'; // 초록 (80-100%)
+              else if (progress >= 50) progressColor = '#F59E0B'; // 주황 (50-80%)
+
+              return `
+                <div style="padding: 10px; background: var(--gray-50); border-radius: 8px; margin-bottom: 6px; ${isComplete ? 'border: 2px solid #10B981;' : ''}" data-indicator-id="${g.indicatorId}">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                    <div>
+                      <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">
+                        ${isComplete ? '✅ ' : ''}${g.indicatorName || g.lag?.name || '미지정'}
+                      </div>
+                      <div style="font-size: 10px; color: var(--gray-400);">로그 ${actual.count}건</div>
+                    </div>
+                    <div style="text-align: right;">
+                      <div style="font-size: 18px; font-weight: 800; color: ${progressColor};">${achieved}</div>
+                      <div style="font-size: 10px; color: var(--gray-500);">/ ${target} ${g.unit || '건'}</div>
+                    </div>
+                  </div>
+                  <!-- 진행률 바 -->
+                  <div style="background: var(--gray-200); border-radius: 4px; height: 8px; overflow: hidden;">
+                    <div style="background: ${progressColor}; height: 100%; width: ${progress}%; transition: width 0.3s ease;"></div>
+                  </div>
+                  <div style="text-align: right; font-size: 10px; color: ${progressColor}; margin-top: 4px;">${progress}%</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = html || '<div style="text-align: center; padding: 20px; color: var(--gray-400);">데이터 없음</div>';
+
+      // 요약 업데이트
+      if (summaryContainer) {
+        const overallProgress = totalTarget > 0 ? Math.round((totalActual / totalTarget) * 100) : 0;
+        let summaryColor = '#EF4444';
+        if (overallProgress >= 80) summaryColor = '#10B981';
+        else if (overallProgress >= 50) summaryColor = '#F59E0B';
+
+        summaryContainer.innerHTML = `
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; text-align: center;">
+            <div>
+              <div style="font-size: 24px; font-weight: 800; color: var(--primary);">${totalGoals}</div>
+              <div style="font-size: 11px; color: var(--gray-500);">총 목표 수</div>
+            </div>
+            <div>
+              <div style="font-size: 24px; font-weight: 800; color: #10B981;">${completedGoals}</div>
+              <div style="font-size: 11px; color: var(--gray-500);">달성 완료</div>
+            </div>
+            <div>
+              <div style="font-size: 24px; font-weight: 800; color: ${summaryColor};">${overallProgress}%</div>
+              <div style="font-size: 11px; color: var(--gray-500);">전체 달성률</div>
+            </div>
+            <div>
+              <div style="font-size: 24px; font-weight: 800; color: var(--gray-700);">${totalActual}/${totalTarget}</div>
+              <div style="font-size: 11px; color: var(--gray-500);">총 실적/목표</div>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    // 모달 닫기 (리스너 해제)
+    function closeWeeklyGoalVsActualModal() {
+      if (weeklyGoalVsActualUnsubscribe) {
+        weeklyGoalVsActualUnsubscribe();
+        weeklyGoalVsActualUnsubscribe = null;
+      }
+      closeModal();
+    }
+
+    // 새로고침 (수동)
+    function refreshWeeklyActualData() {
+      const modal = document.getElementById('weeklyGoalVsActualModal');
+      if (modal) {
+        closeWeeklyGoalVsActualModal();
+        setTimeout(() => openWeeklyGoalVsActualModal(), 100);
+      }
+    }
+
+    // 공유하기 (텍스트 복사)
+    function shareWeeklyGoalVsActual() {
+      const memberName = state.currentUser?.name || '사용자';
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+
+      const getISOWeek = (date) => {
+        const d = new Date(date);
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+        const week1 = new Date(d.getFullYear(), 0, 4);
+        return Math.ceil((((d - week1) / 86400000) + 1) / 7);
+      };
+      const weekNum = getISOWeek(now);
+
+      const summaryEl = document.getElementById('weeklyProgressSummary');
+      let summaryText = '';
+      if (summaryEl) {
+        const nums = summaryEl.querySelectorAll('div[style*="font-size: 24px"]');
+        if (nums.length >= 4) {
+          summaryText = `총 목표: ${nums[0].textContent}개, 달성: ${nums[1].textContent}개, 달성률: ${nums[2].textContent}, 실적: ${nums[3].textContent}`;
+        }
+      }
+
+      const shareText = `📊 ${memberName}님의 주간 목표 달성 현황\n📅 ${now.getFullYear()}년 ${weekNum}주차\n${summaryText}\n\n전략센터에서 확인하세요!`;
+
+      navigator.clipboard.writeText(shareText).then(() => {
+        showToast('클립보드에 복사되었습니다!', 'success');
+      }).catch(() => {
+        showToast('복사 실패', 'error');
+      });
     }
 
     // ========================================
