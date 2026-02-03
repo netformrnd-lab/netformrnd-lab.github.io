@@ -17638,7 +17638,8 @@
       memberFilter: 'me', // me, all, specific member id
       selectedDate: null,
       calendarMonth: new Date(),
-      unlinkedFilter: false // 미분류만 보기
+      unlinkedFilter: false, // 미분류만 보기
+      unknownOwnerFilter: false // 등록자 미상만 보기
     };
 
     function renderOkrRecord() {
@@ -17778,6 +17779,19 @@
                 if (unlinkedCount === 0 && !workLogState.unlinkedFilter) return '';
                 return '<button onclick="toggleUnlinkedFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.unlinkedFilter ? '#F59E0B' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.unlinkedFilter ? '#FEF3C7' : 'white') + '; color: ' + (workLogState.unlinkedFilter ? '#B45309' : 'var(--gray-600)') + '; transition: all 0.2s;">⚠️ 미분류 ' + unlinkedCount + '건</button>';
               })()}
+              <!-- 등록자 미상 필터 -->
+              ${(() => {
+                const unknownOwnerLogs = okrState.dailyLogs.filter(l =>
+                  l.memberId === 'anonymous' ||
+                  l.memberId === '관리자' ||
+                  l.memberId === 'admin' ||
+                  !l.memberId ||
+                  (!teamMembers.some(m => m.id === l.memberId || m.loginId === l.memberId || m.name === l.memberId || m.name === l.memberName))
+                );
+                const unknownCount = unknownOwnerLogs.length;
+                if (unknownCount === 0 && !workLogState.unknownOwnerFilter) return '';
+                return '<button onclick="toggleUnknownOwnerFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.unknownOwnerFilter ? '#DC2626' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.unknownOwnerFilter ? '#FEE2E2' : 'white') + '; color: ' + (workLogState.unknownOwnerFilter ? '#DC2626' : 'var(--gray-600)') + '; transition: all 0.2s;">👤 등록자 미상 ' + unknownCount + '건</button>';
+              })()}
             </div>
           </div>
         </div>
@@ -17818,6 +17832,13 @@
 
     function toggleUnlinkedFilter() {
       workLogState.unlinkedFilter = !workLogState.unlinkedFilter;
+      workLogState.unknownOwnerFilter = false; // 다른 필터 해제
+      renderOkrRecord();
+    }
+
+    function toggleUnknownOwnerFilter() {
+      workLogState.unknownOwnerFilter = !workLogState.unknownOwnerFilter;
+      workLogState.unlinkedFilter = false; // 다른 필터 해제
       renderOkrRecord();
     }
 
@@ -17828,6 +17849,12 @@
       // 미분류 필터 활성화 시 미분류 로그 목록 표시
       if (workLogState.unlinkedFilter) {
         renderUnlinkedLogsView(contentEl);
+        return;
+      }
+
+      // 등록자 미상 필터 활성화 시 등록자 미상 로그 목록 표시
+      if (workLogState.unknownOwnerFilter) {
+        renderUnknownOwnerLogsView(contentEl);
         return;
       }
 
@@ -17924,6 +17951,150 @@
           `}
         </div>
       `;
+    }
+
+    // 등록자 미상 로그 목록 뷰
+    function renderUnknownOwnerLogsView(container) {
+      const teamMembers = (state.teamMembers || []).filter(m => m.role !== 'guest');
+
+      // 등록자 미상 로그 (팀원 목록에 없는 memberId)
+      const logs = okrState.dailyLogs.filter(l =>
+        l.memberId === 'anonymous' ||
+        l.memberId === '관리자' ||
+        l.memberId === 'admin' ||
+        !l.memberId ||
+        (!teamMembers.some(m => m.id === l.memberId || m.loginId === l.memberId || m.name === l.memberId || m.name === l.memberName))
+      ).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+      container.innerHTML = `
+        <div style="background: white; border-radius: 16px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <h3 style="font-size: 18px; font-weight: 700; color: var(--gray-900); margin: 0;">👤 등록자 미상 기록</h3>
+              <p style="font-size: 13px; color: var(--gray-500); margin: 4px 0 0;">등록자가 불분명한 기록입니다. 클릭하여 등록자를 지정해주세요.</p>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 24px; font-weight: 800; color: #DC2626;">${logs.length}건</div>
+              ${logs.length > 0 ? `<button onclick="assignAllUnknownToMe()" style="padding: 10px 16px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">전체 내 것으로 할당</button>` : ''}
+            </div>
+          </div>
+
+          ${logs.length === 0 ? `
+            <div style="text-align: center; padding: 60px; color: var(--gray-400);">
+              <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+              <div style="font-size: 15px;">등록자 미상 기록이 없습니다</div>
+            </div>
+          ` : `
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              ${logs.map(log => {
+                const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                const currentOwner = log.memberName || log.memberId || '미상';
+                return `
+                  <div onclick="openEditLogModal('${log.id}')"
+                       style="display: flex; align-items: center; gap: 16px; padding: 16px 20px; background: #FEE2E2; border: 2px solid #DC2626; border-radius: 12px; cursor: pointer; transition: all 0.2s;"
+                       onmouseover="this.style.background='#FECACA'; this.style.transform='translateY(-2px)';"
+                       onmouseout="this.style.background='#FEE2E2'; this.style.transform='translateY(0)';">
+                    <div style="width: 48px; height: 48px; background: white; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
+                      ${lag ? getOkrLagIcon(lag.name) : '❓'}
+                    </div>
+                    <div style="flex: 1;">
+                      <div style="font-size: 15px; font-weight: 700; color: #991B1B; margin-bottom: 4px;">
+                        ${lag?.name || log.memo || '지표 미지정'}
+                      </div>
+                      <div style="font-size: 12px; color: #B91C1C;">
+                        📅 ${log.date} · 👤 현재: <strong>${currentOwner}</strong> · 📊 ${log.resultValue || 1}${lag?.unit || '건'}
+                      </div>
+                      ${log.memo ? `<div style="font-size: 11px; color: #7F1D1D; margin-top: 4px;">메모: ${log.memo}</div>` : ''}
+                    </div>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                      <span style="font-size: 11px; color: #B91C1C; font-weight: 600;">클릭하여</span>
+                      <span style="background: #DC2626; color: white; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700;">등록자 지정</span>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // 등록자 미상 전체 내 것으로 할당
+    async function assignAllUnknownToMe() {
+      const teamMembers = (state.teamMembers || []).filter(m => m.role !== 'guest');
+      const currentUser = state.currentUser;
+      const currentMember = teamMembers.find(m =>
+        m.id === currentUser?.id ||
+        m.loginId === currentUser?.loginId ||
+        m.name === currentUser?.name
+      );
+
+      if (!currentMember) {
+        showToast('현재 사용자 정보를 찾을 수 없습니다');
+        return;
+      }
+
+      const unknownLogs = okrState.dailyLogs.filter(l =>
+        l.memberId === 'anonymous' ||
+        l.memberId === '관리자' ||
+        l.memberId === 'admin' ||
+        !l.memberId ||
+        (!teamMembers.some(m => m.id === l.memberId || m.loginId === l.memberId || m.name === l.memberId || m.name === l.memberName))
+      );
+
+      if (unknownLogs.length === 0) {
+        showToast('할당할 기록이 없습니다');
+        return;
+      }
+
+      if (!confirm(`총 ${unknownLogs.length}건의 기록을 ${currentMember.name}님의 것으로 할당하시겠습니까?`)) {
+        return;
+      }
+
+      try {
+        showToast('할당 중...');
+        const batch = db.batch();
+
+        for (const log of unknownLogs) {
+          const logRef = db.collection('okr_dailyLogs').doc(log.id);
+          batch.update(logRef, {
+            memberId: currentMember.id,
+            memberName: currentMember.name,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedBy: currentUser?.id || 'anonymous'
+          });
+
+          // 로컬 상태 업데이트
+          const logIndex = okrState.dailyLogs.findIndex(l => l.id === log.id);
+          if (logIndex >= 0) {
+            okrState.dailyLogs[logIndex].memberId = currentMember.id;
+            okrState.dailyLogs[logIndex].memberName = currentMember.name;
+          }
+        }
+
+        await batch.commit();
+
+        // 변경이력 기록
+        await db.collection('okr_changeLogs').add({
+          action: 'bulk_update',
+          entityType: 'dailyLog',
+          data: {
+            name: '등록자 일괄 할당',
+            count: unknownLogs.length,
+            assignedTo: currentMember.name
+          },
+          userId: currentUser?.id || 'anonymous',
+          userName: currentUser?.name || '익명',
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        showToast(`${unknownLogs.length}건이 ${currentMember.name}님께 할당되었습니다`);
+        workLogState.unknownOwnerFilter = false;
+        renderOkrRecord();
+      } catch (e) {
+        console.error('일괄 할당 오류:', e);
+        showToast('할당 실패: ' + e.message);
+      }
     }
 
     // 기록하기 뷰
@@ -18141,17 +18312,26 @@
     // 요약 뷰
     function renderSummaryView(container) {
       const currentUserId = state.currentUser?.id || state.currentUser?.uid || 'anonymous';
+      const currentUserLoginId = state.currentUser?.loginId;
+      const currentUserName = state.currentUser?.name;
       const teamMembers = (state.teamMembers || []).filter(m => m.role !== 'guest');
       let logs = okrState.dailyLogs;
+
+      // 멤버 필터 적용
       if (workLogState.memberFilter === 'me') {
-        logs = logs.filter(l => l.memberId === currentUserId || l.memberId === 'anonymous' || !l.memberId);
+        logs = logs.filter(l =>
+          l.memberId === currentUserId ||
+          l.memberId === currentUserLoginId ||
+          l.memberId === currentUserName ||
+          l.memberName === currentUserName ||
+          l.memberId === 'anonymous' || !l.memberId
+        );
       } else if (workLogState.memberFilter !== 'all') {
-        // 선택한 팀원의 정보 가져오기
         const selectedMember = teamMembers.find(m => m.id === workLogState.memberFilter);
         if (selectedMember) {
           const isCurrentUser = selectedMember.id === currentUserId ||
-            selectedMember.loginId === state.currentUser?.loginId ||
-            selectedMember.name === state.currentUser?.name;
+            selectedMember.loginId === currentUserLoginId ||
+            selectedMember.name === currentUserName;
           logs = logs.filter(l =>
             l.memberId === selectedMember.id ||
             l.memberId === selectedMember.loginId ||
@@ -18164,34 +18344,43 @@
         }
       }
 
-      // 날짜별 그룹화
-      const logsByDate = {};
-      logs.forEach(log => {
-        if (!logsByDate[log.date]) logsByDate[log.date] = [];
-        logsByDate[log.date].push(log);
-      });
-
-      // 최근 7일
-      const dates = Object.keys(logsByDate).sort((a, b) => b.localeCompare(a)).slice(0, 7);
-
-      // 오늘/이번주 요약
+      // 오늘/이번주 계산
       const today = new Date();
       const todayStr = today.toISOString().split('T')[0];
+      const dayOfWeek = today.getDay();
       const thisMonday = new Date(today);
-      thisMonday.setDate(today.getDate() - today.getDay() + 1);
-      const mondayStr = thisMonday.toISOString().split('T')[0];
+      thisMonday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
 
-      const todayLogs = logs.filter(l => l.date === todayStr);
-      const weekLogs = logs.filter(l => l.date >= mondayStr);
+      // 이번 주 요일별 날짜 배열 (월~일)
+      const weekDays = ['월', '화', '수', '목', '금', '토', '일'];
+      const weekDates = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(thisMonday);
+        d.setDate(thisMonday.getDate() + i);
+        weekDates.push(d.toISOString().split('T')[0]);
+      }
 
-      // 지표별 집계 (오늘)
-      const todayByLag = {};
-      todayLogs.forEach(log => {
-        if (!todayByLag[log.laggingIndicatorId]) todayByLag[log.laggingIndicatorId] = 0;
-        todayByLag[log.laggingIndicatorId] += (log.resultValue || 1);
+      // 요일별 로그 그룹화
+      const logsByWeekday = weekDates.map((date, idx) => {
+        const dayLogs = logs.filter(l => l.date === date);
+        const dateObj = new Date(date + 'T00:00:00');
+        const isToday = date === todayStr;
+        const isPast = date < todayStr;
+        const isFuture = date > todayStr;
+
+        // 지표별 집계
+        const byLag = {};
+        dayLogs.forEach(log => {
+          if (!byLag[log.laggingIndicatorId]) byLag[log.laggingIndicatorId] = { count: 0, logs: [] };
+          byLag[log.laggingIndicatorId].count += (log.resultValue || 1);
+          byLag[log.laggingIndicatorId].logs.push(log);
+        });
+
+        return { date, dayName: weekDays[idx], dateObj, dayLogs, isToday, isPast, isFuture, byLag };
       });
 
-      // 지표별 집계 (이번주)
+      // 이번 주 총 합계
+      const weekLogs = logs.filter(l => weekDates.includes(l.date));
       const weekByLag = {};
       weekLogs.forEach(log => {
         if (!weekByLag[log.laggingIndicatorId]) weekByLag[log.laggingIndicatorId] = 0;
@@ -18199,46 +18388,54 @@
       });
 
       let html = `
-        <!-- 오늘 요약 -->
-        <div style="background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%); border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 2px solid var(--primary);">
-          <div style="font-size: 16px; font-weight: 700; color: var(--primary); margin-bottom: 12px;">📌 오늘 (${new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })})</div>
-          ${todayLogs.length === 0 ? `
-            <div style="text-align: center; padding: 20px; color: var(--gray-500);">오늘 기록된 업무가 없습니다</div>
-          ` : `
-            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-              ${Object.entries(todayByLag).map(([lagId, count]) => {
-                const lag = okrState.laggingIndicators.find(l => l.id === lagId);
-                return `
-                  <div style="background: white; padding: 10px 14px; border-radius: 8px; display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 16px;">${getOkrLagIcon(lag?.name || '')}</span>
-                    <span style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${lag?.name || '업무'}</span>
-                    <span style="font-size: 14px; font-weight: 800; color: var(--primary);">${count}</span>
-                  </div>
-                `;
-              }).join('')}
+        <!-- 주간 헤더 -->
+        <div style="background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); border-radius: 16px; padding: 24px; margin-bottom: 20px; color: white;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div>
+              <div style="font-size: 14px; opacity: 0.9; margin-bottom: 4px;">📊 주간 요약</div>
+              <div style="font-size: 20px; font-weight: 800;">${thisMonday.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} ~ ${new Date(weekDates[6] + 'T00:00:00').toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}</div>
             </div>
-          `}
+            <div style="text-align: right;">
+              <div style="font-size: 36px; font-weight: 800;">${weekLogs.length}</div>
+              <div style="font-size: 13px; opacity: 0.9;">총 기록</div>
+            </div>
+          </div>
+
+          <!-- 요일별 미니 바 차트 -->
+          <div style="display: flex; gap: 8px; align-items: flex-end; height: 60px; margin-top: 12px;">
+            ${logsByWeekday.map(day => {
+              const maxLogs = Math.max(...logsByWeekday.map(d => d.dayLogs.length), 1);
+              const height = day.dayLogs.length > 0 ? Math.max((day.dayLogs.length / maxLogs) * 100, 15) : 8;
+              const bgColor = day.isToday ? '#FCD34D' : day.isFuture ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.6)';
+              return `
+                <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                  <div style="width: 100%; height: ${height}%; background: ${bgColor}; border-radius: 4px; min-height: 4px;"></div>
+                  <div style="font-size: 11px; font-weight: ${day.isToday ? '800' : '500'}; opacity: ${day.isFuture ? '0.5' : '1'};">${day.dayName}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
         </div>
 
-        <!-- 이번주 요약 -->
-        <div style="background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px;">📊 이번 주 요약</div>
-          ${weekLogs.length === 0 ? `
-            <div style="text-align: center; padding: 20px; color: var(--gray-500);">이번 주 기록된 업무가 없습니다</div>
+        <!-- 지표별 주간 합계 -->
+        <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px;">📈 지표별 주간 합계</div>
+          ${Object.keys(weekByLag).length === 0 ? `
+            <div style="text-align: center; padding: 20px; color: var(--gray-500);">이번 주 기록이 없습니다</div>
           ` : `
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px;">
               ${Object.entries(weekByLag).sort((a, b) => b[1] - a[1]).map(([lagId, count]) => {
                 const lag = okrState.laggingIndicators.find(l => l.id === lagId);
                 const kpi = okrState.kpis.find(k => k.id === lag?.kpiId);
-                const kr = okrState.keyResults.find(k => k.id === kpi?.keyResultId);
                 const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
+                const color = okrColors[krIdx] || 'var(--primary)';
                 return `
-                  <div style="background: var(--gray-50); padding: 14px; border-radius: 10px; border-left: 3px solid ${okrColors[krIdx] || 'var(--gray-300)'};">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                      <span style="font-size: 18px;">${getOkrLagIcon(lag?.name || '')}</span>
-                      <span style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${lag?.name || '업무'}</span>
+                  <div style="background: var(--gray-50); padding: 14px; border-radius: 12px; border-left: 4px solid ${color};">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                      <span style="font-size: 20px;">${getOkrLagIcon(lag?.name || '')}</span>
+                      <span style="font-size: 13px; font-weight: 600; color: var(--gray-700); flex: 1;">${lag?.name || '업무'}</span>
                     </div>
-                    <div style="font-size: 24px; font-weight: 800; color: ${okrColors[krIdx] || 'var(--primary)'};">${count}<span style="font-size: 12px; font-weight: 500; color: var(--gray-500);">건</span></div>
+                    <div style="font-size: 28px; font-weight: 800; color: ${color};">${count}<span style="font-size: 12px; color: var(--gray-500); font-weight: 500;">${lag?.unit || '건'}</span></div>
                   </div>
                 `;
               }).join('')}
@@ -18246,44 +18443,76 @@
           `}
         </div>
 
-        <!-- 날짜별 기록 -->
-        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px;">📅 날짜별 기록</div>
-          ${dates.length === 0 ? `
-            <div style="text-align: center; padding: 30px; color: var(--gray-500);">기록된 업무가 없습니다</div>
-          ` : `
-            <div style="display: flex; flex-direction: column; gap: 12px;">
-              ${dates.map(date => {
-                const dayLogs = logsByDate[date];
-                const dateObj = new Date(date + 'T00:00:00');
-                const isToday = date === todayStr;
-                const dateLabel = isToday ? '오늘' : dateObj.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', weekday: 'short' });
+        <!-- 요일별 상세 내역 -->
+        <div style="background: white; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+          <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px;">📅 요일별 상세 내역</div>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            ${logsByWeekday.map(day => {
+              const dateLabel = day.dateObj.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
+              const borderColor = day.isToday ? '#4F46E5' : day.isFuture ? 'var(--gray-200)' : 'var(--gray-300)';
+              const headerBg = day.isToday ? 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)' : day.isFuture ? 'var(--gray-100)' : 'var(--gray-50)';
+              const headerColor = day.isToday ? 'white' : day.isFuture ? 'var(--gray-400)' : 'var(--gray-800)';
 
-                return `
-                  <div style="border: 1px solid ${isToday ? 'var(--primary)' : 'var(--gray-200)'}; border-radius: 10px; overflow: hidden; ${isToday ? 'background: #F8FAFF;' : ''}">
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: ${isToday ? 'var(--primary)' : 'var(--gray-100)'}; cursor: pointer;" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
-                      <div style="font-size: 14px; font-weight: 700; color: ${isToday ? 'white' : 'var(--gray-800)'};">${dateLabel}</div>
-                      <div style="font-size: 13px; font-weight: 600; color: ${isToday ? 'white' : 'var(--gray-600)'};">${dayLogs.length}건</div>
+              return `
+                <div style="border: 2px solid ${borderColor}; border-radius: 12px; overflow: hidden; ${day.isToday ? 'box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);' : ''}">
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; background: ${headerBg}; cursor: pointer;"
+                       onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'; this.querySelector('.chevron').style.transform = this.nextElementSibling.style.display === 'none' ? '' : 'rotate(180deg)';">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                      <div style="width: 40px; height: 40px; background: ${day.isToday ? 'rgba(255,255,255,0.2)' : 'white'}; border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                        <span style="font-size: 14px; font-weight: 800; color: ${day.isToday ? 'white' : 'var(--primary)'};">${day.dayName}</span>
+                      </div>
+                      <div>
+                        <div style="font-size: 15px; font-weight: 700; color: ${headerColor};">${dateLabel} ${day.isToday ? '(오늘)' : ''}</div>
+                        <div style="font-size: 12px; color: ${day.isToday ? 'rgba(255,255,255,0.8)' : 'var(--gray-500)'};">${day.dayLogs.length > 0 ? Object.keys(day.byLag).length + '개 지표' : '기록 없음'}</div>
+                      </div>
                     </div>
-                    <div style="padding: 12px; display: ${isToday ? 'block' : 'none'};">
-                      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                        ${dayLogs.map(log => {
-                          const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                      <div style="font-size: 22px; font-weight: 800; color: ${headerColor};">${day.dayLogs.length}<span style="font-size: 12px; font-weight: 500;">건</span></div>
+                      <span class="chevron" style="font-size: 14px; color: ${headerColor}; transition: transform 0.2s; ${day.isToday || day.dayLogs.length > 0 ? 'transform: rotate(180deg);' : ''}">▼</span>
+                    </div>
+                  </div>
+                  <div style="padding: 16px; display: ${(day.isToday || day.dayLogs.length > 0) ? 'block' : 'none'}; background: ${day.isFuture ? 'var(--gray-50)' : 'white'};">
+                    ${day.dayLogs.length === 0 ? `
+                      <div style="text-align: center; padding: 20px; color: var(--gray-400);">
+                        ${day.isFuture ? '아직 기록이 없습니다' : '기록이 없습니다'}
+                      </div>
+                    ` : `
+                      <div style="display: flex; flex-direction: column; gap: 10px;">
+                        ${Object.entries(day.byLag).map(([lagId, data]) => {
+                          const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+                          const kpi = okrState.kpis.find(k => k.id === lag?.kpiId);
+                          const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
+                          const color = okrColors[krIdx] || 'var(--primary)';
                           return `
-                            <div style="background: var(--gray-50); padding: 6px 10px; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 6px;">
-                              <span>${getOkrLagIcon(lag?.name || '')}</span>
-                              <span style="color: var(--gray-700);">${lag?.name || '업무'}</span>
-                              <span style="font-weight: 700; color: var(--primary);">+${log.resultValue || 1}</span>
+                            <div style="background: var(--gray-50); border-radius: 10px; padding: 12px 16px; border-left: 4px solid ${color};">
+                              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                  <span style="font-size: 18px;">${getOkrLagIcon(lag?.name || '')}</span>
+                                  <span style="font-size: 14px; font-weight: 700; color: var(--gray-800);">${lag?.name || '업무'}</span>
+                                </div>
+                                <span style="font-size: 18px; font-weight: 800; color: ${color};">+${data.count}</span>
+                              </div>
+                              ${data.logs.some(l => l.memo) ? `
+                                <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 26px;">
+                                  ${data.logs.filter(l => l.memo).map(l => `
+                                    <div style="font-size: 12px; color: var(--gray-600); display: flex; align-items: center; gap: 6px;">
+                                      <span style="color: var(--gray-400);">•</span>
+                                      <span>${l.memo}</span>
+                                      <span style="color: var(--gray-400);">(+${l.resultValue || 1})</span>
+                                    </div>
+                                  `).join('')}
+                                </div>
+                              ` : ''}
                             </div>
                           `;
                         }).join('')}
                       </div>
-                    </div>
+                    `}
                   </div>
-                `;
-              }).join('')}
-            </div>
-          `}
+                </div>
+              `;
+            }).join('')}
+          </div>
         </div>
       `;
 
@@ -18293,17 +18522,26 @@
     // 캘린더 뷰
     function renderCalendarView(container) {
       const currentUserId = state.currentUser?.id || state.currentUser?.uid || 'anonymous';
+      const currentUserLoginId = state.currentUser?.loginId;
+      const currentUserName = state.currentUser?.name;
       const teamMembers = (state.teamMembers || []).filter(m => m.role !== 'guest');
       let logs = okrState.dailyLogs;
+
+      // 멤버 필터 적용
       if (workLogState.memberFilter === 'me') {
-        logs = logs.filter(l => l.memberId === currentUserId || l.memberId === 'anonymous' || !l.memberId);
+        logs = logs.filter(l =>
+          l.memberId === currentUserId ||
+          l.memberId === currentUserLoginId ||
+          l.memberId === currentUserName ||
+          l.memberName === currentUserName ||
+          l.memberId === 'anonymous' || !l.memberId
+        );
       } else if (workLogState.memberFilter !== 'all') {
-        // 선택한 팀원의 정보 가져오기
         const selectedMember = teamMembers.find(m => m.id === workLogState.memberFilter);
         if (selectedMember) {
           const isCurrentUser = selectedMember.id === currentUserId ||
-            selectedMember.loginId === state.currentUser?.loginId ||
-            selectedMember.name === state.currentUser?.name;
+            selectedMember.loginId === currentUserLoginId ||
+            selectedMember.name === currentUserName;
           logs = logs.filter(l =>
             l.memberId === selectedMember.id ||
             l.memberId === selectedMember.loginId ||
@@ -18316,72 +18554,167 @@
         }
       }
 
-      // 날짜별 집계
-      const logsByDate = {};
-      logs.forEach(log => {
-        if (!logsByDate[log.date]) logsByDate[log.date] = 0;
-        logsByDate[log.date] += 1;
-      });
-
       const calMonth = workLogState.calendarMonth;
       const year = calMonth.getFullYear();
       const month = calMonth.getMonth();
       const firstDay = new Date(year, month, 1);
       const lastDay = new Date(year, month + 1, 0);
       const startDayOfWeek = firstDay.getDay();
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // 이번 달 로그만 필터링
+      const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+      const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+      const monthLogs = logs.filter(l => l.date >= monthStart && l.date <= monthEnd);
+
+      // 날짜별 집계
+      const logsByDate = {};
+      monthLogs.forEach(log => {
+        if (!logsByDate[log.date]) logsByDate[log.date] = [];
+        logsByDate[log.date].push(log);
+      });
+
+      // 지표별 월간 집계
+      const monthByLag = {};
+      monthLogs.forEach(log => {
+        if (!monthByLag[log.laggingIndicatorId]) monthByLag[log.laggingIndicatorId] = 0;
+        monthByLag[log.laggingIndicatorId] += (log.resultValue || 1);
+      });
+
+      // 최대 로그 수 (히트맵용)
+      const maxDayLogs = Math.max(...Object.values(logsByDate).map(arr => arr.length), 1);
 
       // 선택된 날짜의 로그
       const selectedDateStr = workLogState.selectedDate;
       const selectedDateLogs = selectedDateStr ? logs.filter(l => l.date === selectedDateStr) : [];
 
       const days = ['일', '월', '화', '수', '목', '금', '토'];
-      const todayStr = new Date().toISOString().split('T')[0];
 
       let calendarHtml = `
-        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 16px;">
-          <!-- 캘린더 헤더 -->
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <button onclick="changeCalendarMonth(-1)" style="padding: 8px 12px; background: var(--gray-100); border: none; border-radius: 8px; cursor: pointer; font-size: 14px;">◀</button>
-            <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">${year}년 ${month + 1}월</div>
-            <button onclick="changeCalendarMonth(1)" style="padding: 8px 12px; background: var(--gray-100); border: none; border-radius: 8px; cursor: pointer; font-size: 14px;">▶</button>
+        <!-- 월간 요약 헤더 -->
+        <div style="background: linear-gradient(135deg, #059669 0%, #10B981 100%); border-radius: 16px; padding: 24px; margin-bottom: 20px; color: white;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <button onclick="changeCalendarMonth(-1)" style="width: 40px; height: 40px; background: rgba(255,255,255,0.2); border: none; border-radius: 10px; cursor: pointer; color: white; font-size: 18px;">◀</button>
+              <div>
+                <div style="font-size: 14px; opacity: 0.9;">📅 월간 리포트</div>
+                <div style="font-size: 24px; font-weight: 800;">${year}년 ${month + 1}월</div>
+              </div>
+              <button onclick="changeCalendarMonth(1)" style="width: 40px; height: 40px; background: rgba(255,255,255,0.2); border: none; border-radius: 10px; cursor: pointer; color: white; font-size: 18px;">▶</button>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-size: 42px; font-weight: 800;">${monthLogs.length}</div>
+              <div style="font-size: 13px; opacity: 0.9;">총 기록</div>
+            </div>
           </div>
 
+          <!-- 월간 통계 -->
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+            <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 14px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800;">${Object.keys(logsByDate).length}</div>
+              <div style="font-size: 12px; opacity: 0.9;">기록한 날</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 14px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800;">${Object.keys(monthByLag).length}</div>
+              <div style="font-size: 12px; opacity: 0.9;">활용 지표</div>
+            </div>
+            <div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 14px; text-align: center;">
+              <div style="font-size: 28px; font-weight: 800;">${monthLogs.length > 0 ? (monthLogs.length / Object.keys(logsByDate).length).toFixed(1) : 0}</div>
+              <div style="font-size: 12px; opacity: 0.9;">일 평균</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 지표별 월간 합계 -->
+        ${Object.keys(monthByLag).length > 0 ? `
+          <div style="background: white; border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px;">📈 지표별 월간 합계</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+              ${Object.entries(monthByLag).sort((a, b) => b[1] - a[1]).map(([lagId, count]) => {
+                const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+                const kpi = okrState.kpis.find(k => k.id === lag?.kpiId);
+                const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
+                const color = okrColors[krIdx] || '#10B981';
+                return `
+                  <div style="display: flex; align-items: center; gap: 8px; background: var(--gray-50); padding: 10px 14px; border-radius: 10px; border-left: 3px solid ${color};">
+                    <span style="font-size: 18px;">${getOkrLagIcon(lag?.name || '')}</span>
+                    <span style="font-size: 13px; font-weight: 600; color: var(--gray-700);">${lag?.name || '업무'}</span>
+                    <span style="font-size: 16px; font-weight: 800; color: ${color};">${count}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
+
+        <!-- 캘린더 -->
+        <div style="background: white; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 20px;">
           <!-- 요일 헤더 -->
-          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 8px;">
-            ${days.map((d, i) => `<div style="text-align: center; font-size: 12px; font-weight: 600; color: ${i === 0 ? '#DC2626' : i === 6 ? '#2563EB' : 'var(--gray-500)'}; padding: 8px;">${d}</div>`).join('')}
+          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 12px;">
+            ${days.map((d, i) => `<div style="text-align: center; font-size: 13px; font-weight: 700; color: ${i === 0 ? '#DC2626' : i === 6 ? '#2563EB' : 'var(--gray-500)'}; padding: 10px;">${d}</div>`).join('')}
           </div>
 
           <!-- 날짜 그리드 -->
-          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;">
+          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;">
       `;
 
       // 빈 칸 (이전 달)
       for (let i = 0; i < startDayOfWeek; i++) {
-        calendarHtml += `<div style="padding: 8px;"></div>`;
+        calendarHtml += `<div style="aspect-ratio: 1; padding: 8px;"></div>`;
       }
 
       // 날짜 칸
       for (let d = 1; d <= lastDay.getDate(); d++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        const count = logsByDate[dateStr] || 0;
+        const dayLogs = logsByDate[dateStr] || [];
+        const count = dayLogs.length;
         const isToday = dateStr === todayStr;
         const isSelected = dateStr === selectedDateStr;
         const dayOfWeek = new Date(year, month, d).getDay();
+        const isFuture = dateStr > todayStr;
+
+        // 히트맵 색상 계산
+        const intensity = count > 0 ? Math.min(count / maxDayLogs, 1) : 0;
+        const heatColor = count > 0
+          ? `rgba(16, 185, 129, ${0.2 + intensity * 0.6})`
+          : 'transparent';
 
         calendarHtml += `
           <div onclick="selectCalendarDate('${dateStr}')"
-               style="padding: 8px; text-align: center; cursor: pointer; border-radius: 8px; position: relative;
-                      background: ${isSelected ? 'var(--primary)' : isToday ? '#EEF2FF' : 'transparent'};
-                      border: ${isToday && !isSelected ? '2px solid var(--primary)' : 'none'};"
-               onmouseover="if (!${isSelected}) this.style.background='var(--gray-100)'"
-               onmouseout="if (!${isSelected}) this.style.background='${isToday ? '#EEF2FF' : 'transparent'}'">
-            <div style="font-size: 14px; font-weight: ${isToday ? '700' : '500'}; color: ${isSelected ? 'white' : dayOfWeek === 0 ? '#DC2626' : dayOfWeek === 6 ? '#2563EB' : 'var(--gray-800)'};">${d}</div>
-            ${count > 0 ? `<div style="font-size: 10px; font-weight: 700; color: ${isSelected ? 'white' : 'var(--success)'};margin-top: 2px;">${count}</div>` : ''}
+               style="aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; border-radius: 12px; position: relative;
+                      background: ${isSelected ? 'var(--primary)' : isToday ? 'linear-gradient(135deg, #EEF2FF, #E0E7FF)' : heatColor};
+                      border: ${isToday && !isSelected ? '3px solid var(--primary)' : isSelected ? 'none' : '1px solid var(--gray-100)'};
+                      ${isFuture ? 'opacity: 0.5;' : ''}
+                      transition: all 0.15s ease;"
+               onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)';"
+               onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='none';">
+            <div style="font-size: 16px; font-weight: ${isToday || count > 0 ? '700' : '500'}; color: ${isSelected ? 'white' : dayOfWeek === 0 ? '#DC2626' : dayOfWeek === 6 ? '#2563EB' : 'var(--gray-800)'};">${d}</div>
+            ${count > 0 ? `
+              <div style="display: flex; gap: 2px; margin-top: 4px;">
+                ${count <= 3 ? Array(count).fill('').map(() => `<div style="width: 6px; height: 6px; background: ${isSelected ? 'white' : '#10B981'}; border-radius: 50%;"></div>`).join('') : `<div style="font-size: 11px; font-weight: 800; color: ${isSelected ? 'white' : '#10B981'};">${count}</div>`}
+              </div>
+            ` : ''}
           </div>
         `;
       }
 
       calendarHtml += `
+          </div>
+
+          <!-- 범례 -->
+          <div style="display: flex; justify-content: center; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--gray-100);">
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gray-500);">
+              <div style="width: 16px; height: 16px; background: rgba(16, 185, 129, 0.2); border-radius: 4px;"></div>
+              <span>적음</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gray-500);">
+              <div style="width: 16px; height: 16px; background: rgba(16, 185, 129, 0.5); border-radius: 4px;"></div>
+              <span>보통</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gray-500);">
+              <div style="width: 16px; height: 16px; background: rgba(16, 185, 129, 0.8); border-radius: 4px;"></div>
+              <span>많음</span>
+            </div>
           </div>
         </div>
       `;
@@ -18391,29 +18724,61 @@
         const selectedDate = new Date(selectedDateStr + 'T00:00:00');
         const dateLabel = selectedDate.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
 
+        // 선택된 날짜의 지표별 그룹화
+        const selectedByLag = {};
+        selectedDateLogs.forEach(log => {
+          if (!selectedByLag[log.laggingIndicatorId]) selectedByLag[log.laggingIndicatorId] = [];
+          selectedByLag[log.laggingIndicatorId].push(log);
+        });
+
         calendarHtml += `
-          <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
-            <div style="font-size: 16px; font-weight: 700; color: var(--gray-800); margin-bottom: 16px;">📋 ${dateLabel}</div>
+          <div style="background: white; border-radius: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <div style="font-size: 18px; font-weight: 700; color: var(--gray-800);">📋 ${dateLabel}</div>
+              <div style="font-size: 24px; font-weight: 800; color: var(--primary);">${selectedDateLogs.length}건</div>
+            </div>
             ${selectedDateLogs.length === 0 ? `
-              <div style="text-align: center; padding: 30px; color: var(--gray-500);">이 날은 기록된 업무가 없습니다</div>
+              <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+                <div style="font-size: 48px; margin-bottom: 12px;">📝</div>
+                <div style="font-size: 15px;">이 날은 기록된 업무가 없습니다</div>
+              </div>
             ` : `
-              <div style="display: flex; flex-direction: column; gap: 10px;">
-                ${selectedDateLogs.map(log => {
-                  const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
-                  const krIdx = okrState.keyResults.findIndex(k => k.id === log.krId);
+              <div style="display: flex; flex-direction: column; gap: 12px;">
+                ${Object.entries(selectedByLag).map(([lagId, lagLogs]) => {
+                  const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+                  const kpi = okrState.kpis.find(k => k.id === lag?.kpiId);
+                  const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
+                  const color = okrColors[krIdx] || 'var(--primary)';
+                  const totalValue = lagLogs.reduce((sum, l) => sum + (l.resultValue || 1), 0);
+
                   return `
-                    <div onclick="openEditLogModal('${log.id}')" style="display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--gray-50); border-radius: 10px; border-left: 3px solid ${okrColors[krIdx] || 'var(--gray-300)'}; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='#EEF2FF'; this.style.borderLeftColor='var(--primary)'" onmouseout="this.style.background='var(--gray-50)'; this.style.borderLeftColor='${okrColors[krIdx] || 'var(--gray-300)'}'">
-                      <span style="font-size: 20px;">${getOkrLagIcon(lag?.name || '')}</span>
-                      <div style="flex: 1;">
-                        <div style="font-size: 14px; font-weight: 600; color: var(--gray-800);">${lag?.name || '업무'}</div>
-                        ${log.memo ? `<div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">${log.memo}</div>` : ''}
-                      </div>
-                      <div style="text-align: right; display: flex; align-items: center; gap: 10px;">
-                        <div>
-                          <div style="font-size: 18px; font-weight: 800; color: var(--primary);">+${log.resultValue || 1}</div>
-                          <div style="font-size: 11px; color: var(--gray-400);">${log.registeredTime || ''}</div>
+                    <div style="background: var(--gray-50); border-radius: 12px; padding: 16px; border-left: 4px solid ${color};">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                          <span style="font-size: 24px;">${getOkrLagIcon(lag?.name || '')}</span>
+                          <div>
+                            <div style="font-size: 15px; font-weight: 700; color: var(--gray-800);">${lag?.name || '업무'}</div>
+                            <div style="font-size: 12px; color: var(--gray-500);">${lagLogs.length}회 기록</div>
+                          </div>
                         </div>
-                        <div style="font-size: 14px; color: var(--gray-400);">✏️</div>
+                        <div style="font-size: 28px; font-weight: 800; color: ${color};">+${totalValue}</div>
+                      </div>
+                      <div style="display: flex; flex-direction: column; gap: 8px;">
+                        ${lagLogs.map(log => `
+                          <div onclick="openEditLogModal('${log.id}')"
+                               style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: white; border-radius: 8px; cursor: pointer; transition: all 0.15s;"
+                               onmouseover="this.style.background='#EEF2FF';"
+                               onmouseout="this.style.background='white';">
+                            <div style="flex: 1;">
+                              ${log.memo ? `<div style="font-size: 13px; color: var(--gray-700);">${log.memo}</div>` : `<div style="font-size: 13px; color: var(--gray-400);">메모 없음</div>`}
+                              <div style="font-size: 11px; color: var(--gray-400); margin-top: 2px;">${log.registeredTime || ''}</div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                              <span style="font-size: 16px; font-weight: 700; color: ${color};">+${log.resultValue || 1}</span>
+                              <span style="font-size: 14px; color: var(--gray-400);">✏️</span>
+                            </div>
+                          </div>
+                        `).join('')}
                       </div>
                     </div>
                   `;
@@ -18424,9 +18789,9 @@
         `;
       } else {
         calendarHtml += `
-          <div style="background: var(--gray-50); border-radius: 12px; padding: 30px; text-align: center; color: var(--gray-500);">
-            <div style="font-size: 32px; margin-bottom: 8px;">📅</div>
-            <div>날짜를 선택하면 해당 날의 기록을 볼 수 있습니다</div>
+          <div style="background: var(--gray-50); border-radius: 16px; padding: 40px; text-align: center; color: var(--gray-500);">
+            <div style="font-size: 48px; margin-bottom: 12px;">👆</div>
+            <div style="font-size: 15px;">날짜를 선택하면 해당 날의 상세 기록을 볼 수 있습니다</div>
           </div>
         `;
       }
