@@ -953,7 +953,7 @@
         </div>
 
         <div class="nav-section">
-          <div class="nav-label">📞 전화문의 / 빠른 링크</div>
+          <div class="nav-label">🔗 빠른 링크</div>
           <div class="nav-item" onclick="copyOnboardingLink()" style="background: #f0fdf4; border-left: 3px solid #22c55e;">
             <span class="icon">📋</span>
             <span>온보딩 링크 복사</span>
@@ -963,10 +963,6 @@
             <span class="icon">📝</span>
             <span>입점신청서 링크 복사</span>
             <span style="font-size: 10px; color: #2563eb;">복사</span>
-          </div>
-          <div class="nav-item" onclick="switchTab('phoneInquiry')">
-            <span class="icon">☎️</span>
-            <span>전화문의 등록</span>
           </div>
         </div>
 
@@ -1198,6 +1194,9 @@
           </button>
           <button id="inbound-subtab-application" onclick="switchInboundSubType('application')" style="padding: 10px 20px; background: transparent; color: var(--gray-600); border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
             📝 입점신청 <span id="inbound-application-count" style="background: var(--gray-200); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 4px;">0</span>
+          </button>
+          <button id="inbound-subtab-phone" onclick="switchInboundSubType('phone')" style="padding: 10px 20px; background: transparent; color: var(--gray-600); border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+            📞 전화문의 <span id="inbound-phone-count" style="background: var(--gray-200); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 4px;">0</span>
           </button>
         </div>
 
@@ -2349,6 +2348,7 @@
       supplierInquiries: [],  // 공급사 일반문의
       sellerInquiries: [],    // 셀러 일반문의
       proposalRequests: [],   // 제안서 요청
+      phoneInquiries: [],     // 전화문의
       // 온보딩 대기 서류
       pendingSupplierOnboardings: [],  // 공급사 온보딩 대기 서류
       pendingSellerOnboardings: [],    // 셀러 온보딩 대기 서류
@@ -2645,6 +2645,14 @@
         })
       );
 
+      // 전화문의 리스너
+      unsubscribers.push(
+        db.collection('phoneInquiries').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+          state.phoneInquiries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedInboundUpdate();
+        })
+      );
+
       // 온보딩 대기 서류 리스너
       unsubscribers.push(
         db.collection('pendingSupplierOnboardings').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
@@ -2763,7 +2771,7 @@
       inboundStatusFilter = 'all'; // 서브타입 변경 시 상태 필터 초기화
 
       // 서브탭 스타일 업데이트
-      ['inquiry', 'proposal', 'application'].forEach(st => {
+      ['inquiry', 'proposal', 'application', 'phone'].forEach(st => {
         const tab = document.getElementById(`inbound-subtab-${st}`);
         if (tab) {
           if (st === subType) {
@@ -2844,7 +2852,14 @@
       const supplierProposalReqs = proposalRequests.filter(p => p.type === 'supplier' || !p.type);
       const sellerProposalReqs = proposalRequests.filter(p => p.type === 'seller');
 
-      if (inboundType === 'supplier') {
+      // 전화문의는 공급사/셀러 구분 없이 공통
+      if (inboundSubType === 'phone') {
+        const phoneData = state.phoneInquiries || [];
+        data = inboundType === 'supplier'
+          ? phoneData.filter(p => p.type === 'supplier' || !p.type)
+          : phoneData.filter(p => p.type === 'seller');
+        collection = 'phoneInquiries';
+      } else if (inboundType === 'supplier') {
         if (inboundSubType === 'inquiry') {
           data = state.supplierInquiries || [];
           collection = 'supplierInquiries';
@@ -2872,15 +2887,22 @@
       const inquiryCount = document.getElementById('inbound-inquiry-count');
       const proposalCount = document.getElementById('inbound-proposal-count');
       const applicationCount = document.getElementById('inbound-application-count');
+      const phoneCount = document.getElementById('inbound-phone-count');
+
+      const phoneData = state.phoneInquiries || [];
+      const supplierPhoneCount = phoneData.filter(p => p.type === 'supplier' || !p.type).length;
+      const sellerPhoneCount = phoneData.filter(p => p.type === 'seller').length;
 
       if (inboundType === 'supplier') {
         if (inquiryCount) inquiryCount.textContent = (state.supplierInquiries || []).length;
         if (proposalCount) proposalCount.textContent = supplierProposalReqs.length;
         if (applicationCount) applicationCount.textContent = (state.supplierApplications || []).length;
+        if (phoneCount) phoneCount.textContent = supplierPhoneCount;
       } else {
         if (inquiryCount) inquiryCount.textContent = (state.sellerInquiries || []).length;
         if (proposalCount) proposalCount.textContent = sellerProposalReqs.length;
         if (applicationCount) applicationCount.textContent = (state.sellerApplications || []).length;
+        if (phoneCount) phoneCount.textContent = sellerPhoneCount;
       }
 
       // 상태별 카운트 계산
@@ -2914,7 +2936,12 @@
         container.innerHTML = `
           <div style="text-align: center; padding: 60px 20px; color: var(--gray-500);">
             <div style="font-size: 40px; margin-bottom: 12px;">📭</div>
-            <div>${inboundStatusFilter === 'all' ? '등록된 내역이 없습니다' : `'${inboundStatusFilter === 'new' ? '신규' : inboundStatusFilter === 'processing' ? '처리중' : inboundStatusFilter === 'sent' ? '전달완료' : '승인'}' 상태의 항목이 없습니다`}</div>
+            <div style="margin-bottom: 16px;">${inboundStatusFilter === 'all' ? '등록된 내역이 없습니다' : `'${inboundStatusFilter === 'new' ? '신규' : inboundStatusFilter === 'processing' ? '처리중' : inboundStatusFilter === 'sent' ? '전달완료' : '승인'}' 상태의 항목이 없습니다`}</div>
+            ${inboundSubType === 'phone' ? `
+              <button onclick="openQuickPhoneInquiryModal()" style="padding: 12px 24px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                + 전화문의 등록
+              </button>
+            ` : ''}
           </div>
         `;
         return;
@@ -2950,6 +2977,14 @@
 
       // 테이블 렌더링
       container.innerHTML = `
+        ${inboundSubType === 'phone' ? `
+          <div style="padding: 12px 16px; background: #f0fdf4; border-bottom: 1px solid #86efac; display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 13px; color: #166534;">📞 전화로 들어온 문의를 등록하고 관리합니다</span>
+            <button onclick="openQuickPhoneInquiryModal()" style="padding: 8px 16px; background: var(--primary); color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
+              + 전화문의 등록
+            </button>
+          </div>
+        ` : ''}
         <table style="width: 100%; border-collapse: collapse;">
           <thead>
             <tr style="background: var(--gray-50); border-bottom: 1px solid var(--gray-200);">
@@ -2957,45 +2992,28 @@
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">기업명</th>
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">담당자</th>
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">연락처</th>
-              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">첨부</th>
               <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">접수일</th>
-              <th style="padding: 14px 16px; text-align: left; font-size: 13px; font-weight: 600; color: var(--gray-600);">메모</th>
               <th style="padding: 14px 16px; text-align: center; font-size: 13px; font-weight: 600; color: var(--gray-600);">관리</th>
             </tr>
           </thead>
           <tbody>
             ${data.map(item => `
-              <tr style="border-bottom: 1px solid var(--gray-100);">
+              <tr style="border-bottom: 1px solid var(--gray-100); cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'" onclick="openInboundDetailModal('${collection}', '${item.id}')">
                 <td style="padding: 14px 16px;">${getStatusBadge(item.status)}</td>
                 <td style="padding: 14px 16px;">
                   <div style="font-weight: 600;">${item.companyName || item.name || '-'}</div>
-                  ${item.website ? `<a href="${item.website.startsWith('http') ? item.website : 'https://' + item.website}" target="_blank" style="font-size: 11px; color: var(--info);">🔗 홈페이지</a>` : ''}
+                  ${item.website ? `<span style="font-size: 11px; color: var(--info);">🔗 홈페이지</span>` : ''}
                 </td>
                 <td style="padding: 14px 16px; font-size: 13px;">${item.managerName || '-'}</td>
                 <td style="padding: 14px 16px;">
-                  ${item.contactMethod ? `<span style="display: inline-block; padding: 2px 8px; background: ${item.contactMethod === 'email' ? '#dbeafe' : '#dcfce7'}; color: ${item.contactMethod === 'email' ? '#1d4ed8' : '#16a34a'}; border-radius: 10px; font-size: 10px; font-weight: 600; margin-bottom: 4px;">${item.contactMethod === 'email' ? '📧 이메일 선호' : '📱 문자 선호'}</span>` : ''}
-                  <a href="tel:${(item.contact || item.phone || '').replace(/-/g, '')}" style="color: var(--info); text-decoration: none; font-weight: 500; display: block;">${item.contact || item.phone || '-'}</a>
+                  <div style="color: var(--info); font-weight: 500;">${item.contact || item.phone || '-'}</div>
                   ${item.email ? `<div style="font-size: 11px; color: var(--gray-500);">${item.email}</div>` : ''}
                 </td>
-                <td style="padding: 14px 16px;">
-                  ${item.fileUrl ? `<a href="${item.fileUrl}" target="_blank" style="color: var(--primary); font-size: 12px;">📎 ${item.fileName || '파일'}</a>` : '<span style="color: var(--gray-400); font-size: 12px;">-</span>'}
-                </td>
                 <td style="padding: 14px 16px; font-size: 13px; color: var(--gray-600);">${formatDate(item.createdAt)}</td>
-                <td style="padding: 14px 16px; font-size: 12px; color: var(--gray-600); max-width: 200px;">
-                  <div style="white-space: pre-wrap; word-break: break-word; max-height: 60px; overflow-y: auto;">${(item.note || item.message || '-').substring(0, 100)}${(item.note || item.message || '').length > 100 ? '...' : ''}</div>
-                </td>
-                <td style="padding: 14px 16px; text-align: center;">
+                <td style="padding: 14px 16px; text-align: center;" onclick="event.stopPropagation()">
                   <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
-                    ${!item.status || item.status === 'new' ? `
-                      <button onclick="openCSMemoModal('${collection}', '${item.id}', '${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}', '${item.email || ''}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}')" style="padding: 6px 12px; background: var(--warning); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">처리중</button>
-                    ` : ''}
-                    ${item.status === 'processing' ? `
-                      <button onclick="openSendModal('${collection}', '${item.id}', '${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}', '${item.email || ''}')" style="padding: 6px 12px; background: #2563eb; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;" title="제안서/온보딩링크 발송">📤 발송</button>
-                    ` : ''}
-                    ${item.status === 'sent' ? `
-                      <button onclick="updateInboundStatus('${collection}', '${item.id}', 'approved')" style="padding: 6px 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">승인</button>
-                    ` : ''}
-                    <button onclick="openCSMemoModal('${collection}', '${item.id}', '${item.name || item.companyName || ''}', '${item.contact || item.phone || ''}', '${item.email || ''}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}', true)" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">CS메모</button>
+                    <button onclick="openSendModal('${collection}', '${item.id}', '${(item.name || item.companyName || '').replace(/'/g, "\\'")}', '${item.contact || item.phone || ''}', '${item.email || ''}')" style="padding: 6px 12px; background: #2563eb; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;" title="제안서/온보딩링크 발송">📤 발송</button>
+                    <button onclick="openCSMemoModal('${collection}', '${item.id}', '${(item.name || item.companyName || '').replace(/'/g, "\\'")}', '${item.contact || item.phone || ''}', '${item.email || ''}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}', true)" style="padding: 6px 12px; background: var(--info); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">CS메모</button>
                     <button onclick="deleteInboundItem('${collection}', '${item.id}')" style="padding: 6px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">삭제</button>
                   </div>
                 </td>
@@ -3030,6 +3048,153 @@
         console.error('삭제 실패:', e);
         alert('삭제에 실패했습니다.');
       }
+    }
+
+    // 인바운드 상세 모달
+    function openInboundDetailModal(collection, id) {
+      // 해당 컬렉션에서 데이터 찾기
+      let item = null;
+      if (collection === 'supplierInquiries') {
+        item = (state.supplierInquiries || []).find(i => i.id === id);
+      } else if (collection === 'sellerInquiries') {
+        item = (state.sellerInquiries || []).find(i => i.id === id);
+      } else if (collection === 'proposalRequests') {
+        item = (state.proposalRequests || []).find(i => i.id === id);
+      } else if (collection === 'supplierApplications') {
+        item = (state.supplierApplications || []).find(i => i.id === id);
+      } else if (collection === 'sellerApplications') {
+        item = (state.sellerApplications || []).find(i => i.id === id);
+      } else if (collection === 'phoneInquiries') {
+        item = (state.phoneInquiries || []).find(i => i.id === id);
+      }
+
+      if (!item) {
+        showToast('데이터를 찾을 수 없습니다.');
+        return;
+      }
+
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+
+      // 상태 뱃지
+      const getStatusBadge = (status) => {
+        switch(status) {
+          case 'processing': return '<span style="padding: 4px 12px; background: #fef3c7; color: #d97706; border-radius: 12px; font-size: 12px; font-weight: 600;">처리중</span>';
+          case 'sent': return '<span style="padding: 4px 12px; background: #dbeafe; color: #2563eb; border-radius: 12px; font-size: 12px; font-weight: 600;">전달완료</span>';
+          case 'approved': return '<span style="padding: 4px 12px; background: #d1fae5; color: #059669; border-radius: 12px; font-size: 12px; font-weight: 600;">승인</span>';
+          case 'completed': return '<span style="padding: 4px 12px; background: #d1fae5; color: #059669; border-radius: 12px; font-size: 12px; font-weight: 600;">완료</span>';
+          default: return '<span style="padding: 4px 12px; background: #fce7f3; color: #db2777; border-radius: 12px; font-size: 12px; font-weight: 600;">신규</span>';
+        }
+      };
+
+      // 날짜 포맷
+      const formatDate = (timestamp) => {
+        if (!timestamp) return '-';
+        const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+        return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      };
+
+      // 서브타입 라벨
+      const getSubTypeLabel = () => {
+        if (collection === 'phoneInquiries') return '📞 전화문의';
+        if (collection.includes('Inquiries')) return '💬 일반문의';
+        if (collection === 'proposalRequests') return '📄 제안서요청';
+        if (collection.includes('Applications')) return '📝 입점신청';
+        return '';
+      };
+
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 700px;">
+          <div class="modal-header" style="border-bottom: 1px solid var(--gray-200);">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <h2 class="modal-title" style="margin: 0;">📋 문의 상세</h2>
+              <span style="font-size: 12px; padding: 4px 10px; background: var(--gray-100); border-radius: 8px;">${getSubTypeLabel()}</span>
+              ${getStatusBadge(item.status)}
+            </div>
+            <button class="modal-close" onclick="closeModal()">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <!-- 기본 정보 -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+              <div style="background: var(--gray-50); padding: 16px; border-radius: 12px;">
+                <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">기업명</div>
+                <div style="font-size: 16px; font-weight: 600;">${item.companyName || item.name || '-'}</div>
+              </div>
+              <div style="background: var(--gray-50); padding: 16px; border-radius: 12px;">
+                <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">담당자</div>
+                <div style="font-size: 16px; font-weight: 600;">${item.managerName || '-'}</div>
+              </div>
+            </div>
+
+            <!-- 연락처 정보 -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+              <div style="background: #eff6ff; padding: 16px; border-radius: 12px;">
+                <div style="font-size: 12px; color: #1d4ed8; margin-bottom: 6px;">📱 연락처</div>
+                <a href="tel:${(item.contact || item.phone || '').replace(/-/g, '')}" style="font-size: 16px; font-weight: 600; color: #1d4ed8; text-decoration: none;">${item.contact || item.phone || '-'}</a>
+              </div>
+              <div style="background: #f0fdf4; padding: 16px; border-radius: 12px;">
+                <div style="font-size: 12px; color: #16a34a; margin-bottom: 6px;">📧 이메일</div>
+                <div style="font-size: 14px; font-weight: 500; color: #16a34a;">${item.email || '-'}</div>
+              </div>
+            </div>
+
+            ${item.website ? `
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+              <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">🔗 홈페이지</div>
+              <a href="${item.website.startsWith('http') ? item.website : 'https://' + item.website}" target="_blank" style="font-size: 14px; color: var(--info);">${item.website}</a>
+            </div>
+            ` : ''}
+
+            ${item.productLink ? `
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+              <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">📦 상품링크</div>
+              <a href="${item.productLink.startsWith('http') ? item.productLink : 'https://' + item.productLink}" target="_blank" style="font-size: 14px; color: var(--info);">${item.productLink}</a>
+            </div>
+            ` : ''}
+
+            ${item.category ? `
+            <div style="background: #fef3c7; padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+              <div style="font-size: 12px; color: #92400e; margin-bottom: 6px;">📂 카테고리</div>
+              <div style="font-size: 14px; font-weight: 600; color: #92400e;">${item.category}</div>
+            </div>
+            ` : ''}
+
+            ${item.businessType ? `
+            <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+              <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">🏢 사업형태</div>
+              <div style="font-size: 14px; font-weight: 500;">${item.businessType}</div>
+            </div>
+            ` : ''}
+
+            <!-- 문의 내용 / 메모 -->
+            <div style="background: white; border: 1px solid var(--gray-200); padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+              <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">💬 문의 내용</div>
+              <div style="font-size: 14px; line-height: 1.6; white-space: pre-wrap; color: var(--gray-700);">${item.note || item.message || item.notes || '내용 없음'}</div>
+            </div>
+
+            ${item.fileUrl ? `
+            <div style="background: #dbeafe; padding: 16px; border-radius: 12px; margin-bottom: 24px;">
+              <div style="font-size: 12px; color: #1d4ed8; margin-bottom: 6px;">📎 첨부파일</div>
+              <a href="${item.fileUrl}" target="_blank" style="font-size: 14px; color: #1d4ed8; font-weight: 500;">${item.fileName || '파일 다운로드'}</a>
+            </div>
+            ` : ''}
+
+            <!-- 접수 정보 -->
+            <div style="display: flex; justify-content: space-between; padding: 12px 16px; background: var(--gray-50); border-radius: 8px; font-size: 12px; color: var(--gray-500);">
+              <span>접수일: ${formatDate(item.createdAt)}</span>
+              <span>ID: ${id.substring(0, 8)}...</span>
+            </div>
+          </div>
+
+          <!-- 액션 버튼 -->
+          <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
+            <button onclick="closeModal(); openSendModal('${collection}', '${id}', '${(item.name || item.companyName || '').replace(/'/g, "\\'")}', '${item.contact || item.phone || ''}', '${item.email || ''}')" style="padding: 10px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📤 발송</button>
+            <button onclick="closeModal(); openCSMemoModal('${collection}', '${id}', '${(item.name || item.companyName || '').replace(/'/g, "\\'")}', '${item.contact || item.phone || ''}', '${item.email || ''}', '${(item.note || item.message || '').replace(/'/g, "\\'").replace(/\n/g, '\\n')}', true)" style="padding: 10px 20px; background: var(--info); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📝 CS메모</button>
+            <button onclick="closeModal()" style="padding: 10px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">닫기</button>
+          </div>
+        </div>
+      `;
     }
 
     // CS메모 모달 (처리중 전환 + 메모 + 발송 통합)
@@ -4618,11 +4783,12 @@
     }
 
     // 전화문의 저장
-    async function savePhoneInquiry() {
+    async function savePhoneInquiry(type = null) {
       const companyName = document.getElementById('phoneCompanyName')?.value?.trim();
       const contact = document.getElementById('phoneContact')?.value?.trim();
       const inquiryType = document.getElementById('phoneInquiryType')?.value;
       const notes = document.getElementById('phoneNotes')?.value?.trim();
+      const phoneType = type || inboundType || 'supplier'; // 공급사/셀러 구분
 
       if (!companyName || !contact) {
         showToast('회사명과 연락처를 입력해주세요.');
@@ -4630,34 +4796,81 @@
       }
 
       try {
-        await db.collection('supplierApplications').add({
+        await db.collection('phoneInquiries').add({
           companyName: companyName,
           name: companyName,
           phone: contact,
-          sourceType: 'phone_inquiry',
+          contact: contact,
+          type: phoneType, // supplier 또는 seller
           inquiryType: inquiryType,
           notes: notes,
+          note: notes,
           status: 'new',
-          stage: 'inquiry',
           source: 'phone',
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        showToast('✅ 전화문의가 등록되었습니다!');
+        showToast(`✅ ${phoneType === 'supplier' ? '공급사' : '셀러'} 전화문의가 등록되었습니다!`);
 
         // 폼 초기화
-        document.getElementById('phoneCompanyName').value = '';
-        document.getElementById('phoneContact').value = '';
-        document.getElementById('phoneNotes').value = '';
-        document.getElementById('phoneInquiryType').value = 'supplier_inquiry';
+        if (document.getElementById('phoneCompanyName')) document.getElementById('phoneCompanyName').value = '';
+        if (document.getElementById('phoneContact')) document.getElementById('phoneContact').value = '';
+        if (document.getElementById('phoneNotes')) document.getElementById('phoneNotes').value = '';
+        if (document.getElementById('phoneInquiryType')) document.getElementById('phoneInquiryType').value = 'supplier_inquiry';
 
-        // 데이터 새로고침
-        await loadData();
-        render();
+        // 퀵 등록 모달 닫기
+        closeModal();
+
+        // 데이터 새로고침 (realtime으로 이미 반영됨)
+        renderInboundList();
       } catch (error) {
         console.error('전화문의 저장 오류:', error);
         showToast('저장 중 오류가 발생했습니다.');
       }
+    }
+
+    // 전화문의 빠른 등록 모달
+    function openQuickPhoneInquiryModal() {
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+
+      const typeLabel = inboundType === 'supplier' ? '공급사' : '셀러';
+
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header">
+            <h2 class="modal-title">📞 전화문의 빠른 등록 (${typeLabel})</h2>
+            <button class="modal-close" onclick="closeModal()">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">회사명 *</label>
+              <input type="text" id="phoneCompanyName" placeholder="회사명 입력" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연락처 *</label>
+              <input type="tel" id="phoneContact" placeholder="010-0000-0000" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">문의 유형</label>
+              <select id="phoneInquiryType" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+                <option value="general">일반 문의</option>
+                <option value="product_inquiry">상품 문의</option>
+                <option value="partnership">제휴 문의</option>
+                <option value="proposal_request">제안서 요청</option>
+              </select>
+            </div>
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">메모</label>
+              <textarea id="phoneNotes" placeholder="통화 내용 메모..." style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; height: 100px; resize: vertical;"></textarea>
+            </div>
+            <button onclick="savePhoneInquiry('${inboundType}')" style="width: 100%; padding: 14px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;">
+              등록하기
+            </button>
+          </div>
+        </div>
+      `;
     }
 
     // ========================================
@@ -7916,144 +8129,311 @@
       `;
     }
 
-    // 온보딩 카드 렌더링
+    // 온보딩 카드 렌더링 - 간소화된 카드 (클릭 시 상세 모달)
     function renderOnboardingCard(doc) {
       const submittedAt = doc.submittedAt ? new Date(doc.submittedAt) : (doc.createdAt?.toDate ? doc.createdAt.toDate() : new Date());
-      const formattedDate = submittedAt.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const formattedDate = submittedAt.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
       const sourceLabel = doc.source === 'inbound_onboarding' ? '인바운드' : '아웃바운드';
       const sourceColor = doc.source === 'inbound_onboarding' ? '#10b981' : '#3b82f6';
       const productOption = doc.productInfoOption === 'now' ? '지금 등록' : '나중에 등록';
 
-      // 유입 경로 추적 정보
       const tracking = doc.sourceTracking || {};
-
-      // 원본 CRM 문의에서 회사 정보 가져오기
       let companyInfo = null;
       if (tracking.inboundId) {
-        // supplierInquiries, proposalRequests, supplierApplications에서 찾기
         companyInfo = (state.supplierInquiries || []).find(i => i.id === tracking.inboundId) ||
                       (state.proposalRequests || []).find(p => p.id === tracking.inboundId) ||
                       (state.supplierApplications || []).find(a => a.id === tracking.inboundId);
       }
 
-      // 회사명, 담당자, 연락처 추출
       const companyName = companyInfo?.companyName || companyInfo?.name || doc.companyName || '';
       const managerName = companyInfo?.managerName || doc.managerName || '';
       const contact = companyInfo?.contact || companyInfo?.phone || doc.contact || '';
-      const email = companyInfo?.email || doc.email || '';
 
       const isSupplier = onboardingType === 'supplier';
 
+      // 제출 현황 요약
+      const hasExcel = !!doc.productInfoExcel;
+      const hasLicense = !!doc.businessLicense;
+      const hasBank = !!doc.bankAccount;
+      const hasChecklist = !!doc.checklist;
+
       return `
-        <div style="background: var(--gray-50); border: 1px solid var(--gray-200); border-radius: 12px; padding: 20px;">
-          <!-- 회사 정보 헤더 -->
-          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
-            <div style="flex: 1; min-width: 250px;">
-              ${companyName ? `
-                <h3 style="font-size: 18px; font-weight: 700; color: var(--gray-900); margin: 0 0 8px 0; display: flex; align-items: center; gap: 8px;">
-                  🏢 ${companyName}
-                  <span style="background: ${sourceColor}; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">${sourceLabel}</span>
-                </h3>
-                <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--gray-600); margin-bottom: 8px;">
-                  ${managerName ? `<span>👤 ${managerName}</span>` : ''}
-                  ${contact ? `<a href="tel:${contact.replace(/-/g, '')}" style="color: var(--info); text-decoration: none;">📞 ${contact}</a>` : ''}
-                  ${email ? `<a href="mailto:${email}" style="color: var(--info); text-decoration: none;">📧 ${email}</a>` : ''}
-                </div>
-              ` : `
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                  <span style="background: #fef3c7; color: #b45309; padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 600;">⚠️ 회사 정보 미확인</span>
-                  <span style="background: ${sourceColor}; color: white; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">${sourceLabel}</span>
-                </div>
-                <p style="font-size: 12px; color: var(--gray-500); margin: 0;">원본 문의를 확인하거나 사업자등록증을 확인해주세요</p>
-              `}
-              <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
-                ${isSupplier ? `<span style="background: #fef3c7; color: #b45309; padding: 3px 10px; border-radius: 12px; font-size: 11px;">상품정보: ${productOption}</span>` : ''}
-                <span style="font-size: 12px; color: var(--gray-500);">📅 ${formattedDate}</span>
-                ${tracking.inboundId ? `
-                  <button onclick="viewInboundSource('${tracking.inboundId}')" style="padding: 4px 10px; background: #e0f2fe; border: none; border-radius: 6px; color: #0369a1; font-size: 11px; cursor: pointer; font-weight: 500;">
-                    📋 원본 문의 ID: ${tracking.inboundId.substring(0, 8)}...
-                  </button>
-                ` : ''}
-              </div>
+        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.04);"
+             onmouseover="this.style.borderColor='var(--primary)'; this.style.boxShadow='0 4px 12px rgba(0,192,115,0.15)';"
+             onmouseout="this.style.borderColor='var(--gray-200)'; this.style.boxShadow='0 1px 2px rgba(0,0,0,0.04)';"
+             onclick="openOnboardingDetailModal('${doc.id}')">
+
+          <!-- 상단: 기업명 + 상태 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 18px; font-weight: 700; color: var(--gray-900);">
+                ${companyName || '회사명 미확인'}
+              </span>
+              <span style="background: ${sourceColor}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;">${sourceLabel}</span>
             </div>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              ${isSupplier ? `
-                <button onclick="openSupplierMatchModalCRM('${doc.id}')" style="padding: 8px 16px; background: #7c3aed; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                  🔗 공급사 매칭
-                </button>
-                ${(doc.productInfoExcel || (doc.productInfoDirect && doc.productInfoDirect.length > 0)) ? `
-                  <button onclick="importProductsFromOnboardingCRM('${doc.id}')" style="padding: 8px 16px; background: #8b5cf6; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                    📦 상품 이관
-                  </button>
-                ` : ''}
-              ` : `
-                <button onclick="openSellerMatchModalCRM('${doc.id}')" style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                  🔗 셀러 매칭
-                </button>
-              `}
-              <button onclick="deletePendingOnboardingCRM('${doc.id}', '${isSupplier ? 'supplier' : 'seller'}')" style="padding: 8px 16px; background: #ef4444; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                🗑️ 삭제
+            <span style="font-size: 12px; color: var(--gray-500);">${formattedDate}</span>
+          </div>
+
+          <!-- 중간: 담당자/연락처 -->
+          <div style="display: flex; gap: 16px; font-size: 13px; color: var(--gray-600); margin-bottom: 12px;">
+            ${managerName ? `<span>👤 ${managerName}</span>` : ''}
+            ${contact ? `<span style="color: var(--info);">📞 ${contact}</span>` : ''}
+          </div>
+
+          <!-- 하단: 제출 현황 요약 -->
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            ${isSupplier ? `
+              <span style="padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500; ${hasExcel ? 'background: #dcfce7; color: #166534;' : 'background: #fef3c7; color: #92400e;'}">
+                ${hasExcel ? '✅' : '⏳'} 상품정보
+              </span>
+            ` : ''}
+            <span style="padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500; ${hasLicense ? 'background: #dcfce7; color: #166534;' : 'background: #fee2e2; color: #dc2626;'}">
+              ${hasLicense ? '✅' : '❌'} 사업자등록증
+            </span>
+            <span style="padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500; ${hasBank ? 'background: #dcfce7; color: #166534;' : 'background: #fee2e2; color: #dc2626;'}">
+              ${hasBank ? '✅' : '❌'} 통장사본
+            </span>
+            ${hasChecklist ? `
+              <span style="padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500; background: #dbeafe; color: #1e40af;">
+                📋 협업조건
+              </span>
+            ` : ''}
+          </div>
+
+          <!-- 액션 버튼 (클릭 이벤트 전파 방지) -->
+          <div style="display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-100);" onclick="event.stopPropagation()">
+            ${isSupplier ? `
+              <button onclick="openSupplierMatchModalCRM('${doc.id}')" style="flex: 1; padding: 8px; background: #7c3aed; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                🔗 공급사 매칭
               </button>
-            </div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
-            ${doc.productInfoExcel ? `
-              <a href="${doc.productInfoExcel}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: white; border: 1px solid var(--gray-200); border-radius: 8px; padding: 16px; text-decoration: none; color: inherit; transition: all 0.2s;">
-                <span style="font-size: 32px;">📊</span>
-                <span style="font-size: 12px; font-weight: 600; color: var(--gray-700);">상품정보 엑셀</span>
-                <span style="font-size: 11px; color: var(--primary);">클릭하여 보기</span>
-              </a>
-            ` : (isSupplier ? `
-              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: var(--gray-100); border: 1px dashed var(--gray-300); border-radius: 8px; padding: 16px; color: var(--gray-400);">
-                <span style="font-size: 32px; opacity: 0.5;">📊</span>
-                <span style="font-size: 12px;">상품정보 없음</span>
-                <span style="font-size: 11px;">나중에 등록 예정</span>
-              </div>
-            ` : '')}
-
-            ${doc.businessLicense ? `
-              <a href="${doc.businessLicense}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: white; border: 1px solid var(--gray-200); border-radius: 8px; padding: 16px; text-decoration: none; color: inherit; transition: all 0.2s;">
-                <span style="font-size: 32px;">🏢</span>
-                <span style="font-size: 12px; font-weight: 600; color: var(--gray-700);">사업자등록증</span>
-                <span style="font-size: 11px; color: var(--primary);">클릭하여 보기</span>
-              </a>
-            ` : `
-              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: var(--gray-100); border: 1px dashed var(--gray-300); border-radius: 8px; padding: 16px; color: var(--gray-400);">
-                <span style="font-size: 32px; opacity: 0.5;">🏢</span>
-                <span style="font-size: 12px;">사업자등록증 없음</span>
-              </div>
-            `}
-
-            ${doc.bankAccount ? `
-              <a href="${doc.bankAccount}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: white; border: 1px solid var(--gray-200); border-radius: 8px; padding: 16px; text-decoration: none; color: inherit; transition: all 0.2s;">
-                <span style="font-size: 32px;">🏦</span>
-                <span style="font-size: 12px; font-weight: 600; color: var(--gray-700);">통장사본</span>
-                <span style="font-size: 11px; color: var(--primary);">클릭하여 보기</span>
-              </a>
-            ` : `
-              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: var(--gray-100); border: 1px dashed var(--gray-300); border-radius: 8px; padding: 16px; color: var(--gray-400);">
-                <span style="font-size: 32px; opacity: 0.5;">🏦</span>
-                <span style="font-size: 12px;">통장사본 없음</span>
-              </div>
-            `}
-          </div>
-
-          ${doc.checklist ? `
-            <div style="margin-top: 16px; padding: 12px; background: white; border: 1px solid var(--gray-200); border-radius: 8px;">
-              <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📋 협업 조건</div>
-              <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px;">
-                ${doc.checklist.dealTiming ? `<span style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px;">공구일정: ${doc.checklist.dealTiming}</span>` : ''}
-                ${doc.checklist.sellerAssignment ? `<span style="background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 4px;">셀러배정: ${Array.isArray(doc.checklist.sellerAssignment) ? doc.checklist.sellerAssignment.join(', ') : doc.checklist.sellerAssignment}</span>` : ''}
-                ${doc.checklist.sampleSupport ? `<span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px;">샘플: ${Array.isArray(doc.checklist.sampleSupport) ? doc.checklist.sampleSupport.join(', ') : doc.checklist.sampleSupport}</span>` : ''}
-              </div>
-              ${doc.checklist.additionalRequests ? `
-                <div style="margin-top: 8px; padding: 8px; background: var(--gray-50); border-radius: 4px; font-size: 11px; color: var(--gray-600);">
-                  💬 ${doc.checklist.additionalRequests}
-                </div>
+              ${hasExcel ? `
+                <button onclick="importProductsFromOnboardingCRM('${doc.id}')" style="flex: 1; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                  📦 상품 이관
+                </button>
               ` : ''}
+            ` : `
+              <button onclick="openSellerMatchModalCRM('${doc.id}')" style="flex: 1; padding: 8px; background: #3b82f6; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                🔗 셀러 매칭
+              </button>
+            `}
+            <button onclick="deletePendingOnboardingCRM('${doc.id}', '${isSupplier ? 'supplier' : 'seller'}')" style="padding: 8px 12px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+              🗑️
+            </button>
+          </div>
+        </div>
+      `;
+    }
+
+    // 온보딩 상세 모달
+    function openOnboardingDetailModal(docId) {
+      const isSupplier = onboardingType === 'supplier';
+      const data = isSupplier ? state.pendingSupplierOnboardings : state.pendingSellerOnboardings;
+      const doc = data.find(d => d.id === docId);
+
+      if (!doc) {
+        showToast('데이터를 찾을 수 없습니다.');
+        return;
+      }
+
+      const tracking = doc.sourceTracking || {};
+      let companyInfo = null;
+      if (tracking.inboundId) {
+        companyInfo = (state.supplierInquiries || []).find(i => i.id === tracking.inboundId) ||
+                      (state.proposalRequests || []).find(p => p.id === tracking.inboundId) ||
+                      (state.supplierApplications || []).find(a => a.id === tracking.inboundId);
+      }
+
+      const companyName = companyInfo?.companyName || companyInfo?.name || doc.companyName || '-';
+      const managerName = companyInfo?.managerName || doc.managerName || '-';
+      const contact = companyInfo?.contact || companyInfo?.phone || doc.contact || '-';
+      const email = companyInfo?.email || doc.email || '-';
+
+      const submittedAt = doc.submittedAt ? new Date(doc.submittedAt) : (doc.createdAt?.toDate ? doc.createdAt.toDate() : new Date());
+      const formattedDate = submittedAt.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const sourceLabel = doc.source === 'inbound_onboarding' ? '인바운드' : '아웃바운드';
+      const sourceColor = doc.source === 'inbound_onboarding' ? '#10b981' : '#3b82f6';
+      const checklist = doc.checklist || {};
+
+      // 협업조건 라벨 매핑
+      const dealTimingLabels = {
+        'asap': '빠른 시일 내',
+        'within1month': '1개월 이내',
+        'flexible': '협의 가능',
+        'undecided': '미정'
+      };
+      const sellerLabels = {
+        'allSellers': '전체 셀러 배정',
+        'negotiable': '협의 후 결정',
+        'groupDeal': '공동구매 전용'
+      };
+      const sampleLabels = {
+        'free': '무료 샘플 제공',
+        'discounted': '할인가 샘플 제공',
+        'noSample': '샘플 제공 불가'
+      };
+
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 800px;">
+          <div class="modal-header" style="border-bottom: 1px solid var(--gray-200);">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <h2 class="modal-title" style="margin: 0;">📄 온보딩 상세</h2>
+              <span style="background: ${sourceColor}; color: white; padding: 4px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;">${sourceLabel}</span>
             </div>
-          ` : ''}
+            <button class="modal-close" onclick="closeModal()">×</button>
+          </div>
+
+          <div style="padding: 24px; max-height: 70vh; overflow-y: auto;">
+            <!-- 기본 정보 섹션 -->
+            <div style="background: linear-gradient(135deg, #f8fafc, #f1f5f9); padding: 20px; border-radius: 12px; margin-bottom: 24px;">
+              <h3 style="font-size: 20px; font-weight: 700; margin: 0 0 16px 0;">🏢 ${companyName}</h3>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">담당자</div>
+                  <div style="font-size: 15px; font-weight: 600;">${managerName}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">연락처</div>
+                  <a href="tel:${contact.replace(/-/g, '')}" style="font-size: 15px; font-weight: 600; color: var(--info); text-decoration: none;">${contact}</a>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">이메일</div>
+                  <div style="font-size: 15px;">${email}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">접수일</div>
+                  <div style="font-size: 15px;">${formattedDate}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 제출 서류 섹션 -->
+            <div style="margin-bottom: 24px;">
+              <h4 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 12px 0;">📎 제출 서류</h4>
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+                ${isSupplier ? `
+                  ${doc.productInfoExcel ? `
+                    <a href="${doc.productInfoExcel}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit;">
+                      <span style="font-size: 36px;">📊</span>
+                      <span style="font-size: 13px; font-weight: 600; color: #166534;">상품정보 엑셀</span>
+                      <span style="font-size: 11px; color: #15803d;">클릭하여 다운로드</span>
+                    </a>
+                  ` : `
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fef3c7; border: 2px dashed #fcd34d; border-radius: 12px; padding: 20px;">
+                      <span style="font-size: 36px; opacity: 0.6;">📊</span>
+                      <span style="font-size: 13px; font-weight: 600; color: #92400e;">상품정보</span>
+                      <span style="font-size: 11px; color: #b45309;">나중에 등록 예정</span>
+                    </div>
+                  `}
+                ` : ''}
+
+                ${doc.businessLicense ? `
+                  <a href="${doc.businessLicense}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 36px;">🏢</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #166534;">사업자등록증</span>
+                    <span style="font-size: 11px; color: #15803d;">클릭하여 보기</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fee2e2; border: 2px dashed #fca5a5; border-radius: 12px; padding: 20px;">
+                    <span style="font-size: 36px; opacity: 0.6;">🏢</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #dc2626;">사업자등록증</span>
+                    <span style="font-size: 11px; color: #b91c1c;">미제출</span>
+                  </div>
+                `}
+
+                ${doc.bankAccount ? `
+                  <a href="${doc.bankAccount}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 36px;">🏦</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #166534;">통장사본</span>
+                    <span style="font-size: 11px; color: #15803d;">클릭하여 보기</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fee2e2; border: 2px dashed #fca5a5; border-radius: 12px; padding: 20px;">
+                    <span style="font-size: 36px; opacity: 0.6;">🏦</span>
+                    <span style="font-size: 13px; font-weight: 600; color: #dc2626;">통장사본</span>
+                    <span style="font-size: 11px; color: #b91c1c;">미제출</span>
+                  </div>
+                `}
+              </div>
+            </div>
+
+            <!-- 협업 조건 섹션 -->
+            ${Object.keys(checklist).length > 0 ? `
+              <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 20px;">
+                <h4 style="font-size: 14px; font-weight: 700; color: #1e40af; margin: 0 0 16px 0;">📋 협업 조건</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                  ${checklist.dealTiming ? `
+                    <div style="background: white; padding: 12px 16px; border-radius: 8px;">
+                      <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">공구 일정</div>
+                      <div style="font-size: 14px; font-weight: 600; color: #166534;">${dealTimingLabels[checklist.dealTiming] || checklist.dealTiming}</div>
+                    </div>
+                  ` : ''}
+                  ${checklist.sellerAssignment ? `
+                    <div style="background: white; padding: 12px 16px; border-radius: 8px;">
+                      <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">셀러 배정</div>
+                      <div style="font-size: 14px; font-weight: 600; color: #1e40af;">
+                        ${Array.isArray(checklist.sellerAssignment)
+                          ? checklist.sellerAssignment.map(s => sellerLabels[s] || s).join(', ')
+                          : sellerLabels[checklist.sellerAssignment] || checklist.sellerAssignment}
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${checklist.sampleSupport ? `
+                    <div style="background: white; padding: 12px 16px; border-radius: 8px;">
+                      <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">샘플 지원</div>
+                      <div style="font-size: 14px; font-weight: 600; color: #92400e;">
+                        ${Array.isArray(checklist.sampleSupport)
+                          ? checklist.sampleSupport.map(s => sampleLabels[s] || s).join(', ')
+                          : sampleLabels[checklist.sampleSupport] || checklist.sampleSupport}
+                      </div>
+                    </div>
+                  ` : ''}
+                  ${checklist.exportInterest ? `
+                    <div style="background: linear-gradient(135deg, #dbeafe, #eff6ff); padding: 12px 16px; border-radius: 8px; grid-column: span 2;">
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 24px;">🌏</span>
+                        <div>
+                          <div style="font-size: 14px; font-weight: 700; color: #1d4ed8;">해외수출판매 희망</div>
+                          <div style="font-size: 11px; color: #2563eb;">해외 시장 진출에 관심이 있습니다</div>
+                        </div>
+                      </div>
+                    </div>
+                  ` : ''}
+                </div>
+                ${checklist.additionalRequests ? `
+                  <div style="margin-top: 16px; background: white; padding: 12px 16px; border-radius: 8px;">
+                    <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">추가 요청사항</div>
+                    <div style="font-size: 14px; color: var(--gray-700); line-height: 1.5; white-space: pre-wrap;">${checklist.additionalRequests}</div>
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
+
+            ${tracking.inboundId ? `
+              <div style="margin-top: 16px; padding: 12px 16px; background: var(--gray-50); border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 12px; color: var(--gray-500);">원본 문의 ID: ${tracking.inboundId.substring(0, 12)}...</span>
+                <button onclick="closeModal(); viewInboundSource('${tracking.inboundId}')" style="padding: 6px 12px; background: #e0f2fe; border: none; border-radius: 6px; color: #0369a1; font-size: 12px; cursor: pointer; font-weight: 500;">
+                  원본 문의 보기
+                </button>
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- 액션 버튼 -->
+          <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
+            ${isSupplier ? `
+              <button onclick="closeModal(); openSupplierMatchModalCRM('${doc.id}')" style="padding: 10px 20px; background: #7c3aed; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">🔗 공급사 매칭</button>
+              ${doc.productInfoExcel ? `
+                <button onclick="closeModal(); importProductsFromOnboardingCRM('${doc.id}')" style="padding: 10px 20px; background: #8b5cf6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📦 상품 이관</button>
+              ` : ''}
+            ` : `
+              <button onclick="closeModal(); openSellerMatchModalCRM('${doc.id}')" style="padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">🔗 셀러 매칭</button>
+            `}
+            <button onclick="closeModal()" style="padding: 10px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">닫기</button>
+          </div>
         </div>
       `;
     }
