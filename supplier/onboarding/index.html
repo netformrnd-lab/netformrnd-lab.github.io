@@ -633,13 +633,16 @@
                 <span style="font-size: 28px;">💡</span>
                 <div>
                     <div style="font-weight: 700; color: #1d4ed8; font-size: 16px;">이미 입점 문의하셨나요?</div>
-                    <div style="font-size: 13px; color: #3b82f6;">연락처로 조회하면 정보를 다시 입력하지 않아도 됩니다</div>
+                    <div style="font-size: 13px; color: #3b82f6;">연락처와 회사명으로 조회하면 정보를 다시 입력하지 않아도 됩니다</div>
                 </div>
             </div>
-            <div style="display: flex; gap: 8px;">
-                <input type="tel" id="lookup-phone" placeholder="연락처 입력 (010-0000-0000)" style="flex: 1; padding: 12px 14px; border: 1px solid #93c5fd; border-radius: 8px; font-size: 14px;">
-                <button type="button" onclick="lookupByPhone()" style="padding: 12px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap;">
-                    조회하기
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <div style="display: flex; gap: 8px;">
+                    <input type="tel" id="lookup-phone" placeholder="연락처 (010-0000-0000)" style="flex: 1; padding: 12px 14px; border: 1px solid #93c5fd; border-radius: 8px; font-size: 14px;">
+                    <input type="text" id="lookup-company" placeholder="회사명" style="flex: 1; padding: 12px 14px; border: 1px solid #93c5fd; border-radius: 8px; font-size: 14px;">
+                </div>
+                <button type="button" onclick="lookupByPhone()" style="padding: 12px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                    🔍 조회하기
                 </button>
             </div>
             <div style="margin-top: 12px; font-size: 11px; color: #64748b; text-align: center;">
@@ -1196,10 +1199,21 @@
             if (lookupSection) lookupSection.style.display = 'none';
         }
 
+        // 회사명 정규화 (비교용)
+        function normalizeCompanyName(name) {
+            if (!name) return '';
+            return name
+                .replace(/\(주\)|주식회사|㈜|\s+/gi, '')
+                .toLowerCase()
+                .trim();
+        }
+
         async function lookupByPhone() {
             const phone = document.getElementById('lookup-phone')?.value?.trim();
-            if (!phone) {
-                alert('연락처를 입력해주세요.');
+            const companyName = document.getElementById('lookup-company')?.value?.trim();
+
+            if (!phone || !companyName) {
+                alert('연락처와 회사명을 모두 입력해주세요.');
                 return;
             }
 
@@ -1207,16 +1221,34 @@
                 const snapshot = await db.collection('supplierApplications')
                     .where('phone', '==', phone)
                     .orderBy('createdAt', 'desc')
-                    .limit(1)
+                    .limit(5)
                     .get();
 
                 if (!snapshot.empty) {
-                    const doc = snapshot.docs[0];
-                    applicationData = doc.data();
-                    sourceTracking.inboundId = doc.id;
-                    showLoadedDataNotice(applicationData);
-                    hideInquiryLookup();
-                    alert('입점신청 정보를 찾았습니다!');
+                    // 입력한 회사명과 매칭되는 문서 찾기
+                    const inputNormalized = normalizeCompanyName(companyName);
+                    let matchedDoc = null;
+
+                    for (const doc of snapshot.docs) {
+                        const data = doc.data();
+                        const dbNormalized = normalizeCompanyName(data.companyName);
+
+                        // 포함 여부 확인 (양방향)
+                        if (dbNormalized.includes(inputNormalized) || inputNormalized.includes(dbNormalized)) {
+                            matchedDoc = { id: doc.id, data: data };
+                            break;
+                        }
+                    }
+
+                    if (matchedDoc) {
+                        applicationData = matchedDoc.data;
+                        sourceTracking.inboundId = matchedDoc.id;
+                        showLoadedDataNotice(applicationData);
+                        hideInquiryLookup();
+                        alert('입점신청 정보를 찾았습니다!');
+                    } else {
+                        alert('연락처는 있지만 회사명이 일치하지 않습니다.\n다시 확인해주세요.');
+                    }
                 } else {
                     alert('해당 연락처로 등록된 신청 정보가 없습니다.\n처음 신청하시는 경우 아래 양식을 작성해주세요.');
                 }
