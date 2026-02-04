@@ -354,6 +354,67 @@
             color: var(--text-muted);
         }
 
+        /* 타임라인 스타일 */
+        .proposal-timeline {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            border-radius: 12px;
+            margin-bottom: 16px;
+            font-size: 12px;
+        }
+
+        .timeline-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-muted);
+        }
+
+        .timeline-item i {
+            width: 16px;
+            text-align: center;
+            font-size: 11px;
+        }
+
+        .timeline-item.completed i {
+            color: var(--green);
+        }
+
+        .timeline-item.shared i {
+            color: var(--blue);
+        }
+
+        .timeline-item.viewed i {
+            color: var(--purple);
+        }
+
+        .timeline-label {
+            min-width: 60px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .timeline-time {
+            color: var(--text-muted);
+        }
+
+        .timeline-item.pending {
+            opacity: 0.5;
+        }
+
+        /* 데이터 대시보드 버튼 */
+        .btn-analytics {
+            background: linear-gradient(135deg, var(--purple) 0%, #7c3aed 100%);
+            color: white;
+        }
+
+        .btn-analytics:hover {
+            background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+        }
+
         .proposal-actions {
             display: flex;
             gap: 8px;
@@ -720,9 +781,35 @@
 
         // 제안서 카드 렌더링
         function renderProposalCard(proposal) {
-            const createdAt = proposal.createdAt ? new Date(proposal.createdAt).toLocaleDateString('ko-KR') : '-';
             const viewCount = proposal.viewCount || 0;
             const stage = proposal.stage || 'sent';
+
+            // 시간 포맷팅 함수
+            const formatDateTime = (timestamp) => {
+                if (!timestamp) return null;
+                const date = new Date(timestamp);
+                const now = new Date();
+                const diffMs = now - date;
+                const diffMins = Math.floor(diffMs / 60000);
+                const diffHours = Math.floor(diffMs / 3600000);
+                const diffDays = Math.floor(diffMs / 86400000);
+
+                if (diffMins < 1) return '방금 전';
+                if (diffMins < 60) return `${diffMins}분 전`;
+                if (diffHours < 24) return `${diffHours}시간 전`;
+                if (diffDays < 7) return `${diffDays}일 전`;
+
+                return date.toLocaleDateString('ko-KR', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            };
+
+            const createdAtFormatted = formatDateTime(proposal.createdAt) || '-';
+            const sharedAtFormatted = formatDateTime(proposal.sharedAt);
+            const lastViewedAtFormatted = formatDateTime(proposal.lastViewedAt);
 
             let statusClass = 'status-sent';
             let statusText = '발송됨';
@@ -745,9 +832,6 @@
                         <span class="proposal-status ${statusClass}">${statusText}</span>
                     </div>
                     <div class="proposal-meta">
-                        <span class="proposal-meta-item">
-                            <i class="fas fa-calendar"></i> ${createdAt}
-                        </span>
                         ${proposal.category ? `
                         <span class="proposal-meta-item">
                             <i class="fas fa-tag"></i> ${proposal.category}
@@ -756,6 +840,24 @@
                         <span class="proposal-meta-item">
                             <i class="fas fa-user"></i> ${proposal.managerName || '-'}
                         </span>
+                    </div>
+                    <div class="proposal-timeline">
+                        <div class="timeline-item completed">
+                            <i class="fas fa-check-circle"></i>
+                            <span class="timeline-label">작성완료</span>
+                            <span class="timeline-time">${createdAtFormatted}</span>
+                        </div>
+                        <div class="timeline-item ${sharedAtFormatted ? 'shared' : 'pending'}">
+                            <i class="fas fa-share-alt"></i>
+                            <span class="timeline-label">링크공유</span>
+                            <span class="timeline-time">${sharedAtFormatted || '아직 공유 안됨'}</span>
+                        </div>
+                        <div class="timeline-item ${lastViewedAtFormatted ? 'viewed' : 'pending'}">
+                            <i class="fas fa-eye"></i>
+                            <span class="timeline-label">마지막열람</span>
+                            <span class="timeline-time">${lastViewedAtFormatted || '아직 열람 안됨'}</span>
+                            ${viewCount > 0 ? `<span style="margin-left: auto; color: var(--purple); font-weight: 600;">(${viewCount}회)</span>` : ''}
+                        </div>
                     </div>
                     <div class="proposal-stats">
                         <div class="stat-item">
@@ -776,10 +878,10 @@
                             <i class="fas fa-eye"></i> 보기
                         </a>
                         <button class="btn btn-outline" onclick="copyLink('${proposal.id}')">
-                            <i class="fas fa-link"></i> 링크
+                            <i class="fas fa-link"></i> 공유
                         </button>
-                        <a href="analytics.html?id=${proposal.id}" class="btn btn-outline">
-                            <i class="fas fa-chart-bar"></i>
+                        <a href="analytics.html?id=${proposal.id}" class="btn btn-analytics">
+                            <i class="fas fa-chart-bar"></i> 분석
                         </a>
                     </div>
                 </div>
@@ -797,12 +899,14 @@
             }
         }
 
-        // 링크 복사
-        function copyLink(id) {
+        // 링크 복사 (첫 공유 시간 기록)
+        async function copyLink(id) {
             const url = `${window.location.origin}/supplier/custom-proposal/view.html?id=${id}`;
-            navigator.clipboard.writeText(url).then(() => {
-                showToast('링크가 복사되었습니다', 'success');
-            }).catch(() => {
+
+            // 클립보드에 복사
+            try {
+                await navigator.clipboard.writeText(url);
+            } catch {
                 // 폴백: textarea 사용
                 const textarea = document.createElement('textarea');
                 textarea.value = url;
@@ -810,8 +914,26 @@
                 textarea.select();
                 document.execCommand('copy');
                 document.body.removeChild(textarea);
+            }
+
+            // 첫 공유 시간 기록 (아직 없는 경우에만)
+            const proposal = proposals.find(p => p.id === id);
+            if (proposal && !proposal.sharedAt) {
+                try {
+                    const now = Date.now();
+                    await db.collection('proposalDerivatives').doc(id).update({
+                        sharedAt: now
+                    });
+                    proposal.sharedAt = now;
+                    renderContent(); // UI 업데이트
+                    showToast('링크가 복사되었습니다 (첫 공유 기록됨)', 'success');
+                } catch (err) {
+                    console.error('공유 시간 저장 실패:', err);
+                    showToast('링크가 복사되었습니다', 'success');
+                }
+            } else {
                 showToast('링크가 복사되었습니다', 'success');
-            });
+            }
         }
 
         // 토스트

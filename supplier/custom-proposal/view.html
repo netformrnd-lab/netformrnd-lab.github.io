@@ -947,6 +947,64 @@
             display: block;
         }
 
+        /* 다중 이미지 그리드 */
+        .selling-point-images-grid {
+            display: grid;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .selling-point-images-grid.single {
+            grid-template-columns: 1fr;
+        }
+
+        .selling-point-images-grid.double {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .selling-point-images-grid.triple {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .selling-point-images-grid .selling-point-image-wrapper {
+            aspect-ratio: 4/3;
+        }
+
+        .selling-point-images-grid .selling-point-image-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* AI 배지 */
+        .selling-point-image-header .ai-badge {
+            padding: 4px 10px;
+            background: linear-gradient(135deg, #8b5cf6, #6366f1);
+            color: white;
+            font-size: 10px;
+            font-weight: 700;
+            border-radius: 12px;
+            margin-left: auto;
+        }
+
+        /* 마케팅 메시지 */
+        .selling-point-marketing-msg {
+            padding: 14px 18px;
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05));
+            border-left: 3px solid var(--green);
+            border-radius: 0 12px 12px 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--green);
+            font-style: italic;
+        }
+
+        .selling-point-marketing-msg i {
+            margin-right: 8px;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
         /* 상품 슬라이드 내 브랜드 메시지 */
         .product-brand-message {
             background: linear-gradient(135deg, rgba(249, 115, 22, 0.1), rgba(249, 115, 22, 0.05));
@@ -3782,12 +3840,26 @@
                     const productTemplate = categoryTemplates[productCategory] || template;
                     const pStrategy = generateProductStrategy(product, idx, productCategory, productTemplate);
                     const analysis = product.analysis || {};
+                    const imageAnalysis = product.imageAnalysis || {};
                     const currentSlide = slideNum + idx;
 
-                    // 셀링 포인트 배지 생성
-                    const sellingPointsBadges = (analysis.sellingPoints || [])
+                    // 셀링 포인트 배지 생성 (URL 분석 + 이미지 분석 결과 통합)
+                    const allSellingPoints = [
+                        ...(analysis.sellingPoints || []),
+                        ...(imageAnalysis.sellingPoints || [])
+                    ];
+                    const uniqueSellingPoints = [...new Set(allSellingPoints)].slice(0, 5);
+                    const sellingPointsBadges = uniqueSellingPoints
                         .map(sp => `<span class="selling-point-badge">${sp}</span>`)
                         .join('');
+
+                    // 이미지 분석 마케팅 메시지
+                    const marketingMessage = imageAnalysis.marketingMessage || analysis.hook || pStrategy.hook;
+                    const targetAudience = imageAnalysis.targetAudience || analysis.targetAudience || pStrategy.targetAudience;
+
+                    // 다중 소구점 이미지 (최대 3장 표시)
+                    const sellingPointImages = product.sellingPointImages || (product.sellingPointImage ? [product.sellingPointImage] : []);
+                    const displayImages = sellingPointImages.slice(0, 3);
 
                     productSlides += `
                         <!-- 슬라이드 ${currentSlide}: 상품 ${idx + 1} -->
@@ -3856,16 +3928,27 @@
                                                         }</p>
                                                     </div>
                                                 </div>
-                                                ${product.sellingPointImage ? `
+                                                ${displayImages.length > 0 ? `
                                                 <div class="product-strategy-item highlight-strategy selling-point-image-item">
                                                     <div class="selling-point-image-display">
                                                         <div class="selling-point-image-header">
                                                             <span class="selling-point-icon">🎯</span>
                                                             <h4>핵심 공구 포인트</h4>
+                                                            ${imageAnalysis.sellingPoints?.length > 0 ? '<span class="ai-badge">AI 분석</span>' : ''}
                                                         </div>
-                                                        <div class="selling-point-image-wrapper">
-                                                            <img src="${product.sellingPointImage}" alt="핵심 공구 포인트">
+                                                        <div class="selling-point-images-grid ${displayImages.length === 1 ? 'single' : displayImages.length === 2 ? 'double' : 'triple'}">
+                                                            ${displayImages.map((img, imgIdx) => `
+                                                                <div class="selling-point-image-wrapper">
+                                                                    <img src="${img}" alt="핵심 공구 포인트 ${imgIdx + 1}">
+                                                                </div>
+                                                            `).join('')}
                                                         </div>
+                                                        ${imageAnalysis.marketingMessage ? `
+                                                        <div class="selling-point-marketing-msg">
+                                                            <i class="fas fa-quote-left"></i>
+                                                            "${imageAnalysis.marketingMessage}"
+                                                        </div>
+                                                        ` : ''}
                                                     </div>
                                                 </div>
                                                 ` : `
@@ -3873,10 +3956,7 @@
                                                     <div class="product-strategy-icon">🎯</div>
                                                     <div class="product-strategy-content">
                                                         <h4>핵심 공구 포인트</h4>
-                                                        <p>${hasAnalysis
-                                                            ? `"<strong>${analysis.hook}</strong>"`
-                                                            : `"${pStrategy.hook}" 메시지로 구매 전환율을 높입니다.`
-                                                        }</p>
+                                                        <p>"<strong>${marketingMessage}</strong>" 메시지로 구매 전환율을 높입니다.</p>
                                                     </div>
                                                 </div>
                                                 `}
@@ -4905,10 +4985,10 @@
         // 조회 추적
         async function trackView() {
             try {
-                // 조회수 증가
+                // 조회수 증가 및 마지막 열람 시간 기록
                 await db.collection('proposalDerivatives').doc(proposalId).update({
                     viewCount: firebase.firestore.FieldValue.increment(1),
-                    lastViewedAt: new Date().toISOString()
+                    lastViewedAt: Date.now()
                 });
 
                 // 세션 기록
