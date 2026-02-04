@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>셀러 맞춤 제안서 - 모여라딜</title>
+    <link rel="icon" type="image/png" href="../../admin/favicon.png">
+    <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #0f172a;
+            --accent: #3b82f6;
+            --accent-light: #60a5fa;
+            --text: #ffffff;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            font-family: 'Pretendard', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            text-align: center;
+            padding: 40px;
+            max-width: 600px;
+        }
+
+        .icon {
+            font-size: 80px;
+            margin-bottom: 32px;
+        }
+
+        .title {
+            font-size: 32px;
+            font-weight: 800;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .desc {
+            font-size: 18px;
+            color: var(--text-muted);
+            line-height: 1.8;
+            margin-bottom: 40px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px 32px;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+        }
+
+        .loading {
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .loading i {
+            font-size: 48px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 24px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .proposal-info {
+            display: none;
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 32px;
+            text-align: left;
+        }
+
+        .proposal-info.show {
+            display: block;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            color: var(--text-muted);
+        }
+
+        .info-value {
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 로딩 상태 -->
+        <div class="loading show" id="loading">
+            <i class="fas fa-spinner"></i>
+            <p>제안서를 불러오는 중...</p>
+        </div>
+
+        <!-- 제안서 정보 -->
+        <div class="proposal-info" id="proposalInfo">
+            <div class="info-item">
+                <span class="info-label">셀러명</span>
+                <span class="info-value" id="sellerName">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">스토어명</span>
+                <span class="info-value" id="storeName">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">카테고리</span>
+                <span class="info-value" id="category">-</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">작성일</span>
+                <span class="info-value" id="createdAt">-</span>
+            </div>
+        </div>
+
+        <!-- 메인 콘텐츠 -->
+        <div id="mainContent" style="display: none;">
+            <div class="icon">🛍️</div>
+            <h1 class="title">셀러 맞춤 제안서</h1>
+            <p class="desc" id="description">
+                셀러 맞춤 제안서 뷰어가 곧 준비됩니다.<br>
+                현재는 기본 정보만 확인 가능합니다.
+            </p>
+            <a href="list.html" class="btn">
+                <i class="fas fa-arrow-left"></i> 목록으로 돌아가기
+            </a>
+        </div>
+
+        <!-- 에러 상태 -->
+        <div id="errorContent" style="display: none;">
+            <div class="icon">😢</div>
+            <h1 class="title">제안서를 찾을 수 없습니다</h1>
+            <p class="desc">
+                요청하신 제안서가 존재하지 않거나<br>
+                삭제되었을 수 있습니다.
+            </p>
+            <a href="list.html" class="btn">
+                <i class="fas fa-arrow-left"></i> 목록으로 돌아가기
+            </a>
+        </div>
+    </div>
+
+    <script>
+        // Firebase 설정
+        const firebaseConfig = {
+            apiKey: "AIzaSyD_F0F6MBlMGcwBpVvFYsmztXaKKSeAv3Q",
+            authDomain: "myd-db-test-1.firebaseapp.com",
+            projectId: "myd-db-test-1",
+            storageBucket: "myd-db-test-1.firebasestorage.app",
+            messagingSenderId: "368468337741",
+            appId: "1:368468337741:web:46d64e6a182aded8a45a5f"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        const COLLECTION_NAME = 'sellerProposalDerivatives';
+
+        // URL에서 제안서 ID 추출
+        const urlParams = new URLSearchParams(window.location.search);
+        const proposalId = urlParams.get('id');
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!proposalId) {
+                showError();
+                return;
+            }
+
+            try {
+                // 제안서 데이터 로드
+                const doc = await db.collection(COLLECTION_NAME).doc(proposalId).get();
+
+                if (!doc.exists) {
+                    showError();
+                    return;
+                }
+
+                const data = doc.data();
+
+                // 조회수 증가 및 마지막 열람 시간 기록
+                await db.collection(COLLECTION_NAME).doc(proposalId).update({
+                    viewCount: firebase.firestore.FieldValue.increment(1),
+                    lastViewedAt: Date.now()
+                });
+
+                // 제안서 정보 표시
+                document.getElementById('sellerName').textContent = data.sellerName || '-';
+                document.getElementById('storeName').textContent = data.storeName || '-';
+                document.getElementById('category').textContent = data.category || '-';
+                document.getElementById('createdAt').textContent = data.createdAt
+                    ? new Date(data.createdAt).toLocaleDateString('ko-KR')
+                    : '-';
+
+                showContent();
+
+            } catch (err) {
+                console.error('제안서 로드 실패:', err);
+                showError();
+            }
+        });
+
+        function showContent() {
+            document.getElementById('loading').classList.remove('show');
+            document.getElementById('proposalInfo').classList.add('show');
+            document.getElementById('mainContent').style.display = 'block';
+        }
+
+        function showError() {
+            document.getElementById('loading').classList.remove('show');
+            document.getElementById('errorContent').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
