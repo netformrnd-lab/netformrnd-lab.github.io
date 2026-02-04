@@ -6938,14 +6938,16 @@ async function saveSupplierWithProducts(data) {
       supplierId = docRef.id;
     }
     
-    // 기존 상품 중 삭제된 것 처리
-    const existingProducts = (state.supplierProducts || []).filter(p => p.supplierId === supplierId);
-    const existingIds = products.filter(p => p.existingId).map(p => p.existingId);
-    
-    for (const existingProduct of existingProducts) {
-      if (!existingIds.includes(existingProduct.id)) {
-        // 삭제된 상품
-        await db.collection('supplierProducts').doc(existingProduct.id).delete();
+    // 기존 상품 중 삭제된 것 처리 (products 배열이 있을 때만 - 빈 배열로 전달 시 전체 삭제 방지)
+    if (products.length > 0) {
+      const existingProducts = (state.supplierProducts || []).filter(p => p.supplierId === supplierId);
+      const existingIds = products.filter(p => p.existingId).map(p => p.existingId);
+
+      for (const existingProduct of existingProducts) {
+        if (!existingIds.includes(existingProduct.id)) {
+          // 삭제된 상품
+          await db.collection('supplierProducts').doc(existingProduct.id).delete();
+        }
       }
     }
     
@@ -44852,7 +44854,144 @@ function renderDataErrors() {
         </div>
       ` : ''}
     `}
+
+    <!-- 상품 복구 도구 -->
+    <div class="card" style="margin-top: 24px; border: 2px solid #8b5cf6;">
+      <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #8b5cf6;">🔧 상품 DB 복구 도구</h3>
+      <p style="font-size: 13px; color: var(--gray-600); margin-bottom: 16px;">
+        공급사 상품이 실수로 삭제된 경우, 온보딩 데이터 또는 주문 데이터에서 복구할 수 있습니다.
+      </p>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <input type="text" id="recover-supplier-name" placeholder="공급사명 입력 (예: 그로홈)"
+          style="flex: 1; min-width: 200px; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+        <button onclick="recoverSupplierProducts()" style="padding: 10px 20px; background: #8b5cf6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+          🔄 상품 복구
+        </button>
+      </div>
+      <div id="recover-result" style="margin-top: 12px; font-size: 13px;"></div>
+    </div>
   `;
+}
+
+// 공급사 상품 복구 함수
+async function recoverSupplierProducts() {
+  const supplierName = document.getElementById('recover-supplier-name').value.trim();
+  const resultDiv = document.getElementById('recover-result');
+
+  if (!supplierName) {
+    resultDiv.innerHTML = '<span style="color: #dc2626;">⚠️ 공급사명을 입력해주세요.</span>';
+    return;
+  }
+
+  resultDiv.innerHTML = '<span style="color: var(--gray-500);">🔍 데이터 검색 중...</span>';
+
+  try {
+    // 1. 공급사 찾기
+    const supplier = (state.suppliers || []).find(s =>
+      s.name && s.name.toLowerCase().includes(supplierName.toLowerCase())
+    );
+
+    if (!supplier) {
+      resultDiv.innerHTML = `<span style="color: #dc2626;">⚠️ "${supplierName}" 공급사를 찾을 수 없습니다.</span>`;
+      return;
+    }
+
+    // 2. 이미 상품이 있는지 확인
+    const existingProducts = (state.supplierProducts || []).filter(p => p.supplierId === supplier.id);
+    if (existingProducts.length > 0) {
+      resultDiv.innerHTML = `<span style="color: #f59e0b;">⚠️ "${supplier.name}"에 이미 ${existingProducts.length}개 상품이 있습니다. 중복 등록을 방지하려면 먼저 삭제해주세요.</span>`;
+      return;
+    }
+
+    let recoveredProducts = [];
+
+    // 3. 온보딩 데이터에서 상품 정보 추출
+    const onboardingData = supplier.onboardingData || {};
+    const onboardingDocs = supplier.onboardingDocuments || onboardingData.documents || {};
+    const productInfoDirect = onboardingDocs.productInfoDirect || onboardingData.productInfoDirect || [];
+
+    if (productInfoDirect.length > 0) {
+      for (const p of productInfoDirect) {
+        recoveredProducts.push({
+          supplierId: supplier.id,
+          supplierName: supplier.name,
+          brandName: p.brandName || supplier.name,
+          supplierType: 'external',
+          representativeProduct: p.representativeProduct || '',
+          productName: p.productName || '',
+          retailPrice: parseFloat(p.retailPrice) || 0,
+          salePrice: parseFloat(p.salePrice) || 0,
+          supplyPrice: parseFloat(p.supplyPrice) || 0,
+          commission: parseFloat(p.commission) || 0,
+          source: 'recovered_from_onboarding',
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+
+    // 4. 주문 데이터에서 상품 정보 추출 (온보딩 데이터가 없는 경우)
+    if (recoveredProducts.length === 0) {
+      const orders = (state.cafe24Orders || []).filter(o => {
+        const orderSupplier = (o.supplier_name || o.supplier || o.brand_name || '').toLowerCase();
+        return orderSupplier.includes(supplierName.toLowerCase());
+      });
+
+      if (orders.length > 0) {
+        // 상품별로 그룹화
+        const productMap = {};
+        orders.forEach(o => {
+          const productName = o.product_name || o.product_option || '';
+          if (productName && !productMap[productName]) {
+            productMap[productName] = {
+              productName: productName,
+              salePrice: Number(o.unit_price) || 0,
+              supplyPrice: Number(o.supply_price) || 0
+            };
+          }
+        });
+
+        for (const [name, p] of Object.entries(productMap)) {
+          recoveredProducts.push({
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            brandName: supplier.name,
+            supplierType: 'external',
+            productName: p.productName,
+            retailPrice: 0,
+            salePrice: p.salePrice,
+            supplyPrice: p.supplyPrice,
+            source: 'recovered_from_orders',
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+    }
+
+    if (recoveredProducts.length === 0) {
+      resultDiv.innerHTML = `<span style="color: #dc2626;">⚠️ "${supplier.name}"의 복구 가능한 상품 데이터를 찾을 수 없습니다. 수동 등록이 필요합니다.</span>`;
+      return;
+    }
+
+    // 5. 복구 확인
+    if (!confirm(`"${supplier.name}"의 ${recoveredProducts.length}개 상품을 복구하시겠습니까?\n\n상품 목록:\n${recoveredProducts.map(p => `- ${p.productName}`).join('\n')}`)) {
+      resultDiv.innerHTML = '<span style="color: var(--gray-500);">취소되었습니다.</span>';
+      return;
+    }
+
+    // 6. Firestore에 저장
+    let savedCount = 0;
+    for (const product of recoveredProducts) {
+      await db.collection('supplierProducts').add(product);
+      savedCount++;
+    }
+
+    resultDiv.innerHTML = `<span style="color: #10b981;">✅ "${supplier.name}"의 ${savedCount}개 상품이 성공적으로 복구되었습니다!</span>`;
+    showToast(`✅ ${savedCount}개 상품 복구 완료`);
+
+  } catch (error) {
+    console.error('상품 복구 오류:', error);
+    resultDiv.innerHTML = `<span style="color: #dc2626;">❌ 복구 중 오류 발생: ${error.message}</span>`;
+  }
 }
 
 // ========== 퀵 업무 허브 (Quick Task Hub) + 모디(MODi) ==========
