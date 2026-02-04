@@ -1019,12 +1019,15 @@
         let uploadedFiles = {};
         let sellerId = null;
 
-        // URL에서 셀러 ID 확인
+        // URL에서 파라미터 확인
         const urlParams = new URLSearchParams(window.location.search);
         sellerId = urlParams.get('id');
+        const proposalId = urlParams.get('proposalId'); // 제안서 ID
 
         // 셀러 정보 로드
         let supplierData = null;
+        let proposalData = null; // 제안서 데이터
+
         if (sellerId) {
             db.collection('sellers').doc(sellerId).get().then(doc => {
                 if (doc.exists) {
@@ -1032,6 +1035,80 @@
                     console.log('셀러 정보 로드:', supplierData.name);
                 }
             });
+        }
+
+        // 제안서 데이터 로드 (proposalId가 있는 경우)
+        if (proposalId) {
+            loadProposalData(proposalId);
+        }
+
+        async function loadProposalData(propId) {
+            try {
+                const doc = await db.collection('proposalRequests').doc(propId).get();
+                if (doc.exists && doc.data().type === 'seller') {
+                    proposalData = { id: doc.id, ...doc.data() };
+                    console.log('제안서 정보 로드:', proposalData.channelName);
+                    showProposalNotice(proposalData);
+                    prefillFromProposal(proposalData);
+                }
+            } catch (error) {
+                console.error('제안서 로드 오류:', error);
+            }
+        }
+
+        // 제안서 데이터 불러옴 안내
+        function showProposalNotice(data) {
+            const noticeHtml = `
+                <div id="proposal-notice" style="margin-bottom: 24px; padding: 16px; background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-radius: 12px; border: 2px solid #22c55e;">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                        <span style="font-size: 24px;">✅</span>
+                        <div>
+                            <div style="font-weight: 700; color: #166534; font-size: 15px;">입점 제안서 정보가 연동되었습니다</div>
+                            <div style="font-size: 13px; color: #15803d;">${data.channelName || ''} ${data.managerName ? '/ ' + data.managerName : ''}</div>
+                        </div>
+                    </div>
+                    <div style="font-size: 12px; color: #166534; padding: 8px; background: white; border-radius: 6px;">
+                        💡 제안서에 작성하신 진행 의향이 미리 선택되어 있습니다. 추가/수정도 가능해요!
+                    </div>
+                </div>
+            `;
+            const header = document.querySelector('.header');
+            if (header) {
+                header.insertAdjacentHTML('afterend', noticeHtml);
+            }
+        }
+
+        // 제안서 데이터로 체크리스트 미리 선택
+        function prefillFromProposal(data) {
+            if (!data.intentions) return;
+            const intentions = data.intentions;
+
+            // 진행 의향 관련 항목들 체크 (향후 체크리스트 확장 시 사용)
+            // 현재 온보딩에는 진행 의향 체크리스트가 없으므로 데이터만 저장하고
+            // 추가 요청사항에 표시
+            let intentionSummary = [];
+            if (intentions.ownBrand) intentionSummary.push('자체브랜드');
+            if (intentions.collab) intentionSummary.push('브랜드콜라보');
+            if (intentions.live) intentionSummary.push('라이브커머스');
+            if (intentions.popup) intentionSummary.push('오프라인팝업');
+            if (intentions.ambassador) {
+                let ambText = '앰버서더/모델활동';
+                if (intentions.ambassadorBrand) ambText += `(${intentions.ambassadorBrand})`;
+                intentionSummary.push(ambText);
+            }
+            if (intentions.overseas && intentions.overseasCountries?.length > 0) {
+                intentionSummary.push(`해외인친(${intentions.overseasCountries.join(', ')})`);
+            }
+
+            // 추가 요청사항에 진행 의향 정보 자동 입력
+            if (intentionSummary.length > 0) {
+                const additionalRequests = document.getElementById('additionalRequests');
+                if (additionalRequests) {
+                    const existing = additionalRequests.value;
+                    const proposalInfo = `[제안서 진행의향] ${intentionSummary.join(', ')}`;
+                    additionalRequests.value = existing ? `${proposalInfo}\n\n${existing}` : proposalInfo;
+                }
+            }
         }
 
         // 상품정보 등록 옵션 선택
@@ -1225,8 +1302,22 @@
                     productInfoOption: productOption,
                     submittedAt: new Date().toISOString(),
                     // 협업 조건 체크리스트
-                    checklist: checklistData
+                    checklist: checklistData,
+                    // 작성자 정보
+                    filledBy: 'seller', // 'seller' | 'moyeoradeal'
+                    filledAt: new Date().toISOString()
                 };
+
+                // 제안서 연동 정보 추가
+                if (proposalData) {
+                    docData.proposalRequestId = proposalData.id;
+                    docData.proposalIntentions = proposalData.intentions || {};
+                    docData.proposalInfo = {
+                        channelName: proposalData.channelName || '',
+                        snsLink: proposalData.snsLink || '',
+                        managerName: proposalData.managerName || ''
+                    };
+                }
 
                 // 상품정보 처리 (지금하기 선택 시)
                 if (productOption === 'now') {
@@ -1279,23 +1370,43 @@
                         documentsApproved: false,
                         onboardingStatus: 'completed',
                         onboardingDocuments: docData,
+                        proposalRequestId: proposalData?.id || null,
                         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 } else {
                     // 셀러 ID 없이 제출된 경우 - 셀러 DB에 신규 등록 (인바운드)
                     docData.source = 'inbound_onboarding';
-                    await db.collection('sellers').add({
-                        name: '온보딩 신청 셀러', // 나중에 CRM에서 수정
-                        contact: '',
-                        email: '',
-                        phone: '',
-                        status: 'onboarding_completed', // 온보딩 완료, 정보 입력 필요
+                    const newSellerRef = await db.collection('sellers').add({
+                        name: proposalData?.channelName || '온보딩 신청 셀러',
+                        contact: proposalData?.managerName || '',
+                        email: proposalData?.email || '',
+                        phone: proposalData?.phone || '',
+                        status: 'onboarding_completed',
                         documentsSubmitted: true,
                         documentsApproved: false,
                         onboardingStatus: 'completed',
                         onboardingDocuments: docData,
+                        proposalRequestId: proposalData?.id || null,
                         registeredAt: new Date().toISOString(),
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+
+                    // 제안서가 있으면 셀러 ID 연결
+                    if (proposalData) {
+                        await db.collection('proposalRequests').doc(proposalData.id).update({
+                            sellerId: newSellerRef.id,
+                            onboardingCompleted: true,
+                            onboardingCompletedAt: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                    }
+                }
+
+                // 기존 셀러에 연결된 제안서도 업데이트
+                if (sellerId && proposalData) {
+                    await db.collection('proposalRequests').doc(proposalData.id).update({
+                        sellerId: sellerId,
+                        onboardingCompleted: true,
+                        onboardingCompletedAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
                 }
 
