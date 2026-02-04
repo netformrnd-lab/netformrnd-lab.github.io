@@ -9006,10 +9006,31 @@
       const unassignedList = document.getElementById('unassignedTasksList');
       const unassignedCount = document.getElementById('unassignedCount');
 
+      // ★ 행동지표(input)와 성과지표(output) 구분 (linkedLagType 또는 indicatorType 필드 확인)
+      const inputTasks = unassignedTasks.filter(t => (t.linkedLagType || t.indicatorType) !== 'output');
+      const outputTasks = unassignedTasks.filter(t => (t.linkedLagType || t.indicatorType) === 'output');
+
       if (unassignedList) {
-        unassignedList.innerHTML = unassignedTasks.length === 0
-          ? '<div style="font-size: 11px; color: var(--gray-400); text-align: center; padding: 20px 0;">모든 업무가 배치됨</div>'
-          : unassignedTasks.map(task => createDraggableTaskCard(task, true)).join('');
+        if (unassignedTasks.length === 0) {
+          unassignedList.innerHTML = '<div style="font-size: 11px; color: var(--gray-400); text-align: center; padding: 20px 0;">모든 업무가 배치됨</div>';
+        } else {
+          let html = '';
+          // 행동지표 (위)
+          if (inputTasks.length > 0) {
+            html += `<div style="font-size: 10px; color: #6366F1; font-weight: 600; padding: 4px 8px; background: #EEF2FF; border-radius: 4px; margin-bottom: 6px;">📝 행동 ${inputTasks.length}건</div>`;
+            html += inputTasks.map(task => createDraggableTaskCard(task, true)).join('');
+          }
+          // 구분선
+          if (inputTasks.length > 0 && outputTasks.length > 0) {
+            html += '<div style="border-top: 2px dashed #E5E7EB; margin: 10px 0;"></div>';
+          }
+          // 성과지표 (아래)
+          if (outputTasks.length > 0) {
+            html += `<div style="font-size: 10px; color: #10B981; font-weight: 600; padding: 4px 8px; background: #ECFDF5; border-radius: 4px; margin-bottom: 6px;">📊 성과 ${outputTasks.length}건</div>`;
+            html += outputTasks.map(task => createDraggableTaskCard(task, true)).join('');
+          }
+          unassignedList.innerHTML = html;
+        }
       }
       if (unassignedCount) {
         unassignedCount.textContent = unassignedTasks.length;
@@ -9060,7 +9081,7 @@
              ondragend="dragEnd(event)"
              onclick="openTaskPlanDetail('${task.id}')">
           <div class="task-title">${task.title || '제목 없음'}</div>
-          <div class="task-meta">${taskDeadline ? formatDate(taskDeadline) : ''}${ddayBadge}</div>
+          <div class="task-meta">${taskDeadline ? taskDeadline.slice(5).replace('-', '/') : ''}${ddayBadge}</div>
           ${delayReason}
         </div>
       `;
@@ -15806,11 +15827,12 @@
         const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
         okrState.subIndicators = subIndicatorsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 업무일지 (최근 30일)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // 업무일지 (목표 시작일부터 전체 로드 - 팀 그로스보드용)
+        // 목표 시작일이 있으면 그 날짜부터, 없으면 올해 1월 1일부터
+        const currentYear = new Date().getFullYear();
+        const objectiveStartDate = okrState.objective?.startDate || `${currentYear}-01-01`;
         const logSnapshot = await db.collection('okr_dailyLogs')
-          .where('date', '>=', thirtyDaysAgo.toISOString().split('T')[0])
+          .where('date', '>=', objectiveStartDate)
           .orderBy('date', 'desc')
           .get();
         okrState.dailyLogs = logSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -15977,7 +15999,7 @@
 
     function calcOkrKPIRate(kpiId) {
       const kpi = okrState.kpis.find(k => k.id === kpiId);
-      if (!kpi || !kpi.targetValue) return '0.000';
+      if (!kpi) return '0.000';
 
       // 새로운 계층 구조 확인: 총 성과지표가 있는 경우
       const totalMetricsForKPI = okrState.totalMetrics.filter(tm => tm.kpiId === kpiId);
@@ -15990,8 +16012,13 @@
         return (isNaN(avgRate) || !isFinite(avgRate)) ? '0.000' : avgRate.toFixed(3);
       }
 
-      // 기존 구조: 성과형(output) 지표만 KPI 달성률에 반영
-      const resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
+      // 기존 구조: 성과형(output) 지표 우선, 없으면 모든 지표 사용 (fallback)
+      let resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId && l.type === 'output');
+
+      // ★ FIXED: output 지표가 없으면 모든 지표를 사용 (행동지표 포함)
+      if (resultLags.length === 0) {
+        resultLags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
+      }
 
       const totalValue = resultLags.reduce((sum, lag) => {
         const logs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lag.id);
@@ -16001,8 +16028,21 @@
         return sum + calcLagValue(lag, logSum);
       }, 0);
 
+      // ★ FIXED: targetValue 없으면 지표별 목표 합계 또는 현재값 기준으로 계산
+      let targetValue = kpi.targetValue;
+      if (!targetValue || targetValue === 0) {
+        // 지표별 target 합계 사용
+        const lagTargetSum = resultLags.reduce((sum, lag) => sum + (lag.target || 0), 0);
+        if (lagTargetSum > 0) {
+          targetValue = lagTargetSum;
+        } else {
+          // 목표가 전혀 없으면 현재값이 100% 기여도 (활동량 표시)
+          return totalValue > 0 ? '100.000' : '0.000';
+        }
+      }
+
       // 소수 3째자리까지
-      const rate = Math.min((totalValue / kpi.targetValue) * 100, 100);
+      const rate = Math.min((totalValue / targetValue) * 100, 100);
       return rate.toFixed(3);
     }
 
@@ -18376,7 +18416,8 @@
       selectedDate: null,
       calendarMonth: new Date(),
       unlinkedFilter: false, // 미분류만 보기
-      unknownOwnerFilter: false // 등록자 미상만 보기
+      unknownOwnerFilter: false, // 등록자 미상만 보기
+      disconnectedFilter: false // 지표 연결 해제된 것만 보기
     };
 
     function renderOkrRecord() {
@@ -18516,6 +18557,17 @@
                 if (unlinkedCount === 0 && !workLogState.unlinkedFilter) return '';
                 return '<button onclick="toggleUnlinkedFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.unlinkedFilter ? '#F59E0B' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.unlinkedFilter ? '#FEF3C7' : 'white') + '; color: ' + (workLogState.unlinkedFilter ? '#B45309' : 'var(--gray-600)') + '; transition: all 0.2s;">⚠️ 미분류 ' + unlinkedCount + '건</button>';
               })()}
+              <!-- 지표 연결 해제 필터 (삭제된 지표) -->
+              ${(() => {
+                const disconnectedCount = filteredLogs.filter(l =>
+                  l.laggingIndicatorId &&
+                  l.laggingIndicatorId !== 'undefined' &&
+                  l.laggingIndicatorId !== 'null' &&
+                  !okrState.laggingIndicators.some(lag => lag.id === l.laggingIndicatorId)
+                ).length;
+                if (disconnectedCount === 0 && !workLogState.disconnectedFilter) return '';
+                return '<button onclick="toggleDisconnectedFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.disconnectedFilter ? '#DC2626' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.disconnectedFilter ? '#FEE2E2' : 'white') + '; color: ' + (workLogState.disconnectedFilter ? '#DC2626' : 'var(--gray-600)') + '; transition: all 0.2s;">🔗 연결해제 ' + disconnectedCount + '건</button>';
+              })()}
               <!-- 등록자 미상 필터 -->
               ${(() => {
                 const unknownOwnerLogs = okrState.dailyLogs.filter(l =>
@@ -18591,6 +18643,15 @@
     function toggleUnknownOwnerFilter() {
       workLogState.unknownOwnerFilter = !workLogState.unknownOwnerFilter;
       workLogState.unlinkedFilter = false; // 다른 필터 해제
+      workLogState.disconnectedFilter = false; // 다른 필터 해제
+      renderOkrRecord();
+    }
+
+    // ★ 지표 연결 해제 필터 토글
+    function toggleDisconnectedFilter() {
+      workLogState.disconnectedFilter = !workLogState.disconnectedFilter;
+      workLogState.unlinkedFilter = false; // 다른 필터 해제
+      workLogState.unknownOwnerFilter = false; // 다른 필터 해제
       renderOkrRecord();
     }
 
@@ -18601,6 +18662,12 @@
       // 미분류 필터 활성화 시 미분류 로그 목록 표시
       if (workLogState.unlinkedFilter) {
         renderUnlinkedLogsView(contentEl);
+        return;
+      }
+
+      // ★ 지표 연결 해제 필터 활성화 시 해당 로그 목록 표시
+      if (workLogState.disconnectedFilter) {
+        renderDisconnectedLogsView(contentEl);
         return;
       }
 
@@ -18925,11 +18992,12 @@
                 <span style="background: #EEF2FF; color: var(--primary); padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;">📥 행동지표</span>
                 <span style="font-size: 11px; color: var(--gray-500);">${inputLags.length}개</span>
               </div>
-              ${inputLags.length > 0 ? `
-                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;">
-                  ${inputLags.map(lag => renderLagCard(lag, favoriteLagIds)).join('')}
+              <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;">
+                ${inputLags.map(lag => renderLagCard(lag, favoriteLagIds)).join('')}
+                <div onclick="openAddLagModal('input', '${selectedRecordKrId}')" style="display: flex; align-items: center; justify-content: center; min-height: 80px; border: 2px dashed var(--gray-300); border-radius: 12px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.borderColor='var(--gray-400)'; this.style.background='var(--gray-50)';" onmouseout="this.style.borderColor='var(--gray-300)'; this.style.background='transparent';">
+                  <span style="font-size: 24px; color: var(--gray-400);">+</span>
                 </div>
-              ` : `<div style="text-align: center; padding: 20px; color: var(--gray-400); font-size: 12px;">행동지표가 없습니다</div>`}
+              </div>
             </div>
 
             <!-- 성과지표 섹션 -->
@@ -18938,11 +19006,12 @@
                 <span style="background: #ECFDF5; color: #059669; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;">📤 성과지표</span>
                 <span style="font-size: 11px; color: var(--gray-500);">${outputLags.length}개</span>
               </div>
-              ${outputLags.length > 0 ? `
-                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;">
-                  ${outputLags.map(lag => renderLagCard(lag, favoriteLagIds)).join('')}
+              <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;">
+                ${outputLags.map(lag => renderLagCard(lag, favoriteLagIds)).join('')}
+                <div onclick="openAddLagModal('output', '${selectedRecordKrId}')" style="display: flex; align-items: center; justify-content: center; min-height: 80px; border: 2px dashed var(--gray-300); border-radius: 12px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.borderColor='var(--gray-400)'; this.style.background='var(--gray-50)';" onmouseout="this.style.borderColor='var(--gray-300)'; this.style.background='transparent';">
+                  <span style="font-size: 24px; color: var(--gray-400);">+</span>
                 </div>
-              ` : `<div style="text-align: center; padding: 20px; color: var(--gray-400); font-size: 12px;">성과지표가 없습니다</div>`}
+              </div>
             </div>
           ` : `
             <!-- 전체 KPI: 서브KPI별 그룹화 표시 -->
@@ -18971,8 +19040,8 @@
                     '</div>' +
                     '<span style="font-size: 11px; color: var(--gray-500);">' + lags.length + '개 지표</span>' +
                   '</div>' +
-                  (inputLagsForKpi.length > 0 ? '<div style="margin-bottom: 8px;"><div style="font-size: 10px; color: var(--primary); font-weight: 600; margin-bottom: 6px;">📥 행동지표</div><div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;">' + inputLagsForKpi.map(lag => renderLagCard(lag, favoriteLagIds)).join('') + '</div></div>' : '') +
-                  (outputLagsForKpi.length > 0 ? '<div><div style="font-size: 10px; color: #059669; font-weight: 600; margin-bottom: 6px;">📤 성과지표</div><div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;">' + outputLagsForKpi.map(lag => renderLagCard(lag, favoriteLagIds)).join('') + '</div></div>' : '') +
+                  '<div style="margin-bottom: 8px;"><div style="font-size: 10px; color: var(--primary); font-weight: 600; margin-bottom: 6px;">📥 행동지표</div><div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;">' + inputLagsForKpi.map(lag => renderLagCard(lag, favoriteLagIds)).join('') + '<div onclick="openAddLagModal(\\'input\\', \\'' + (kr?.id || '') + '\\', \\'' + kpiId + '\\')" style="display: flex; align-items: center; justify-content: center; min-height: 70px; border: 2px dashed var(--gray-300); border-radius: 10px; cursor: pointer;" onmouseover="this.style.borderColor=\\'var(--gray-400)\\'" onmouseout="this.style.borderColor=\\'var(--gray-300)\\'"><span style="font-size: 20px; color: var(--gray-400);">+</span></div></div></div>' +
+                  '<div><div style="font-size: 10px; color: #059669; font-weight: 600; margin-bottom: 6px;">📤 성과지표</div><div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;">' + outputLagsForKpi.map(lag => renderLagCard(lag, favoriteLagIds)).join('') + '<div onclick="openAddLagModal(\\'output\\', \\'' + (kr?.id || '') + '\\', \\'' + kpiId + '\\')" style="display: flex; align-items: center; justify-content: center; min-height: 70px; border: 2px dashed var(--gray-300); border-radius: 10px; cursor: pointer;" onmouseover="this.style.borderColor=\\'var(--gray-400)\\'" onmouseout="this.style.borderColor=\\'var(--gray-300)\\'"><span style="font-size: 20px; color: var(--gray-400);">+</span></div></div></div>' +
                 '</div>';
               }).join('');
             })()}
@@ -19016,6 +19085,106 @@
       }
 
       container.innerHTML = html;
+    }
+
+    // 지표 빠른 추가 모달
+    function openAddLagModal(type = 'input', krId = '', kpiId = '') {
+      // 선택된 KR에 연결된 KPI 목록
+      const kpisForKr = kpiId ? [okrState.kpis.find(k => k.id === kpiId)].filter(Boolean) : okrState.kpis.filter(k => k.keyResultId === krId);
+
+      // KPI가 없으면 먼저 선택하도록
+      if (!kpiId && kpisForKr.length === 0) {
+        alert('먼저 서브 KPI를 선택해주세요.');
+        return;
+      }
+
+      const selectedKpi = kpiId ? okrState.kpis.find(k => k.id === kpiId) : null;
+      const typeLabel = type === 'output' ? '성과지표' : '행동지표';
+      const typeColor = type === 'output' ? '#059669' : 'var(--primary)';
+      const typeBg = type === 'output' ? '#ECFDF5' : '#EEF2FF';
+
+      const modalHtml = `
+        <div id="addLagModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 420px; overflow: hidden;">
+            <div style="padding: 20px; border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center; background: ${typeBg};">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 20px;">${type === 'output' ? '📤' : '📥'}</span>
+                <h3 style="font-size: 16px; font-weight: 700; color: ${typeColor};">${typeLabel} 추가</h3>
+              </div>
+              <button onclick="document.getElementById('addLagModal').remove()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">×</button>
+            </div>
+            <div style="padding: 20px;">
+              ${!kpiId ? `
+                <div style="margin-bottom: 16px;">
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 6px;">서브 KPI 선택</label>
+                  <select id="addLagKpiSelect" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px;">
+                    ${kpisForKr.map(kpi => `<option value="${kpi.id}">${kpi.name}</option>`).join('')}
+                  </select>
+                </div>
+              ` : `
+                <div style="margin-bottom: 16px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
+                  <div style="font-size: 11px; color: var(--gray-500);">서브 KPI</div>
+                  <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${selectedKpi?.name || ''}</div>
+                </div>
+              `}
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 6px;">지표 이름 *</label>
+                <input type="text" id="addLagName" placeholder="예: 콜드콜 건수, 계약서 발송" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+              </div>
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 6px;">단위</label>
+                <input type="text" id="addLagUnit" value="건" placeholder="건, 개, 명, 원 등" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px;">
+              </div>
+              <button onclick="saveQuickLag('${type}', '${kpiId}')" style="width: 100%; padding: 14px; background: ${typeColor}; color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer;">
+                + ${typeLabel} 추가
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      document.getElementById('addLagName').focus();
+    }
+
+    // 지표 빠른 저장
+    async function saveQuickLag(type, presetKpiId) {
+      const name = document.getElementById('addLagName').value.trim();
+      const unit = document.getElementById('addLagUnit').value.trim() || '건';
+      const kpiId = presetKpiId || document.getElementById('addLagKpiSelect')?.value;
+
+      if (!name) {
+        alert('지표 이름을 입력해주세요.');
+        return;
+      }
+
+      if (!kpiId) {
+        alert('서브 KPI를 선택해주세요.');
+        return;
+      }
+
+      try {
+        const lagData = {
+          name,
+          unit,
+          type: type === 'output' ? 'output' : 'input',
+          kpiId,
+          target: 0,
+          current: 0,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        await db.collection('okr_laggingIndicators').add(lagData);
+        showToast('지표가 추가되었습니다.');
+        document.getElementById('addLagModal').remove();
+
+        // 데이터 새로고침
+        await loadOkrObjective();
+        renderOkrRecord();
+      } catch (error) {
+        console.error('지표 추가 오류:', error);
+        alert('저장 중 오류가 발생했습니다.');
+      }
     }
 
     function renderLagCard(lag, favoriteLagIds) {
@@ -19206,16 +19375,29 @@
                           const lag = okrState.laggingIndicators.find(l => l.id === lagId);
                           const kpi = okrState.kpis.find(k => k.id === lag?.kpiId);
                           const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
-                          const color = okrColors[krIdx] || 'var(--primary)';
+
+                          // ★ 연결 해제된 지표 체크
+                          const isDisconnected = !lag || !lagId || lagId === 'undefined' || lagId === 'null';
+                          const color = isDisconnected ? '#EF4444' : (okrColors[krIdx] || 'var(--primary)');
+                          const disconnectedBadge = isDisconnected
+                            ? '<span style="font-size: 10px; background: #FEE2E2; color: #DC2626; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">⚠️ 지표 연결 해제</span>'
+                            : '';
+
                           return `
-                            <div style="background: var(--gray-50); border-radius: 10px; padding: 12px 16px; border-left: 4px solid ${color};">
+                            <div style="background: ${isDisconnected ? '#FEF2F2' : 'var(--gray-50)'}; border-radius: 10px; padding: 12px 16px; border-left: 4px solid ${color};">
                               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                  <span style="font-size: 18px;">${getOkrLagIcon(lag?.name || '')}</span>
-                                  <span style="font-size: 14px; font-weight: 700; color: var(--gray-800);">${lag?.name || '업무'}</span>
+                                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                  <span style="font-size: 18px;">${isDisconnected ? '⚠️' : getOkrLagIcon(lag?.name || '')}</span>
+                                  <span style="font-size: 14px; font-weight: 700; color: ${isDisconnected ? '#DC2626' : 'var(--gray-800)'};">${lag?.name || '(삭제된 지표)'}</span>
+                                  ${disconnectedBadge}
                                 </div>
                                 <span style="font-size: 18px; font-weight: 800; color: ${color};">+${data.count}</span>
                               </div>
+                              ${isDisconnected ? `
+                                <div style="font-size: 11px; color: #B91C1C; background: #FECACA; padding: 6px 10px; border-radius: 6px; margin-bottom: 8px;">
+                                  지표가 삭제되었거나 연결이 해제되었습니다. 기록 수정에서 지표를 다시 선택해주세요.
+                                </div>
+                              ` : ''}
                               ${data.logs.some(l => l.memo) ? `
                                 <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 26px;">
                                   ${data.logs.filter(l => l.memo).map(l => `
@@ -19223,6 +19405,7 @@
                                       <span style="color: var(--gray-400);">•</span>
                                       <span>${l.memo}</span>
                                       <span style="color: var(--gray-400);">(+${l.resultValue || 1})</span>
+                                      ${isDisconnected ? '<span onclick="openEditLogModal(\'' + l.id + '\')" style="font-size: 10px; color: #3182F6; cursor: pointer; margin-left: 4px;">수정</span>' : ''}
                                     </div>
                                   `).join('')}
                                 </div>
