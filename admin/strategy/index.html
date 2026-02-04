@@ -8880,27 +8880,50 @@
     // ★ 업무 배치 저장 (공통)
     async function saveTaskAssignment(taskId, targetDay, delayReason = null) {
       weeklyGoalState.taskAssignments[taskId] = targetDay;
+      const { monday } = getThisWeekDates();
+      const currentWeekKey = monday.toISOString().split('T')[0];
+
+      // 업무 정보 확인
+      const task = (state.taskPlans || []).find(t => t.id === taskId);
 
       try {
-        const updateData = {
-          assignedDay: targetDay === 'unassigned' ? null : targetDay,
-          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
+        const taskRef = db.collection('taskPlans').doc(taskId);
+        let updateData;
+
+        // ★ 주간 고정 업무: weeklyAssignments에 저장
+        if (task?.isWeeklyRecurring) {
+          const weeklyAssignments = task.weeklyAssignments || {};
+          weeklyAssignments[currentWeekKey] = targetDay === 'unassigned' ? null : targetDay;
+          updateData = {
+            weeklyAssignments,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+          // 로컬 상태 업데이트
+          const taskIndex = (state.taskPlans || []).findIndex(t => t.id === taskId);
+          if (taskIndex >= 0) {
+            state.taskPlans[taskIndex].weeklyAssignments = weeklyAssignments;
+          }
+        } else {
+          // 일반 업무: assignedDay에 저장
+          updateData = {
+            assignedDay: targetDay === 'unassigned' ? null : targetDay,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          };
+          // 로컬 상태 업데이트
+          const taskIndex = (state.taskPlans || []).findIndex(t => t.id === taskId);
+          if (taskIndex >= 0) {
+            state.taskPlans[taskIndex].assignedDay = updateData.assignedDay;
+          }
+        }
 
         // 지연 사유가 있으면 추가
         if (delayReason) {
           updateData.delayReason = delayReason;
+          const taskIndex = (state.taskPlans || []).findIndex(t => t.id === taskId);
+          if (taskIndex >= 0) state.taskPlans[taskIndex].delayReason = delayReason;
         }
 
-        const taskRef = db.collection('taskPlans').doc(taskId);
         await taskRef.update(updateData);
-
-        // state.taskPlans에도 반영
-        const taskIndex = (state.taskPlans || []).findIndex(t => t.id === taskId);
-        if (taskIndex >= 0) {
-          state.taskPlans[taskIndex].assignedDay = updateData.assignedDay;
-          if (delayReason) state.taskPlans[taskIndex].delayReason = delayReason;
-        }
 
         renderWeeklyTaskBoard();
         const msg = targetDay === 'unassigned'
@@ -8961,22 +8984,32 @@
       return { monday, friday };
     }
 
-    // 배치 필요 업무 필터링 (이번 주 마감 + 미배치)
+    // 배치 필요 업무 필터링 (이번 주 마감 + 미배치 + 주간고정)
     function getUnassignedThisWeekTasks() {
       const { monday, friday } = getThisWeekDates();
       const currentUserId = state.currentUser?.id;
+      const currentWeekKey = monday.toISOString().split('T')[0]; // 이번 주 구분키
 
       return (state.taskPlans || []).filter(task => {
         // 내 업무만
         if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
         // 완료되지 않은 업무만
         if (task.status === 'done' || task.status === 'completed') return false;
-        // 마감일이 이번 주인 업무 (deadline 또는 dueDate 필드 호환)
+
+        // ★ 주간 고정 업무: 이번 주에 아직 배치 안됨
+        if (task.isWeeklyRecurring) {
+          // 이번 주에 배치된 적 없으면 표시
+          const weeklyAssigned = task.weeklyAssignments?.[currentWeekKey];
+          if (!weeklyAssigned || weeklyAssigned === 'unassigned') return true;
+          return false;
+        }
+
+        // 일반 업무: 마감일이 이번 주인 경우
         const taskDeadline = task.deadline || task.dueDate;
         if (!taskDeadline) return false;
         const dueDate = new Date(taskDeadline);
         if (dueDate < monday || dueDate > friday) return false;
-        // 배치되지 않은 업무 (assignedDay가 없거나 null이거나 'unassigned'인 경우)
+        // 배치되지 않은 업무
         if (task.assignedDay && task.assignedDay !== 'unassigned') return false;
         return true;
       });
@@ -8986,11 +9019,19 @@
     function getTasksByDay(day) {
       const { monday, friday } = getThisWeekDates();
       const currentUserId = state.currentUser?.id;
+      const currentWeekKey = monday.toISOString().split('T')[0]; // 이번 주 구분키
 
       return (state.taskPlans || []).filter(task => {
         if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
         if (task.status === 'done' || task.status === 'completed') return false;
-        // 마감일이 이번 주인 업무 (deadline 또는 dueDate 필드 호환)
+
+        // ★ 주간 고정 업무: 이번 주 배치 정보 확인
+        if (task.isWeeklyRecurring) {
+          const weeklyAssigned = task.weeklyAssignments?.[currentWeekKey];
+          return weeklyAssigned === day;
+        }
+
+        // 일반 업무: 마감일이 이번 주인 경우
         const taskDeadline = task.deadline || task.dueDate;
         if (!taskDeadline) return false;
         const dueDate = new Date(taskDeadline);
@@ -9054,6 +9095,11 @@
       const delayReason = task.delayReason ? `<div class="task-delay">⚡ ${task.delayReason}</div>` : '';
       const taskDeadline = task.deadline || task.dueDate;
 
+      // ★ 주간 고정 업무 표시
+      const recurringBadge = task.isWeeklyRecurring
+        ? `<span style="font-size: 9px; font-weight: 600; background: #FEF3C7; color: #B45309; padding: 1px 5px; border-radius: 4px; margin-right: 4px;">🔄 매주</span>`
+        : '';
+
       // ★ D-day 계산 (완료 목표일 기준 = 마감 2일 전)
       let ddayBadge = '';
       if (taskDeadline) {
@@ -9075,12 +9121,12 @@
       }
 
       return `
-        <div class="draggable-task ${needsAssign ? 'needs-assign' : ''}"
+        <div class="draggable-task ${needsAssign ? 'needs-assign' : ''} ${task.isWeeklyRecurring ? 'weekly-recurring' : ''}"
              draggable="true"
              ondragstart="dragStart(event, '${task.id}')"
              ondragend="dragEnd(event)"
              onclick="openTaskPlanDetail('${task.id}')">
-          <div class="task-title">${task.title || '제목 없음'}</div>
+          <div class="task-title">${recurringBadge}${task.title || '제목 없음'}</div>
           <div class="task-meta">${taskDeadline ? taskDeadline.slice(5).replace('-', '/') : ''}${ddayBadge}</div>
           ${delayReason}
         </div>
@@ -9549,9 +9595,43 @@
             <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
           </div>
 
+          <!-- 주간 고정 업무 섹션 -->
+          <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid #F59E0B;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div style="font-size: 14px; color: #B45309; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+                🔄 주간 고정 업무 <span style="font-size: 11px; font-weight: 500; color: #92400E;">(매주 배치 필요에 자동 표시)</span>
+              </div>
+              <button onclick="openWeeklyRecurringTaskForm()" style="background: #F59E0B; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                + 고정 업무 추가
+              </button>
+            </div>
+            <div id="weeklyRecurringTasksList" style="max-height: 150px; overflow-y: auto;">
+              ${(() => {
+                const recurringTasks = (state.taskPlans || []).filter(t =>
+                  t.isWeeklyRecurring &&
+                  (t.assignee === currentMemberId || t.assigneeId === currentMemberId)
+                );
+                if (recurringTasks.length === 0) {
+                  return '<div style="text-align: center; padding: 16px; color: #92400E; font-size: 12px;">등록된 주간 고정 업무가 없습니다</div>';
+                }
+                return recurringTasks.map(task => {
+                  const lag = okrState.laggingIndicators.find(l => l.id === task.laggingIndicatorId);
+                  return '<div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: white; border-radius: 8px; margin-bottom: 6px;">' +
+                    '<span style="font-size: 16px;">🔄</span>' +
+                    '<div style="flex: 1;">' +
+                      '<div style="font-size: 12px; font-weight: 600; color: var(--gray-800);">' + (task.title || '제목 없음') + '</div>' +
+                      (lag ? '<div style="font-size: 10px; color: var(--gray-500);">연결: ' + lag.name + '</div>' : '') +
+                    '</div>' +
+                    '<button onclick="deleteWeeklyRecurringTask(&#39;' + task.id + '&#39;)" style="background: #FEE2E2; color: #DC2626; border: none; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer;">삭제</button>' +
+                  '</div>';
+                }).join('');
+              })()}
+            </div>
+          </div>
+
           <!-- 안내 배너 -->
           <div style="background: linear-gradient(135deg, #ECFDF5, #D1FAE5); border-radius: 12px; padding: 14px; margin-bottom: 20px; border: 1px solid #10B981;">
-            <div style="font-size: 13px; color: #059669; font-weight: 600; margin-bottom: 4px;">💡 주간 목표 설정 가이드</div>
+            <div style="font-size: 13px; color: #059669; font-weight: 600; margin-bottom: 4px;">💡 주간 목표 수치 설정</div>
             <div style="font-size: 12px; color: var(--gray-600); line-height: 1.5;">
               • <strong>행동지표</strong>: 이번 주 실행할 업무 횟수 (예: 공구 3건, 미팅 5회) &nbsp;|&nbsp; <strong>성과지표</strong>: 이번 주 달성할 결과 목표 (예: 매출 2천만원, 입점 1곳)
             </div>
@@ -9696,6 +9776,136 @@
         case 'weekly': return '주';
         case 'monthly': return '월';
         default: return '월';
+      }
+    }
+
+    // ★ 주간 고정 업무 추가 폼 열기
+    function openWeeklyRecurringTaskForm() {
+      const currentMemberId = state.currentUser?.id;
+      const member = (state.teamMembers || []).find(m => m.id === currentMemberId);
+
+      // 내 담당 KPI 목록
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        (kpi.subAssignees || []).includes(currentMemberId)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+      const myLags = okrState.laggingIndicators.filter(l => myKpiIds.includes(l.kpiId));
+
+      const lagOptions = myLags.map(lag => {
+        const typeLabel = lag.type === 'output' ? '성과' : '행동';
+        return '<option value="' + lag.id + '">' + lag.name + ' (' + typeLabel + ')</option>';
+      }).join('');
+
+      showModal(`
+        <div style="padding: 24px; max-width: 500px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="font-size: 18px; font-weight: 700;">🔄 주간 고정 업무 추가</div>
+            <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          <div style="background: #FEF3C7; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 12px; color: #92400E;">
+            💡 매주 반복되는 업무를 등록하면 <strong>배치 필요</strong>에 자동으로 표시됩니다.
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">업무 제목 *</label>
+            <input type="text" id="weeklyTaskTitle" placeholder="예: 주간 회의, 보고서 작성" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">연결 지표 (선택)</label>
+            <select id="weeklyTaskLag" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+              <option value="">지표 미연결</option>
+              ${lagOptions}
+            </select>
+            <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">지표를 연결하면 완료 시 자동 기록됩니다</div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">설명 (선택)</label>
+            <textarea id="weeklyTaskDesc" placeholder="업무 상세 설명" rows="2" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; resize: none;"></textarea>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal(), 300);" class="btn btn-secondary">취소</button>
+            <button onclick="saveWeeklyRecurringTask()" style="background: #F59E0B; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">등록</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // ★ 주간 고정 업무 저장
+    async function saveWeeklyRecurringTask() {
+      const title = document.getElementById('weeklyTaskTitle').value.trim();
+      const lagId = document.getElementById('weeklyTaskLag').value;
+      const description = document.getElementById('weeklyTaskDesc').value.trim();
+
+      if (!title) {
+        showToast('업무 제목을 입력해주세요', 'error');
+        return;
+      }
+
+      const currentMemberId = state.currentUser?.id;
+      const member = (state.teamMembers || []).find(m => m.id === currentMemberId);
+
+      // 연결된 지표 정보
+      let linkedLagName = '';
+      let linkedLagType = 'input';
+      let krId = '';
+      let kpiId = '';
+      if (lagId) {
+        const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+        if (lag) {
+          linkedLagName = lag.name;
+          linkedLagType = lag.type || 'input';
+          kpiId = lag.kpiId;
+          const kpi = okrState.kpis.find(k => k.id === kpiId);
+          krId = kpi?.keyResultId || '';
+        }
+      }
+
+      const taskData = {
+        title,
+        description,
+        assigneeId: currentMemberId,
+        assignee: member?.name || '',
+        isWeeklyRecurring: true,  // ★ 주간 고정 업무 표시
+        weeklyAssignments: {},    // ★ 주별 배치 기록
+        laggingIndicatorId: lagId,
+        linkedLagName,
+        linkedLagType,
+        krId,
+        kpiId,
+        status: 'waiting',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      try {
+        await db.collection('taskPlans').add(taskData);
+        showToast('주간 고정 업무가 등록되었습니다', 'success');
+        closeModal();
+        await loadTaskPlanData();
+        setTimeout(() => openPersonalGoalsModal(), 300);
+      } catch (e) {
+        console.error('주간 고정 업무 등록 오류:', e);
+        showToast('등록 실패', 'error');
+      }
+    }
+
+    // ★ 주간 고정 업무 삭제
+    async function deleteWeeklyRecurringTask(taskId) {
+      if (!confirm('이 주간 고정 업무를 삭제하시겠습니까?')) return;
+
+      try {
+        await db.collection('taskPlans').doc(taskId).delete();
+        showToast('삭제되었습니다', 'success');
+        await loadTaskPlanData();
+        openPersonalGoalsModal();
+      } catch (e) {
+        console.error('삭제 오류:', e);
+        showToast('삭제 실패', 'error');
       }
     }
 
@@ -26079,12 +26289,6 @@
                       <option value="5" ${task.scheduledDay === '5' ? 'selected' : ''}>금요일</option>
                     </select>
                   </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: white; border-radius: 8px; border: 1px solid var(--gray-200);">
-                  <input type="checkbox" id="taskPlanWeeklyRecurring" ${task.isWeeklyRecurring ? 'checked' : ''} style="width: 18px; height: 18px; accent-color: #22C55E;">
-                  <label for="taskPlanWeeklyRecurring" style="font-size: 13px; color: var(--gray-700); cursor: pointer;">
-                    <strong>🔄 주간 고정 목표</strong> <span style="font-size: 11px; color: var(--gray-500);">(매주 반복되는 업무)</span>
-                  </label>
                 </div>
                 <div style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">💡 실행 예정일이나 요일을 지정하면 주간목표 보드에 표시됩니다</div>
               </div>
