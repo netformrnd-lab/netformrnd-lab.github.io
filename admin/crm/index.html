@@ -2425,6 +2425,18 @@
           <p class="page-desc">입점 공급사와 미입점 공급사를 통합 관리합니다</p>
         </div>
 
+        <!-- 공급사 DB / 상품 DB 전환 탭 -->
+        <div style="display: flex; gap: 4px; margin-bottom: 20px; background: var(--gray-100); padding: 4px; border-radius: 10px; width: fit-content;">
+          <button onclick="switchSupplierSubTab('list')" id="supplier-subtab-list" style="padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            🏭 공급사 DB
+          </button>
+          <button onclick="switchSupplierSubTab('productDB')" id="supplier-subtab-productDB" style="padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: transparent; color: var(--gray-500);">
+            🏷️ 상품 DB
+          </button>
+        </div>
+
+        <!-- 공급사 목록 섹션 -->
+        <div id="supplier-section-list">
         <!-- 입점/미입점 필터 탭 -->
         <div style="display: flex; gap: 8px; margin-bottom: 20px;">
           <button onclick="filterSuppliersByStatus('all')" id="supplier-filter-all" class="filter-tab active" style="padding: 10px 20px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: var(--primary); color: white;">
@@ -2473,6 +2485,14 @@
         <div class="card">
           <div id="suppliers-list" style="overflow-x: auto;">
             <p style="text-align: center; color: var(--gray-500); padding: 40px;">공급사 데이터를 불러오는 중...</p>
+          </div>
+        </div>
+        </div><!-- supplier-section-list 닫기 -->
+
+        <!-- 상품 DB 섹션 -->
+        <div id="supplier-section-productDB" style="display: none;">
+          <div id="crm-product-db-container">
+            <p style="text-align: center; color: var(--gray-500); padding: 40px;">상품 DB 데이터를 불러오는 중...</p>
           </div>
         </div>
       </div>
@@ -2891,6 +2911,14 @@
       unsubscribers.push(
         db.collection('productList').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
           state.productList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          debouncedRender();
+        })
+      );
+
+      // 공급사 상품 DB (상품수 표시용)
+      unsubscribers.push(
+        db.collection('supplierProducts').orderBy('brandName').onSnapshot(snapshot => {
+          state.supplierProducts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           debouncedRender();
         })
       );
@@ -10627,11 +10655,16 @@
     // 공급사 관리 탭 렌더링
     function renderSuppliersTab() {
       const suppliers = state.suppliers || [];
+      const supplierProducts = state.supplierProducts || [];
 
-      // 통계 업데이트
-      const contracted = suppliers.filter(s => s.contracted);
-      const onboarding = suppliers.filter(s => s.onboarding && !s.contracted);
-      const prospect = suppliers.filter(s => !s.onboarding && !s.contracted);
+      // 상품이 있는 공급사는 입점완료로 인식 (헬퍼 함수)
+      const hasProducts = (supplierId) => supplierProducts.some(p => p.supplierId === supplierId);
+      const isContracted = (s) => s.contracted || hasProducts(s.id);
+
+      // 통계 업데이트 (상품 있는 공급사도 입점완료로 카운트)
+      const contracted = suppliers.filter(s => isContracted(s));
+      const onboarding = suppliers.filter(s => s.onboarding && !isContracted(s));
+      const prospect = suppliers.filter(s => !s.onboarding && !isContracted(s));
 
       document.getElementById('suppliers-total').textContent = suppliers.length;
       document.getElementById('suppliers-contracted').textContent = contracted.length;
@@ -10641,11 +10674,11 @@
       // 필터링
       let filtered = [...suppliers];
       if (suppliersStatusFilter === 'contracted') {
-        filtered = filtered.filter(s => s.contracted);
+        filtered = filtered.filter(s => isContracted(s));
       } else if (suppliersStatusFilter === 'pending') {
-        filtered = filtered.filter(s => s.onboarding && !s.contracted);
+        filtered = filtered.filter(s => s.onboarding && !isContracted(s));
       } else if (suppliersStatusFilter === 'prospect') {
-        filtered = filtered.filter(s => !s.onboarding && !s.contracted);
+        filtered = filtered.filter(s => !s.onboarding && !isContracted(s));
       }
 
       // 검색
@@ -10654,7 +10687,7 @@
         filtered = filtered.filter(s =>
           (s.name || '').toLowerCase().includes(keyword) ||
           (s.contact || '').toLowerCase().includes(keyword) ||
-          (s.products || []).some(p => (p.name || '').toLowerCase().includes(keyword))
+          (state.supplierProducts || []).filter(p => p.supplierId === s.id).some(p => (p.productName || p.representativeProduct || '').toLowerCase().includes(keyword))
         );
       }
 
@@ -10679,25 +10712,158 @@
             </tr>
           </thead>
           <tbody>
-            ${filtered.map(s => `
+            ${filtered.map(s => {
+              const productCount = supplierProducts.filter(p => p.supplierId === s.id).length;
+              const supplierIsContracted = s.contracted || productCount > 0;
+              return `
               <tr>
                 <td style="font-weight: 600;">${s.name || '-'}</td>
                 <td>${s.contact || '-'}</td>
                 <td>${s.phone || s.email || '-'}</td>
                 <td>
-                  ${s.contracted ? '<span class="status-badge status-approved">입점완료</span>' :
+                  ${supplierIsContracted ? '<span class="status-badge status-approved">입점완료</span>' :
                     s.onboarding ? '<span class="status-badge status-review">온보딩중</span>' :
                     '<span class="status-badge status-pending">미입점</span>'}
                 </td>
-                <td>${(s.products || []).length}개</td>
+                <td>${productCount}개</td>
                 <td>${s.createdAt ? new Date(s.createdAt.toDate ? s.createdAt.toDate() : s.createdAt).toLocaleDateString() : '-'}</td>
                 <td>
                   <button onclick="viewSupplierDetail('${s.id}')" style="padding: 4px 8px; background: var(--info); color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">상세</button>
                 </td>
-              </tr>
-            `).join('')}
+              </tr>`;
+            }).join('')}
           </tbody>
         </table>
+      `;
+    }
+
+    // 공급사 서브탭 전환 (공급사 목록 / 상품 DB)
+    let currentSupplierSubTab = 'list';
+    function switchSupplierSubTab(subTab) {
+      currentSupplierSubTab = subTab;
+
+      // 탭 버튼 스타일 업데이트
+      document.getElementById('supplier-subtab-list').style.cssText = subTab === 'list'
+        ? 'padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);'
+        : 'padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: transparent; color: var(--gray-500);';
+      document.getElementById('supplier-subtab-productDB').style.cssText = subTab === 'productDB'
+        ? 'padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: white; color: var(--gray-900); box-shadow: 0 1px 3px rgba(0,0,0,0.1);'
+        : 'padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; background: transparent; color: var(--gray-500);';
+
+      // 섹션 표시/숨김
+      document.getElementById('supplier-section-list').style.display = subTab === 'list' ? 'block' : 'none';
+      document.getElementById('supplier-section-productDB').style.display = subTab === 'productDB' ? 'block' : 'none';
+
+      // 상품 DB 렌더링
+      if (subTab === 'productDB') {
+        renderCRMProductDB();
+      }
+    }
+
+    // CRM 상품 DB 렌더링
+    let crmProductDBSearchKeyword = '';
+    function renderCRMProductDB() {
+      const container = document.getElementById('crm-product-db-container');
+      const products = state.supplierProducts || [];
+      const suppliers = state.suppliers || [];
+
+      // 검색 필터
+      let filtered = products;
+      if (crmProductDBSearchKeyword) {
+        const keyword = crmProductDBSearchKeyword.toLowerCase();
+        filtered = products.filter(p =>
+          (p.productName || '').toLowerCase().includes(keyword) ||
+          (p.representativeProduct || '').toLowerCase().includes(keyword) ||
+          (p.brandName || '').toLowerCase().includes(keyword)
+        );
+      }
+
+      // 통계
+      const totalProducts = products.length;
+      const supplierCount = [...new Set(products.map(p => p.supplierId).filter(Boolean))].length;
+      const inhouseProducts = products.filter(p => p.supplierType === 'inhouse').length;
+      const externalProducts = products.filter(p => p.supplierType !== 'inhouse').length;
+
+      container.innerHTML = `
+        <!-- 통계 -->
+        <div class="kpi-grid" style="margin-bottom: 24px;">
+          <div class="kpi-card" style="background: linear-gradient(135deg, #dbeafe, #bfdbfe);">
+            <div class="kpi-label" style="color: #1e40af;">전체 상품</div>
+            <div class="kpi-value" style="color: #1d4ed8;">${totalProducts}</div>
+          </div>
+          <div class="kpi-card" style="background: linear-gradient(135deg, #d1fae5, #a7f3d0);">
+            <div class="kpi-label" style="color: #065f46;">공급사 수</div>
+            <div class="kpi-value" style="color: #059669;">${supplierCount}</div>
+          </div>
+          <div class="kpi-card" style="background: linear-gradient(135deg, #fef3c7, #fde68a);">
+            <div class="kpi-label" style="color: #92400e;">자사 상품</div>
+            <div class="kpi-value" style="color: #d97706;">${inhouseProducts}</div>
+          </div>
+          <div class="kpi-card" style="background: linear-gradient(135deg, #fce7f3, #fbcfe8);">
+            <div class="kpi-label" style="color: #9d174d;">타사 상품</div>
+            <div class="kpi-value" style="color: #db2777;">${externalProducts}</div>
+          </div>
+        </div>
+
+        <!-- 검색 -->
+        <div style="margin-bottom: 16px;">
+          <input type="text" id="crm-product-search" placeholder="🔍 상품명, 대표상품, 공급사명 검색 후 Enter"
+            value="${crmProductDBSearchKeyword}"
+            onkeyup="if(event.key==='Enter'){crmProductDBSearchKeyword=this.value;renderCRMProductDB();}"
+            style="padding: 10px 16px; border: 1px solid var(--gray-300); border-radius: 8px; width: 100%; max-width: 400px; font-size: 14px;">
+        </div>
+
+        <!-- 상품 목록 -->
+        <div class="card">
+          ${filtered.length === 0 ? `
+            <p style="text-align: center; color: var(--gray-500); padding: 40px;">등록된 상품이 없습니다.</p>
+          ` : `
+            <div style="overflow-x: auto;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>공급사</th>
+                    <th>브랜드명</th>
+                    <th>대표상품</th>
+                    <th>상품명(SKU)</th>
+                    <th style="text-align: right;">정가(V+)</th>
+                    <th style="text-align: right;">공구판매가</th>
+                    <th style="text-align: right;">공급가(V+)</th>
+                    <th style="text-align: center;">수수료율</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${filtered.slice(0, 100).map(p => {
+                    const supplier = suppliers.find(s => s.id === p.supplierId);
+                    const marginRate = p.supplyPrice && p.salePrice ? Math.round((1 - p.supplyPrice / p.salePrice) * 100) : 0;
+                    return `
+                    <tr>
+                      <td style="font-weight: 600;">${supplier?.name || p.brandName || '-'}</td>
+                      <td>${p.brandName || '-'}</td>
+                      <td><a href="#" onclick="viewSupplierDetail('${p.supplierId}'); return false;" style="color: var(--primary);">${p.representativeProduct || '-'}</a></td>
+                      <td>${p.productName || '-'}</td>
+                      <td style="text-align: right;">${p.retailPrice ? Number(p.retailPrice).toLocaleString() + '원' : '-'}</td>
+                      <td style="text-align: right;">${p.salePrice ? Number(p.salePrice).toLocaleString() + '원' : '-'}</td>
+                      <td style="text-align: right; font-weight: 600; color: var(--primary);">${p.supplyPrice ? Number(p.supplyPrice).toLocaleString() + '원' : '-'}</td>
+                      <td style="text-align: center;"><span style="background: ${marginRate >= 20 ? '#d1fae5' : '#fef3c7'}; color: ${marginRate >= 20 ? '#059669' : '#d97706'}; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;">${marginRate}%</span></td>
+                    </tr>
+                  `}).join('')}
+                </tbody>
+              </table>
+              ${filtered.length > 100 ? `<p style="text-align: center; color: var(--gray-500); padding: 16px; font-size: 13px;">외 ${filtered.length - 100}개 상품</p>` : ''}
+            </div>
+          `}
+        </div>
+
+        <!-- 안내 -->
+        <div style="margin-top: 16px; padding: 16px; background: #eff6ff; border-radius: 12px; border-left: 4px solid #3b82f6;">
+          <p style="margin: 0; font-size: 13px; color: #1e40af;">
+            💡 <strong>이 데이터는 다음과 연동됩니다:</strong><br>
+            • 캘린더 공구 등록 - 공급사 선택 시 해당 상품 목록에서 선택<br>
+            • 매출관리 내역서 - 정산 금액 산출에 활용<br>
+            • 공구 진행 관리 - 샘플 전달 및 협의사항 관리
+          </p>
+        </div>
       `;
     }
 
@@ -10747,6 +10913,9 @@
       const sellerLabels = { 'allSellers': '전체 셀러 배정', 'negotiable': '협의 후 결정', 'groupDeal': '공동구매 전용' };
       const sampleLabels = { 'free': '무료 샘플 제공', 'discounted': '할인가 샘플 제공', 'noSample': '샘플 제공 불가' };
 
+      // 공급사 상품 목록
+      const supplierProductsList = (state.supplierProducts || []).filter(p => p.supplierId === id);
+
       // 서류 존재 여부
       const hasExcel = !!onboardingDocs.productInfoExcel;
       const hasLicense = !!onboardingDocs.businessLicense;
@@ -10755,6 +10924,9 @@
       const hasContract = !!supplier.contractFile;
       const hasChecklist = Object.keys(checklist).length > 0;
 
+      // 상품이 있으면 입점완료로 인식
+      const supplierIsContracted = supplier.contracted || supplierProductsList.length > 0;
+
       const modal = document.getElementById('modal');
       modal.innerHTML = `
         <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
@@ -10762,7 +10934,7 @@
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
               <div style="display: flex; align-items: center; gap: 12px;">
                 <h2 style="font-size: 20px; font-weight: 700;">🏭 ${supplier.name || '공급사 상세'}</h2>
-                ${supplier.contracted ? '<span class="status-badge status-approved">입점완료</span>' :
+                ${supplierIsContracted ? '<span class="status-badge status-approved">입점완료</span>' :
                   supplier.onboarding ? '<span class="status-badge status-review">온보딩중</span>' :
                   '<span class="status-badge status-pending">미입점</span>'}
               </div>
@@ -10864,7 +11036,7 @@
                     <span style="font-size: 12px; font-weight: 600; color: #9d174d;">계약서</span>
                     <span style="font-size: 10px; color: #be185d;">클릭하여 보기</span>
                   </a>
-                ` : supplier.contracted ? `
+                ` : supplierIsContracted ? `
                   <div onclick="openContractUploadModal('${id}', 'supplier')" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fef3c7; border: 2px dashed #fcd34d; border-radius: 12px; padding: 16px; cursor: pointer;">
                     <span style="font-size: 32px;">📝</span>
                     <span style="font-size: 12px; font-weight: 600; color: #92400e;">계약서</span>
@@ -10931,16 +11103,16 @@
 
             <!-- 등록 상품 -->
             <div style="margin-bottom: 20px;">
-              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📦 등록 상품 (${(supplier.products || []).length}개)</h3>
-              ${(supplier.products || []).length > 0 ? `
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📦 등록 상품 (${supplierProductsList.length}개)</h3>
+              ${supplierProductsList.length > 0 ? `
                 <div style="display: grid; gap: 8px;">
-                  ${supplier.products.slice(0, 10).map(p => `
+                  ${supplierProductsList.slice(0, 10).map(p => `
                     <div style="background: var(--gray-50); padding: 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
-                      <span style="font-weight: 500;">${p.name || '-'}</span>
-                      ${p.price ? `<span style="color: var(--primary); font-weight: 600;">${Number(p.price).toLocaleString()}원</span>` : ''}
+                      <span style="font-weight: 500;">${p.productName || p.representativeProduct || '-'}</span>
+                      ${p.supplyPrice ? `<span style="color: var(--primary); font-weight: 600;">${Number(p.supplyPrice).toLocaleString()}원</span>` : ''}
                     </div>
                   `).join('')}
-                  ${(supplier.products || []).length > 10 ? `<div style="text-align: center; color: var(--gray-500); font-size: 13px;">외 ${supplier.products.length - 10}개 상품</div>` : ''}
+                  ${supplierProductsList.length > 10 ? `<div style="text-align: center; color: var(--gray-500); font-size: 13px;">외 ${supplierProductsList.length - 10}개 상품</div>` : ''}
                 </div>
               ` : '<div style="background: var(--gray-50); padding: 20px; border-radius: 8px; text-align: center; color: var(--gray-400);">등록된 상품 없음</div>'}
             </div>
@@ -10972,7 +11144,7 @@
 
             <!-- 액션 버튼 -->
             <div style="display: flex; gap: 8px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--gray-200);">
-              ${supplier.contracted ? `
+              ${supplierIsContracted ? `
                 <button onclick="openContractUploadModal('${id}', 'supplier')" style="flex: 1; padding: 12px; background: #ec4899; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
                   📝 계약서 ${hasContract ? '변경' : '업로드'}
                 </button>
@@ -11101,6 +11273,11 @@
             progressText.textContent = '업로드 완료!';
             showToast('계약서가 업로드되었습니다.', 'success');
 
+            // 공급사인 경우, 온보딩 상품 데이터 자동 이관
+            if (partnerType === 'supplier') {
+              await autoImportOnboardingProducts(partnerId);
+            }
+
             setTimeout(() => {
               closeModal();
               // 상세 모달 다시 열기
@@ -11116,6 +11293,62 @@
         console.error('업로드 오류:', error);
         showToast('업로드 중 오류가 발생했습니다.', 'error');
         progressDiv.style.display = 'none';
+      }
+    }
+
+    // 계약서 업로드 시 온보딩 상품 자동 이관
+    async function autoImportOnboardingProducts(supplierId) {
+      try {
+        const supplier = state.suppliers.find(s => s.id === supplierId);
+        if (!supplier) return;
+
+        // 온보딩 데이터 확인
+        const onboardingData = supplier.onboardingData || {};
+        const onboardingDocs = supplier.onboardingDocuments || onboardingData.documents || {};
+
+        // 직접 입력된 상품 정보 확인
+        const productInfoDirect = onboardingDocs.productInfoDirect || onboardingData.productInfoDirect || [];
+
+        if (!productInfoDirect || productInfoDirect.length === 0) {
+          // 상품 정보 없으면 패스
+          return;
+        }
+
+        // 이미 이관된 상품이 있는지 확인
+        const existingProducts = (state.supplierProducts || []).filter(p => p.supplierId === supplierId);
+        if (existingProducts.length > 0) {
+          // 이미 상품이 있으면 패스
+          return;
+        }
+
+        const supplierName = supplier.name || '알 수 없음';
+        let importedCount = 0;
+
+        for (const product of productInfoDirect) {
+          await db.collection('supplierProducts').add({
+            supplierId: supplierId,
+            supplierName: supplierName,
+            brandName: product.brandName || supplierName,
+            supplierType: 'external',
+            representativeProduct: product.representativeProduct || '',
+            productName: product.productName || '',
+            retailPrice: parseFloat(product.retailPrice) || 0,
+            salePrice: parseFloat(product.salePrice) || 0,
+            supplyPrice: parseFloat(product.supplyPrice) || 0,
+            commission: parseFloat(product.commission) || 0,
+            shippingFee: product.shippingFee || '',
+            source: 'contract_auto_import',
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          importedCount++;
+        }
+
+        if (importedCount > 0) {
+          showToast(`📦 ${importedCount}개 상품이 자동으로 상품DB에 등록되었습니다!`, 'success');
+        }
+      } catch (error) {
+        console.error('상품 자동 이관 오류:', error);
+        // 오류가 나도 계약서 업로드는 성공한 것으로 처리
       }
     }
 
