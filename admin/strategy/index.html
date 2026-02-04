@@ -9144,7 +9144,7 @@
       }
     }
 
-    // 주간 목표 대시보드 렌더링 (목표 vs 현재값)
+    // 주간 목표 대시보드 렌더링 (목표 vs 현재값) - weeklyGoalConfigs 사용
     function renderWeeklyGoalDashboard() {
       const dashboard = document.getElementById('weeklyGoalDashboard');
       const versionEl = document.getElementById('weeklyGoalVersion');
@@ -9153,30 +9153,29 @@
       if (!dashboard) return;
 
       const currentMemberId = state.currentUser?.id;
+
+      // 이번 주 날짜 범위 계산
       const now = new Date();
       const dayOfWeek = now.getDay();
       const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() + mondayOffset);
-      const currentWeek = weekStart.toISOString().split('T')[0].slice(0, 7) + '-W' + getWeekNumberForGoal(weekStart);
+      const weekStartStr = weekStart.toISOString().split('T')[0];
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      const weekEndStr = weekEnd.toISOString().split('T')[0];
 
-      function getWeekNumberForGoal(d) {
-        const onejan = new Date(d.getFullYear(), 0, 1);
-        return Math.ceil((((d - onejan) / 86400000) + onejan.getDay() + 1) / 7);
-      }
-
-      // 이번 주 개인 목표 가져오기
-      const weeklyGoals = (okrState.personalGoals || []).filter(g =>
-        g.memberId === currentMemberId && g.period === currentWeek
-      );
+      // weeklyGoalConfigs에서 현재 사용자 목표 가져오기
+      const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
+      const goals = config?.goals || [];
+      const currentVersion = config?.currentVersion || 1;
 
       // 버전 정보 업데이트
-      const latestVersion = weeklyGoals.reduce((max, g) => Math.max(max, g.version || 1), 1);
       if (versionEl) {
-        versionEl.textContent = `ver.${latestVersion}`;
+        versionEl.textContent = `ver.${currentVersion}`;
       }
 
-      if (weeklyGoals.length === 0) {
+      if (goals.length === 0) {
         dashboard.innerHTML = `
           <div style="background: white; border-radius: 10px; padding: 16px; text-align: center; border: 1px solid var(--gray-200);">
             <div style="font-size: 13px; color: var(--gray-500);">목표가 설정되지 않았습니다</div>
@@ -9187,45 +9186,48 @@
         return;
       }
 
-      // 현재 버전 목표만 필터링
-      const currentVersionGoals = weeklyGoals.filter(g => (g.version || 1) === latestVersion);
-
       // 목표별 현재값 계산 및 렌더링
       let dashboardHTML = '';
-      currentVersionGoals.forEach(goal => {
-        const lag = okrState.laggingIndicators.find(l => l.id === goal.lagId);
-        if (!lag) return;
-
-        const actualValue = calculateLagActualValue(lag.id, currentWeek, 'weekly');
-        const targetValue = goal.targetValue || 0;
+      goals.forEach(goal => {
+        // 이번 주 실적 계산
+        const weeklyLogs = (okrState.dailyLogs || []).filter(log =>
+          log.lagId === goal.indicatorId &&
+          log.memberId === currentMemberId &&
+          log.date >= weekStartStr &&
+          log.date <= weekEndStr
+        );
+        const actualValue = weeklyLogs.reduce((sum, log) => sum + (parseFloat(log.quantity) || 0), 0);
+        const targetValue = goal.target || 0;
         const rate = targetValue > 0 ? Math.min(Math.round((actualValue / targetValue) * 100), 100) : 0;
         const rateColor = rate >= 100 ? '#10B981' : rate >= 70 ? '#3182f6' : rate >= 50 ? '#F59E0B' : '#EF4444';
 
         dashboardHTML += `
-          <div style="background: white; border-radius: 10px; padding: 12px; border: 1px solid var(--gray-200);">
-            <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${lag.name}</div>
+          <div style="background: white; border-radius: 10px; padding: 12px; border: 1px solid var(--gray-200); position: relative;">
+            <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${goal.name}">${goal.name}</div>
             <div style="display: flex; justify-content: space-between; align-items: baseline;">
               <span style="font-size: 18px; font-weight: 700; color: var(--gray-900);">${actualValue}</span>
-              <span style="font-size: 12px; color: var(--gray-500);">/ ${targetValue}</span>
+              <span style="font-size: 12px; color: var(--gray-500);">/ ${targetValue}${goal.unit || ''}</span>
             </div>
             <div style="margin-top: 6px; height: 4px; background: var(--gray-200); border-radius: 2px; overflow: hidden;">
-              <div style="height: 100%; width: ${rate}%; background: ${rateColor}; border-radius: 2px;"></div>
+              <div style="height: 100%; width: ${rate}%; background: ${rateColor}; border-radius: 2px; transition: width 0.3s;"></div>
             </div>
-            <div style="font-size: 10px; color: ${rateColor}; text-align: right; margin-top: 4px;">${rate}%</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+              <span style="font-size: 10px; color: ${rateColor}; font-weight: 600;">${rate}%</span>
+              <div style="display: flex; gap: 4px;">
+                <button onclick="quickAddWeeklyLog('${goal.indicatorId}')" style="background: #10B981; color: white; border: none; width: 22px; height: 22px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 700;" title="+1 등록">+1</button>
+                <button onclick="openQuickLogModal('${goal.indicatorId}')" style="background: var(--primary); color: white; border: none; width: 22px; height: 22px; border-radius: 4px; cursor: pointer; font-size: 10px;" title="상세 등록">📷</button>
+              </div>
+            </div>
           </div>
         `;
       });
 
-      dashboard.innerHTML = dashboardHTML || `
-        <div style="background: white; border-radius: 10px; padding: 16px; text-align: center; border: 1px solid var(--gray-200);">
-          <div style="font-size: 13px; color: var(--gray-500);">목표 데이터를 불러오는 중...</div>
-        </div>
-      `;
+      dashboard.innerHTML = dashboardHTML;
 
       // 이전 버전이 있으면 표시
-      if (latestVersion > 1 && prevSection) {
+      if (currentVersion > 1 && prevSection) {
         prevSection.style.display = 'block';
-        renderPreviousVersionComparison(weeklyGoals, latestVersion, currentWeek);
+        renderPreviousVersionComparisonNew(config, currentVersion, weekStartStr, weekEndStr);
       } else if (prevSection) {
         prevSection.style.display = 'none';
       }
@@ -9264,6 +9266,55 @@
       }
 
       content.innerHTML = html || '<div style="font-size: 11px; color: var(--gray-400);">이전 버전 기록 없음</div>';
+    }
+
+    // 이전 버전 비교 렌더링 (새 weeklyGoalConfigs 시스템용)
+    function renderPreviousVersionComparisonNew(config, currentVersion, weekStartStr, weekEndStr) {
+      const content = document.getElementById('previousVersionContent');
+      if (!content || !config) return;
+
+      const versionHistory = config.versionHistory || {};
+      const currentMemberId = state.currentUser?.id;
+
+      let html = '<div style="max-height: 200px; overflow-y: auto;">';
+
+      // 버전 히스토리를 역순으로 표시 (최신 → 과거)
+      const versions = Object.keys(versionHistory)
+        .map(v => parseInt(v))
+        .filter(v => v < currentVersion)
+        .sort((a, b) => b - a);
+
+      if (versions.length === 0) {
+        content.innerHTML = '<div style="font-size: 11px; color: var(--gray-400);">이전 버전 기록 없음</div>';
+        return;
+      }
+
+      versions.forEach(v => {
+        const history = versionHistory[v];
+        if (!history) return;
+
+        html += `
+          <div style="margin-bottom: 10px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span style="font-size: 12px; font-weight: 600; color: var(--primary);">ver.${v}</span>
+              <span style="font-size: 10px; color: var(--gray-500);">${history.date || ''}</span>
+            </div>
+            <div style="font-size: 11px; color: var(--gray-600);">
+              ${history.action === 'add' ? '✅ 추가:' : history.action === 'remove' ? '❌ 제거:' : '🔄 변경:'}
+              ${history.goalName || '목표'}
+            </div>
+          </div>
+        `;
+      });
+
+      html += '</div>';
+      html += `
+        <button onclick="openVersionCompareModal('${currentMemberId}')" style="margin-top: 8px; width: 100%; padding: 8px; background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; color: var(--gray-600); cursor: pointer;">
+          📊 전체 버전 히스토리 보기
+        </button>
+      `;
+
+      content.innerHTML = html;
     }
 
     // ========================================
@@ -9582,190 +9633,523 @@
       });
 
       showModal(`
-        <div style="padding: 24px; max-width: 1200px; max-height: 85vh; overflow-y: auto;">
+        <div style="padding: 24px; max-width: 900px; max-height: 85vh; overflow-y: auto;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <div>
               <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
-                🎯 ${member.name}님의 주간 목표 설정
+                🎯 ${member.name}님의 주간 목표
+                <span style="font-size: 12px; background: var(--primary); color: white; padding: 2px 8px; border-radius: 10px;">ver.${getCurrentWeeklyGoalVersion(currentMemberId)}</span>
               </div>
               <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
-                📅 <strong>${weekLabel}</strong> 이번 주 목표를 설정하세요 <span style="color: #10B981;">(매주 월요일 설정 권장)</span>
+                한 번 설정하면 매주 유지됩니다. 수정 시 새 버전으로 기록됩니다.
               </p>
             </div>
-            <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
-          </div>
-
-          <!-- 주간 고정 업무 섹션 -->
-          <div style="background: linear-gradient(135deg, #FEF3C7, #FDE68A); border-radius: 12px; padding: 16px; margin-bottom: 20px; border: 1px solid #F59E0B;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-              <div style="font-size: 14px; color: #B45309; font-weight: 700; display: flex; align-items: center; gap: 8px;">
-                🔄 주간 고정 업무 <span style="font-size: 11px; font-weight: 500; color: #92400E;">(매주 배치 필요에 자동 표시)</span>
-              </div>
-              <button onclick="openWeeklyRecurringTaskForm()" style="background: #F59E0B; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
-                + 고정 업무 추가
+            <div style="display: flex; gap: 8px;">
+              <button onclick="openVersionCompareModal('${currentMemberId}')" style="background: white; border: 1px solid var(--gray-300); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                📊 버전 비교
               </button>
-            </div>
-            <div id="weeklyRecurringTasksList" style="max-height: 150px; overflow-y: auto;">
-              ${(() => {
-                const recurringTasks = (state.taskPlans || []).filter(t =>
-                  t.isWeeklyRecurring &&
-                  (t.assignee === currentMemberId || t.assigneeId === currentMemberId)
-                );
-                if (recurringTasks.length === 0) {
-                  return '<div style="text-align: center; padding: 16px; color: #92400E; font-size: 12px;">등록된 주간 고정 업무가 없습니다</div>';
-                }
-                return recurringTasks.map(task => {
-                  const lag = okrState.laggingIndicators.find(l => l.id === task.laggingIndicatorId);
-                  return '<div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: white; border-radius: 8px; margin-bottom: 6px;">' +
-                    '<span style="font-size: 16px;">🔄</span>' +
-                    '<div style="flex: 1;">' +
-                      '<div style="font-size: 12px; font-weight: 600; color: var(--gray-800);">' + (task.title || '제목 없음') + '</div>' +
-                      (lag ? '<div style="font-size: 10px; color: var(--gray-500);">연결: ' + lag.name + '</div>' : '') +
-                    '</div>' +
-                    '<button onclick="deleteWeeklyRecurringTask(&#39;' + task.id + '&#39;)" style="background: #FEE2E2; color: #DC2626; border: none; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer;">삭제</button>' +
-                  '</div>';
-                }).join('');
-              })()}
+              <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
             </div>
           </div>
 
-          <!-- 안내 배너 -->
-          <div style="background: linear-gradient(135deg, #ECFDF5, #D1FAE5); border-radius: 12px; padding: 14px; margin-bottom: 20px; border: 1px solid #10B981;">
-            <div style="font-size: 13px; color: #059669; font-weight: 600; margin-bottom: 4px;">💡 주간 목표 수치 설정</div>
-            <div style="font-size: 12px; color: var(--gray-600); line-height: 1.5;">
-              • <strong>행동지표</strong>: 이번 주 실행할 업무 횟수 (예: 공구 3건, 미팅 5회) &nbsp;|&nbsp; <strong>성과지표</strong>: 이번 주 달성할 결과 목표 (예: 매출 2천만원, 입점 1곳)
-            </div>
+          <!-- 현재 주간 목표 목록 -->
+          <div id="weeklyGoalsList" style="margin-bottom: 20px;">
+            ${renderWeeklyGoalsCards(currentMemberId, myLags)}
           </div>
 
-          <!-- 행동지표 + 성과지표 가로 배치 -->
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-            <!-- 행동지표(Input) 목표 설정 -->
-            <div>
-              <div style="font-size: 15px; font-weight: 700; color: #059669; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                📥 행동지표(Input) 목표
-              </div>
-              <div style="background: #F0FDF4; border-radius: 12px; padding: 14px; max-height: 400px; overflow-y: auto;">
-                ${Object.keys(inputByKR).length === 0 ? `
-                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">내 담당 행동지표가 없습니다</div>
-                ` : Object.values(inputByKR).map(group => {
-                  const idx = group.krIdx;
-                  return `
-                  <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
-                    <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 2px;">${okrIcons[idx % 4]} ${group.kr.name}</div>
-                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px;">${group.kpi.name}</div>
-                    ${group.lags.map(lag => {
-                      const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
-                      return `
-                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px;">
-                          <div style="flex: 1; font-size: 11px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
-                          <input type="hidden" id="goalPeriod_${lag.id}" value="${currentWeek}">
-                          <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
-                            style="width: 60px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 5px; font-size: 12px; text-align: right;">
-                          <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || '건'}</span>
-                        </div>
-                      `;
-                    }).join('')}
-                  </div>
-                `}).join('')}
-              </div>
-            </div>
-
-            <!-- 성과지표(Output) 목표 설정 -->
-            <div>
-              <div style="font-size: 15px; font-weight: 700; color: #D97706; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                📤 성과지표(Output) 목표
-              </div>
-              <div style="background: #FFFBEB; border-radius: 12px; padding: 14px; max-height: 400px; overflow-y: auto;">
-                ${Object.keys(outputByKR).length === 0 ? `
-                  <div style="text-align: center; padding: 20px; color: var(--gray-400);">내 담당 성과지표가 없습니다</div>
-                ` : Object.values(outputByKR).map(group => {
-                  const idx = group.krIdx;
-                  return `
-                  <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 10px; border-left: 3px solid ${okrColors[idx % 4]};">
-                    <div style="font-size: 10px; color: var(--gray-500); margin-bottom: 2px;">${okrIcons[idx % 4]} ${group.kr.name}</div>
-                    <div style="font-size: 12px; font-weight: 600; color: ${okrColors[idx % 4]}; margin-bottom: 8px;">${group.kpi.name}</div>
-                    ${group.lags.map(lag => {
-                      const existingGoal = memberGoals.find(g => g.indicatorId === lag.id);
-                      return `
-                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px;">
-                          <div style="flex: 1; font-size: 11px; font-weight: 600; color: var(--gray-700);">${lag.name}</div>
-                          <input type="hidden" id="goalPeriod_${lag.id}" value="${currentWeek}">
-                          <input type="number" id="goalValue_${lag.id}" value="${existingGoal?.targetValue || ''}" placeholder="0"
-                            style="width: 80px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 5px; font-size: 12px; text-align: right;">
-                          <span style="font-size: 11px; color: var(--gray-500);">${lag.unit || '건'}</span>
-                        </div>
-                      `;
-                    }).join('')}
-                  </div>
-                `}).join('')}
-              </div>
-            </div>
+          <!-- 목표 추가 버튼 -->
+          <div style="text-align: center; padding: 16px; border: 2px dashed var(--gray-300); border-radius: 12px; margin-bottom: 20px;">
+            <button onclick="openAddWeeklyGoalModal('${currentMemberId}')" style="background: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+              + 주간 목표 추가
+            </button>
+            <p style="font-size: 12px; color: var(--gray-500); margin-top: 8px;">지표를 선택하고 목표 수량을 설정하세요</p>
           </div>
 
-          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 20px; border-top: 1px solid var(--gray-200); margin-top: 20px;">
-            <button class="btn btn-secondary" onclick="closeModal()">취소</button>
-            <button class="btn btn-primary" onclick="savePersonalGoals('${currentMemberId}', '${currentWeek}')">💾 주간 목표 저장</button>
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button class="btn btn-secondary" onclick="closeModal()">닫기</button>
           </div>
         </div>
       `);
     }
 
-    // 개인 목표 일괄 저장 (주간 기준)
-    async function savePersonalGoals(memberId, weekPeriod = null) {
-      const allLags = okrState.laggingIndicators;
-      const batch = db.batch();
-      const goalsToSave = [];
+    // 현재 주간 목표 버전 가져오기
+    function getCurrentWeeklyGoalVersion(memberId) {
+      const config = okrState.weeklyGoalConfigs?.find(c => c.memberId === memberId);
+      return config?.currentVersion || 1;
+    }
 
-      // 모든 지표의 목표 수집
-      allLags.forEach(lag => {
-        const periodEl = document.getElementById(`goalPeriod_${lag.id}`);
-        const valueEl = document.getElementById(`goalValue_${lag.id}`);
+    // 주간 목표 카드 렌더링
+    function renderWeeklyGoalsCards(memberId, myLags) {
+      const config = okrState.weeklyGoalConfigs?.find(c => c.memberId === memberId);
+      const goals = config?.goals || [];
 
-        if (periodEl && valueEl) {
-          const period = periodEl.value || weekPeriod;
-          const targetValue = parseFloat(valueEl.value) || 0;
+      if (goals.length === 0) {
+        return '<div style="text-align: center; padding: 40px; color: var(--gray-400);"><div style="font-size: 48px; margin-bottom: 12px;">🎯</div><div>설정된 주간 목표가 없습니다</div><div style="font-size: 12px; margin-top: 4px;">아래 버튼을 눌러 목표를 추가하세요</div></div>';
+      }
 
-          if (targetValue > 0) {
-            goalsToSave.push({
-              memberId: memberId,
-              indicatorId: lag.id,
-              indicatorName: lag.name,
-              indicatorType: lag.type === 'output' ? 'output' : 'input',
-              period: period,
-              targetValue: targetValue,
-              unit: lag.unit || '건'
-            });
-          }
-        }
-      });
+      const { monday, friday } = getThisWeekDates();
+      const weekStart = monday.toISOString().split('T')[0];
+      const weekEnd = friday.toISOString().split('T')[0];
+
+      return '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px;">' +
+        goals.map(goal => {
+          const lag = okrState.laggingIndicators.find(l => l.id === goal.indicatorId);
+          const isOutput = lag?.type === 'output';
+
+          // 이번 주 실적 계산
+          const weekLogs = okrState.dailyLogs.filter(log =>
+            log.laggingIndicatorId === goal.indicatorId &&
+            log.memberId === memberId &&
+            log.date >= weekStart && log.date <= weekEnd
+          );
+          const achieved = weekLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+          const progress = goal.target > 0 ? Math.min(Math.round((achieved / goal.target) * 100), 100) : 0;
+
+          const bgColor = isOutput ? '#FFFBEB' : '#F0FDF4';
+          const accentColor = isOutput ? '#D97706' : '#059669';
+          const icon = isOutput ? '📤' : '📥';
+
+          return '<div style="background: ' + bgColor + '; border-radius: 12px; padding: 16px; border: 1px solid ' + accentColor + '30;">' +
+            '<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">' +
+              '<div style="display: flex; align-items: center; gap: 8px;">' +
+                '<span style="font-size: 20px;">' + icon + '</span>' +
+                '<div>' +
+                  '<div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">' + (goal.name || lag?.name || '목표') + '</div>' +
+                  '<div style="font-size: 11px; color: ' + accentColor + ';">' + (isOutput ? '성과지표' : '행동지표') + '</div>' +
+                '</div>' +
+              '</div>' +
+              '<button onclick="removeWeeklyGoal(&#39;' + memberId + '&#39;, &#39;' + goal.indicatorId + '&#39;)" style="background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 16px;">✕</button>' +
+            '</div>' +
+            '<div style="margin-bottom: 12px;">' +
+              '<div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">' +
+                '<span style="color: var(--gray-600);">목표 ' + goal.target + (goal.unit || '건') + '/주</span>' +
+                '<span style="font-weight: 700; color: ' + accentColor + ';">' + progress + '%</span>' +
+              '</div>' +
+              '<div style="background: white; border-radius: 10px; height: 8px; overflow: hidden;">' +
+                '<div style="background: ' + accentColor + '; height: 100%; width: ' + progress + '%; transition: width 0.3s;"></div>' +
+              '</div>' +
+              '<div style="font-size: 13px; font-weight: 600; color: var(--gray-800); margin-top: 6px;">이번주 ' + achieved + (goal.unit || '건') + ' 완료</div>' +
+            '</div>' +
+            '<div style="display: flex; gap: 8px;">' +
+              '<button onclick="quickAddWeeklyLog(&#39;' + goal.indicatorId + '&#39;, 1)" style="flex: 1; background: ' + accentColor + '; color: white; border: none; padding: 8px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">+1 등록</button>' +
+              '<button onclick="openQuickLogModal(&#39;' + goal.indicatorId + '&#39;)" style="background: white; border: 1px solid ' + accentColor + '; color: ' + accentColor + '; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">📷 상세</button>' +
+            '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>';
+    }
+
+    // 주간 목표 추가 모달
+    function openAddWeeklyGoalModal(memberId) {
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+
+      // 내 담당 KPI의 지표 목록
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === memberId || (kpi.subAssignees || []).includes(memberId)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+      const myLags = okrState.laggingIndicators.filter(l => myKpiIds.includes(l.kpiId));
+
+      // 이미 설정된 목표의 지표 ID 목록
+      const config = okrState.weeklyGoalConfigs?.find(c => c.memberId === memberId);
+      const existingIds = (config?.goals || []).map(g => g.indicatorId);
+
+      // 아직 설정되지 않은 지표만 필터링
+      const availableLags = myLags.filter(l => !existingIds.includes(l.id));
+
+      const inputLags = availableLags.filter(l => l.type !== 'output');
+      const outputLags = availableLags.filter(l => l.type === 'output');
+
+      showModal(`
+        <div style="padding: 24px; max-width: 500px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="font-size: 18px; font-weight: 700;">+ 주간 목표 추가</div>
+            <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal('${memberId}'), 300);" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지표 선택 *</label>
+            <select id="newGoalIndicator" onchange="updateGoalUnit()" style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+              <option value="">지표를 선택하세요</option>
+              ${inputLags.length > 0 ? '<optgroup label="📥 행동지표">' + inputLags.map(l => '<option value="' + l.id + '" data-unit="' + (l.unit || '건') + '" data-type="input">' + l.name + '</option>').join('') + '</optgroup>' : ''}
+              ${outputLags.length > 0 ? '<optgroup label="📤 성과지표">' + outputLags.map(l => '<option value="' + l.id + '" data-unit="' + (l.unit || '건') + '" data-type="output">' + l.name + '</option>').join('') + '</optgroup>' : ''}
+            </select>
+            ${availableLags.length === 0 ? '<div style="font-size: 12px; color: #F59E0B; margin-top: 6px;">⚠️ 추가 가능한 지표가 없습니다</div>' : ''}
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">주간 목표 수량 *</label>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input type="number" id="newGoalTarget" placeholder="0" min="1" style="flex: 1; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 16px; text-align: center;">
+              <span id="newGoalUnit" style="font-size: 14px; color: var(--gray-600); min-width: 40px;">건/주</span>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 12px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal('${memberId}'), 300);" class="btn btn-secondary">취소</button>
+            <button onclick="saveNewWeeklyGoal('${memberId}')" class="btn btn-primary">추가</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // 단위 업데이트
+    function updateGoalUnit() {
+      const select = document.getElementById('newGoalIndicator');
+      const unitSpan = document.getElementById('newGoalUnit');
+      const option = select.options[select.selectedIndex];
+      if (option && option.dataset.unit) {
+        unitSpan.textContent = option.dataset.unit + '/주';
+      }
+    }
+
+    // 새 주간 목표 저장
+    async function saveNewWeeklyGoal(memberId) {
+      const indicatorId = document.getElementById('newGoalIndicator').value;
+      const target = parseInt(document.getElementById('newGoalTarget').value) || 0;
+
+      if (!indicatorId) {
+        showToast('지표를 선택하세요', 'error');
+        return;
+      }
+      if (target <= 0) {
+        showToast('목표 수량을 입력하세요', 'error');
+        return;
+      }
+
+      const lag = okrState.laggingIndicators.find(l => l.id === indicatorId);
+      const select = document.getElementById('newGoalIndicator');
+      const option = select.options[select.selectedIndex];
 
       try {
-        // 이번 주 목표만 삭제 (다른 주 목표는 유지)
-        const existingGoals = (okrState.personalGoals || []).filter(g =>
-          g.memberId === memberId && g.period === weekPeriod
-        );
-        existingGoals.forEach(goal => {
-          batch.delete(db.collection('okr_personalGoals').doc(goal.id));
-        });
+        // 기존 설정 가져오기
+        let config = okrState.weeklyGoalConfigs?.find(c => c.memberId === memberId);
+        const configRef = config
+          ? db.collection('okr_weeklyGoalConfigs').doc(config.id)
+          : db.collection('okr_weeklyGoalConfigs').doc();
 
-        // 새 목표 추가
-        goalsToSave.forEach(goal => {
-          const docRef = db.collection('okr_personalGoals').doc();
-          batch.set(docRef, {
-            ...goal,
+        const newGoal = {
+          indicatorId,
+          name: lag?.name || '',
+          target,
+          unit: option?.dataset?.unit || '건',
+          type: option?.dataset?.type || 'input'
+        };
+
+        if (config) {
+          // 기존 설정에 목표 추가 + 버전 업
+          const newVersion = (config.currentVersion || 1) + 1;
+          await configRef.update({
+            goals: firebase.firestore.FieldValue.arrayUnion(newGoal),
+            currentVersion: newVersion,
+            [`versionHistory.${newVersion}`]: {
+              date: new Date().toISOString(),
+              action: 'add_goal',
+              goalName: newGoal.name
+            },
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          // 새 설정 생성
+          await configRef.set({
+            memberId,
+            currentVersion: 1,
+            goals: [newGoal],
+            versionHistory: {
+              1: { date: new Date().toISOString(), action: 'create' }
+            },
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
-        });
+        }
 
-        await batch.commit();
-        await loadOkrData();
-        renderPersonalGrowthboard();
+        showToast('주간 목표가 추가되었습니다', 'success');
+        await loadWeeklyGoalConfigs();
         closeModal();
-        showToast(`주간 목표가 저장되었습니다! (${goalsToSave.length}개 지표)`, 'success');
+        setTimeout(() => openPersonalGoalsModal(memberId), 300);
       } catch (e) {
         console.error('주간 목표 저장 오류:', e);
         showToast('저장 실패', 'error');
+      }
+    }
+
+    // 주간 목표 삭제
+    async function removeWeeklyGoal(memberId, indicatorId) {
+      if (!confirm('이 목표를 삭제하시겠습니까?')) return;
+
+      try {
+        const config = okrState.weeklyGoalConfigs?.find(c => c.memberId === memberId);
+        if (!config) return;
+
+        const goalToRemove = config.goals.find(g => g.indicatorId === indicatorId);
+        const newVersion = (config.currentVersion || 1) + 1;
+
+        await db.collection('okr_weeklyGoalConfigs').doc(config.id).update({
+          goals: config.goals.filter(g => g.indicatorId !== indicatorId),
+          currentVersion: newVersion,
+          [`versionHistory.${newVersion}`]: {
+            date: new Date().toISOString(),
+            action: 'remove_goal',
+            goalName: goalToRemove?.name || ''
+          },
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        showToast('목표가 삭제되었습니다', 'success');
+        await loadWeeklyGoalConfigs();
+        openPersonalGoalsModal(memberId);
+      } catch (e) {
+        console.error('목표 삭제 오류:', e);
+        showToast('삭제 실패', 'error');
+      }
+    }
+
+    // 빠른 실적 등록 (+1)
+    async function quickAddWeeklyLog(indicatorId, value = 1) {
+      const lag = okrState.laggingIndicators.find(l => l.id === indicatorId);
+      if (!lag) {
+        showToast('지표를 찾을 수 없습니다', 'error');
+        return;
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+      const currentUser = state.currentUser;
+      const member = getCurrentMember();
+
+      try {
+        await db.collection('okr_dailyLogs').add({
+          lagId: indicatorId, // weeklyGoalConfigs와 일치하는 필드명
+          laggingIndicatorId: indicatorId,
+          krId: lag.krId || '',
+          kpiId: lag.kpiId || '',
+          resultValue: value,
+          quantity: value, // weeklyGoalConfigs와 일치
+          date: today,
+          registeredTime: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+          memberId: member?.id || currentUser?.id || 'anonymous',
+          memberName: member?.name || currentUser?.name || '익명',
+          memo: '',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        showToast(`${lag.name} +${value} 등록됨`, 'success');
+
+        // 데이터 새로고침 후 대시보드 업데이트
+        await loadOkrData();
+        renderWeeklyGoalDashboard();
+      } catch (e) {
+        console.error('실적 등록 오류:', e);
+        showToast('등록 실패', 'error');
+      }
+    }
+
+    // 상세 등록 모달 (캡처 포함)
+    function openQuickLogModal(indicatorId) {
+      const lag = okrState.laggingIndicators.find(l => l.id === indicatorId);
+      if (!lag) return;
+
+      const isOutput = lag.type === 'output';
+      const accentColor = isOutput ? '#D97706' : '#059669';
+
+      showModal(`
+        <div style="padding: 24px; max-width: 450px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+              ${isOutput ? '📤' : '📥'} ${lag.name} 등록
+            </div>
+            <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">수량 *</label>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input type="number" id="quickLogValue" value="1" min="1" style="flex: 1; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 18px; text-align: center;">
+              <span style="font-size: 14px; color: var(--gray-600);">${lag.unit || '건'}</span>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">메모 (선택)</label>
+            <input type="text" id="quickLogMemo" placeholder="간단한 메모" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">📷 이미지 첨부 (Ctrl+V 붙여넣기)</label>
+            <div id="quickLogImageArea" onclick="document.getElementById('quickLogImageInput').click()"
+                 style="border: 2px dashed var(--gray-300); border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; min-height: 80px; display: flex; align-items: center; justify-content: center; flex-direction: column;"
+                 ondragover="event.preventDefault(); this.style.borderColor='${accentColor}';"
+                 ondragleave="this.style.borderColor='var(--gray-300)';"
+                 ondrop="handleQuickLogImageDrop(event)">
+              <div style="color: var(--gray-400); font-size: 13px;">클릭하거나 이미지를 붙여넣기 하세요</div>
+            </div>
+            <input type="file" id="quickLogImageInput" accept="image/*" style="display: none;" onchange="handleQuickLogImageSelect(event)">
+          </div>
+
+          <div style="display: flex; gap: 12px;">
+            <button onclick="closeModal()" class="btn btn-secondary" style="flex: 1;">취소</button>
+            <button onclick="submitWeeklyGoalLog('${indicatorId}')" style="flex: 1; background: ${accentColor}; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">등록</button>
+          </div>
+        </div>
+      `);
+
+      // 붙여넣기 이벤트 리스너
+      document.addEventListener('paste', handleQuickLogPaste);
+    }
+
+    // 이미지 붙여넣기 처리
+    let quickLogImageData = null;
+
+    function handleQuickLogPaste(event) {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+
+      for (let item of items) {
+        if (item.type.indexOf('image') !== -1) {
+          const file = item.getAsFile();
+          processQuickLogImage(file);
+          break;
+        }
+      }
+    }
+
+    function handleQuickLogImageDrop(event) {
+      event.preventDefault();
+      const file = event.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) {
+        processQuickLogImage(file);
+      }
+    }
+
+    function handleQuickLogImageSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        processQuickLogImage(file);
+      }
+    }
+
+    function processQuickLogImage(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        quickLogImageData = e.target.result;
+        const area = document.getElementById('quickLogImageArea');
+        if (area) {
+          area.innerHTML = '<img src="' + quickLogImageData + '" style="max-width: 100%; max-height: 150px; border-radius: 8px;"><div style="font-size: 11px; color: var(--gray-500); margin-top: 8px;">클릭하여 변경</div>';
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    // 주간 목표 상세 등록 제출
+    async function submitWeeklyGoalLog(indicatorId) {
+      const value = parseInt(document.getElementById('quickLogValue').value) || 1;
+      const memo = document.getElementById('quickLogMemo').value.trim();
+
+      const lag = okrState.laggingIndicators.find(l => l.id === indicatorId);
+      if (!lag) return;
+
+      const today = new Date().toISOString().split('T')[0];
+      const currentUser = state.currentUser;
+      const member = getCurrentMember();
+
+      try {
+        const logData = {
+          lagId: indicatorId, // weeklyGoalConfigs와 일치하는 필드명
+          laggingIndicatorId: indicatorId,
+          krId: lag.krId || '',
+          kpiId: lag.kpiId || '',
+          resultValue: value,
+          quantity: value, // weeklyGoalConfigs와 일치
+          date: today,
+          registeredTime: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+          memberId: member?.id || currentUser?.id || 'anonymous',
+          memberName: member?.name || currentUser?.name || '익명',
+          memo,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        // 이미지가 있으면 추가
+        if (quickLogImageData) {
+          logData.image = quickLogImageData;
+        }
+
+        await db.collection('okr_dailyLogs').add(logData);
+
+        document.removeEventListener('paste', handleQuickLogPaste);
+        quickLogImageData = null;
+
+        showToast(`${lag.name} +${value} 등록됨`, 'success');
+        await loadOkrData();
+        closeModal();
+        // 대시보드 업데이트
+        renderWeeklyGoalDashboard();
+      } catch (e) {
+        console.error('등록 오류:', e);
+        showToast('등록 실패', 'error');
+      }
+    }
+
+    // 버전 비교 모달
+    function openVersionCompareModal(memberId) {
+      const config = okrState.weeklyGoalConfigs?.find(c => c.memberId === memberId);
+      if (!config) {
+        showToast('버전 기록이 없습니다', 'error');
+        return;
+      }
+
+      const member = (state.teamMembers || []).find(m => m.id === memberId);
+      const versionHistory = config.versionHistory || {};
+      const versions = Object.keys(versionHistory).sort((a, b) => b - a);
+
+      showModal(`
+        <div style="padding: 24px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div style="font-size: 18px; font-weight: 700;">📊 ${member?.name || ''}님의 버전별 기록</div>
+            <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal('${memberId}'), 300);" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
+          </div>
+
+          <div style="background: #EEF2FF; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 13px; color: var(--primary);">
+            💡 현재 버전: ver.${config.currentVersion} | 총 ${versions.length}개 버전 기록
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            ${versions.map(v => {
+              const info = versionHistory[v];
+              const isCurrentVersion = parseInt(v) === config.currentVersion;
+              return `
+                <div style="background: ${isCurrentVersion ? '#F0FDF4' : 'white'}; border: 1px solid ${isCurrentVersion ? '#10B981' : 'var(--gray-200)'}; border-radius: 10px; padding: 14px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span style="font-size: 14px; font-weight: 700; color: var(--gray-800);">ver.${v}</span>
+                      ${isCurrentVersion ? '<span style="font-size: 10px; background: #10B981; color: white; padding: 2px 6px; border-radius: 4px;">현재</span>' : ''}
+                    </div>
+                    <span style="font-size: 11px; color: var(--gray-500);">${info.date ? new Date(info.date).toLocaleDateString('ko-KR') : ''}</span>
+                  </div>
+                  <div style="font-size: 12px; color: var(--gray-600); margin-top: 6px;">
+                    ${info.action === 'create' ? '🆕 최초 생성' : ''}
+                    ${info.action === 'add_goal' ? '➕ 목표 추가: ' + (info.goalName || '') : ''}
+                    ${info.action === 'remove_goal' ? '➖ 목표 삭제: ' + (info.goalName || '') : ''}
+                    ${info.action === 'update' ? '✏️ 목표 수정' : ''}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; padding-top: 16px; margin-top: 16px; border-top: 1px solid var(--gray-200);">
+            <button onclick="closeModal(); setTimeout(() => openPersonalGoalsModal('${memberId}'), 300);" class="btn btn-secondary">닫기</button>
+          </div>
+        </div>
+      `);
+    }
+
+    // 주간 목표 설정 로드
+    async function loadWeeklyGoalConfigs() {
+      try {
+        const snapshot = await db.collection('okr_weeklyGoalConfigs').get();
+        okrState.weeklyGoalConfigs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      } catch (e) {
+        console.error('주간 목표 설정 로드 오류:', e);
+        okrState.weeklyGoalConfigs = [];
       }
     }
 
@@ -15936,6 +16320,7 @@
       personalTargets: [],  // 개인 목표 (팀 KPI와 별개)
       personalGoals: [],    // 새 개인 목표 (지표별 기간 설정)
       quarterlyGoals: [],   // 분기별 개인 목표 (개인그로스보드용)
+      weeklyGoalConfigs: [], // 주간 목표 설정 (버전 관리)
       weeklyPlans: [],      // 주간 계획 (Firebase 저장)
       meetings: [],  // 미팅 일지
       favorites: JSON.parse(localStorage.getItem('okrFavorites') || '[]'),
@@ -16087,6 +16472,9 @@
 
         // KPI 마감일 알림 체크
         setTimeout(() => checkKPIDeadlineNotifications(), 1500);
+
+        // 주간 목표 설정 로드
+        await loadWeeklyGoalConfigs();
 
       } catch (e) {
         console.error('OKR 데이터 로드 오류:', e);
