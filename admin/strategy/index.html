@@ -9006,10 +9006,31 @@
       const unassignedList = document.getElementById('unassignedTasksList');
       const unassignedCount = document.getElementById('unassignedCount');
 
+      // ★ 행동지표(input)와 성과지표(output) 구분 (linkedLagType 또는 indicatorType 필드 확인)
+      const inputTasks = unassignedTasks.filter(t => (t.linkedLagType || t.indicatorType) !== 'output');
+      const outputTasks = unassignedTasks.filter(t => (t.linkedLagType || t.indicatorType) === 'output');
+
       if (unassignedList) {
-        unassignedList.innerHTML = unassignedTasks.length === 0
-          ? '<div style="font-size: 11px; color: var(--gray-400); text-align: center; padding: 20px 0;">모든 업무가 배치됨</div>'
-          : unassignedTasks.map(task => createDraggableTaskCard(task, true)).join('');
+        if (unassignedTasks.length === 0) {
+          unassignedList.innerHTML = '<div style="font-size: 11px; color: var(--gray-400); text-align: center; padding: 20px 0;">모든 업무가 배치됨</div>';
+        } else {
+          let html = '';
+          // 행동지표 (위)
+          if (inputTasks.length > 0) {
+            html += `<div style="font-size: 10px; color: #6366F1; font-weight: 600; padding: 4px 8px; background: #EEF2FF; border-radius: 4px; margin-bottom: 6px;">📝 행동 ${inputTasks.length}건</div>`;
+            html += inputTasks.map(task => createDraggableTaskCard(task, true)).join('');
+          }
+          // 구분선
+          if (inputTasks.length > 0 && outputTasks.length > 0) {
+            html += '<div style="border-top: 2px dashed #E5E7EB; margin: 10px 0;"></div>';
+          }
+          // 성과지표 (아래)
+          if (outputTasks.length > 0) {
+            html += `<div style="font-size: 10px; color: #10B981; font-weight: 600; padding: 4px 8px; background: #ECFDF5; border-radius: 4px; margin-bottom: 6px;">📊 성과 ${outputTasks.length}건</div>`;
+            html += outputTasks.map(task => createDraggableTaskCard(task, true)).join('');
+          }
+          unassignedList.innerHTML = html;
+        }
       }
       if (unassignedCount) {
         unassignedCount.textContent = unassignedTasks.length;
@@ -9060,7 +9081,7 @@
              ondragend="dragEnd(event)"
              onclick="openTaskPlanDetail('${task.id}')">
           <div class="task-title">${task.title || '제목 없음'}</div>
-          <div class="task-meta">${taskDeadline ? formatDate(taskDeadline) : ''}${ddayBadge}</div>
+          <div class="task-meta">${taskDeadline ? taskDeadline.slice(5).replace('-', '/') : ''}${ddayBadge}</div>
           ${delayReason}
         </div>
       `;
@@ -18395,7 +18416,8 @@
       selectedDate: null,
       calendarMonth: new Date(),
       unlinkedFilter: false, // 미분류만 보기
-      unknownOwnerFilter: false // 등록자 미상만 보기
+      unknownOwnerFilter: false, // 등록자 미상만 보기
+      disconnectedFilter: false // 지표 연결 해제된 것만 보기
     };
 
     function renderOkrRecord() {
@@ -18535,6 +18557,17 @@
                 if (unlinkedCount === 0 && !workLogState.unlinkedFilter) return '';
                 return '<button onclick="toggleUnlinkedFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.unlinkedFilter ? '#F59E0B' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.unlinkedFilter ? '#FEF3C7' : 'white') + '; color: ' + (workLogState.unlinkedFilter ? '#B45309' : 'var(--gray-600)') + '; transition: all 0.2s;">⚠️ 미분류 ' + unlinkedCount + '건</button>';
               })()}
+              <!-- 지표 연결 해제 필터 (삭제된 지표) -->
+              ${(() => {
+                const disconnectedCount = filteredLogs.filter(l =>
+                  l.laggingIndicatorId &&
+                  l.laggingIndicatorId !== 'undefined' &&
+                  l.laggingIndicatorId !== 'null' &&
+                  !okrState.laggingIndicators.some(lag => lag.id === l.laggingIndicatorId)
+                ).length;
+                if (disconnectedCount === 0 && !workLogState.disconnectedFilter) return '';
+                return '<button onclick="toggleDisconnectedFilter()" style="padding: 10px 14px; border: 2px solid ' + (workLogState.disconnectedFilter ? '#DC2626' : 'var(--gray-200)') + '; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; background: ' + (workLogState.disconnectedFilter ? '#FEE2E2' : 'white') + '; color: ' + (workLogState.disconnectedFilter ? '#DC2626' : 'var(--gray-600)') + '; transition: all 0.2s;">🔗 연결해제 ' + disconnectedCount + '건</button>';
+              })()}
               <!-- 등록자 미상 필터 -->
               ${(() => {
                 const unknownOwnerLogs = okrState.dailyLogs.filter(l =>
@@ -18610,6 +18643,15 @@
     function toggleUnknownOwnerFilter() {
       workLogState.unknownOwnerFilter = !workLogState.unknownOwnerFilter;
       workLogState.unlinkedFilter = false; // 다른 필터 해제
+      workLogState.disconnectedFilter = false; // 다른 필터 해제
+      renderOkrRecord();
+    }
+
+    // ★ 지표 연결 해제 필터 토글
+    function toggleDisconnectedFilter() {
+      workLogState.disconnectedFilter = !workLogState.disconnectedFilter;
+      workLogState.unlinkedFilter = false; // 다른 필터 해제
+      workLogState.unknownOwnerFilter = false; // 다른 필터 해제
       renderOkrRecord();
     }
 
@@ -18620,6 +18662,12 @@
       // 미분류 필터 활성화 시 미분류 로그 목록 표시
       if (workLogState.unlinkedFilter) {
         renderUnlinkedLogsView(contentEl);
+        return;
+      }
+
+      // ★ 지표 연결 해제 필터 활성화 시 해당 로그 목록 표시
+      if (workLogState.disconnectedFilter) {
+        renderDisconnectedLogsView(contentEl);
         return;
       }
 
@@ -19327,16 +19375,29 @@
                           const lag = okrState.laggingIndicators.find(l => l.id === lagId);
                           const kpi = okrState.kpis.find(k => k.id === lag?.kpiId);
                           const krIdx = okrState.keyResults.findIndex(k => k.id === kpi?.keyResultId);
-                          const color = okrColors[krIdx] || 'var(--primary)';
+
+                          // ★ 연결 해제된 지표 체크
+                          const isDisconnected = !lag || !lagId || lagId === 'undefined' || lagId === 'null';
+                          const color = isDisconnected ? '#EF4444' : (okrColors[krIdx] || 'var(--primary)');
+                          const disconnectedBadge = isDisconnected
+                            ? '<span style="font-size: 10px; background: #FEE2E2; color: #DC2626; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">⚠️ 지표 연결 해제</span>'
+                            : '';
+
                           return `
-                            <div style="background: var(--gray-50); border-radius: 10px; padding: 12px 16px; border-left: 4px solid ${color};">
+                            <div style="background: ${isDisconnected ? '#FEF2F2' : 'var(--gray-50)'}; border-radius: 10px; padding: 12px 16px; border-left: 4px solid ${color};">
                               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                  <span style="font-size: 18px;">${getOkrLagIcon(lag?.name || '')}</span>
-                                  <span style="font-size: 14px; font-weight: 700; color: var(--gray-800);">${lag?.name || '업무'}</span>
+                                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                                  <span style="font-size: 18px;">${isDisconnected ? '⚠️' : getOkrLagIcon(lag?.name || '')}</span>
+                                  <span style="font-size: 14px; font-weight: 700; color: ${isDisconnected ? '#DC2626' : 'var(--gray-800)'};">${lag?.name || '(삭제된 지표)'}</span>
+                                  ${disconnectedBadge}
                                 </div>
                                 <span style="font-size: 18px; font-weight: 800; color: ${color};">+${data.count}</span>
                               </div>
+                              ${isDisconnected ? `
+                                <div style="font-size: 11px; color: #B91C1C; background: #FECACA; padding: 6px 10px; border-radius: 6px; margin-bottom: 8px;">
+                                  지표가 삭제되었거나 연결이 해제되었습니다. 기록 수정에서 지표를 다시 선택해주세요.
+                                </div>
+                              ` : ''}
                               ${data.logs.some(l => l.memo) ? `
                                 <div style="display: flex; flex-direction: column; gap: 6px; padding-left: 26px;">
                                   ${data.logs.filter(l => l.memo).map(l => `
@@ -19344,6 +19405,7 @@
                                       <span style="color: var(--gray-400);">•</span>
                                       <span>${l.memo}</span>
                                       <span style="color: var(--gray-400);">(+${l.resultValue || 1})</span>
+                                      ${isDisconnected ? '<span onclick="openEditLogModal(\'' + l.id + '\')" style="font-size: 10px; color: #3182F6; cursor: pointer; margin-left: 4px;">수정</span>' : ''}
                                     </div>
                                   `).join('')}
                                 </div>
