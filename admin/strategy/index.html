@@ -1563,6 +1563,15 @@
             </div>
           </div>
 
+          <!-- 그룹 필터 드롭다운 (상태별/KPI별/담당자별) -->
+          <div class="card" style="padding: 8px 12px; display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+            <select id="taskPlanGroupBy" onchange="filterTaskPlan()" style="padding: 6px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white; cursor: pointer;">
+              <option value="status">📊 상태별</option>
+              <option value="kr">🎯 KPI별</option>
+              <option value="assignee">👥 담당자별</option>
+            </select>
+          </div>
+
           <!-- 완료 카드 -->
           <div class="card" style="padding: 8px 14px; display: flex; align-items: center; gap: 6px; background: #DCFCE7; border: 1px solid #86EFAC; flex-shrink: 0;">
             <span style="font-size: 11px; color: #16A34A;">✅ 완료</span>
@@ -1615,20 +1624,22 @@
           </div>
         </div>
 
-        <!-- 그룹 필터 (검색은 헤더로 이동) -->
-        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+        <!-- 전체 업무 카드 -->
+        <div class="card" style="padding: 16px 20px;">
           <input type="text" id="taskPlanSearch" placeholder="🔍 업무 검색..." oninput="filterTaskPlan(); document.getElementById('taskPlanSearchHeader').value = this.value;" style="display: none;">
-          <select id="taskPlanGroupBy" onchange="filterTaskPlan()" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white;">
-            <option value="status">📊 상태별</option>
-            <option value="kr">🎯 KPI별</option>
-            <option value="assignee">👥 담당자별</option>
-          </select>
-        </div>
-
-        <!-- 업무 목록 -->
-        <div id="taskPlanList">
-          <div style="text-align: center; padding: 60px; background: white; border-radius: 16px;">
-            업무 목록 로딩중...
+          <!-- 헤더 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 14px;">📋</span>
+              <span style="font-size: 14px; font-weight: 700; color: var(--gray-800);">전체 업무</span>
+              <span id="totalTaskCountBadge" style="font-size: 12px; color: var(--gray-500);">0개</span>
+            </div>
+          </div>
+          <!-- 업무 목록 -->
+          <div id="taskPlanList">
+            <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+              업무 목록 로딩중...
+            </div>
           </div>
         </div>
       </div>
@@ -9056,12 +9067,22 @@
         unassignedCount.style.display = goals.length > 0 ? 'inline' : 'none';
       }
 
-      // 요일별 영역 - 계획된 목표 + 완료된 실적 표시
+      // 요일별 영역 - 업무 + 계획된 목표 표시
       const now = new Date();
       const dayOfWeek = now.getDay();
       const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() + mondayOffset);
+
+      // 전체 업무 목록 가져오기 (진행중, 대기만)
+      const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
+        if (task.status !== 'doing' && task.status !== 'waiting') return false;
+        // 내 업무 필터링
+        if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
+          if (task.assigneeId !== currentMemberId) return false;
+        }
+        return true;
+      });
 
       ['mon', 'tue', 'wed', 'thu', 'fri'].forEach((day, index) => {
         const dayDate = new Date(weekStart);
@@ -9072,7 +9093,21 @@
         if (dayList) {
           let html = '';
 
-          // 해당 날짜의 계획된 목표들 표시
+          // 1. 해당 날짜에 마감인 업무들 표시 (진행중/대기)
+          const dayTasks = allTasks.filter(task => {
+            const taskDeadline = task.deadline || task.dueDate || task.scheduledDate;
+            if (!taskDeadline) return false;
+            return taskDeadline === dateStr;
+          });
+
+          if (dayTasks.length > 0) {
+            dayTasks.forEach(task => {
+              html += createDayTaskCard(task);
+            });
+          }
+
+          // 2. 해당 날짜의 계획된 목표들 표시 (구분선 추가)
+          let goalHtml = '';
           goals.forEach(goal => {
             const plan = weeklyGoalPlans[goal.indicatorId];
             const plannedQty = plan?.[day] || 0;
@@ -9086,13 +9121,36 @@
             const completedQty = dayLogs.reduce((sum, log) => sum + (parseFloat(log.resultValue) || 0), 0);
 
             if (plannedQty > 0 || completedQty > 0) {
-              html += createDayGoalCard(goal, day, plannedQty, completedQty, dateStr);
+              goalHtml += createDayGoalCard(goal, day, plannedQty, completedQty, dateStr);
             }
           });
 
-          dayList.innerHTML = html || '<div style="font-size: 10px; color: var(--gray-400); text-align: center; padding: 10px 0;">드래그하여 배치</div>';
+          if (goalHtml && html) {
+            html += '<div style="border-top: 1px dashed var(--gray-300); margin: 6px 0;"></div>';
+          }
+          html += goalHtml;
+
+          dayList.innerHTML = html || '<div style="font-size: 10px; color: var(--gray-400); text-align: center; padding: 10px 0;">업무 없음</div>';
         }
       });
+    }
+
+    // 요일별 업무 카드 생성 (진행중/대기 업무용)
+    function createDayTaskCard(task) {
+      const statusColor = task.status === 'doing' ? 'var(--primary)' : '#F59E0B';
+      const statusBg = task.status === 'doing' ? 'var(--primary-light)' : '#FEF3C7';
+      const statusText = task.status === 'doing' ? '진행중' : '대기';
+
+      return `
+        <div onclick="openScheduledTaskDetail('${task.id}')"
+             style="background: ${statusBg}; border: 1px solid ${statusColor}; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; font-size: 10px;">
+          <div style="font-weight: 600; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;" title="${task.title}">${task.title || '제목 없음'}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 9px; color: ${statusColor}; font-weight: 600;">${statusText}</span>
+            ${task.delayReason ? '<span style="font-size: 9px; color: #EF4444;">⚡</span>' : ''}
+          </div>
+        </div>
+      `;
     }
 
     // 주간 목표 계획 카드 생성 (배치 필요 영역용)
@@ -26233,6 +26291,10 @@
       if (doneEl) doneEl.textContent = doneCount;
       if (overdueEl) overdueEl.textContent = overdueCount;
       if (quickTotalEl) quickTotalEl.textContent = totalCount;
+
+      // 전체 업무 카드 뱃지 업데이트
+      const totalTaskCountBadgeEl = document.getElementById('totalTaskCountBadge');
+      if (totalTaskCountBadgeEl) totalTaskCountBadgeEl.textContent = `${totalCount}개`;
 
       // 오늘 마감 카드 업데이트
       const todayDeadlineCountEl = document.getElementById('todayDeadlineCount');
