@@ -9135,15 +9135,20 @@
       });
     }
 
-    // 요일별 업무 카드 생성 (진행중/대기 업무용)
+    // 요일별 업무 카드 생성 (진행중/대기 업무용) - 드래그앤드롭 지원
     function createDayTaskCard(task) {
       const statusColor = task.status === 'doing' ? 'var(--primary)' : '#F59E0B';
       const statusBg = task.status === 'doing' ? 'var(--primary-light)' : '#FEF3C7';
       const statusText = task.status === 'doing' ? '진행중' : '대기';
 
       return `
-        <div onclick="openScheduledTaskDetail('${task.id}')"
-             style="background: ${statusBg}; border: 1px solid ${statusColor}; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; font-size: 10px;">
+        <div draggable="true"
+             ondragstart="dragStart(event, '${task.id}')"
+             ondragend="dragEnd(event)"
+             onclick="openScheduledTaskDetail('${task.id}')"
+             style="background: ${statusBg}; border: 1px solid ${statusColor}; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: grab; font-size: 10px; transition: all 0.2s;"
+             onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.15)'; this.style.transform='translateY(-1px)'"
+             onmouseout="this.style.boxShadow='none'; this.style.transform='none'">
           <div style="font-weight: 600; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;" title="${task.title}">${task.title || '제목 없음'}</div>
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span style="font-size: 9px; color: ${statusColor}; font-weight: 600;">${statusText}</span>
@@ -9690,6 +9695,22 @@
         }
       }
 
+      // 실행예정일 계산 (assignedDay를 실제 날짜로 변환)
+      let assignedDateText = '';
+      const assignedDay = task.assignedDay;
+      if (assignedDay && assignedDay !== 'unassigned') {
+        const dayLabels = { mon: '월요일', tue: '화요일', wed: '수요일', thu: '목요일', fri: '금요일' };
+        const dayLabel = dayLabels[assignedDay] || assignedDay;
+        // 이번 주 해당 요일의 날짜 계산
+        const { monday } = getThisWeekDates();
+        const dayOffsets = { mon: 0, tue: 1, wed: 2, thu: 3, fri: 4 };
+        const offset = dayOffsets[assignedDay] || 0;
+        const assignedDate = new Date(monday);
+        assignedDate.setDate(monday.getDate() + offset);
+        const dateStr = assignedDate.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+        assignedDateText = `${dateStr} (${dayLabel})`;
+      }
+
       const modalHTML = `
         <div id="scheduledTaskDetailModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 500px; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -9716,6 +9737,11 @@
               <div style="display: grid; grid-template-columns: 100px 1fr; gap: 12px; font-size: 13px;">
                 <div style="color: var(--gray-500);">📅 마감일</div>
                 <div style="color: var(--gray-900); font-weight: 500;">${taskDeadline || '미정'} ${ddayText ? `<span style="color: ${ddayText.includes('지연') ? '#EF4444' : '#10B981'}; font-weight: 600;">(${ddayText})</span>` : ''}</div>
+
+                ${assignedDateText ? `
+                <div style="color: var(--gray-500);">🗓️ 실행예정일</div>
+                <div style="color: var(--primary); font-weight: 500;">${assignedDateText}</div>
+                ` : ''}
 
                 <div style="color: var(--gray-500);">👤 담당자</div>
                 <div style="color: var(--gray-900);">${assigneeName}</div>
@@ -9749,19 +9775,131 @@
             </div>
 
             <!-- 하단 버튼 -->
-            <div style="padding: 16px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: flex-end;">
+            <div style="padding: 16px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: space-between;">
               <button onclick="document.getElementById('scheduledTaskDetailModal').remove(); openTaskPlanModal('${taskId}')" style="background: var(--gray-100); color: var(--gray-700); border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
                 ✏️ 수정
               </button>
-              <button onclick="document.getElementById('scheduledTaskDetailModal').remove()" style="background: var(--primary); color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                확인
-              </button>
+              <div style="display: flex; gap: 8px;">
+                ${task.status !== 'done' ? `
+                <button onclick="document.getElementById('scheduledTaskDetailModal').remove(); completeScheduledTask('${taskId}')" style="background: #10B981; color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                  ✓ 완료
+                </button>
+                ` : ''}
+                <button onclick="document.getElementById('scheduledTaskDetailModal').remove()" style="background: var(--primary); color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                  닫기
+                </button>
+              </div>
             </div>
           </div>
         </div>
       `;
 
       document.body.insertAdjacentHTML('beforeend', modalHTML);
+    }
+
+    // 예약된 업무 완료 처리 (지연 시에만 이유 작성)
+    async function completeScheduledTask(taskId) {
+      const tasks = taskPlanState?.tasks || state.taskPlans || [];
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      // 마감일 체크 - 지연 여부 확인
+      const deadline = task.deadline || task.dueDate;
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+
+      if (deadline) {
+        const deadlineDate = new Date(deadline);
+        deadlineDate.setHours(0, 0, 0, 0);
+
+        if (now > deadlineDate) {
+          // 지연된 경우 - 이유 입력 모달 표시
+          showScheduledTaskDelayModal(taskId, task.title, deadline);
+          return;
+        }
+      }
+
+      // 지연이 아닌 경우 - 바로 완료 처리
+      await executeScheduledTaskCompletion(taskId);
+    }
+
+    // 예약된 업무 지연 완료 모달
+    function showScheduledTaskDelayModal(taskId, taskTitle, deadline) {
+      const deadlineStr = new Date(deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+      const modalHtml = `
+        <div id="scheduledTaskDelayModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #EF4444; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ⏰ 마감일 초과 완료
+            </div>
+            <div style="background: #FEE2E2; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #991B1B; margin-bottom: 8px;">
+                <strong>${taskTitle || '업무'}</strong>
+              </div>
+              <div style="font-size: 12px; color: #DC2626;">
+                마감일: <strong>${deadlineStr}</strong><br>
+                오늘까지 완료해야 했던 업무입니다
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
+              <input type="text" id="scheduledTaskDelayInput" placeholder="예: 우선순위 변경으로 일정 조정" maxlength="50"
+                     style="width: 100%; padding: 12px; border: 2px solid #EF4444; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">한 줄로 간략히 (최대 50자)</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="document.getElementById('scheduledTaskDelayModal')?.remove()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmScheduledTaskDelay('${taskId}')" style="flex: 1; padding: 12px; background: #EF4444; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                완료 처리
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      document.getElementById('scheduledTaskDelayInput').focus();
+    }
+
+    async function confirmScheduledTaskDelay(taskId) {
+      const delayReason = document.getElementById('scheduledTaskDelayInput')?.value.trim();
+      if (!delayReason) {
+        alert('지연 사유를 입력해주세요.');
+        return;
+      }
+      document.getElementById('scheduledTaskDelayModal')?.remove();
+      await executeScheduledTaskCompletion(taskId, delayReason);
+    }
+
+    async function executeScheduledTaskCompletion(taskId, delayReason = null) {
+      try {
+        const updateData = {
+          status: 'done',
+          completedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        if (delayReason) {
+          updateData.delayReason = delayReason;
+        }
+
+        await db.collection('taskPlans').doc(taskId).update(updateData);
+
+        // 로컬 상태 업데이트
+        const taskIndex = (state.taskPlans || []).findIndex(t => t.id === taskId);
+        if (taskIndex >= 0) {
+          state.taskPlans[taskIndex].status = 'done';
+          if (delayReason) state.taskPlans[taskIndex].delayReason = delayReason;
+        }
+
+        renderWeeklyTaskBoard();
+        loadTaskPlanData();
+        showToast(delayReason ? '업무가 완료되었습니다 (지연)' : '업무가 완료되었습니다', 'success');
+      } catch (error) {
+        console.error('업무 완료 처리 오류:', error);
+        showToast('완료 처리 중 오류가 발생했습니다', 'error');
+      }
     }
 
     // 이전 버전 토글
@@ -10176,7 +10314,7 @@
               </div>
               <div style="display: flex; flex-direction: column; gap: 8px;">
                 ${pendingTasks.map(task => `
-                  <div onclick="closeModal(); setTimeout(() => openTaskPlanDetail('${task.id}'), 300);" style="padding: 12px; background: ${isPast ? '#FEF2F2' : 'white'}; border: 1px solid ${isPast ? '#FECACA' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer;">
+                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: ${isPast ? '#FEF2F2' : 'white'}; border: 1px solid ${isPast ? '#FECACA' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
                     <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${task.title}</div>
                     <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">
                       ${task.status === 'doing' ? '🔵 진행중' : task.status === 'waiting' ? '⏸️ 대기' : '📋 ' + (task.status || '미정')}
@@ -10195,7 +10333,7 @@
               </div>
               <div style="display: flex; flex-direction: column; gap: 8px;">
                 ${doneTasks.map(task => `
-                  <div onclick="closeModal(); setTimeout(() => openTaskPlanDetail('${task.id}'), 300);" style="padding: 12px; background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; cursor: pointer;">
+                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
                     <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); text-decoration: line-through;">${task.title}</div>
                     <div style="font-size: 11px; color: #16A34A; margin-top: 4px;">✓ 완료됨</div>
                   </div>
@@ -27848,20 +27986,103 @@
       }
     }
 
-    // 업무 완료 처리 (업무기록 연동)
+    // 업무 완료 처리 (업무기록 연동) - 지연 시에만 이유 작성
     async function completeTaskPlan(taskId) {
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
 
-      if (!confirm('이 업무를 완료 처리하시겠습니까?\n완료 시 업무 일지에 자동으로 기록됩니다.')) return;
+      // 마감일 체크 - 지연 여부 확인
+      const deadline = task.deadline || task.dueDate;
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+
+      if (deadline) {
+        const deadlineDate = new Date(deadline);
+        deadlineDate.setHours(0, 0, 0, 0);
+
+        if (now > deadlineDate) {
+          // 지연된 경우 - 이유 입력 모달 표시
+          showTaskDelayReasonModal(taskId, task.title, deadline);
+          return;
+        }
+      }
+
+      // 지연이 아닌 경우 - 바로 완료 처리
+      await executeTaskCompletion(taskId);
+    }
+
+    // 업무 지연 완료 모달 (지연 사유 입력)
+    function showTaskDelayReasonModal(taskId, taskTitle, deadline) {
+      const deadlineStr = new Date(deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+      const modalHtml = `
+        <div id="taskDelayReasonModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #EF4444; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ⏰ 마감일 초과 완료
+            </div>
+            <div style="background: #FEE2E2; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #991B1B; margin-bottom: 8px;">
+                <strong>${taskTitle || '업무'}</strong>
+              </div>
+              <div style="font-size: 12px; color: #DC2626;">
+                마감일: <strong>${deadlineStr}</strong><br>
+                오늘까지 완료해야 했던 업무입니다
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
+              <input type="text" id="taskDelayReasonInput" placeholder="예: 우선순위 변경으로 일정 조정" maxlength="50"
+                     style="width: 100%; padding: 12px; border: 2px solid #EF4444; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">한 줄로 간략히 (최대 50자)</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="closeTaskDelayReasonModal()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmDelayedTaskCompletion('${taskId}')" style="flex: 1; padding: 12px; background: #EF4444; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                완료 처리
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      document.getElementById('taskDelayReasonInput').focus();
+    }
+
+    function closeTaskDelayReasonModal() {
+      document.getElementById('taskDelayReasonModal')?.remove();
+    }
+
+    async function confirmDelayedTaskCompletion(taskId) {
+      const delayReason = document.getElementById('taskDelayReasonInput')?.value.trim();
+      if (!delayReason) {
+        alert('지연 사유를 입력해주세요.');
+        return;
+      }
+      closeTaskDelayReasonModal();
+      await executeTaskCompletion(taskId, delayReason);
+    }
+
+    // 실제 업무 완료 실행
+    async function executeTaskCompletion(taskId, delayReason = null) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
 
       try {
         // 1. 업무 상태 변경
-        await db.collection('taskPlans').doc(taskId).update({
+        const updateData = {
           status: 'done',
           completedAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
+
+        // 지연 사유가 있으면 추가
+        if (delayReason) {
+          updateData.delayReason = delayReason;
+        }
+
+        await db.collection('taskPlans').doc(taskId).update(updateData);
 
         // 2. 업무기록에 자동 기록 (KPI 연결된 경우)
         if (task.krId || task.laggingIndicatorId) {
