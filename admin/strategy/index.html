@@ -1563,6 +1563,15 @@
             </div>
           </div>
 
+          <!-- 그룹 필터 드롭다운 (상태별/KPI별/담당자별) -->
+          <div class="card" style="padding: 8px 12px; display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+            <select id="taskPlanGroupBy" onchange="filterTaskPlan()" style="padding: 6px 10px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white; cursor: pointer;">
+              <option value="status">📊 상태별</option>
+              <option value="kr">🎯 KPI별</option>
+              <option value="assignee">👥 담당자별</option>
+            </select>
+          </div>
+
           <!-- 완료 카드 -->
           <div class="card" style="padding: 8px 14px; display: flex; align-items: center; gap: 6px; background: #DCFCE7; border: 1px solid #86EFAC; flex-shrink: 0;">
             <span style="font-size: 11px; color: #16A34A;">✅ 완료</span>
@@ -1615,20 +1624,22 @@
           </div>
         </div>
 
-        <!-- 그룹 필터 (검색은 헤더로 이동) -->
-        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+        <!-- 전체 업무 카드 -->
+        <div class="card" style="padding: 16px 20px;">
           <input type="text" id="taskPlanSearch" placeholder="🔍 업무 검색..." oninput="filterTaskPlan(); document.getElementById('taskPlanSearchHeader').value = this.value;" style="display: none;">
-          <select id="taskPlanGroupBy" onchange="filterTaskPlan()" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white;">
-            <option value="status">📊 상태별</option>
-            <option value="kr">🎯 KPI별</option>
-            <option value="assignee">👥 담당자별</option>
-          </select>
-        </div>
-
-        <!-- 업무 목록 -->
-        <div id="taskPlanList">
-          <div style="text-align: center; padding: 60px; background: white; border-radius: 16px;">
-            업무 목록 로딩중...
+          <!-- 헤더 -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 14px;">📋</span>
+              <span style="font-size: 14px; font-weight: 700; color: var(--gray-800);">전체 업무</span>
+              <span id="totalTaskCountBadge" style="font-size: 12px; color: var(--gray-500);">0개</span>
+            </div>
+          </div>
+          <!-- 업무 목록 -->
+          <div id="taskPlanList">
+            <div style="text-align: center; padding: 40px; color: var(--gray-400);">
+              업무 목록 로딩중...
+            </div>
           </div>
         </div>
       </div>
@@ -9056,12 +9067,22 @@
         unassignedCount.style.display = goals.length > 0 ? 'inline' : 'none';
       }
 
-      // 요일별 영역 - 계획된 목표 + 완료된 실적 표시
+      // 요일별 영역 - 업무 + 계획된 목표 표시
       const now = new Date();
       const dayOfWeek = now.getDay();
       const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() + mondayOffset);
+
+      // 전체 업무 목록 가져오기 (진행중, 대기만)
+      const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
+        if (task.status !== 'doing' && task.status !== 'waiting') return false;
+        // 내 업무 필터링
+        if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
+          if (task.assigneeId !== currentMemberId) return false;
+        }
+        return true;
+      });
 
       ['mon', 'tue', 'wed', 'thu', 'fri'].forEach((day, index) => {
         const dayDate = new Date(weekStart);
@@ -9072,7 +9093,21 @@
         if (dayList) {
           let html = '';
 
-          // 해당 날짜의 계획된 목표들 표시
+          // 1. 해당 날짜에 마감인 업무들 표시 (진행중/대기)
+          const dayTasks = allTasks.filter(task => {
+            const taskDeadline = task.deadline || task.dueDate || task.scheduledDate;
+            if (!taskDeadline) return false;
+            return taskDeadline === dateStr;
+          });
+
+          if (dayTasks.length > 0) {
+            dayTasks.forEach(task => {
+              html += createDayTaskCard(task);
+            });
+          }
+
+          // 2. 해당 날짜의 계획된 목표들 표시 (구분선 추가)
+          let goalHtml = '';
           goals.forEach(goal => {
             const plan = weeklyGoalPlans[goal.indicatorId];
             const plannedQty = plan?.[day] || 0;
@@ -9086,13 +9121,36 @@
             const completedQty = dayLogs.reduce((sum, log) => sum + (parseFloat(log.resultValue) || 0), 0);
 
             if (plannedQty > 0 || completedQty > 0) {
-              html += createDayGoalCard(goal, day, plannedQty, completedQty, dateStr);
+              goalHtml += createDayGoalCard(goal, day, plannedQty, completedQty, dateStr);
             }
           });
 
-          dayList.innerHTML = html || '<div style="font-size: 10px; color: var(--gray-400); text-align: center; padding: 10px 0;">드래그하여 배치</div>';
+          if (goalHtml && html) {
+            html += '<div style="border-top: 1px dashed var(--gray-300); margin: 6px 0;"></div>';
+          }
+          html += goalHtml;
+
+          dayList.innerHTML = html || '<div style="font-size: 10px; color: var(--gray-400); text-align: center; padding: 10px 0;">업무 없음</div>';
         }
       });
+    }
+
+    // 요일별 업무 카드 생성 (진행중/대기 업무용)
+    function createDayTaskCard(task) {
+      const statusColor = task.status === 'doing' ? 'var(--primary)' : '#F59E0B';
+      const statusBg = task.status === 'doing' ? 'var(--primary-light)' : '#FEF3C7';
+      const statusText = task.status === 'doing' ? '진행중' : '대기';
+
+      return `
+        <div onclick="openScheduledTaskDetail('${task.id}')"
+             style="background: ${statusBg}; border: 1px solid ${statusColor}; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; font-size: 10px;">
+          <div style="font-weight: 600; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;" title="${task.title}">${task.title || '제목 없음'}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 9px; color: ${statusColor}; font-weight: 600;">${statusText}</span>
+            ${task.delayReason ? '<span style="font-size: 9px; color: #EF4444;">⚡</span>' : ''}
+          </div>
+        </div>
+      `;
     }
 
     // 주간 목표 계획 카드 생성 (배치 필요 영역용)
@@ -9118,16 +9176,22 @@
       `;
     }
 
-    // 요일별 목표 카드 생성 (계획 + 완료 표시)
+    // 요일별 목표 카드 생성 (계획 + 완료 표시, 드래그로 이동 가능)
     function createDayGoalCard(goal, day, plannedQty, completedQty, dateStr) {
       const isCompleted = completedQty >= plannedQty && plannedQty > 0;
       const bgColor = isCompleted ? '#DCFCE7' : '#F3F4F6';
       const borderColor = isCompleted ? '#86EFAC' : '#E5E7EB';
 
+      // 드래그 데이터 준비
+      const moveData = JSON.stringify({ indicatorId: goal.indicatorId, fromDay: day, qty: plannedQty });
+
       return `
-        <div onclick="openGoalCompletionModal('${goal.indicatorId}', '${day}', ${plannedQty}, ${completedQty}, '${dateStr}')"
-             style="background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; font-size: 10px;">
-          <div style="font-weight: 600; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;" title="${goal.name}">${goal.name}</div>
+        <div draggable="true"
+             ondragstart="event.dataTransfer.setData('moveGoalPlan', '${moveData.replace(/'/g, "\\'")}'); event.target.style.opacity='0.5';"
+             ondragend="event.target.style.opacity='1';"
+             onclick="openGoalCompletionModal('${goal.indicatorId}', '${day}', ${plannedQty}, ${completedQty}, '${dateStr}')"
+             style="background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: grab; font-size: 10px;">
+          <div style="font-weight: 600; color: var(--gray-700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;" title="${goal.name}">↔️ ${goal.name}</div>
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span style="color: var(--gray-500);">계획: ${plannedQty}${goal.unit || ''}</span>
             <span style="font-weight: 700; color: ${isCompleted ? '#16A34A' : 'var(--primary)'};">${completedQty}/${plannedQty}</span>
@@ -9357,12 +9421,24 @@
           }
         }
 
-        // 일일 로그 저장
+        // 지표 정보 조회 (krId, kpiId 가져오기)
+        const lag = okrState.laggingIndicators?.find(l => l.id === indicatorId);
+        const member = state.members?.find(m => m.id === state.currentUser?.id);
+        const now = new Date();
+        const registeredTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+        // 일일 로그 저장 (기존 데이터 구조와 일치하도록 모든 필드 포함)
         const logData = {
+          lagId: indicatorId,
           laggingIndicatorId: indicatorId,
+          krId: lag?.krId || '',
+          kpiId: lag?.kpiId || '',
           resultValue: qty,
+          quantity: qty,
           date: dateStr,
+          registeredTime: registeredTime,
           memberId: state.currentUser?.id,
+          memberName: member?.name || state.currentUser?.name || '',
           memo: memo,
           imageUrl: imageUrl,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -9390,24 +9466,23 @@
       event.preventDefault();
       event.target.classList.remove('drag-over');
 
-      // 목표 카드 드롭인 경우
+      // 목표 카드 드롭인 경우 (배치 필요 영역에서)
       const goalIndicatorId = event.dataTransfer.getData('goalIndicatorId');
       if (goalIndicatorId) {
-        // 해당 요일에 수량 추가
-        const currentMemberId = state.currentUser?.id;
-        const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
-        const goal = config?.goals?.find(g => g.indicatorId === goalIndicatorId);
+        openGoalQtyInputModal(goalIndicatorId, targetDay);
+        return;
+      }
 
-        if (goal) {
-          // 간단 수량 입력 프롬프트
-          const dayNames = { mon: '월', tue: '화', wed: '수', thu: '목', fri: '금' };
-          const qty = prompt(`${dayNames[targetDay]}요일에 "${goal.name}" 몇 개 계획?`, '1');
-          if (qty && parseInt(qty) > 0) {
-            if (!weeklyGoalPlans[goalIndicatorId]) weeklyGoalPlans[goalIndicatorId] = {};
-            weeklyGoalPlans[goalIndicatorId][targetDay] = (weeklyGoalPlans[goalIndicatorId][targetDay] || 0) + parseInt(qty);
-            localStorage.setItem('weeklyGoalPlans', JSON.stringify(weeklyGoalPlans));
-            renderWeeklyTaskBoard();
+      // 요일간 목표 이동인 경우
+      const moveData = event.dataTransfer.getData('moveGoalPlan');
+      if (moveData) {
+        try {
+          const { indicatorId, fromDay, qty } = JSON.parse(moveData);
+          if (fromDay !== targetDay) {
+            openGoalMoveConfirmModal(indicatorId, fromDay, targetDay, qty);
           }
+        } catch (e) {
+          console.error('Move data parse error:', e);
         }
         return;
       }
@@ -9417,6 +9492,112 @@
         originalDropTask(event, targetDay);
       }
     };
+
+    // 수량 입력 모달 (가운데 표시)
+    function openGoalQtyInputModal(indicatorId, targetDay) {
+      const currentMemberId = state.currentUser?.id;
+      const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
+      const goal = config?.goals?.find(g => g.indicatorId === indicatorId);
+      if (!goal) return;
+
+      const dayNames = { mon: '월요일', tue: '화요일', wed: '수요일', thu: '목요일', fri: '금요일' };
+
+      const modalHTML = `
+        <div id="goalQtyInputModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 320px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
+            <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
+              <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: var(--gray-900);">🎯 ${dayNames[targetDay]} 계획</h3>
+              <div style="font-size: 13px; color: var(--gray-600); margin-top: 4px;">"${goal.name}" 몇 ${goal.unit || '개'} 계획?</div>
+            </div>
+            <div style="padding: 24px;">
+              <input type="number" id="goalQtyInput" value="1" min="1" autofocus
+                     style="width: 100%; padding: 14px; border: 2px solid var(--primary); border-radius: 10px; font-size: 20px; font-weight: 700; text-align: center; outline: none;"
+                     onkeydown="if(event.key === 'Enter') confirmGoalQtyInput('${indicatorId}', '${targetDay}')">
+            </div>
+            <div style="padding: 16px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: flex-end;">
+              <button onclick="document.getElementById('goalQtyInputModal').remove()" style="background: var(--gray-100); color: var(--gray-700); border: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">취소</button>
+              <button onclick="confirmGoalQtyInput('${indicatorId}', '${targetDay}')" style="background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">확인</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', modalHTML);
+      setTimeout(() => document.getElementById('goalQtyInput')?.focus(), 100);
+    }
+
+    function confirmGoalQtyInput(indicatorId, targetDay) {
+      const qty = parseInt(document.getElementById('goalQtyInput')?.value) || 0;
+      if (qty > 0) {
+        if (!weeklyGoalPlans[indicatorId]) weeklyGoalPlans[indicatorId] = {};
+        weeklyGoalPlans[indicatorId][targetDay] = (weeklyGoalPlans[indicatorId][targetDay] || 0) + qty;
+        localStorage.setItem('weeklyGoalPlans', JSON.stringify(weeklyGoalPlans));
+        renderWeeklyTaskBoard();
+        showToast(`${targetDay === 'mon' ? '월' : targetDay === 'tue' ? '화' : targetDay === 'wed' ? '수' : targetDay === 'thu' ? '목' : '금'}요일에 ${qty}개 배치됨`);
+      }
+      document.getElementById('goalQtyInputModal')?.remove();
+    }
+
+    // 요일간 이동 확인 모달
+    function openGoalMoveConfirmModal(indicatorId, fromDay, toDay, qty) {
+      const currentMemberId = state.currentUser?.id;
+      const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
+      const goal = config?.goals?.find(g => g.indicatorId === indicatorId);
+      if (!goal) return;
+
+      const dayNames = { mon: '월', tue: '화', wed: '수', thu: '목', fri: '금' };
+
+      const modalHTML = `
+        <div id="goalMoveConfirmModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 360px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
+            <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
+              <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: var(--gray-900);">📦 목표 이동</h3>
+            </div>
+            <div style="padding: 24px; text-align: center;">
+              <div style="font-size: 14px; color: var(--gray-700); margin-bottom: 16px;">"${goal.name}"</div>
+              <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
+                <div style="padding: 12px 20px; background: var(--gray-100); border-radius: 8px;">
+                  <div style="font-size: 11px; color: var(--gray-500);">FROM</div>
+                  <div style="font-size: 16px; font-weight: 700; color: var(--gray-800);">${dayNames[fromDay]}요일</div>
+                  <div style="font-size: 12px; color: var(--gray-600);">${qty}${goal.unit || '개'}</div>
+                </div>
+                <span style="font-size: 20px; color: var(--primary);">→</span>
+                <div style="padding: 12px 20px; background: var(--primary-light); border-radius: 8px; border: 2px solid var(--primary);">
+                  <div style="font-size: 11px; color: var(--primary);">TO</div>
+                  <div style="font-size: 16px; font-weight: 700; color: var(--primary);">${dayNames[toDay]}요일</div>
+                </div>
+              </div>
+              <div style="margin-top: 16px; font-size: 13px; color: var(--gray-600);">이동하시겠습니까?</div>
+            </div>
+            <div style="padding: 16px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: flex-end;">
+              <button onclick="document.getElementById('goalMoveConfirmModal').remove()" style="background: var(--gray-100); color: var(--gray-700); border: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">취소</button>
+              <button onclick="confirmGoalMove('${indicatorId}', '${fromDay}', '${toDay}', ${qty})" style="background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">확인</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', modalHTML);
+    }
+
+    function confirmGoalMove(indicatorId, fromDay, toDay, qty) {
+      // 원래 요일에서 제거
+      if (weeklyGoalPlans[indicatorId] && weeklyGoalPlans[indicatorId][fromDay]) {
+        weeklyGoalPlans[indicatorId][fromDay] -= qty;
+        if (weeklyGoalPlans[indicatorId][fromDay] <= 0) {
+          delete weeklyGoalPlans[indicatorId][fromDay];
+        }
+      }
+
+      // 새 요일에 추가
+      if (!weeklyGoalPlans[indicatorId]) weeklyGoalPlans[indicatorId] = {};
+      weeklyGoalPlans[indicatorId][toDay] = (weeklyGoalPlans[indicatorId][toDay] || 0) + qty;
+
+      localStorage.setItem('weeklyGoalPlans', JSON.stringify(weeklyGoalPlans));
+      document.getElementById('goalMoveConfirmModal')?.remove();
+      renderWeeklyTaskBoard();
+      showToast('이동 완료');
+    }
 
     // 초기화 시 로컬 스토리지에서 계획 불러오기
     function loadWeeklyGoalPlans() {
@@ -26233,6 +26414,10 @@
       if (doneEl) doneEl.textContent = doneCount;
       if (overdueEl) overdueEl.textContent = overdueCount;
       if (quickTotalEl) quickTotalEl.textContent = totalCount;
+
+      // 전체 업무 카드 뱃지 업데이트
+      const totalTaskCountBadgeEl = document.getElementById('totalTaskCountBadge');
+      if (totalTaskCountBadgeEl) totalTaskCountBadgeEl.textContent = `${totalCount}개`;
 
       // 오늘 마감 카드 업데이트
       const todayDeadlineCountEl = document.getElementById('todayDeadlineCount');
