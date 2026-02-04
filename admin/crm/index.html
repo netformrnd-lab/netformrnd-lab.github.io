@@ -2578,6 +2578,7 @@
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
 
   <script>
     // Firebase 설정
@@ -10685,56 +10686,408 @@
       const supplier = state.suppliers.find(s => s.id === id);
       if (!supplier) return;
 
+      // 온보딩 데이터 가져오기
+      const onboardingData = supplier.onboardingData || {};
+      const onboardingDocs = supplier.onboardingDocuments || onboardingData.documents || {};
+      const applicationData = onboardingData.application || {};
+      const checklist = onboardingDocs.checklist || {};
+
+      // 원본 입점신청서 데이터 가져오기
+      const sourceAppId = supplier.sourceApplicationId;
+      const sourceApp = sourceAppId ? (state.supplierApplications || []).find(a => a.id === sourceAppId) : null;
+
+      // 협업조건 라벨
+      const dealTimingLabels = { 'asap': '빠른 시일 내', 'within1month': '1개월 이내', 'flexible': '협의 가능', 'undecided': '미정' };
+      const sellerLabels = { 'allSellers': '전체 셀러 배정', 'negotiable': '협의 후 결정', 'groupDeal': '공동구매 전용' };
+      const sampleLabels = { 'free': '무료 샘플 제공', 'discounted': '할인가 샘플 제공', 'noSample': '샘플 제공 불가' };
+
+      // 서류 존재 여부
+      const hasExcel = !!onboardingDocs.productInfoExcel;
+      const hasLicense = !!onboardingDocs.businessLicense;
+      const hasBank = !!onboardingDocs.bankAccount;
+      const hasProposal = !!(sourceApp?.fileUrl || applicationData.fileUrl || supplier.proposalFile);
+      const hasContract = !!supplier.contractFile;
+      const hasChecklist = Object.keys(checklist).length > 0;
+
       const modal = document.getElementById('modal');
       modal.innerHTML = `
         <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
-          <div style="background: white; border-radius: 16px; padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+          <div style="background: white; border-radius: 16px; padding: 24px; max-width: 900px; width: 95%; max-height: 90vh; overflow-y: auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-              <h2 style="font-size: 20px; font-weight: 700;">🏭 ${supplier.name || '공급사 상세'}</h2>
-              <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
-            </div>
-
-            <div style="display: grid; gap: 16px;">
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                  <div style="font-size: 12px; color: var(--gray-500);">담당자</div>
-                  <div style="font-weight: 600;">${supplier.contact || '-'}</div>
-                </div>
-                <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                  <div style="font-size: 12px; color: var(--gray-500);">연락처</div>
-                  <div style="font-weight: 600;">${supplier.phone || supplier.email || '-'}</div>
-                </div>
-              </div>
-
-              <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">상태</div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <h2 style="font-size: 20px; font-weight: 700;">🏭 ${supplier.name || '공급사 상세'}</h2>
                 ${supplier.contracted ? '<span class="status-badge status-approved">입점완료</span>' :
                   supplier.onboarding ? '<span class="status-badge status-review">온보딩중</span>' :
                   '<span class="status-badge status-pending">미입점</span>'}
               </div>
-
-              <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">등록 상품 (${(supplier.products || []).length}개)</div>
-                ${(supplier.products || []).length > 0 ?
-                  supplier.products.map(p => `<div style="padding: 4px 0;">${p.name || '-'}</div>`).join('') :
-                  '<div style="color: var(--gray-400);">등록된 상품 없음</div>'}
-              </div>
-
-              ${supplier.memo ? `
-                <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">메모</div>
-                  <div>${supplier.memo}</div>
-                </div>
-              ` : ''}
+              <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-top: 20px;">
+            <!-- 기본 정보 섹션 -->
+            <div style="background: linear-gradient(135deg, #f8fafc, #f1f5f9); padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">👤 기본 정보</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">담당자</div>
+                  <div style="font-size: 15px; font-weight: 600;">${supplier.contact || supplier.managerName || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">연락처</div>
+                  <div style="font-size: 15px; font-weight: 600;">${supplier.phone || supplier.managerPhone || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">이메일</div>
+                  <div style="font-size: 15px;">${supplier.email || supplier.managerEmail || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">등록일</div>
+                  <div style="font-size: 15px;">${supplier.createdAt ? new Date(supplier.createdAt.toDate ? supplier.createdAt.toDate() : supplier.createdAt).toLocaleDateString('ko-KR') : '-'}</div>
+                </div>
+                ${supplier.website || applicationData.website ? `
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">홈페이지</div>
+                  <a href="${supplier.website || applicationData.website}" target="_blank" style="font-size: 14px; color: var(--info);">${supplier.website || applicationData.website}</a>
+                </div>
+                ` : ''}
+                ${supplier.address || applicationData.address ? `
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">주소</div>
+                  <div style="font-size: 14px;">${supplier.address || applicationData.address}</div>
+                </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- 제출 서류 섹션 -->
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📎 제출 서류</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;">
+                ${hasExcel ? `
+                  <a href="${onboardingDocs.productInfoExcel}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">📊</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #166534;">상품정보 엑셀</span>
+                    <span style="font-size: 10px; color: #15803d;">클릭하여 다운로드</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fef3c7; border: 2px dashed #fcd34d; border-radius: 12px; padding: 16px;">
+                    <span style="font-size: 32px; opacity: 0.5;">📊</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #92400e;">상품정보</span>
+                    <span style="font-size: 10px; color: #b45309;">미제출</span>
+                  </div>
+                `}
+
+                ${hasLicense ? `
+                  <a href="${onboardingDocs.businessLicense}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">🏢</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #166534;">사업자등록증</span>
+                    <span style="font-size: 10px; color: #15803d;">클릭하여 보기</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fee2e2; border: 2px dashed #fca5a5; border-radius: 12px; padding: 16px;">
+                    <span style="font-size: 32px; opacity: 0.5;">🏢</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #dc2626;">사업자등록증</span>
+                    <span style="font-size: 10px; color: #b91c1c;">미제출</span>
+                  </div>
+                `}
+
+                ${hasBank ? `
+                  <a href="${onboardingDocs.bankAccount}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">🏦</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #166534;">통장사본</span>
+                    <span style="font-size: 10px; color: #15803d;">클릭하여 보기</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fee2e2; border: 2px dashed #fca5a5; border-radius: 12px; padding: 16px;">
+                    <span style="font-size: 32px; opacity: 0.5;">🏦</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #dc2626;">통장사본</span>
+                    <span style="font-size: 10px; color: #b91c1c;">미제출</span>
+                  </div>
+                `}
+
+                ${hasProposal ? `
+                  <a href="${sourceApp?.fileUrl || applicationData.fileUrl || supplier.proposalFile}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">📄</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #1e40af;">회사소개서</span>
+                    <span style="font-size: 10px; color: #1d4ed8;">클릭하여 보기</span>
+                  </a>
+                ` : ''}
+
+                ${hasContract ? `
+                  <a href="${supplier.contractFile}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fce7f3; border: 2px solid #f9a8d4; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">📝</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #9d174d;">계약서</span>
+                    <span style="font-size: 10px; color: #be185d;">클릭하여 보기</span>
+                  </a>
+                ` : supplier.contracted ? `
+                  <div onclick="openContractUploadModal('${id}', 'supplier')" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fef3c7; border: 2px dashed #fcd34d; border-radius: 12px; padding: 16px; cursor: pointer;">
+                    <span style="font-size: 32px;">📝</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #92400e;">계약서</span>
+                    <span style="font-size: 10px; color: #b45309;">클릭하여 업로드</span>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- 협업 조건 (체크리스트) -->
+            ${hasChecklist ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📋 협업 조건</h3>
+              <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 12px; padding: 16px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                  ${checklist.dealTiming ? `
+                  <div>
+                    <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">딜 진행 시기</div>
+                    <div style="font-size: 14px; font-weight: 600; color: #166534;">${dealTimingLabels[checklist.dealTiming] || checklist.dealTiming}</div>
+                  </div>
+                  ` : ''}
+                  ${checklist.sellerAssignment ? `
+                  <div>
+                    <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">셀러 배정</div>
+                    <div style="font-size: 14px; font-weight: 600; color: #166534;">
+                      ${Array.isArray(checklist.sellerAssignment) ? checklist.sellerAssignment.map(s => sellerLabels[s] || s).join(', ') : sellerLabels[checklist.sellerAssignment] || checklist.sellerAssignment}
+                    </div>
+                  </div>
+                  ` : ''}
+                  ${checklist.sampleSupport ? `
+                  <div>
+                    <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">샘플 지원</div>
+                    <div style="font-size: 14px; font-weight: 600; color: #166534;">
+                      ${Array.isArray(checklist.sampleSupport) ? checklist.sampleSupport.map(s => sampleLabels[s] || s).join(', ') : sampleLabels[checklist.sampleSupport] || checklist.sampleSupport}
+                    </div>
+                  </div>
+                  ` : ''}
+                  ${checklist.exportInterest ? `
+                  <div>
+                    <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">해외 수출</div>
+                    <div style="font-size: 14px; font-weight: 600; color: #166534;">${checklist.exportInterest === 'yes' ? '수출 관심 있음' : '국내만 희망'}</div>
+                  </div>
+                  ` : ''}
+                </div>
+                ${checklist.additionalRequests ? `
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #86efac;">
+                  <div style="font-size: 11px; color: var(--gray-500); margin-bottom: 4px;">추가 요청사항</div>
+                  <div style="font-size: 14px; color: var(--gray-700); line-height: 1.5; white-space: pre-wrap;">${checklist.additionalRequests}</div>
+                </div>
+                ` : ''}
+              </div>
+            </div>
+            ` : ''}
+
+            <!-- 입점신청 원본 정보 -->
+            ${(applicationData.message || applicationData.productInfo || sourceApp?.message || supplier.notes) ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">💬 입점신청 메시지</h3>
+              <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; font-size: 14px; color: var(--gray-700); line-height: 1.6; white-space: pre-wrap;">
+                ${applicationData.message || applicationData.productInfo || sourceApp?.message || supplier.notes || '-'}
+              </div>
+            </div>
+            ` : ''}
+
+            <!-- 등록 상품 -->
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📦 등록 상품 (${(supplier.products || []).length}개)</h3>
+              ${(supplier.products || []).length > 0 ? `
+                <div style="display: grid; gap: 8px;">
+                  ${supplier.products.slice(0, 10).map(p => `
+                    <div style="background: var(--gray-50); padding: 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                      <span style="font-weight: 500;">${p.name || '-'}</span>
+                      ${p.price ? `<span style="color: var(--primary); font-weight: 600;">${Number(p.price).toLocaleString()}원</span>` : ''}
+                    </div>
+                  `).join('')}
+                  ${(supplier.products || []).length > 10 ? `<div style="text-align: center; color: var(--gray-500); font-size: 13px;">외 ${supplier.products.length - 10}개 상품</div>` : ''}
+                </div>
+              ` : '<div style="background: var(--gray-50); padding: 20px; border-radius: 8px; text-align: center; color: var(--gray-400);">등록된 상품 없음</div>'}
+            </div>
+
+            <!-- CS 상담 이력 -->
+            ${(supplier.csHistory || []).length > 0 ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">💬 CS 상담 이력</h3>
+              <div style="max-height: 200px; overflow-y: auto; display: grid; gap: 8px;">
+                ${supplier.csHistory.slice(-5).reverse().map(cs => `
+                  <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                      <span style="font-size: 12px; color: var(--gray-500);">${cs.date || ''}</span>
+                      <span style="font-size: 11px; color: var(--gray-400);">${cs.createdBy || ''}</span>
+                    </div>
+                    <div style="font-size: 14px; color: var(--gray-700);">${cs.content || ''}</div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+
+            ${supplier.memo ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📝 메모</h3>
+              <div style="background: #fef3c7; padding: 16px; border-radius: 12px; font-size: 14px; color: var(--gray-700);">${supplier.memo}</div>
+            </div>
+            ` : ''}
+
+            <!-- 액션 버튼 -->
+            <div style="display: flex; gap: 8px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--gray-200);">
+              ${supplier.contracted ? `
+                <button onclick="openContractUploadModal('${id}', 'supplier')" style="flex: 1; padding: 12px; background: #ec4899; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  📝 계약서 ${hasContract ? '변경' : '업로드'}
+                </button>
+              ` : `
+                <button onclick="markSupplierAsContracted('${id}')" style="flex: 1; padding: 12px; background: var(--success); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  ✅ 입점완료 처리
+                </button>
+              `}
               <button onclick="closeModal()" style="flex: 1; padding: 12px; background: var(--gray-100); color: var(--gray-700); border: 1px solid var(--gray-300); border-radius: 8px; font-weight: 600; cursor: pointer;">닫기</button>
             </div>
           </div>
         </div>
       `;
       modal.style.display = 'block';
+    }
+
+    // 계약서 업로드 모달
+    function openContractUploadModal(partnerId, partnerType) {
+      const modal = document.getElementById('modal');
+      modal.innerHTML = `
+        <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1001;">
+          <div style="background: white; border-radius: 16px; padding: 24px; max-width: 500px; width: 90%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+              <h2 style="font-size: 18px; font-weight: 700;">📝 계약서 파일 업로드</h2>
+              <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+              <p style="font-size: 14px; color: var(--gray-600); margin-bottom: 16px;">계약서 파일(PDF, 이미지)을 업로드해주세요.</p>
+
+              <div id="contract-upload-area" style="border: 2px dashed var(--gray-300); border-radius: 12px; padding: 40px; text-align: center; cursor: pointer; transition: all 0.2s;"
+                   onclick="document.getElementById('contract-file-input').click()"
+                   ondragover="event.preventDefault(); this.style.borderColor='var(--primary)'; this.style.background='#f0fdf4';"
+                   ondragleave="this.style.borderColor='var(--gray-300)'; this.style.background='white';"
+                   ondrop="handleContractFileDrop(event, '${partnerId}', '${partnerType}')">
+                <div style="font-size: 48px; margin-bottom: 12px;">📎</div>
+                <div style="font-size: 14px; color: var(--gray-600);">클릭하거나 파일을 드래그하세요</div>
+                <div style="font-size: 12px; color: var(--gray-400); margin-top: 8px;">PDF, PNG, JPG (최대 10MB)</div>
+              </div>
+              <input type="file" id="contract-file-input" accept=".pdf,.png,.jpg,.jpeg" style="display: none;" onchange="handleContractFileSelect(event, '${partnerId}', '${partnerType}')">
+
+              <div id="contract-upload-progress" style="display: none; margin-top: 16px;">
+                <div style="height: 8px; background: var(--gray-200); border-radius: 4px; overflow: hidden;">
+                  <div id="contract-progress-bar" style="height: 100%; background: var(--primary); width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <div id="contract-progress-text" style="font-size: 12px; color: var(--gray-500); text-align: center; margin-top: 8px;">업로드 중...</div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 8px;">
+              <button onclick="closeModal()" style="flex: 1; padding: 12px; background: var(--gray-100); color: var(--gray-700); border: 1px solid var(--gray-300); border-radius: 8px; font-weight: 600; cursor: pointer;">취소</button>
+            </div>
+          </div>
+        </div>
+      `;
+      modal.style.display = 'block';
+    }
+
+    // 계약서 파일 선택 핸들러
+    async function handleContractFileSelect(event, partnerId, partnerType) {
+      const file = event.target.files[0];
+      if (file) {
+        await uploadContractFile(file, partnerId, partnerType);
+      }
+    }
+
+    // 계약서 파일 드롭 핸들러
+    async function handleContractFileDrop(event, partnerId, partnerType) {
+      event.preventDefault();
+      const file = event.dataTransfer.files[0];
+      if (file) {
+        await uploadContractFile(file, partnerId, partnerType);
+      }
+    }
+
+    // 계약서 파일 업로드
+    async function uploadContractFile(file, partnerId, partnerType) {
+      const maxSize = 10 * 1024 * 1024; // 10MB
+      if (file.size > maxSize) {
+        showToast('파일 크기는 10MB 이하여야 합니다.', 'error');
+        return;
+      }
+
+      const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
+      if (!allowedTypes.includes(file.type)) {
+        showToast('PDF 또는 이미지 파일만 업로드 가능합니다.', 'error');
+        return;
+      }
+
+      const progressDiv = document.getElementById('contract-upload-progress');
+      const progressBar = document.getElementById('contract-progress-bar');
+      const progressText = document.getElementById('contract-progress-text');
+
+      progressDiv.style.display = 'block';
+
+      try {
+        // Firebase Storage에 업로드
+        const timestamp = Date.now();
+        const fileName = `contracts/${partnerType}/${partnerId}_${timestamp}_${file.name}`;
+        const storageRef = firebase.storage().ref(fileName);
+        const uploadTask = storageRef.put(file);
+
+        uploadTask.on('state_changed',
+          (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            progressBar.style.width = progress + '%';
+            progressText.textContent = `업로드 중... ${Math.round(progress)}%`;
+          },
+          (error) => {
+            console.error('업로드 실패:', error);
+            showToast('파일 업로드에 실패했습니다.', 'error');
+            progressDiv.style.display = 'none';
+          },
+          async () => {
+            const downloadURL = await uploadTask.snapshot.ref.getDownloadURL();
+
+            // Firestore 업데이트
+            const collection = partnerType === 'supplier' ? 'suppliers' : 'sellers';
+            await db.collection(collection).doc(partnerId).update({
+              contractFile: downloadURL,
+              contractFileName: file.name,
+              contractUploadedAt: firebase.firestore.FieldValue.serverTimestamp(),
+              contracted: true
+            });
+
+            progressText.textContent = '업로드 완료!';
+            showToast('계약서가 업로드되었습니다.', 'success');
+
+            setTimeout(() => {
+              closeModal();
+              // 상세 모달 다시 열기
+              if (partnerType === 'supplier') {
+                viewSupplierDetail(partnerId);
+              } else {
+                viewSellerDetail(partnerId);
+              }
+            }, 1000);
+          }
+        );
+      } catch (error) {
+        console.error('업로드 오류:', error);
+        showToast('업로드 중 오류가 발생했습니다.', 'error');
+        progressDiv.style.display = 'none';
+      }
+    }
+
+    // 공급사 입점완료 처리
+    async function markSupplierAsContracted(id) {
+      if (!confirm('이 공급사를 입점완료 처리하시겠습니까?')) return;
+
+      try {
+        await db.collection('suppliers').doc(id).update({
+          contracted: true,
+          contractedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        showToast('입점완료 처리되었습니다.', 'success');
+        closeModal();
+      } catch (error) {
+        console.error('입점완료 처리 오류:', error);
+        showToast('처리 중 오류가 발생했습니다.', 'error');
+      }
     }
 
     // 공급사 추가 모달
@@ -10848,49 +11201,215 @@
       const seller = state.sellers.find(s => s.id === id);
       if (!seller) return;
 
+      // 온보딩 데이터 가져오기
+      const onboardingData = seller.onboardingData || {};
+      const onboardingDocs = seller.onboardingDocuments || onboardingData.documents || {};
+      const applicationData = onboardingData.application || {};
+
+      // 원본 입점신청서 데이터 가져오기
+      const sourceAppId = seller.sourceApplicationId;
+      const sourceApp = sourceAppId ? (state.sellerApplications || []).find(a => a.id === sourceAppId) : null;
+
+      // 서류 존재 여부
+      const hasLicense = !!onboardingDocs.businessLicense;
+      const hasBank = !!onboardingDocs.bankAccount;
+      const hasProposal = !!(sourceApp?.fileUrl || applicationData.fileUrl || seller.proposalFile);
+      const hasContract = !!seller.contractFile;
+
       const modal = document.getElementById('modal');
       modal.innerHTML = `
         <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;">
-          <div style="background: white; border-radius: 16px; padding: 24px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+          <div style="background: white; border-radius: 16px; padding: 24px; max-width: 900px; width: 95%; max-height: 90vh; overflow-y: auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-              <h2 style="font-size: 20px; font-weight: 700;">🛒 ${seller.name || '셀러 상세'}</h2>
-              <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
-            </div>
-
-            <div style="display: grid; gap: 16px;">
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                  <div style="font-size: 12px; color: var(--gray-500);">채널</div>
-                  <div style="font-weight: 600;">${seller.channel || '-'}</div>
-                </div>
-                <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                  <div style="font-size: 12px; color: var(--gray-500);">담당자</div>
-                  <div style="font-weight: 600;">${seller.contact || '-'}</div>
-                </div>
-              </div>
-
-              <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">상태</div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <h2 style="font-size: 20px; font-weight: 700;">🛒 ${seller.name || '셀러 상세'}</h2>
                 ${seller.contracted ? '<span class="status-badge status-approved">입점완료</span>' :
                   seller.onboarding ? '<span class="status-badge status-review">온보딩중</span>' :
                   '<span class="status-badge status-pending">미입점</span>'}
               </div>
-
-              ${seller.memo ? `
-                <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
-                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 8px;">메모</div>
-                  <div>${seller.memo}</div>
-                </div>
-              ` : ''}
+              <button onclick="closeModal()" style="background: none; border: none; font-size: 24px; cursor: pointer;">&times;</button>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-top: 20px;">
+            <!-- 기본 정보 섹션 -->
+            <div style="background: linear-gradient(135deg, #f8fafc, #f1f5f9); padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">👤 기본 정보</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">셀러명</div>
+                  <div style="font-size: 15px; font-weight: 600;">${seller.name || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">채널</div>
+                  <div style="font-size: 15px; font-weight: 600;">${seller.channel || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">담당자</div>
+                  <div style="font-size: 15px; font-weight: 600;">${seller.contact || seller.managerName || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">연락처</div>
+                  <div style="font-size: 15px; font-weight: 600;">${seller.phone || seller.managerPhone || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">이메일</div>
+                  <div style="font-size: 15px;">${seller.email || seller.managerEmail || '-'}</div>
+                </div>
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">등록일</div>
+                  <div style="font-size: 15px;">${seller.createdAt ? new Date(seller.createdAt.toDate ? seller.createdAt.toDate() : seller.createdAt).toLocaleDateString('ko-KR') : '-'}</div>
+                </div>
+                ${seller.website || applicationData.website || seller.channelUrl ? `
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">채널 URL</div>
+                  <a href="${seller.website || applicationData.website || seller.channelUrl}" target="_blank" style="font-size: 14px; color: var(--info);">${seller.website || applicationData.website || seller.channelUrl}</a>
+                </div>
+                ` : ''}
+                ${seller.followerCount ? `
+                <div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 4px;">팔로워 수</div>
+                  <div style="font-size: 15px; font-weight: 600; color: var(--primary);">${Number(seller.followerCount).toLocaleString()}명</div>
+                </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- 제출 서류 섹션 -->
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📎 제출 서류</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;">
+                ${hasLicense ? `
+                  <a href="${onboardingDocs.businessLicense}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">🏢</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #166534;">사업자등록증</span>
+                    <span style="font-size: 10px; color: #15803d;">클릭하여 보기</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fee2e2; border: 2px dashed #fca5a5; border-radius: 12px; padding: 16px;">
+                    <span style="font-size: 32px; opacity: 0.5;">🏢</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #dc2626;">사업자등록증</span>
+                    <span style="font-size: 10px; color: #b91c1c;">미제출</span>
+                  </div>
+                `}
+
+                ${hasBank ? `
+                  <a href="${onboardingDocs.bankAccount}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dcfce7; border: 2px solid #86efac; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">🏦</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #166534;">통장사본</span>
+                    <span style="font-size: 10px; color: #15803d;">클릭하여 보기</span>
+                  </a>
+                ` : `
+                  <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fee2e2; border: 2px dashed #fca5a5; border-radius: 12px; padding: 16px;">
+                    <span style="font-size: 32px; opacity: 0.5;">🏦</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #dc2626;">통장사본</span>
+                    <span style="font-size: 10px; color: #b91c1c;">미제출</span>
+                  </div>
+                `}
+
+                ${hasProposal ? `
+                  <a href="${sourceApp?.fileUrl || applicationData.fileUrl || seller.proposalFile}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #dbeafe; border: 2px solid #93c5fd; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">📄</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #1e40af;">제출 서류</span>
+                    <span style="font-size: 10px; color: #1d4ed8;">클릭하여 보기</span>
+                  </a>
+                ` : ''}
+
+                ${hasContract ? `
+                  <a href="${seller.contractFile}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fce7f3; border: 2px solid #f9a8d4; border-radius: 12px; padding: 16px; text-decoration: none; color: inherit;">
+                    <span style="font-size: 32px;">📝</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #9d174d;">계약서</span>
+                    <span style="font-size: 10px; color: #be185d;">클릭하여 보기</span>
+                  </a>
+                ` : seller.contracted ? `
+                  <div onclick="openContractUploadModal('${id}', 'seller')" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fef3c7; border: 2px dashed #fcd34d; border-radius: 12px; padding: 16px; cursor: pointer;">
+                    <span style="font-size: 32px;">📝</span>
+                    <span style="font-size: 12px; font-weight: 600; color: #92400e;">계약서</span>
+                    <span style="font-size: 10px; color: #b45309;">클릭하여 업로드</span>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+
+            <!-- 입점신청 원본 정보 -->
+            ${(applicationData.message || applicationData.productInfo || sourceApp?.message || seller.notes) ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">💬 입점신청 메시지</h3>
+              <div style="background: var(--gray-50); padding: 16px; border-radius: 12px; font-size: 14px; color: var(--gray-700); line-height: 1.6; white-space: pre-wrap;">
+                ${applicationData.message || applicationData.productInfo || sourceApp?.message || seller.notes || '-'}
+              </div>
+            </div>
+            ` : ''}
+
+            <!-- 주요 카테고리 -->
+            ${seller.categories || seller.category ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📂 주요 카테고리</h3>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                ${(seller.categories || [seller.category]).filter(Boolean).map(cat => `
+                  <span style="background: #dbeafe; color: #1e40af; padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500;">${cat}</span>
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+
+            <!-- CS 상담 이력 -->
+            ${(seller.csHistory || []).length > 0 ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">💬 CS 상담 이력</h3>
+              <div style="max-height: 200px; overflow-y: auto; display: grid; gap: 8px;">
+                ${seller.csHistory.slice(-5).reverse().map(cs => `
+                  <div style="background: var(--gray-50); padding: 12px; border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                      <span style="font-size: 12px; color: var(--gray-500);">${cs.date || ''}</span>
+                      <span style="font-size: 11px; color: var(--gray-400);">${cs.createdBy || ''}</span>
+                    </div>
+                    <div style="font-size: 14px; color: var(--gray-700);">${cs.content || ''}</div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+
+            ${seller.memo ? `
+            <div style="margin-bottom: 20px;">
+              <h3 style="font-size: 14px; font-weight: 700; color: var(--gray-700); margin: 0 0 16px 0;">📝 메모</h3>
+              <div style="background: #fef3c7; padding: 16px; border-radius: 12px; font-size: 14px; color: var(--gray-700);">${seller.memo}</div>
+            </div>
+            ` : ''}
+
+            <!-- 액션 버튼 -->
+            <div style="display: flex; gap: 8px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--gray-200);">
+              ${seller.contracted ? `
+                <button onclick="openContractUploadModal('${id}', 'seller')" style="flex: 1; padding: 12px; background: #ec4899; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  📝 계약서 ${hasContract ? '변경' : '업로드'}
+                </button>
+              ` : `
+                <button onclick="markSellerAsContracted('${id}')" style="flex: 1; padding: 12px; background: var(--success); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer;">
+                  ✅ 입점완료 처리
+                </button>
+              `}
               <button onclick="closeModal()" style="flex: 1; padding: 12px; background: var(--gray-100); color: var(--gray-700); border: 1px solid var(--gray-300); border-radius: 8px; font-weight: 600; cursor: pointer;">닫기</button>
             </div>
           </div>
         </div>
       `;
       modal.style.display = 'block';
+    }
+
+    // 셀러 입점완료 처리
+    async function markSellerAsContracted(id) {
+      if (!confirm('이 셀러를 입점완료 처리하시겠습니까?')) return;
+
+      try {
+        await db.collection('sellers').doc(id).update({
+          contracted: true,
+          contractedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        showToast('입점완료 처리되었습니다.', 'success');
+        closeModal();
+      } catch (error) {
+        console.error('입점완료 처리 오류:', error);
+        showToast('처리 중 오류가 발생했습니다.', 'error');
+      }
     }
 
     // 셀러 추가 모달
