@@ -363,11 +363,41 @@
             border-color: var(--accent);
         }
 
+        /* 상품 상세설명 입력 */
+        .product-desc-row {
+            margin-top: 8px;
+        }
+
+        .product-desc-input {
+            width: 100%;
+            min-height: 70px;
+            padding: 12px;
+            border: 2px dashed var(--border);
+            border-radius: 10px;
+            font-size: 12px;
+            font-family: inherit;
+            background: linear-gradient(135deg, #fefce8, #fef9c3);
+            resize: vertical;
+            line-height: 1.5;
+        }
+
+        .product-desc-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            border-style: solid;
+            background: white;
+        }
+
+        .product-desc-input::placeholder {
+            color: #a16207;
+            opacity: 0.7;
+        }
+
         /* 상품 URL 입력 */
         .product-url-row {
             display: flex;
             gap: 8px;
-            margin-top: 4px;
+            margin-top: 8px;
         }
 
         .product-url-input {
@@ -1063,14 +1093,19 @@
                                 <input type="text" class="product-input" placeholder="딜가 (예: 35000)"
                                        value="${product.dealPrice}" onchange="updateProduct('${product.id}', 'dealPrice', this.value)">
                             </div>
+                            <div class="product-desc-row">
+                                <textarea class="product-desc-input" id="desc_${product.id}"
+                                    placeholder="📋 상품 상세설명 붙여넣기 (정확도 ⭐⭐⭐⭐⭐)&#10;상세페이지에서 복사해서 붙여넣으세요. 타겟층, 성분, 특징 등을 자동 분석합니다.&#10;예: 우리아이 비타민D 유산균! 3~7세 영유아를 위한 프로바이오틱스..."
+                                    onchange="updateProduct('${product.id}', 'description', this.value)">${product.description || ''}</textarea>
+                            </div>
                             <div class="product-url-row">
                                 <input type="url" class="product-url-input" id="url_${product.id}"
-                                       placeholder="🔗 상품 상세페이지 URL (스마트스토어, 쿠팡, 자사몰 등)"
+                                       placeholder="🔗 또는 상품 URL 입력 (정확도 ⭐⭐⭐)"
                                        value="${product.detailUrl || ''}"
                                        onchange="updateProduct('${product.id}', 'detailUrl', this.value)">
                                 <button type="button" class="analyze-url-btn" id="analyzeBtn_${product.id}"
                                         onclick="analyzeProductUrl('${product.id}')">
-                                    <i class="fas fa-search"></i>
+                                    <i class="fas fa-magic"></i>
                                     <span>AI 분석</span>
                                 </button>
                             </div>
@@ -1190,25 +1225,30 @@
             await new Promise(resolve => setTimeout(resolve, 1200));
 
             const name = product.name || '';
+            const description = product.description || ''; // 상세설명 추가
             const price = parseInt(String(product.dealPrice || product.originalPrice || '30000').replace(/[^0-9]/g, ''));
             const discount = product.originalPrice && product.dealPrice
                 ? Math.round((1 - parseInt(product.dealPrice) / parseInt(product.originalPrice)) * 100)
                 : 0;
 
-            // 상품명에서 키워드 추출
-            const keywords = extractProductKeywords(name);
+            // 상품명 + 상세설명에서 키워드 추출 (상세설명이 있으면 더 정확!)
+            const textToAnalyze = description ? `${name} ${description}` : name;
+            const keywords = extractProductKeywords(textToAnalyze);
+
+            // 상세설명에서 추가 정보 추출
+            const detailInfo = description ? extractDetailInfo(description) : null;
 
             // 가격대 분석
             const priceSegment = price < 15000 ? 'budget' : price < 35000 ? 'mid' : price < 70000 ? 'premium' : 'luxury';
 
-            // 카테고리 + 키워드 기반 타겟 오디언스 결정
-            const targetInfo = determineTargetAudience(category, keywords, priceSegment);
+            // 카테고리 + 키워드 기반 타겟 오디언스 결정 (상세정보 반영)
+            const targetInfo = determineTargetAudience(category, keywords, priceSegment, detailInfo);
 
             // 셀링 포인트 생성
-            const sellingPoints = generateSellingPoints(keywords, discount, platform);
+            const sellingPoints = generateSellingPoints(keywords, discount, platform, detailInfo);
 
             // 공구 전략 생성
-            const strategy = generateSharpStrategy(name, keywords, targetInfo, priceSegment, discount, platform);
+            const strategy = generateSharpStrategy(name, keywords, targetInfo, priceSegment, discount, platform, detailInfo);
 
             // 예상 성과 계산
             const expectedResults = calculateExpectedResults(priceSegment, discount, keywords);
@@ -1219,50 +1259,145 @@
                 targetAudience: targetInfo.audience,
                 targetSeller: targetInfo.seller,
                 strategy,
-                hook: generateHook(keywords, discount, priceSegment),
+                hook: generateHook(keywords, discount, priceSegment, detailInfo),
                 contentType: targetInfo.contentType,
                 expectedSales: expectedResults.sales,
                 expectedContent: expectedResults.content,
-                conversionTip: generateConversionTip(keywords, priceSegment),
-                priceSegment
+                conversionTip: generateConversionTip(keywords, priceSegment, detailInfo),
+                priceSegment,
+                hasDetailedAnalysis: !!description // 상세분석 여부 표시
             };
         }
 
-        // 상품명에서 키워드 추출
-        function extractProductKeywords(name) {
-            const nameLower = name.toLowerCase();
+        // 상세설명에서 추가 정보 추출
+        function extractDetailInfo(desc) {
+            const info = {
+                ageTarget: null,
+                certifications: [],
+                ingredients: [],
+                benefits: [],
+                warnings: []
+            };
+
+            // 나이 타겟 추출
+            const ageMatch = desc.match(/(\d+)[\s~-]*(\d+)?세|(\d+)개월|영유아|유아|아이|어린이|성인|중장년|시니어/g);
+            if (ageMatch) {
+                if (/영유아|0[\s~-]*3세|개월/.test(desc)) info.ageTarget = '0~3세 영유아';
+                else if (/유아|아이|어린이|3[\s~-]*7세|4[\s~-]*10세/.test(desc)) info.ageTarget = '3~10세 어린이';
+                else if (/초등|7[\s~-]*13세/.test(desc)) info.ageTarget = '초등학생';
+                else if (/청소년|10대/.test(desc)) info.ageTarget = '청소년';
+                else if (/성인|20[\s~-]*/.test(desc)) info.ageTarget = '성인';
+                else if (/중장년|40[\s~-]*|50[\s~-]*/.test(desc)) info.ageTarget = '중장년층';
+                else if (/시니어|노인|60[\s~-]*/.test(desc)) info.ageTarget = '시니어';
+            }
+
+            // 인증/특허 추출
+            if (/HACCP|해썹/.test(desc)) info.certifications.push('HACCP');
+            if (/GMP/.test(desc)) info.certifications.push('GMP');
+            if (/FDA/.test(desc)) info.certifications.push('FDA');
+            if (/식약처/.test(desc)) info.certifications.push('식약처 인증');
+            if (/특허/.test(desc)) info.certifications.push('특허 기술');
+            if (/KC인증|KC마크/.test(desc)) info.certifications.push('KC인증');
+            if (/유기농|오가닉/.test(desc)) info.certifications.push('유기농 인증');
+            if (/무방부제|무첨가/.test(desc)) info.certifications.push('무첨가');
+
+            // 주요 성분 추출
+            const ingredientPatterns = [
+                '프로바이오틱스', '유산균', '비타민D', '비타민C', '칼슘', '철분', '아연',
+                '콜라겐', 'DHA', '오메가3', '루테인', '프로폴리스', '홍삼', '녹용',
+                '히알루론산', '레티놀', '세라마이드', '나이아신아마이드'
+            ];
+            ingredientPatterns.forEach(ing => {
+                if (desc.includes(ing)) info.ingredients.push(ing);
+            });
+
+            // 효능/특징 추출
+            if (/장건강|장 건강|배변/.test(desc)) info.benefits.push('장건강');
+            if (/면역|면역력/.test(desc)) info.benefits.push('면역력');
+            if (/피부|보습|탄력/.test(desc)) info.benefits.push('피부건강');
+            if (/눈건강|시력/.test(desc)) info.benefits.push('눈건강');
+            if (/뼈건강|골다공|칼슘/.test(desc)) info.benefits.push('뼈건강');
+            if (/수면|숙면|잠/.test(desc)) info.benefits.push('수면');
+            if (/피로|활력|에너지/.test(desc)) info.benefits.push('활력');
+            if (/다이어트|체중/.test(desc)) info.benefits.push('다이어트');
+
+            return info;
+        }
+
+        // 상품명/상세설명에서 키워드 추출
+        function extractProductKeywords(text) {
             const keywords = {
-                organic: /유기농|오가닉|친환경|무농약/.test(name),
-                premium: /프리미엄|고급|명품|럭셔리/.test(name),
-                natural: /천연|자연|무첨가|무방부제|무향료/.test(name),
-                // 키즈 키워드 강화 - "우리아이", "아이" 등 정확히 감지
-                kids: /우리아이|아이들|아이용|유아|키즈|어린이|베이비|주니어|쥬니어|초등|영유아|소아/.test(name),
-                baby: /신생아|아기|영아|돌아기|육아|0세|1세|2세|젖병|분유/.test(name),
-                health: /건강|영양|비타민|유산균|콜라겐|프로바이오틱스|프리바이오틱스|락토|장건강/.test(name),
-                diet: /다이어트|슬림|저칼로리|제로|다이어트/.test(name),
-                home: /가정|집|주방|거실|욕실|청소|세탁/.test(name),
-                season: /여름|겨울|봄|가을|시즌|썸머|윈터/.test(name),
-                limited: /한정|리미티드|스페셜|에디션|시즌한정/.test(name),
-                set: /세트|패키지|묶음|기획|구성|번들/.test(name),
-                gift: /선물|기프트|답례|감사|축하/.test(name),
-                new: /신제품|뉴|신상|출시|NEW|리뉴얼/.test(name),
-                best: /베스트|인기|추천|1위|판매1위|스테디/.test(name),
-                functional: /기능성|특허|인증|FDA|HACCP|GMP|식약처/.test(name),
-                safe: /안전|안심|무형광|무염소|저자극|순한|마일드/.test(name),
-                drops: /드롭스|드롭|액상|시럽|츄어블/.test(name)
+                organic: /유기농|오가닉|친환경|무농약/.test(text),
+                premium: /프리미엄|고급|명품|럭셔리/.test(text),
+                natural: /천연|자연|무첨가|무방부제|무향료|무색소|무설탕/.test(text),
+                // 키즈 키워드 - 더 정밀하게
+                kids: /우리아이|우리 아이|아이들|아이용|아이 전용|유아|키즈|어린이|베이비|주니어|쥬니어|초등|영유아|소아|3세|4세|5세|6세|7세|8세|9세|10세/.test(text),
+                baby: /신생아|아기|영아|돌아기|육아|0세|1세|2세|젖병|분유|이유식|개월/.test(text),
+                health: /건강|영양|비타민|유산균|콜라겐|프로바이오틱스|프리바이오틱스|락토|장건강|면역|홍삼/.test(text),
+                diet: /다이어트|슬림|저칼로리|제로|체중|감량/.test(text),
+                home: /가정|집|주방|거실|욕실|청소|세탁|정리/.test(text),
+                season: /여름|겨울|봄|가을|시즌|썸머|윈터/.test(text),
+                limited: /한정|리미티드|스페셜|에디션|시즌한정/.test(text),
+                set: /세트|패키지|묶음|기획|구성|번들|박스/.test(text),
+                gift: /선물|기프트|답례|감사|축하|기념일/.test(text),
+                new: /신제품|뉴|신상|출시|NEW|리뉴얼|업그레이드/.test(text),
+                best: /베스트|인기|추천|1위|판매1위|스테디|히트/.test(text),
+                functional: /기능성|특허|인증|FDA|HACCP|GMP|식약처|건강기능식품/.test(text),
+                safe: /안전|안심|무형광|무염소|저자극|순한|마일드|무해/.test(text),
+                drops: /드롭스|드롭|액상|시럽|츄어블|젤리|구미/.test(text),
+                // 새로 추가된 키워드
+                women: /여성|엄마|임산부|수유|갱년기|여자/.test(text),
+                men: /남성|아빠|남자/.test(text),
+                senior: /시니어|노인|어르신|중장년|갱년기/.test(text),
+                pet: /반려동물|강아지|고양이|펫|애견/.test(text)
             };
             return keywords;
         }
 
-        // 타겟 오디언스 결정 (키즈 키워드 우선 처리)
-        function determineTargetAudience(category, keywords, priceSegment) {
+        // 타겟 오디언스 결정 (상세정보 반영)
+        function determineTargetAudience(category, keywords, priceSegment, detailInfo) {
+            // 상세정보에서 나이 타겟이 명시되어 있으면 우선 사용
+            if (detailInfo && detailInfo.ageTarget) {
+                const age = detailInfo.ageTarget;
+                if (age.includes('영유아') || age.includes('0~3세')) {
+                    return {
+                        audience: `${age} 자녀를 둔 30대 엄마`,
+                        seller: '육아 전문 맘 블로거 (영아 전문)',
+                        contentType: '아이 먹이는/사용 모습 + 엄마 솔직 후기'
+                    };
+                }
+                if (age.includes('어린이') || age.includes('3~10세') || age.includes('초등')) {
+                    return {
+                        audience: `${age} 자녀를 둔 30~40대 학부모`,
+                        seller: '맘카페 활동 육아 인플루언서',
+                        contentType: '아이 반응 영상 + 성분 분석 리뷰'
+                    };
+                }
+                if (age.includes('시니어') || age.includes('중장년')) {
+                    return {
+                        audience: `${age} 건강 관심층`,
+                        seller: '건강/웰니스 전문 인플루언서',
+                        contentType: '복용 후기 + 효과 경험담'
+                    };
+                }
+            }
+
             // 키즈/베이비 키워드가 있으면 카테고리 상관없이 키즈 타겟으로 전환
             if (keywords.kids || keywords.baby) {
-                const ageGroup = keywords.baby ? '0~3세' : '3~10세';
+                const ageGroup = keywords.baby ? '0~3세 영유아' : '3~10세 어린이';
                 return {
                     audience: `${ageGroup} 자녀를 둔 30대 엄마`,
                     seller: '육아 전문 맘 블로거/인플루언서',
                     contentType: '아이 먹는/사용 모습 리뷰'
+                };
+            }
+
+            // 시니어/중장년 키워드
+            if (keywords.senior) {
+                return {
+                    audience: '40~60대 건강 관심 중장년층',
+                    seller: '건강/웰니스 전문 인플루언서',
+                    contentType: '효과 후기 + 복용법 설명'
                 };
             }
 
@@ -1302,18 +1437,30 @@
             return categoryTargets[category] || categoryTargets.default;
         }
 
-        // 셀링 포인트 생성
-        function generateSellingPoints(keywords, discount, platform) {
+        // 셀링 포인트 생성 (상세정보 반영)
+        function generateSellingPoints(keywords, discount, platform, detailInfo) {
             const points = [];
 
-            // 키즈 관련 먼저
+            // 상세정보에서 인증 추출
+            if (detailInfo && detailInfo.certifications.length > 0) {
+                detailInfo.certifications.slice(0, 2).forEach(cert => {
+                    points.push(`✅ ${cert}`);
+                });
+            }
+
+            // 상세정보에서 주요 성분 추출
+            if (detailInfo && detailInfo.ingredients.length > 0) {
+                points.push(`💊 ${detailInfo.ingredients.slice(0, 2).join(', ')}`);
+            }
+
+            // 키즈 관련
             if (keywords.kids) points.push('👶 키즈 전용');
             if (keywords.baby) points.push('🍼 영유아용');
-            if (keywords.organic) points.push('🌿 유기농 인증');
+            if (keywords.organic && !points.some(p => p.includes('유기농'))) points.push('🌿 유기농 인증');
             if (keywords.premium) points.push('✨ 프리미엄');
-            if (keywords.natural) points.push('🍃 무첨가');
+            if (keywords.natural && !points.some(p => p.includes('무첨가'))) points.push('🍃 무첨가');
             if (keywords.safe) points.push('🛡️ 안전 인증');
-            if (keywords.functional) points.push('📋 기능성 인증');
+            if (keywords.functional && !points.some(p => p.includes('인증'))) points.push('📋 기능성 인증');
             if (keywords.best) points.push('🏆 베스트셀러');
             if (keywords.new) points.push('🆕 신제품');
             if (keywords.limited) points.push('⏰ 한정판');
@@ -1326,9 +1473,28 @@
             return points.slice(0, 4);
         }
 
-        // 날카로운 공구 전략 생성
-        function generateSharpStrategy(name, keywords, targetInfo, priceSegment, discount, platform) {
+        // 날카로운 공구 전략 생성 (상세정보 반영)
+        function generateSharpStrategy(name, keywords, targetInfo, priceSegment, discount, platform, detailInfo) {
             let strategy = '';
+
+            // 상세정보가 있으면 더 정교한 전략
+            if (detailInfo && detailInfo.ageTarget) {
+                const age = detailInfo.ageTarget;
+                const certs = detailInfo.certifications.join(', ');
+                const ingredients = detailInfo.ingredients.join(', ');
+                const benefits = detailInfo.benefits.join(', ');
+
+                if (age.includes('영유아') || age.includes('어린이') || keywords.kids || keywords.baby) {
+                    strategy = `"${age} 우리 아이에게 ${ingredients || '안전한 성분'}!" `;
+                    if (certs) strategy += `${certs} 인증으로 믿을 수 있어요. `;
+                    strategy += `${targetInfo.audience} 타겟, ${targetInfo.seller}의 "${targetInfo.contentType}"로 `;
+                    strategy += `"실제 아이가 잘 먹는 모습" 강조!`;
+                    if (discount >= 40) {
+                        strategy += ` ${discount}% 특가로 긴급성 부여!`;
+                    }
+                    return strategy;
+                }
+            }
 
             // 키즈 제품 특화 전략
             if (keywords.kids || keywords.baby) {
@@ -1367,8 +1533,20 @@
             return strategy;
         }
 
-        // 훅 메시지 생성
-        function generateHook(keywords, discount, priceSegment) {
+        // 훅 메시지 생성 (상세정보 반영)
+        function generateHook(keywords, discount, priceSegment, detailInfo) {
+            // 상세정보 기반 맞춤 훅
+            if (detailInfo && detailInfo.ageTarget) {
+                const age = detailInfo.ageTarget;
+                if (age.includes('영유아') || age.includes('어린이')) {
+                    if (discount >= 40) return `👶 ${age} 우리 아이 먹일 건데 ${discount}% 특가? 지금이에요!`;
+                    if (detailInfo.certifications.length > 0) {
+                        return `👶 ${detailInfo.certifications[0]} 받은 안전한 제품! 까다로운 엄마들이 선택`;
+                    }
+                    return `👶 ${age} 전용! 성분 까다로운 엄마들이 인정한 제품`;
+                }
+            }
+
             // 키즈 제품 우선
             if (keywords.kids || keywords.baby) {
                 if (discount >= 40) return `👶 우리 아이 먹일 건데 ${discount}% 특가? 지금 아니면 없어요!`;
@@ -1406,8 +1584,11 @@
             return { sales: sales + '개', content };
         }
 
-        // 전환 팁 생성
-        function generateConversionTip(keywords, priceSegment) {
+        // 전환 팁 생성 (상세정보 반영)
+        function generateConversionTip(keywords, priceSegment, detailInfo) {
+            if (detailInfo && (detailInfo.ageTarget?.includes('영유아') || detailInfo.ageTarget?.includes('어린이'))) {
+                return '아이 먹이는 영상 인증샷 이벤트 + 맘카페/육아앱 바이럴';
+            }
             if (keywords.kids || keywords.baby) return '아이 먹는/사용 영상 인증샷 이벤트 + 맘카페 바이럴';
             if (keywords.set) return '세트 구성 강조 + 개당 가격 환산 보여주기';
             if (keywords.gift) return '선물 포장/메시지카드 옵션 추가';
