@@ -2209,6 +2209,88 @@
       collapsedMemberKPIs: {}  // 내 선행지표 폴더 접힘 상태
     };
 
+    // ========== 소프트 삭제 + 자동 백업 시스템 (전략센터) ==========
+    // 데이터 타입별 표시 이름
+    const DELETED_TYPE_LABELS = {
+      projects: '프로젝트',
+      megaProjects: '메가프로젝트',
+      references: '레퍼런스',
+      refCategories: '레퍼런스카테고리',
+      tasks: '업무',
+      taskPlans: '업무계획',
+      teamKPIs: '팀선행지표',
+      memberKPIs: '내선행지표',
+      okr_personalTargets: '개인목표',
+      okr_meetings: '미팅',
+      okr_dailyLogs: '업무기록',
+      okr_totalMetrics: '총성과지표',
+      okr_subIndicators: '하위지표',
+      okr_keyResults: 'KR',
+      okr_kpis: 'OKR KPI',
+      okr_laggingIndicators: '지연지표',
+      trendKeywords: '트렌드키워드',
+      keywordSites: '키워드사이트',
+      growthboardShareLinks: '공유링크',
+      meetingNotes: '미팅노트',
+      okrs: 'OKR',
+      routineTasks: '루틴'
+    };
+
+    // 소프트 삭제: 데이터를 휴지통으로 이동
+    async function softDelete(collectionName, docId, itemData, displayName = '') {
+      const currentUser = sessionStorage.getItem('moyeora_strategy_user');
+      const userData = currentUser ? JSON.parse(currentUser) : null;
+
+      // 휴지통에 백업 저장
+      const trashData = {
+        originalCollection: collectionName,
+        originalId: docId,
+        data: itemData,
+        displayName: displayName || itemData?.name || itemData?.title || itemData?.projectName || docId,
+        deletedAt: new Date().toISOString(),
+        deletedBy: userData?.name || '관리자',
+        deletedByEmail: userData?.email || '',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30일 후 만료
+        source: 'strategy' // 출처 표시
+      };
+
+      // 휴지통에 저장
+      await db.collection('deletedItems').add(trashData);
+
+      // 원본 컬렉션에서 삭제
+      await db.collection(collectionName).doc(docId).delete();
+
+      return trashData;
+    }
+
+    // 배치 소프트 삭제 (여러 문서를 한번에 휴지통으로)
+    async function softDeleteBatch(items) {
+      const currentUser = sessionStorage.getItem('moyeora_strategy_user');
+      const userData = currentUser ? JSON.parse(currentUser) : null;
+      const batch = db.batch();
+
+      for (const item of items) {
+        // 휴지통에 백업
+        const trashRef = db.collection('deletedItems').doc();
+        batch.set(trashRef, {
+          originalCollection: item.collection,
+          originalId: item.id,
+          data: item.data,
+          displayName: item.displayName || item.data?.name || item.data?.title || item.id,
+          deletedAt: new Date().toISOString(),
+          deletedBy: userData?.name || '관리자',
+          deletedByEmail: userData?.email || '',
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          source: 'strategy'
+        });
+
+        // 원본 삭제
+        batch.delete(db.collection(item.collection).doc(item.id));
+      }
+
+      await batch.commit();
+    }
+
     // 기본 카테고리 (Firebase에 없을 때 사용)
     const DEFAULT_CATEGORIES = [
       { id: 'event', label: '이벤트', emoji: '🎉', color: '#F59E0B', bg: '#FEF3C7' },
@@ -4174,18 +4256,20 @@
       }
     }
 
-    // 프로젝트 삭제
+    // 프로젝트 삭제 (소프트 삭제)
     async function deleteProject() {
       const id = document.getElementById('projectId').value;
       if (!id) return;
 
-      if (!confirm('정말 삭제하시겠습니까?')) return;
+      if (!confirm('이 프로젝트를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('projects').doc(id).delete();
-        showToast('삭제되었습니다');
+        const project = state.projects.find(p => p.id === id);
+        await softDelete('projects', id, project, project?.name || project?.title);
+        showToast('휴지통으로 이동되었습니다');
         closeProjectModal();
       } catch (e) {
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -4852,17 +4936,19 @@
       }
     }
 
-    // 레퍼런스 삭제
+    // 레퍼런스 삭제 (소프트 삭제)
     async function deleteReference() {
       const id = document.getElementById('referenceId').value;
-      if (!id || !confirm('정말 삭제하시겠습니까?')) return;
+      if (!id || !confirm('이 레퍼런스를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('references').doc(id).delete();
-        showToast('삭제되었습니다');
+        const ref = state.references.find(r => r.id === id);
+        await softDelete('references', id, ref, ref?.title || ref?.name);
+        showToast('휴지통으로 이동되었습니다');
         closeReferenceModal();
         renderReferences();
       } catch (e) {
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -5072,12 +5158,14 @@
     }
 
     async function deleteCategory(catId) {
-      if (!confirm('이 카테고리를 삭제하시겠습니까?')) return;
+      if (!confirm('이 카테고리를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('refCategories').doc(catId).delete();
-        showToast('삭제됨');
+        const cat = state.refCategories.find(c => c.id === catId);
+        await softDelete('refCategories', catId, cat, cat?.label || cat?.name);
+        showToast('휴지통으로 이동되었습니다');
       } catch (e) {
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -8741,18 +8829,19 @@
       }
     }
 
-    // 개인 목표 삭제
+    // 개인 목표 삭제 (소프트 삭제)
     async function deletePersonalTarget(targetId) {
-      if (!confirm('내 목표를 삭제하시겠습니까?')) return;
+      if (!confirm('내 목표를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('okr_personalTargets').doc(targetId).delete();
+        const target = state.okrPersonalTargets?.find(t => t.id === targetId);
+        await softDelete('okr_personalTargets', targetId, target, target?.title || target?.name);
         await loadOkrData();
         renderPersonalGrowthboard();
         closeModal();
-        showToast('내 목표가 삭제되었습니다', 'success');
+        showToast('휴지통으로 이동되었습니다', 'success');
       } catch (e) {
-        console.error('개인 목표 삭제 오류:', e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패', 'error');
       }
     }
@@ -11491,17 +11580,18 @@
       }
     }
 
-    // ★ 주간 고정 업무 삭제
+    // ★ 주간 고정 업무 삭제 (소프트 삭제)
     async function deleteWeeklyRecurringTask(taskId) {
-      if (!confirm('이 주간 고정 업무를 삭제하시겠습니까?')) return;
+      if (!confirm('이 주간 고정 업무를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('taskPlans').doc(taskId).delete();
-        showToast('삭제되었습니다', 'success');
+        const task = taskPlanState.weeklyRecurringTasks?.find(t => t.id === taskId);
+        await softDelete('taskPlans', taskId, task, task?.taskName || task?.title);
+        showToast('휴지통으로 이동되었습니다', 'success');
         await loadTaskPlanData();
         openPersonalGoalsModal();
       } catch (e) {
-        console.error('삭제 오류:', e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패', 'error');
       }
     }
@@ -12743,20 +12833,21 @@
       }
     }
 
-    // 미팅 삭제
+    // 미팅 삭제 (소프트 삭제)
     async function deleteMeeting(meetingId) {
-      if (!confirm('정말로 이 미팅을 삭제하시겠습니까?')) return;
+      if (!confirm('이 미팅을 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('okr_meetings').doc(meetingId).delete();
-        showToast('미팅이 삭제되었습니다', 'success');
+        const meeting = okrState.meetings?.find(m => m.id === meetingId);
+        await softDelete('okr_meetings', meetingId, meeting, meeting?.title || meeting?.meetingDate);
+        showToast('휴지통으로 이동되었습니다', 'success');
         await loadOkrData();
         renderOkrDashboard();
         if (state.currentTab === 'meeting-history') renderMeetingHistory();
         closeModal();
       } catch (error) {
-        console.error('미팅 삭제 오류:', error);
-        showToast('미팅 삭제 중 오류가 발생했습니다', 'error');
+        console.error('삭제 실패:', error);
+        showToast('삭제 중 오류가 발생했습니다', 'error');
       }
     }
 
@@ -14722,14 +14813,15 @@
     }
 
     async function deleteTask(taskId) {
-      if (!confirm('이 업무를 삭제하시겠습니까?')) return;
+      if (!confirm('이 업무를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
       try {
-        await db.collection('tasks').doc(taskId).delete();
-        showToast('업무가 삭제되었습니다');
+        const task = state.tasks?.find(t => t.id === taskId);
+        await softDelete('tasks', taskId, task, task?.title || task?.name);
+        showToast('휴지통으로 이동되었습니다');
         closeModal();
         loadWorkLogData();
       } catch (e) {
-        console.error(e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -15303,14 +15395,16 @@
     }
 
     async function deleteSecretLink(linkId) {
-      if (!confirm('이 링크를 삭제하시겠습니까?\n삭제 후에는 이 링크로 접근할 수 없습니다.')) return;
+      if (!confirm('이 링크를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('growthboardShareLinks').doc(linkId).delete();
-        showToast('링크가 삭제되었습니다');
+        const snapshot = await db.collection('growthboardShareLinks').doc(linkId).get();
+        const link = snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
+        await softDelete('growthboardShareLinks', linkId, link, link?.linkName || link?.token);
+        showToast('휴지통으로 이동되었습니다');
         openSecretLinkModal();
       } catch (e) {
-        console.error(e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -15481,14 +15575,15 @@
     }
 
     async function deleteMegaProject(id) {
-      if (!confirm('이 팀 KPI를 삭제하시겠습니까?\n하위 선행지표 연결이 해제됩니다.')) return;
+      if (!confirm('이 팀 KPI를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능, 하위 선행지표 연결 해제됨)')) return;
 
       try {
-        await db.collection('megaProjects').doc(id).delete();
-        showToast('삭제되었습니다');
+        const mega = state.megaProjects?.find(m => m.id === id);
+        await softDelete('megaProjects', id, mega, mega?.name || mega?.title);
+        showToast('휴지통으로 이동되었습니다');
         closeModal();
       } catch (e) {
-        console.error(e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -15619,13 +15714,15 @@
     }
 
     async function deleteProjectV2(id) {
-      if (!confirm('이 프로젝트를 삭제하시겠습니까?')) return;
+      if (!confirm('이 프로젝트를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('projects').doc(id).delete();
-        showToast('삭제되었습니다');
+        const project = state.projects?.find(p => p.id === id);
+        await softDelete('projects', id, project, project?.name || project?.title);
+        showToast('휴지통으로 이동되었습니다');
         closeModal();
       } catch (e) {
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -15835,21 +15932,40 @@
     }
 
     async function deleteTeamKPI(id) {
-      if (!confirm('이 선행지표를 삭제하시겠습니까?\n연결된 내 업무도 함께 삭제됩니다.')) return;
+      if (!confirm('이 선행지표를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능, 연결된 내 업무도 함께 이동)')) return;
 
       try {
-        // 연결된 내 선행지표 삭제
-        const memberKPIs = await db.collection('memberKPIs').where('teamKpiId', '==', id).get();
-        const batch = db.batch();
-        memberKPIs.docs.forEach(doc => batch.delete(doc.ref));
-        batch.delete(db.collection('teamKPIs').doc(id));
-        await batch.commit();
+        const teamKpi = state.teamKPIs?.find(k => k.id === id);
+        const memberKPIsSnapshot = await db.collection('memberKPIs').where('teamKpiId', '==', id).get();
 
-        showToast('삭제되었습니다');
+        // 배치 소프트 삭제를 위한 항목 준비
+        const itemsToDelete = [];
+
+        // 연결된 내 선행지표 추가
+        memberKPIsSnapshot.docs.forEach(doc => {
+          itemsToDelete.push({
+            collection: 'memberKPIs',
+            id: doc.id,
+            data: { id: doc.id, ...doc.data() },
+            displayName: doc.data()?.name || doc.data()?.title
+          });
+        });
+
+        // 팀 KPI 추가
+        itemsToDelete.push({
+          collection: 'teamKPIs',
+          id: id,
+          data: teamKpi,
+          displayName: teamKpi?.name || teamKpi?.title
+        });
+
+        await softDeleteBatch(itemsToDelete);
+
+        showToast('휴지통으로 이동되었습니다');
         closeModal();
         renderKPIManagement();
       } catch (e) {
-        console.error(e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패');
       }
     }
@@ -15996,11 +16112,12 @@
     }
 
     async function deleteMemberKPI(id) {
-      if (!confirm('이 내 업무를 삭제하시겠습니까?')) return;
+      if (!confirm('이 내 업무를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('memberKPIs').doc(id).delete();
-        showToast('삭제되었습니다');
+        const memberKpi = state.memberKPIs?.find(k => k.id === id);
+        await softDelete('memberKPIs', id, memberKpi, memberKpi?.name || memberKpi?.title);
+        showToast('휴지통으로 이동되었습니다');
         closeModal();
         renderKPIManagement();
       } catch (e) {
@@ -17149,20 +17266,21 @@
       }
     }
 
-    // 키워드 삭제
+    // 키워드 삭제 (소프트 삭제)
     async function deleteKeyword() {
       const id = document.getElementById('keywordId').value;
       if (!id) return;
 
-      if (!confirm('이 키워드를 삭제하시겠습니까?')) return;
+      if (!confirm('이 키워드를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('trendKeywords').doc(id).delete();
-        showToast('키워드가 삭제되었습니다', 'success');
+        const keyword = state.keywords?.find(k => k.id === id);
+        await softDelete('trendKeywords', id, keyword, keyword?.keyword || keyword?.title);
+        showToast('휴지통으로 이동되었습니다', 'success');
         closeKeywordModal();
         await loadKeywords();
       } catch (error) {
-        console.error('키워드 삭제 오류:', error);
+        console.error('삭제 실패:', error);
         showToast('삭제 중 오류가 발생했습니다', 'error');
       }
     }
@@ -17278,17 +17396,18 @@
       }
     }
 
-    // 사이트 삭제
+    // 사이트 삭제 (소프트 삭제)
     async function deleteKeywordSite(siteId) {
-      if (!confirm('이 사이트를 삭제하시겠습니까?\n해당 사이트의 키워드는 유지됩니다.')) return;
+      if (!confirm('이 사이트를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능, 키워드는 유지됩니다)')) return;
 
       try {
-        await db.collection('keywordSites').doc(siteId).delete();
+        const site = state.keywordSites?.find(s => s.id === siteId);
+        await softDelete('keywordSites', siteId, site, site?.name || site?.url);
         await loadKeywordSites();
         renderKeywordSiteList();
-        showToast('사이트가 삭제되었습니다', 'success');
+        showToast('휴지통으로 이동되었습니다', 'success');
       } catch (error) {
-        console.error('사이트 삭제 오류:', error);
+        console.error('삭제 실패:', error);
         showToast('삭제 중 오류가 발생했습니다', 'error');
       }
     }
@@ -21698,19 +21817,20 @@
       }
     }
 
-    // 업무일지 삭제
+    // 업무일지 삭제 (소프트 삭제)
     async function deleteWorkLog(logId) {
-      if (!confirm('이 업무 기록을 삭제하시겠습니까?')) return;
+      if (!confirm('이 업무 기록을 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
         const log = okrState.dailyLogs.find(l => l.id === logId);
         const lag = okrState.laggingIndicators.find(l => l.id === log?.laggingIndicatorId);
 
-        await db.collection('okr_dailyLogs').doc(logId).delete();
+        // 소프트 삭제
+        await softDelete('okr_dailyLogs', logId, log, lag?.name || log?.date || '업무 기록');
 
         // 변경이력 기록
         await db.collection('okr_changeLogs').add({
-          action: 'delete',
+          action: 'soft_delete',
           entityType: 'dailyLog',
           entityId: logId,
           data: {
@@ -21728,9 +21848,9 @@
 
         closeModal();
         renderOkrRecord();
-        showToast('업무 기록이 삭제되었습니다');
+        showToast('휴지통으로 이동되었습니다');
       } catch (e) {
-        console.error('업무 기록 삭제 오류:', e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패: ' + e.message);
       }
     }
@@ -22586,7 +22706,7 @@
       }
     }
 
-    // 총 성과지표 삭제
+    // 총 성과지표 삭제 (소프트 삭제)
     async function deleteTotalMetric(totalMetricId) {
       try {
         const totalMetric = okrState.totalMetrics.find(tm => tm.id === totalMetricId);
@@ -22599,14 +22719,15 @@
           lag.totalMetricId = null;
         }
 
-        await db.collection('okr_totalMetrics').doc(totalMetricId).delete();
+        // 소프트 삭제
+        await softDelete('okr_totalMetrics', totalMetricId, totalMetric, totalMetric.name);
 
         okrState.totalMetrics = okrState.totalMetrics.filter(tm => tm.id !== totalMetricId);
 
-        await saveChangeLog('totalMetric', 'delete', { id: totalMetricId, name: totalMetric.name });
-        showToast(`총 성과지표 "${totalMetric.name}" 삭제됨`, 'success');
+        await saveChangeLog('totalMetric', 'soft_delete', { id: totalMetricId, name: totalMetric.name });
+        showToast(`"${totalMetric.name}" 휴지통으로 이동됨`, 'success');
       } catch (e) {
-        console.error('총 성과지표 삭제 오류:', e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패', 'error');
       }
     }
@@ -22912,7 +23033,7 @@
       }
     }
 
-    // 하위지표 삭제
+    // 하위지표 삭제 (소프트 삭제)
     async function deleteSubIndicator(subIndicatorId) {
       try {
         const subIndicator = okrState.subIndicators.find(si => si.id === subIndicatorId);
@@ -22925,14 +23046,15 @@
           log.subIndicatorId = null;
         }
 
-        await db.collection('okr_subIndicators').doc(subIndicatorId).delete();
+        // 소프트 삭제
+        await softDelete('okr_subIndicators', subIndicatorId, subIndicator, subIndicator.name);
 
         okrState.subIndicators = okrState.subIndicators.filter(si => si.id !== subIndicatorId);
 
-        await saveChangeLog('subIndicator', 'delete', { id: subIndicatorId, name: subIndicator.name });
-        showToast(`하위지표 "${subIndicator.name}" 삭제됨`, 'success');
+        await saveChangeLog('subIndicator', 'soft_delete', { id: subIndicatorId, name: subIndicator.name });
+        showToast(`"${subIndicator.name}" 휴지통으로 이동됨`, 'success');
       } catch (e) {
-        console.error('하위지표 삭제 오류:', e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패', 'error');
       }
     }
@@ -24396,7 +24518,7 @@
       }
     }
 
-    // 업무기록 삭제 (확인 절차 포함)
+    // 업무기록 삭제 (소프트 삭제)
     async function deleteOkrLog(logId) {
       if (!logId) return;
 
@@ -24407,23 +24529,24 @@
       }
 
       const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
-      const confirmMsg = `"${lag?.name || '업무'}" 기록을 삭제하시겠습니까?`;
+      const confirmMsg = `"${lag?.name || '업무'}" 기록을 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)`;
 
       if (!confirm(confirmMsg)) return;
 
       try {
-        await db.collection('okr_dailyLogs').doc(logId).delete();
+        // 소프트 삭제
+        await softDelete('okr_dailyLogs', logId, log, lag?.name || log?.date);
 
         // 로컬 상태에서 제거
         okrState.dailyLogs = okrState.dailyLogs.filter(l => l.id !== logId);
         okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
 
-        showToast('기록이 삭제되었습니다', 'success');
+        showToast('휴지통으로 이동되었습니다', 'success');
 
         renderOkrDashboard();
         renderOkrRecord();
       } catch (e) {
-        console.error('삭제 오류:', e);
+        console.error('삭제 실패:', e);
         showToast('삭제 실패', 'error');
       }
     }
@@ -25285,22 +25408,29 @@
     }
 
     async function deleteOkrKR(krId) {
-      if (!confirm('이 KR을 삭제하시겠습니까? 연결된 KPI도 함께 삭제됩니다.')) return;
+      if (!confirm('이 KR을 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능, 연결된 KPI도 함께 이동)')) return;
       try {
+        const kr = okrState.keyResults?.find(k => k.id === krId);
         const kpis = okrState.kpis.filter(k => k.keyResultId === krId);
+        const itemsToDelete = [];
+
         for (const kpi of kpis) {
           const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
-          for (const lag of lags) await db.collection('okr_laggingIndicators').doc(lag.id).delete();
-          await db.collection('okr_kpis').doc(kpi.id).delete();
+          for (const lag of lags) {
+            itemsToDelete.push({ collection: 'okr_laggingIndicators', id: lag.id, data: lag, displayName: lag?.name });
+          }
+          itemsToDelete.push({ collection: 'okr_kpis', id: kpi.id, data: kpi, displayName: kpi?.name });
         }
-        await db.collection('okr_keyResults').doc(krId).delete();
+        itemsToDelete.push({ collection: 'okr_keyResults', id: krId, data: kr, displayName: kr?.name });
+
+        await softDeleteBatch(itemsToDelete);
         await loadOkrData();
         renderOkrDashboard();
         renderOkrSettings();
         renderOkrRecord();
         closeModal();
-        showToast('삭제되었습니다', 'success');
-      } catch (e) { console.error(e); showToast('삭제 실패', 'error'); }
+        showToast('휴지통으로 이동되었습니다', 'success');
+      } catch (e) { console.error('삭제 실패:', e); showToast('삭제 실패', 'error'); }
     }
 
     // KPI 현황 테이블에서 편집 버튼 클릭 시 호출
@@ -25596,35 +25726,33 @@
     }
 
     async function deleteOkrKPI(kpiId) {
-      if (!confirm('이 KPI를 삭제하시겠습니까?')) return;
+      if (!confirm('이 KPI를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
       try {
-        // ★ Firestore Batch Write로 트랜잭션 보장
-        const batch = db.batch();
-
-        // 1. 연관된 모든 Metrics 삭제
+        const kpi = okrState.kpis?.find(k => k.id === kpiId);
         const lags = okrState.laggingIndicators.filter(l => l.kpiId === kpiId);
+        const itemsToDelete = [];
+
+        // 연관된 모든 Metrics 추가
         for (const lag of lags) {
-          const lagRef = db.collection('okr_laggingIndicators').doc(lag.id);
-          batch.delete(lagRef);
+          itemsToDelete.push({ collection: 'okr_laggingIndicators', id: lag.id, data: lag, displayName: lag?.name });
         }
 
-        // 2. KPI 삭제
-        const kpiRef = db.collection('okr_kpis').doc(kpiId);
-        batch.delete(kpiRef);
+        // KPI 추가
+        itemsToDelete.push({ collection: 'okr_kpis', id: kpiId, data: kpi, displayName: kpi?.name });
 
-        // 3. 배치 실행 (원자적)
-        await batch.commit();
-        console.log('✅ KPI 및 연관 Metrics 동기화 삭제 완료');
+        // 소프트 삭제 배치 실행
+        await softDeleteBatch(itemsToDelete);
+        console.log('✅ KPI 및 연관 Metrics 휴지통 이동 완료');
 
         await loadOkrData();
         renderOkrDashboard();
         renderOkrSettings();
         renderOkrRecord();
         closeModal();
-        showToast('삭제되었습니다', 'success');
+        showToast('휴지통으로 이동되었습니다', 'success');
       } catch (e) {
-        console.error('❌ KPI 삭제 실패 (롤백됨):', e);
-        showToast('삭제 실패 - 변경사항이 롤백되었습니다', 'error');
+        console.error('삭제 실패:', e);
+        showToast('삭제 실패', 'error');
       }
     }
 
@@ -28284,16 +28412,17 @@
       openTaskPlanModal(taskId);
     }
 
-    // 업무 삭제
+    // 업무 삭제 (소프트 삭제)
     async function deleteTaskPlan(taskId) {
-      if (!confirm('이 업무를 삭제하시겠습니까?')) return;
+      if (!confirm('이 업무를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('taskPlans').doc(taskId).delete();
-        showToast('업무가 삭제되었습니다.');
+        const task = taskPlanState.tasks?.find(t => t.id === taskId);
+        await softDelete('taskPlans', taskId, task, task?.taskName || task?.title);
+        showToast('휴지통으로 이동되었습니다');
         loadTaskPlanData();
       } catch (error) {
-        console.error('업무 삭제 오류:', error);
+        console.error('삭제 실패:', error);
         alert('삭제 중 오류가 발생했습니다.');
       }
     }
@@ -29388,15 +29517,16 @@
       document.body.appendChild(modal);
     }
 
-    // 노트 삭제
+    // 노트 삭제 (소프트 삭제)
     async function deleteNote(noteId) {
-      if (!confirm('이 노트를 삭제하시겠습니까?')) return;
+      if (!confirm('이 노트를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
       try {
-        await db.collection('meetingNotes').doc(noteId).delete();
+        const note = meetingNotesState.notes?.find(n => n.id === noteId);
+        await softDelete('meetingNotes', noteId, note, note?.title || note?.meetingDate);
         meetingNotesState.notes = meetingNotesState.notes.filter(n => n.id !== noteId);
         document.getElementById('note-detail-modal')?.remove();
         renderMeetingNotes();
-        showToast('✓ 노트가 삭제되었습니다.');
+        showToast('휴지통으로 이동되었습니다');
       } catch (error) {
         console.error('삭제 실패:', error);
         alert('삭제 중 오류가 발생했습니다.');

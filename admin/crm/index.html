@@ -2693,6 +2693,55 @@
     // 페이지 언로드 시 리스너 정리
     window.addEventListener('beforeunload', cleanupListeners);
 
+    // ========== 소프트 삭제 + 자동 백업 시스템 (CRM) ==========
+    // 데이터 타입별 표시 이름
+    const DELETED_TYPE_LABELS = {
+      deals: '공구',
+      suppliers: '공급사',
+      sellers: '셀러',
+      sellerList: '셀러목록',
+      productList: '상품목록',
+      sellerSettlements: '셀러정산서',
+      supplierSettlements: '공급사정산서',
+      pendingOnboardings: '셀러온보딩서류',
+      pendingSupplierOnboardings: '공급사온보딩서류',
+      proposals: '제안서',
+      proposalDerivatives: '공급사제안서',
+      supplierInquiries: '공급사문의',
+      sellerInquiries: '셀러문의',
+      phoneInquiries: '전화문의',
+      proposalRequests: '제안서요청',
+      dealProposals: '공구제안',
+      sellerApplications: '셀러입점신청',
+      supplierApplications: '공급사입점신청'
+    };
+
+    // 소프트 삭제: 데이터를 휴지통으로 이동
+    async function softDelete(collectionName, docId, itemData, displayName = '') {
+      const currentUser = sessionStorage.getItem('moyeora_crm_user');
+      const userData = currentUser ? JSON.parse(currentUser) : null;
+
+      // 휴지통에 백업 저장
+      const trashData = {
+        originalCollection: collectionName,
+        originalId: docId,
+        data: itemData,
+        displayName: displayName || itemData?.name || itemData?.title || itemData?.brandName || docId,
+        deletedAt: new Date().toISOString(),
+        deletedBy: userData?.name || '관리자',
+        deletedByEmail: userData?.email || '',
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30일 후 만료
+      };
+
+      // 휴지통에 저장
+      await db.collection('deletedItems').add(trashData);
+
+      // 원본 컬렉션에서 삭제
+      await db.collection(collectionName).doc(docId).delete();
+
+      return trashData;
+    }
+
     // 팀원 목록 로드
     let teamMembers = [];
     async function loadTeamMembers() {
@@ -3386,12 +3435,24 @@
       }
     }
 
-    // 인바운드 항목 삭제
+    // 인바운드 항목 삭제 (소프트 삭제)
     async function deleteInboundItem(collection, id) {
-      if (!confirm('이 항목을 삭제하시겠습니까?')) return;
+      if (!confirm('이 항목을 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
       try {
-        await db.collection(collection).doc(id).delete();
-        showToast('삭제되었습니다.');
+        // 해당 컬렉션에서 데이터 찾기
+        let item = null;
+        if (collection === 'supplierInquiries') {
+          item = (state.supplierInquiries || []).find(i => i.id === id);
+        } else if (collection === 'sellerInquiries') {
+          item = (state.sellerInquiries || []).find(i => i.id === id);
+        } else if (collection === 'proposalRequests') {
+          item = (state.proposalRequests || []).find(i => i.id === id);
+        } else if (collection === 'phoneInquiries') {
+          item = (state.phoneInquiries || []).find(i => i.id === id);
+        }
+
+        await softDelete(collection, id, item, item?.companyName || item?.name || item?.caller);
+        showToast('휴지통으로 이동되었습니다');
       } catch (e) {
         console.error('삭제 실패:', e);
         alert('삭제에 실패했습니다.');
@@ -7286,13 +7347,16 @@
       }
     }
 
-    // 제안서 삭제
+    // 제안서 삭제 (소프트 삭제)
     async function deleteProposal(proposalId) {
-      if (!confirm('이 제안서를 삭제하시겠습니까?')) return;
+      if (!confirm('이 제안서를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
-        await db.collection('proposals').doc(proposalId).delete();
-        showToast('제안서가 삭제되었습니다');
+        const snapshot = await db.collection('proposals').doc(proposalId).get();
+        const proposal = snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
+
+        await softDelete('proposals', proposalId, proposal, proposal?.title || proposal?.clientName);
+        showToast('휴지통으로 이동되었습니다');
         closeProposalBuilder();
         loadProposals();
       } catch (e) {
@@ -8425,16 +8489,16 @@
       }
     }
 
-    // 제안서 삭제
+    // 제안서 삭제 (소프트 삭제)
     async function deleteSupcProposal(proposalId) {
-      if (!confirm('이 제안서를 삭제하시겠습니까?')) return;
+      if (!confirm('이 제안서를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
 
       try {
         // 제안서 정보 가져오기
         const proposal = state.supplierProposals.find(p => p.id === proposalId);
 
-        // proposalDerivatives 삭제
-        await db.collection('proposalDerivatives').doc(proposalId).delete();
+        // 소프트 삭제: 휴지통으로 이동
+        await softDelete('proposalDerivatives', proposalId, proposal, proposal?.supplierName || proposal?.productName);
 
         // productList 상태 초기화 (연결된 경우)
         if (proposal?.productListId) {
@@ -8448,7 +8512,7 @@
           });
         }
 
-        showToast('제안서가 삭제되었습니다');
+        showToast('휴지통으로 이동되었습니다');
       } catch (err) {
         console.error('삭제 실패:', err);
         showToast('삭제에 실패했습니다');
@@ -8734,10 +8798,11 @@
     }
 
     async function deleteSellerListItem(id) {
-      if (!confirm('이 셀러를 삭제하시겠습니까?')) return;
+      if (!confirm('이 셀러를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
       try {
-        await db.collection('sellerList').doc(id).delete();
-        showToast('셀러가 삭제되었습니다');
+        const item = state.sellerList.find(s => s.id === id);
+        await softDelete('sellerList', id, item, item?.accountName || item?.sellerName);
+        showToast('휴지통으로 이동되었습니다');
       } catch (err) {
         console.error('삭제 실패:', err);
         showToast('삭제에 실패했습니다');
@@ -8928,10 +8993,11 @@
     }
 
     async function deleteProductListItem(id) {
-      if (!confirm('이 상품을 삭제하시겠습니까?')) return;
+      if (!confirm('이 상품을 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
       try {
-        await db.collection('productList').doc(id).delete();
-        showToast('상품이 삭제되었습니다');
+        const item = state.productList.find(p => p.id === id);
+        await softDelete('productList', id, item, item?.productName || item?.brandName);
+        showToast('휴지통으로 이동되었습니다');
       } catch (err) {
         console.error('삭제 실패:', err);
         showToast('삭제에 실패했습니다');
@@ -10488,16 +10554,19 @@
       }
     }
 
-    // 대기 서류 삭제
+    // 대기 서류 삭제 (소프트 삭제)
     async function deletePendingOnboardingCRM(docId, type) {
-      if (!confirm('정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+      if (!confirm('이 서류를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) {
         return;
       }
 
       try {
         const collection = type === 'supplier' ? 'pendingSupplierOnboardings' : 'pendingOnboardings';
-        await db.collection(collection).doc(docId).delete();
-        showToast('서류가 삭제되었습니다.', 'success');
+        const items = type === 'supplier' ? state.pendingSupplierOnboardings : state.pendingSellerOnboardings;
+        const item = items?.find(d => d.id === docId);
+
+        await softDelete(collection, docId, item, item?.companyName || item?.sellerName || item?.name);
+        showToast('휴지통으로 이동되었습니다', 'success');
       } catch (error) {
         console.error('삭제 오류:', error);
         showToast('삭제 중 오류가 발생했습니다.', 'error');
