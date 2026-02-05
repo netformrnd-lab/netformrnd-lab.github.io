@@ -3247,20 +3247,25 @@
                 managerName: document.getElementById('managerName').value.trim(),
                 phone: document.getElementById('phone').value.trim(),
                 category: selectedCategory,
-                products: products.map(p => ({
+                products: await Promise.all(products.filter(p => p.name).map(async p => ({
                     name: p.name,
                     originalPrice: p.originalPrice,
                     dealPrice: p.dealPrice,
-                    image: p.image,
-                    category: p.category || '', // 상품별 개별 카테고리
+                    image: p.image ? await compressImage(p.image, 200, 0.6) : null, // 압축된 상품 이미지
+                    category: p.category || '',
                     detailUrl: p.detailUrl || '',
                     discount: p.originalPrice && p.dealPrice
                         ? Math.round((1 - parseInt(p.dealPrice) / parseInt(p.originalPrice)) * 100)
                         : null,
-                    analysis: p.analysis || null,
-                    imageAnalysis: p.imageAnalysis || null, // AI 이미지 분석 결과
-                    sellingPointImages: p.sellingPointImages || [] // 소구점 이미지들
-                })).filter(p => p.name),
+                    // AI 분석 결과 텍스트만 저장 (이미지 제외)
+                    imageAnalysis: p.imageAnalysis ? {
+                        sellingPoints: p.imageAnalysis.sellingPoints || [],
+                        marketingMessage: p.imageAnalysis.marketingMessage || '',
+                        targetAudience: p.imageAnalysis.targetAudience || '',
+                        targetSeller: p.imageAnalysis.targetSeller || '',
+                        contentType: p.imageAnalysis.contentType || ''
+                    } : null
+                }))),
                 // 브랜드 정보
                 brand: {
                     slogan: document.getElementById('brandSlogan')?.value?.trim() || '',
@@ -3391,6 +3396,50 @@
             if (forceClose || event.target.id === 'successModal') {
                 document.getElementById('successModal').classList.remove('show');
             }
+        }
+
+        // 이미지 압축 함수
+        function compressImage(base64, maxSize = 200, quality = 0.6) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+
+                    // 최대 크기로 리사이즈
+                    if (width > height) {
+                        if (width > maxSize) {
+                            height = Math.round(height * maxSize / width);
+                            width = maxSize;
+                        }
+                    } else {
+                        if (height > maxSize) {
+                            width = Math.round(width * maxSize / height);
+                            height = maxSize;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    // JPEG로 압축
+                    const compressed = canvas.toDataURL('image/jpeg', quality);
+                    resolve(compressed);
+                };
+                img.onerror = function() {
+                    // 오류 시 원본 반환 (작은 경우에만)
+                    if (base64 && base64.length < 50000) {
+                        resolve(base64);
+                    } else {
+                        resolve(null);
+                    }
+                };
+                img.src = base64;
+            });
         }
 
         // 토스트
