@@ -44929,7 +44929,46 @@ async function recoverSupplierProducts() {
       }
     }
 
-    // 4. 주문 데이터에서 상품 정보 추출 (온보딩 데이터가 없는 경우)
+    // 4. 딜 데이터에서 상품 정보 추출
+    if (recoveredProducts.length === 0) {
+      const supplierDeals = (state.deals || []).filter(d => d.supplierId === supplier.id);
+      if (supplierDeals.length > 0) {
+        const productMap = {};
+        for (const deal of supplierDeals) {
+          const selectedProducts = deal.selectedProducts || [];
+          for (const sp of selectedProducts) {
+            const productId = typeof sp === 'string' ? sp : sp.productId;
+            const productName = typeof sp === 'string' ? '' : (sp.productName || '');
+            const marginRate = typeof sp === 'string' ? 0 : (sp.marginRate || 0);
+            if (productName && !productMap[productName]) {
+              productMap[productName] = {
+                productName: productName,
+                marginRate: marginRate,
+                dealTitle: deal.title
+              };
+            }
+          }
+        }
+
+        for (const [name, p] of Object.entries(productMap)) {
+          recoveredProducts.push({
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            brandName: supplier.name,
+            supplierType: 'external',
+            productName: p.productName,
+            retailPrice: 0,
+            salePrice: 0,
+            supplyPrice: 0,
+            commission: p.marginRate,
+            source: 'recovered_from_deals',
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+    }
+
+    // 5. 주문 데이터에서 상품 정보 추출 (온보딩/딜 데이터가 없는 경우)
     if (recoveredProducts.length === 0) {
       const orders = (state.cafe24Orders || []).filter(o => {
         const orderSupplier = (o.supplier_name || o.supplier || o.brand_name || '').toLowerCase();
@@ -44968,7 +45007,24 @@ async function recoverSupplierProducts() {
     }
 
     if (recoveredProducts.length === 0) {
-      resultDiv.innerHTML = `<span style="color: #dc2626;">⚠️ "${supplier.name}"의 복구 가능한 상품 데이터를 찾을 수 없습니다. 수동 등록이 필요합니다.</span>`;
+      resultDiv.innerHTML = `
+        <div style="color: #dc2626; margin-bottom: 12px;">⚠️ "${supplier.name}"의 복구 가능한 상품 데이터를 찾을 수 없습니다.</div>
+        <div style="background: #fef3c7; padding: 12px; border-radius: 8px; font-size: 12px;">
+          <div style="font-weight: 600; margin-bottom: 8px;">📋 Firebase에서 직접 확인하기:</div>
+          <ol style="margin: 0; padding-left: 20px; line-height: 1.8;">
+            <li><a href="https://console.firebase.google.com" target="_blank" style="color: #2563eb;">Firebase 콘솔</a> 접속</li>
+            <li>Firestore Database → supplierProducts 컬렉션 확인</li>
+            <li>supplierId: "${supplier.id}" 로 필터링</li>
+            <li>또는 suppliers → ${supplier.id} 문서의 하위 필드 확인</li>
+          </ol>
+          <div style="margin-top: 10px;">
+            <button onclick="showManualProductInput('${supplier.id}', '${supplier.name}')"
+              style="padding: 6px 12px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">
+              ✏️ 수동으로 상품 등록
+            </button>
+          </div>
+        </div>
+      `;
       return;
     }
 
@@ -44991,6 +45047,92 @@ async function recoverSupplierProducts() {
   } catch (error) {
     console.error('상품 복구 오류:', error);
     resultDiv.innerHTML = `<span style="color: #dc2626;">❌ 복구 중 오류 발생: ${error.message}</span>`;
+  }
+}
+
+// 수동 상품 등록 폼 표시
+function showManualProductInput(supplierId, supplierName) {
+  const resultDiv = document.getElementById('recover-result');
+  resultDiv.innerHTML = `
+    <div style="background: white; padding: 16px; border-radius: 10px; border: 1px solid var(--gray-200); margin-top: 12px;">
+      <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">✏️ ${supplierName} 상품 수동 등록</h4>
+      <div style="display: grid; gap: 10px;">
+        <div>
+          <label style="font-size: 12px; color: var(--gray-600);">상품명 *</label>
+          <input type="text" id="manual-product-name" placeholder="예: 미끄럼 방지 롤러페인트 1개"
+            style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+          <div>
+            <label style="font-size: 12px; color: var(--gray-600);">소비자정가</label>
+            <input type="number" id="manual-retail-price" placeholder="29900"
+              style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">
+          </div>
+          <div>
+            <label style="font-size: 12px; color: var(--gray-600);">판매가</label>
+            <input type="number" id="manual-sale-price" placeholder="24900"
+              style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">
+          </div>
+          <div>
+            <label style="font-size: 12px; color: var(--gray-600);">공급단가(V+)</label>
+            <input type="number" id="manual-supply-price" placeholder="19900"
+              style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 13px;">
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button onclick="saveManualProduct('${supplierId}', '${supplierName}')"
+            style="flex: 1; padding: 10px; background: #10b981; color: white; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
+            💾 저장
+          </button>
+          <button onclick="document.getElementById('recover-result').innerHTML = ''"
+            style="padding: 10px 16px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 6px; font-size: 13px; cursor: pointer;">
+            취소
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// 수동 상품 저장
+async function saveManualProduct(supplierId, supplierName) {
+  const productName = document.getElementById('manual-product-name').value.trim();
+  const retailPrice = parseFloat(document.getElementById('manual-retail-price').value) || 0;
+  const salePrice = parseFloat(document.getElementById('manual-sale-price').value) || 0;
+  const supplyPrice = parseFloat(document.getElementById('manual-supply-price').value) || 0;
+
+  if (!productName) {
+    showToast('⚠️ 상품명을 입력해주세요.');
+    return;
+  }
+
+  try {
+    const productData = {
+      supplierId: supplierId,
+      supplierName: supplierName,
+      brandName: supplierName,
+      supplierType: 'external',
+      productName: productName,
+      retailPrice: retailPrice,
+      salePrice: salePrice,
+      supplyPrice: supplyPrice,
+      source: 'manual_input',
+      createdAt: new Date().toISOString()
+    };
+
+    await db.collection('supplierProducts').add(productData);
+
+    document.getElementById('recover-result').innerHTML = `
+      <span style="color: #10b981;">✅ "${productName}" 상품이 등록되었습니다!</span>
+      <button onclick="showManualProductInput('${supplierId}', '${supplierName}')"
+        style="margin-left: 10px; padding: 4px 10px; background: #8b5cf6; color: white; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">
+        + 추가 등록
+      </button>
+    `;
+    showToast('✅ 상품 등록 완료');
+  } catch (error) {
+    console.error('상품 등록 오류:', error);
+    showToast('❌ 등록 실패: ' + error.message);
   }
 }
 
