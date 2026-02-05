@@ -1773,6 +1773,11 @@
         let brandImageAnalysis = null;
         let createdProposalId = null;
 
+        // 편집 모드 확인
+        const editParams = new URLSearchParams(window.location.search);
+        const editProposalId = editParams.get('edit');
+        let isEditMode = !!editProposalId;
+
         const categoryNames = {
             food: '식품/음료',
             baby: '육아/키즈',
@@ -3367,27 +3372,46 @@
                     keywords: document.getElementById('brandKeywords')?.value?.trim() || '',
                     pageUrl: document.getElementById('brandPageUrl')?.value?.trim() || ''
                 },
-                viewCount: 0,
-                createdAt: new Date().toISOString(),
-                status: 'active'
+                updatedAt: new Date().toISOString()
             };
 
             try {
-                const docRef = await db.collection('proposalDerivatives').add(proposalData);
-                createdProposalId = docRef.id;
+                if (isEditMode) {
+                    // 편집 모드: 기존 문서 업데이트
+                    await db.collection('proposalDerivatives').doc(editProposalId).update({
+                        ...proposalData,
+                        editHistory: firebase.firestore.FieldValue.arrayUnion({
+                            type: 'edit',
+                            at: Date.now(),
+                            note: '수정됨'
+                        })
+                    });
+                    createdProposalId = editProposalId;
 
-                // 임시저장 데이터 삭제
-                localStorage.removeItem('proposalDraft');
+                    localStorage.removeItem('proposalDraft');
+                    showToast('제안서가 수정되었습니다!');
+                    setTimeout(() => {
+                        window.location.href = `list.html?new=${createdProposalId}`;
+                    }, 800);
+                } else {
+                    // 신규 생성
+                    proposalData.viewCount = 0;
+                    proposalData.createdAt = new Date().toISOString();
+                    proposalData.status = 'active';
 
-                // list.html로 이동 (생성된 제안서 하이라이트)
-                showToast('제안서가 생성되었습니다!');
-                setTimeout(() => {
-                    window.location.href = `list.html?new=${createdProposalId}`;
-                }, 800);
+                    const docRef = await db.collection('proposalDerivatives').add(proposalData);
+                    createdProposalId = docRef.id;
+
+                    localStorage.removeItem('proposalDraft');
+                    showToast('제안서가 생성되었습니다!');
+                    setTimeout(() => {
+                        window.location.href = `list.html?new=${createdProposalId}`;
+                    }, 800);
+                }
 
             } catch (e) {
-                console.error('생성 오류:', e);
-                showToast('제안서 생성에 실패했습니다');
+                console.error(isEditMode ? '수정 오류:' : '생성 오류:', e);
+                showToast(isEditMode ? '제안서 수정에 실패했습니다' : '제안서 생성에 실패했습니다');
             }
         }
 
@@ -3623,9 +3647,72 @@
         }
 
         // 초기화
+        // 편집 모드: Firestore에서 기존 데이터 불러오기
+        async function loadProposalForEdit(id) {
+            try {
+                const doc = await db.collection('proposalDerivatives').doc(id).get();
+                if (!doc.exists) {
+                    showToast('제안서를 찾을 수 없습니다');
+                    return;
+                }
+
+                const data = doc.data();
+
+                // 페이지 타이틀 변경
+                document.querySelector('.page-title').textContent = '✏️ 제안서 편집';
+                const submitBtn = document.querySelector('.submit-btn');
+                if (submitBtn) {
+                    submitBtn.innerHTML = '<i class="fas fa-save"></i> 수정 저장';
+                }
+
+                // 기본 정보
+                document.getElementById('companyName').value = data.companyName || '';
+                document.getElementById('managerName').value = data.managerName || '';
+                document.getElementById('phone').value = data.phone || '';
+                document.getElementById('previewCompany').textContent = data.companyName || '-';
+
+                // 카테고리
+                if (data.category) selectCategory(data.category);
+
+                // 공구가 상태
+                if (data.dealPriceStatus) {
+                    const radio = document.querySelector(`input[name="dealPriceStatus"][value="${data.dealPriceStatus}"]`);
+                    if (radio) radio.checked = true;
+                }
+
+                // 상품
+                if (data.products && data.products.length > 0) {
+                    products = data.products.map(p => ({
+                        ...p,
+                        id: p.id || 'product_' + Date.now() + Math.random().toString(36).substr(2, 5)
+                    }));
+                    renderProducts();
+                }
+
+                // 브랜드 정보
+                if (data.brand) {
+                    if (document.getElementById('brandPageUrl')) document.getElementById('brandPageUrl').value = data.brand.pageUrl || '';
+                    if (document.getElementById('brandSlogan')) document.getElementById('brandSlogan').value = data.brand.slogan || '';
+                    if (document.getElementById('brandStory')) document.getElementById('brandStory').value = data.brand.story || '';
+                    if (document.getElementById('brandKeywords')) document.getElementById('brandKeywords').value = data.brand.keywords || '';
+                }
+
+                showToast('편집 모드: 기존 데이터를 불러왔습니다');
+
+            } catch (err) {
+                console.error('데이터 로드 실패:', err);
+                showToast('데이터를 불러오는데 실패했습니다');
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             renderProducts();
-            loadDraft();
+
+            if (isEditMode) {
+                loadProposalForEdit(editProposalId);
+            } else {
+                loadDraft();
+            }
         });
     </script>
 </body>
