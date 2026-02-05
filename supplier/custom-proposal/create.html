@@ -880,6 +880,28 @@
             font-size: 12px;
             font-weight: 600;
             color: var(--accent);
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .ai-analysis-result .selling-point-tag.deselected {
+            background: rgba(100, 116, 139, 0.1);
+            border-color: rgba(100, 116, 139, 0.2);
+            color: var(--text-muted);
+            opacity: 0.5;
+            text-decoration: line-through;
+        }
+
+        .ai-analysis-result .selling-point-tag:hover {
+            transform: scale(1.03);
+        }
+
+        .ai-analysis-result .sp-select-hint {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            opacity: 0.7;
         }
 
         .ai-analysis-result .marketing-message {
@@ -1914,7 +1936,7 @@
                                     </div>
                                 </div>
                                 <div id="aiAnalysisResult_${product.id}">
-                                    ${product.imageAnalysis ? renderImageAnalysis(product.imageAnalysis) : ''}
+                                    ${product.imageAnalysis ? renderImageAnalysis(product.imageAnalysis, product.id) : ''}
                                 </div>
                             </div>
                             ${product.analysis ? renderProductAnalysis(product) : ''}
@@ -2743,7 +2765,7 @@
 
                 // 결과 렌더링
                 if (resultDiv) {
-                    resultDiv.innerHTML = renderImageAnalysis(finalAnalysis);
+                    resultDiv.innerHTML = renderImageAnalysis(finalAnalysis, product.id);
                 }
 
                 showToast(`${imageCount}장 이미지 AI 분석이 완료되었습니다!`);
@@ -2780,16 +2802,17 @@
         }
 
         // AI 분석 결과 렌더링
-        function renderImageAnalysis(analysis) {
+        function renderImageAnalysis(analysis, productId) {
             if (!analysis) return '';
 
             const sellingPoints = analysis.sellingPoints || [];
+            const selectedPoints = analysis.selectedSellingPoints || sellingPoints; // 기본: 전체 선택
             const targetAudience = analysis.targetAudience || '';
             const marketingMessage = analysis.marketingMessage || '';
             const extractedText = analysis.extractedText || '';
 
             return `
-                <div class="ai-analysis-result">
+                <div class="ai-analysis-result" data-product-id="${productId || ''}">
                     <div class="result-header">
                         <i class="fas fa-check-circle"></i>
                         Claude AI 이미지 분석 완료 ${analysis.imageCount ? `(${analysis.imageCount}장)` : ''}
@@ -2797,10 +2820,14 @@
 
                     ${sellingPoints.length > 0 ? `
                     <div class="result-section">
-                        <div class="result-label">🎯 핵심 소구점</div>
+                        <div class="result-label">🎯 핵심 소구점 <span style="color: var(--accent); font-size: 10px;">(클릭하여 제안서에 넣을 항목 선택)</span></div>
                         <div class="selling-points-list">
-                            ${sellingPoints.map(sp => `<span class="selling-point-tag">${sp}</span>`).join('')}
+                            ${sellingPoints.map((sp, i) => {
+                                const isSelected = selectedPoints.includes(sp);
+                                return `<span class="selling-point-tag ${isSelected ? '' : 'deselected'}" data-sp-index="${i}" onclick="toggleSellingPoint(this, '${productId}')">${sp}</span>`;
+                            }).join('')}
                         </div>
+                        <div class="sp-select-hint">${selectedPoints.length}/${sellingPoints.length}개 선택됨 — 제안서에 반영됩니다</div>
                     </div>
                     ` : ''}
 
@@ -2813,7 +2840,7 @@
 
                     ${marketingMessage ? `
                     <div class="result-section">
-                        <div class="result-label">💬 추천 마케팅 메시지</div>
+                        <div class="result-label">💬 추천 마케팅 메시지 <span style="color: var(--green); font-size: 10px;">→ 제안서 반영</span></div>
                         <div class="marketing-message">"${marketingMessage}"</div>
                     </div>
                     ` : ''}
@@ -2826,6 +2853,30 @@
                     ` : ''}
                 </div>
             `;
+        }
+
+        // 소구점 선택/해제 토글
+        function toggleSellingPoint(el, productId) {
+            el.classList.toggle('deselected');
+
+            // product 객체에 선택된 소구점 업데이트
+            const product = products.find(p => p.id === productId);
+            if (product && product.imageAnalysis) {
+                const allTags = el.closest('.selling-points-list').querySelectorAll('.selling-point-tag');
+                const selected = [];
+                allTags.forEach(tag => {
+                    if (!tag.classList.contains('deselected')) {
+                        selected.push(tag.textContent);
+                    }
+                });
+                product.imageAnalysis.selectedSellingPoints = selected;
+
+                // 힌트 텍스트 업데이트
+                const hint = el.closest('.result-section').querySelector('.sp-select-hint');
+                if (hint) {
+                    hint.textContent = `${selected.length}/${product.imageAnalysis.sellingPoints.length}개 선택됨 — 제안서에 반영됩니다`;
+                }
+            }
         }
 
         // ===== 브랜드 이미지 관련 함수 =====
@@ -3359,6 +3410,7 @@
                     // AI 분석 결과 텍스트만 저장 (이미지 제외)
                     imageAnalysis: p.imageAnalysis ? {
                         sellingPoints: p.imageAnalysis.sellingPoints || [],
+                        selectedSellingPoints: p.imageAnalysis.selectedSellingPoints || p.imageAnalysis.sellingPoints || [],
                         marketingMessage: p.imageAnalysis.marketingMessage || '',
                         targetAudience: p.imageAnalysis.targetAudience || '',
                         targetSeller: p.imageAnalysis.targetSeller || '',
@@ -3425,6 +3477,7 @@
                 // 이미지 분석 결과 텍스트만 저장
                 imageAnalysis: p.imageAnalysis ? {
                     sellingPoints: p.imageAnalysis.sellingPoints || [],
+                    selectedSellingPoints: p.imageAnalysis.selectedSellingPoints || p.imageAnalysis.sellingPoints || [],
                     marketingMessage: p.imageAnalysis.marketingMessage || '',
                     targetAudience: p.imageAnalysis.targetAudience || '',
                     targetSeller: p.imageAnalysis.targetSeller || '',
