@@ -9602,7 +9602,7 @@
       }
     };
 
-    // 배치 선택 모달 (모두 배치 vs 분할 배치)
+    // 배치 선택 모달 (모두 배치 + 분할 배치 통합 - 한 번에 선택 및 적용)
     function openGoalPlacementChoiceModal(indicatorId, targetDay) {
       const currentMemberId = state.currentUser?.id;
       const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
@@ -9621,44 +9621,71 @@
         return;
       }
 
+      // 수량이 1이면 바로 배치 (선택 불필요)
+      if (remaining === 1) {
+        confirmAllPlacement(indicatorId, targetDay, remaining);
+        return;
+      }
+
+      const unit = goal.unit || '개';
+      const quickBtns = [1, Math.ceil(remaining / 4), Math.ceil(remaining / 2), remaining]
+        .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+        .map(v => `
+          <button onclick="document.getElementById('splitPlacementQtyInput').value=${v}"
+                  style="padding: 5px 12px; border: 1px solid var(--gray-300); background: var(--gray-50); border-radius: 20px; font-size: 11px; cursor: pointer; transition: all 0.2s;"
+                  onmouseover="this.style.background='var(--primary-light)'; this.style.borderColor='var(--primary)'"
+                  onmouseout="this.style.background='var(--gray-50)'; this.style.borderColor='var(--gray-300)'">${v}${unit}${v === remaining ? ' (전체)' : ''}</button>
+        `).join('');
+
       const modalHTML = `
         <div id="goalPlacementChoiceModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 360px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
             <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
               <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--gray-900);">🎯 ${dayNames[targetDay]} 배치</h3>
               <div style="font-size: 13px; color: var(--gray-600); margin-top: 4px;">"${goal.name}"</div>
-              <div style="font-size: 12px; color: var(--primary); margin-top: 2px; font-weight: 600;">남은 수량: ${remaining}${goal.unit || '개'}</div>
+              <div style="font-size: 12px; color: var(--primary); margin-top: 2px; font-weight: 600;">남은 수량: ${remaining}${unit}</div>
             </div>
-            <div style="padding: 20px 24px;">
-              <div style="font-size: 13px; color: var(--gray-700); margin-bottom: 16px; text-align: center;">어떻게 배치할까요?</div>
-              <div style="display: flex; flex-direction: column; gap: 12px;">
-                <button onclick="confirmAllPlacement('${indicatorId}', '${targetDay}', ${remaining})"
-                        style="width: 100%; padding: 16px; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 12px; cursor: pointer; text-align: left; transition: transform 0.2s, box-shadow 0.2s;"
-                        onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 20px rgba(49,130,246,0.3)';"
-                        onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
-                  <div style="display: flex; align-items: center; gap: 12px;">
-                    <div style="width: 40px; height: 40px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📦</div>
-                    <div>
-                      <div style="font-size: 14px; font-weight: 700;">모두 배치</div>
-                      <div style="font-size: 12px; opacity: 0.9;">남은 ${remaining}${goal.unit || '개'} 전체를 ${dayNames[targetDay]}에 배치</div>
-                    </div>
+            <div style="padding: 16px 24px;">
+              <!-- 모두 배치: 원클릭 -->
+              <button onclick="confirmAllPlacement('${indicatorId}', '${targetDay}', ${remaining})"
+                      style="width: 100%; padding: 14px; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 12px; cursor: pointer; text-align: left; transition: transform 0.2s, box-shadow 0.2s; margin-bottom: 16px;"
+                      onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 20px rgba(49,130,246,0.3)'"
+                      onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <div style="width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">📦</div>
+                  <div>
+                    <div style="font-size: 14px; font-weight: 700;">모두 배치</div>
+                    <div style="font-size: 11px; opacity: 0.9;">남은 ${remaining}${unit} 전체를 ${dayNames[targetDay]}에 배치</div>
                   </div>
-                </button>
-                <button onclick="openSplitPlacementModal('${indicatorId}', '${targetDay}', ${remaining})"
-                        style="width: 100%; padding: 16px; background: white; color: var(--gray-800); border: 2px solid var(--gray-200); border-radius: 12px; cursor: pointer; text-align: left; transition: all 0.2s;"
-                        onmouseover="this.style.borderColor='var(--primary)'; this.style.background='var(--primary-light)';"
-                        onmouseout="this.style.borderColor='var(--gray-200)'; this.style.background='white';">
-                  <div style="display: flex; align-items: center; gap: 12px;">
-                    <div style="width: 40px; height: 40px; background: var(--gray-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px;">✂️</div>
-                    <div>
-                      <div style="font-size: 14px; font-weight: 700;">분할 배치</div>
-                      <div style="font-size: 12px; color: var(--gray-600);">원하는 수량만 선택해서 배치</div>
-                    </div>
+                </div>
+              </button>
+              <!-- 분할 배치: 수량 선택 + 배치 버튼 통합 (한 번에 완료) -->
+              <div style="border: 2px solid var(--gray-200); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                  <div style="width: 36px; height: 36px; background: var(--gray-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">✂️</div>
+                  <div>
+                    <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">분할 배치</div>
+                    <div style="font-size: 11px; color: var(--gray-500);">원하는 수량만 선택해서 배치</div>
                   </div>
-                </button>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 10px;">
+                  <button onclick="var i=document.getElementById('splitPlacementQtyInput'); var v=Math.max(1,(parseInt(i.value)||1)-1); i.value=v;"
+                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">−</button>
+                  <input type="number" id="splitPlacementQtyInput" value="1" min="1" max="${remaining}"
+                         style="width: 70px; padding: 10px; border: 2px solid var(--primary); border-radius: 10px; font-size: 22px; font-weight: 700; text-align: center; outline: none;"
+                         onchange="var v=Math.max(1,Math.min(${remaining},parseInt(this.value)||1)); this.value=v;"
+                         onkeydown="if(event.key==='Enter') confirmInlineSplitPlacement('${indicatorId}','${targetDay}')">
+                  <button onclick="var i=document.getElementById('splitPlacementQtyInput'); var v=Math.min(${remaining},(parseInt(i.value)||1)+1); i.value=v;"
+                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">+</button>
+                </div>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px;">
+                  ${quickBtns}
+                </div>
+                <button onclick="confirmInlineSplitPlacement('${indicatorId}', '${targetDay}')"
+                        style="width: 100%; padding: 10px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">배치</button>
               </div>
             </div>
-            <div style="padding: 12px 24px 20px; text-align: center;">
+            <div style="padding: 8px 24px 16px; text-align: center;">
               <button onclick="document.getElementById('goalPlacementChoiceModal').remove()"
                       style="background: none; border: none; color: var(--gray-500); font-size: 13px; cursor: pointer; padding: 8px 16px;">
                 취소
@@ -9669,6 +9696,20 @@
       `;
 
       document.body.insertAdjacentHTML('beforeend', modalHTML);
+    }
+
+    // 분할 배치 확인 (통합 모달에서 직접 실행)
+    function confirmInlineSplitPlacement(indicatorId, targetDay) {
+      const qty = parseInt(document.getElementById('splitPlacementQtyInput')?.value) || 0;
+      if (qty > 0) {
+        if (!weeklyGoalPlans[indicatorId]) weeklyGoalPlans[indicatorId] = {};
+        weeklyGoalPlans[indicatorId][targetDay] = (weeklyGoalPlans[indicatorId][targetDay] || 0) + qty;
+        localStorage.setItem('weeklyGoalPlans', JSON.stringify(weeklyGoalPlans));
+        renderWeeklyTaskBoard();
+        const dayLabel = targetDay === 'mon' ? '월' : targetDay === 'tue' ? '화' : targetDay === 'wed' ? '수' : targetDay === 'thu' ? '목' : '금';
+        showToast(`${dayLabel}요일에 ${qty}개 배치 완료!`);
+      }
+      document.getElementById('goalPlacementChoiceModal')?.remove();
     }
 
     // 모두 배치 확인
@@ -9786,40 +9827,85 @@
       document.getElementById('goalQtyInputModal')?.remove();
     }
 
-    // 요일간 이동 확인 모달
+    // 요일간 이동 확인 모달 (모두 이동 + 분할 이동 통합 - 한 번에 선택 및 적용)
     function openGoalMoveConfirmModal(indicatorId, fromDay, toDay, qty) {
       const currentMemberId = state.currentUser?.id;
       const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
       const goal = config?.goals?.find(g => g.indicatorId === indicatorId);
       if (!goal) return;
 
-      const dayNames = { mon: '월', tue: '화', wed: '수', thu: '목', fri: '금' };
+      const dayNames = { mon: '월요일', tue: '화요일', wed: '수요일', thu: '목요일', fri: '금요일' };
+      const dayLabels = { mon: '월', tue: '화', wed: '수', thu: '목', fri: '금' };
+      const unit = goal.unit || '개';
+
+      // 수량이 1이면 바로 이동 (선택 불필요)
+      if (qty <= 1) {
+        confirmGoalMove(indicatorId, fromDay, toDay, qty);
+        return;
+      }
+
+      const quickBtns = [1, Math.ceil(qty / 4), Math.ceil(qty / 2), qty]
+        .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+        .map(v => `
+          <button onclick="document.getElementById('splitMoveQtyInput').value=${v}"
+                  style="padding: 5px 12px; border: 1px solid var(--gray-300); background: var(--gray-50); border-radius: 20px; font-size: 11px; cursor: pointer; transition: all 0.2s;"
+                  onmouseover="this.style.background='var(--primary-light)'; this.style.borderColor='var(--primary)'"
+                  onmouseout="this.style.background='var(--gray-50)'; this.style.borderColor='var(--gray-300)'">${v}${unit}${v === qty ? ' (전체)' : ''}</button>
+        `).join('');
 
       const modalHTML = `
         <div id="goalMoveConfirmModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 360px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
             <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
-              <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: var(--gray-900);">📦 목표 이동</h3>
+              <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--gray-900);">📦 ${dayLabels[fromDay]}요일 → ${dayLabels[toDay]}요일 이동</h3>
+              <div style="font-size: 13px; color: var(--gray-600); margin-top: 4px;">"${goal.name}"</div>
+              <div style="font-size: 12px; color: var(--primary); margin-top: 2px; font-weight: 600;">현재 수량: ${qty}${unit}</div>
             </div>
-            <div style="padding: 24px; text-align: center;">
-              <div style="font-size: 14px; color: var(--gray-700); margin-bottom: 16px;">"${goal.name}"</div>
-              <div style="display: flex; align-items: center; justify-content: center; gap: 12px;">
-                <div style="padding: 12px 20px; background: var(--gray-100); border-radius: 8px;">
-                  <div style="font-size: 11px; color: var(--gray-500);">FROM</div>
-                  <div style="font-size: 16px; font-weight: 700; color: var(--gray-800);">${dayNames[fromDay]}요일</div>
-                  <div style="font-size: 12px; color: var(--gray-600);">${qty}${goal.unit || '개'}</div>
+            <div style="padding: 16px 24px;">
+              <!-- 모두 이동: 원클릭 -->
+              <button onclick="confirmGoalMove('${indicatorId}', '${fromDay}', '${toDay}', ${qty})"
+                      style="width: 100%; padding: 14px; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 12px; cursor: pointer; text-align: left; transition: transform 0.2s, box-shadow 0.2s; margin-bottom: 16px;"
+                      onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 20px rgba(49,130,246,0.3)'"
+                      onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <div style="width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">📦</div>
+                  <div>
+                    <div style="font-size: 14px; font-weight: 700;">모두 이동</div>
+                    <div style="font-size: 11px; opacity: 0.9;">${qty}${unit} 전체를 ${dayNames[toDay]}로 이동</div>
+                  </div>
                 </div>
-                <span style="font-size: 20px; color: var(--primary);">→</span>
-                <div style="padding: 12px 20px; background: var(--primary-light); border-radius: 8px; border: 2px solid var(--primary);">
-                  <div style="font-size: 11px; color: var(--primary);">TO</div>
-                  <div style="font-size: 16px; font-weight: 700; color: var(--primary);">${dayNames[toDay]}요일</div>
+              </button>
+              <!-- 분할 이동: 수량 선택 + 이동 버튼 통합 (한 번에 완료) -->
+              <div style="border: 2px solid var(--gray-200); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                  <div style="width: 36px; height: 36px; background: var(--gray-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">✂️</div>
+                  <div>
+                    <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">분할 이동</div>
+                    <div style="font-size: 11px; color: var(--gray-500);">원하는 수량만 선택해서 이동</div>
+                  </div>
                 </div>
+                <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 10px;">
+                  <button onclick="var i=document.getElementById('splitMoveQtyInput'); var v=Math.max(1,(parseInt(i.value)||1)-1); i.value=v;"
+                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">−</button>
+                  <input type="number" id="splitMoveQtyInput" value="1" min="1" max="${qty}"
+                         style="width: 70px; padding: 10px; border: 2px solid var(--primary); border-radius: 10px; font-size: 22px; font-weight: 700; text-align: center; outline: none;"
+                         onchange="var v=Math.max(1,Math.min(${qty},parseInt(this.value)||1)); this.value=v;"
+                         onkeydown="if(event.key==='Enter') confirmGoalMoveSplit('${indicatorId}','${fromDay}','${toDay}')">
+                  <button onclick="var i=document.getElementById('splitMoveQtyInput'); var v=Math.min(${qty},(parseInt(i.value)||1)+1); i.value=v;"
+                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">+</button>
+                </div>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px;">
+                  ${quickBtns}
+                </div>
+                <button onclick="confirmGoalMoveSplit('${indicatorId}', '${fromDay}', '${toDay}')"
+                        style="width: 100%; padding: 10px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">이동</button>
               </div>
-              <div style="margin-top: 16px; font-size: 13px; color: var(--gray-600);">이동하시겠습니까?</div>
             </div>
-            <div style="padding: 16px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: flex-end;">
-              <button onclick="document.getElementById('goalMoveConfirmModal').remove()" style="background: var(--gray-100); color: var(--gray-700); border: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">취소</button>
-              <button onclick="confirmGoalMove('${indicatorId}', '${fromDay}', '${toDay}', ${qty})" style="background: var(--primary); color: white; border: none; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">확인</button>
+            <div style="padding: 8px 24px 16px; text-align: center;">
+              <button onclick="document.getElementById('goalMoveConfirmModal').remove()"
+                      style="background: none; border: none; color: var(--gray-500); font-size: 13px; cursor: pointer; padding: 8px 16px;">
+                취소
+              </button>
             </div>
           </div>
         </div>
@@ -9828,6 +9914,7 @@
       document.body.insertAdjacentHTML('beforeend', modalHTML);
     }
 
+    // 모두 이동 확인
     function confirmGoalMove(indicatorId, fromDay, toDay, qty) {
       // 원래 요일에서 제거
       if (weeklyGoalPlans[indicatorId] && weeklyGoalPlans[indicatorId][fromDay]) {
@@ -9844,7 +9931,32 @@
       localStorage.setItem('weeklyGoalPlans', JSON.stringify(weeklyGoalPlans));
       document.getElementById('goalMoveConfirmModal')?.remove();
       renderWeeklyTaskBoard();
-      showToast('이동 완료');
+      const dayLabel = toDay === 'mon' ? '월' : toDay === 'tue' ? '화' : toDay === 'wed' ? '수' : toDay === 'thu' ? '목' : '금';
+      showToast(`${dayLabel}요일로 ${qty}개 전체 이동 완료!`);
+    }
+
+    // 분할 이동 확인 (통합 모달에서 직접 실행)
+    function confirmGoalMoveSplit(indicatorId, fromDay, toDay) {
+      const qty = parseInt(document.getElementById('splitMoveQtyInput')?.value) || 0;
+      if (qty > 0) {
+        // 원래 요일에서 제거
+        if (weeklyGoalPlans[indicatorId] && weeklyGoalPlans[indicatorId][fromDay]) {
+          weeklyGoalPlans[indicatorId][fromDay] -= qty;
+          if (weeklyGoalPlans[indicatorId][fromDay] <= 0) {
+            delete weeklyGoalPlans[indicatorId][fromDay];
+          }
+        }
+
+        // 새 요일에 추가
+        if (!weeklyGoalPlans[indicatorId]) weeklyGoalPlans[indicatorId] = {};
+        weeklyGoalPlans[indicatorId][toDay] = (weeklyGoalPlans[indicatorId][toDay] || 0) + qty;
+
+        localStorage.setItem('weeklyGoalPlans', JSON.stringify(weeklyGoalPlans));
+        renderWeeklyTaskBoard();
+        const dayLabel = toDay === 'mon' ? '월' : toDay === 'tue' ? '화' : toDay === 'wed' ? '수' : toDay === 'thu' ? '목' : '금';
+        showToast(`${dayLabel}요일로 ${qty}개 이동 완료!`);
+      }
+      document.getElementById('goalMoveConfirmModal')?.remove();
     }
 
     // 초기화 시 로컬 스토리지에서 계획 불러오기
