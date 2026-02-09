@@ -8907,21 +8907,7 @@
       const task = (state.taskPlans || []).find(t => t.id === taskId);
       if (!task) return;
 
-      const taskDeadline = task.deadline || task.dueDate;
-
-      // ★ 완료 목표일 검증 (마감 2일 전까지 완료해야 함)
-      if (targetDay !== 'unassigned' && taskDeadline) {
-        const targetDate = getDayDate(targetDay);
-        const completionTarget = getCompletionTargetDate(taskDeadline);
-
-        if (targetDate > completionTarget) {
-          // 완료 목표일 초과 → 지연 사유 모달 표시
-          showDelayReasonModal(taskId, targetDay, taskDeadline, completionTarget);
-          return;
-        }
-      }
-
-      // 정상 배치 진행
+      // 정상 배치 진행 (완료 목표일 검증 제거 - 지연 사유는 업무수정에서 직접 기재)
       await saveTaskAssignment(taskId, targetDay);
     }
 
@@ -9602,16 +9588,13 @@
       }
     };
 
-    // 배치 선택 모달 (모두 배치 + 분할 배치 통합 - 한 번에 선택 및 적용)
+    // 배치 선택 모달 (모두/분할 가로 배치, 심플 UI)
     function openGoalPlacementChoiceModal(indicatorId, targetDay) {
       const currentMemberId = state.currentUser?.id;
       const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
       const goal = config?.goals?.find(g => g.indicatorId === indicatorId);
       if (!goal) return;
 
-      const dayNames = { mon: '월요일', tue: '화요일', wed: '수요일', thu: '목요일', fri: '금요일' };
-
-      // 남은 수량 계산
       const plan = weeklyGoalPlans[indicatorId] || {};
       const totalPlanned = ['mon', 'tue', 'wed', 'thu', 'fri'].reduce((sum, d) => sum + (plan[d] || 0), 0);
       const remaining = (goal.target || 0) - totalPlanned;
@@ -9621,7 +9604,6 @@
         return;
       }
 
-      // 수량이 1이면 바로 배치 (선택 불필요)
       if (remaining === 1) {
         confirmAllPlacement(indicatorId, targetDay, remaining);
         return;
@@ -9639,57 +9621,38 @@
 
       const modalHTML = `
         <div id="goalPlacementChoiceModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
-          <div style="background: white; border-radius: 16px; width: 90%; max-width: 360px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
-            <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
-              <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--gray-900);">🎯 ${dayNames[targetDay]} 배치</h3>
-              <div style="font-size: 13px; color: var(--gray-600); margin-top: 4px;">"${goal.name}"</div>
-              <div style="font-size: 12px; color: var(--primary); margin-top: 2px; font-weight: 600;">남은 수량: ${remaining}${unit}</div>
-            </div>
-            <div style="padding: 16px 24px;">
-              <!-- 모두 배치: 원클릭 -->
-              <button onclick="confirmAllPlacement('${indicatorId}', '${targetDay}', ${remaining})"
-                      style="width: 100%; padding: 14px; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 12px; cursor: pointer; text-align: left; transition: transform 0.2s, box-shadow 0.2s; margin-bottom: 16px;"
-                      onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 20px rgba(49,130,246,0.3)'"
-                      onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
-                <div style="display: flex; align-items: center; gap: 12px;">
-                  <div style="width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">📦</div>
-                  <div>
-                    <div style="font-size: 14px; font-weight: 700;">모두 배치</div>
-                    <div style="font-size: 11px; opacity: 0.9;">남은 ${remaining}${unit} 전체를 ${dayNames[targetDay]}에 배치</div>
-                  </div>
-                </div>
-              </button>
-              <!-- 분할 배치: 수량 선택 + 배치 버튼 통합 (한 번에 완료) -->
-              <div style="border: 2px solid var(--gray-200); border-radius: 12px; padding: 14px;">
-                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
-                  <div style="width: 36px; height: 36px; background: var(--gray-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">✂️</div>
-                  <div>
-                    <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">분할 배치</div>
-                    <div style="font-size: 11px; color: var(--gray-500);">원하는 수량만 선택해서 배치</div>
-                  </div>
-                </div>
-                <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 10px;">
-                  <button onclick="var i=document.getElementById('splitPlacementQtyInput'); var v=Math.max(1,(parseInt(i.value)||1)-1); i.value=v;"
-                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">−</button>
-                  <input type="number" id="splitPlacementQtyInput" value="1" min="1" max="${remaining}"
-                         style="width: 70px; padding: 10px; border: 2px solid var(--primary); border-radius: 10px; font-size: 22px; font-weight: 700; text-align: center; outline: none;"
-                         onchange="var v=Math.max(1,Math.min(${remaining},parseInt(this.value)||1)); this.value=v;"
-                         onkeydown="if(event.key==='Enter') confirmInlineSplitPlacement('${indicatorId}','${targetDay}')">
-                  <button onclick="var i=document.getElementById('splitPlacementQtyInput'); var v=Math.min(${remaining},(parseInt(i.value)||1)+1); i.value=v;"
-                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">+</button>
-                </div>
-                <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px;">
-                  ${quickBtns}
-                </div>
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 300px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
+            <div style="padding: 24px 24px 20px;">
+              <!-- 수량 선택 -->
+              <div style="display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 14px;">
+                <button onclick="var i=document.getElementById('splitPlacementQtyInput'); var v=Math.max(1,(parseInt(i.value)||1)-1); i.value=v;"
+                        style="width: 40px; height: 40px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 20px; font-weight: bold; cursor: pointer; color: var(--gray-600);">−</button>
+                <input type="number" id="splitPlacementQtyInput" value="1" min="1" max="${remaining}"
+                       style="width: 72px; padding: 10px; border: 2px solid var(--primary); border-radius: 10px; font-size: 24px; font-weight: 700; text-align: center; outline: none;"
+                       onchange="var v=Math.max(1,Math.min(${remaining},parseInt(this.value)||1)); this.value=v;"
+                       onkeydown="if(event.key==='Enter') confirmInlineSplitPlacement('${indicatorId}','${targetDay}')">
+                <button onclick="var i=document.getElementById('splitPlacementQtyInput'); var v=Math.min(${remaining},(parseInt(i.value)||1)+1); i.value=v;"
+                        style="width: 40px; height: 40px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 20px; font-weight: bold; cursor: pointer; color: var(--gray-600);">+</button>
+              </div>
+              <!-- 빠른 선택 -->
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 20px;">
+                ${quickBtns}
+              </div>
+              <!-- 모두/분할 가로 버튼 -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <button onclick="confirmAllPlacement('${indicatorId}', '${targetDay}', ${remaining})"
+                        style="padding: 14px 0; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 700; transition: transform 0.15s;"
+                        onmouseover="this.style.transform='translateY(-1px)'"
+                        onmouseout="this.style.transform='translateY(0)'">모두 배치</button>
                 <button onclick="confirmInlineSplitPlacement('${indicatorId}', '${targetDay}')"
-                        style="width: 100%; padding: 10px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">배치</button>
+                        style="padding: 14px 0; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 700; transition: transform 0.15s;"
+                        onmouseover="this.style.transform='translateY(-1px)'"
+                        onmouseout="this.style.transform='translateY(0)'">분할 배치</button>
               </div>
             </div>
-            <div style="padding: 8px 24px 16px; text-align: center;">
+            <div style="padding: 4px 24px 16px; text-align: center;">
               <button onclick="document.getElementById('goalPlacementChoiceModal').remove()"
-                      style="background: none; border: none; color: var(--gray-500); font-size: 13px; cursor: pointer; padding: 8px 16px;">
-                취소
-              </button>
+                      style="background: none; border: none; color: var(--gray-500); font-size: 13px; cursor: pointer; padding: 8px 16px;">취소</button>
             </div>
           </div>
         </div>
@@ -9827,18 +9790,16 @@
       document.getElementById('goalQtyInputModal')?.remove();
     }
 
-    // 요일간 이동 확인 모달 (모두 이동 + 분할 이동 통합 - 한 번에 선택 및 적용)
+    // 요일간 이동 확인 모달 (모두/분할 가로 배치, 심플 UI)
     function openGoalMoveConfirmModal(indicatorId, fromDay, toDay, qty) {
       const currentMemberId = state.currentUser?.id;
       const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === currentMemberId);
       const goal = config?.goals?.find(g => g.indicatorId === indicatorId);
       if (!goal) return;
 
-      const dayNames = { mon: '월요일', tue: '화요일', wed: '수요일', thu: '목요일', fri: '금요일' };
-      const dayLabels = { mon: '월', tue: '화', wed: '수', thu: '목', fri: '금' };
       const unit = goal.unit || '개';
 
-      // 수량이 1이면 바로 이동 (선택 불필요)
+      // 수량이 1이면 바로 이동
       if (qty <= 1) {
         confirmGoalMove(indicatorId, fromDay, toDay, qty);
         return;
@@ -9855,57 +9816,38 @@
 
       const modalHTML = `
         <div id="goalMoveConfirmModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) this.remove()">
-          <div style="background: white; border-radius: 16px; width: 90%; max-width: 360px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
-            <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
-              <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--gray-900);">📦 ${dayLabels[fromDay]}요일 → ${dayLabels[toDay]}요일 이동</h3>
-              <div style="font-size: 13px; color: var(--gray-600); margin-top: 4px;">"${goal.name}"</div>
-              <div style="font-size: 12px; color: var(--primary); margin-top: 2px; font-weight: 600;">현재 수량: ${qty}${unit}</div>
-            </div>
-            <div style="padding: 16px 24px;">
-              <!-- 모두 이동: 원클릭 -->
-              <button onclick="confirmGoalMove('${indicatorId}', '${fromDay}', '${toDay}', ${qty})"
-                      style="width: 100%; padding: 14px; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 12px; cursor: pointer; text-align: left; transition: transform 0.2s, box-shadow 0.2s; margin-bottom: 16px;"
-                      onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 20px rgba(49,130,246,0.3)'"
-                      onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
-                <div style="display: flex; align-items: center; gap: 12px;">
-                  <div style="width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">📦</div>
-                  <div>
-                    <div style="font-size: 14px; font-weight: 700;">모두 이동</div>
-                    <div style="font-size: 11px; opacity: 0.9;">${qty}${unit} 전체를 ${dayNames[toDay]}로 이동</div>
-                  </div>
-                </div>
-              </button>
-              <!-- 분할 이동: 수량 선택 + 이동 버튼 통합 (한 번에 완료) -->
-              <div style="border: 2px solid var(--gray-200); border-radius: 12px; padding: 14px;">
-                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
-                  <div style="width: 36px; height: 36px; background: var(--gray-100); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px;">✂️</div>
-                  <div>
-                    <div style="font-size: 14px; font-weight: 700; color: var(--gray-800);">분할 이동</div>
-                    <div style="font-size: 11px; color: var(--gray-500);">원하는 수량만 선택해서 이동</div>
-                  </div>
-                </div>
-                <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 10px;">
-                  <button onclick="var i=document.getElementById('splitMoveQtyInput'); var v=Math.max(1,(parseInt(i.value)||1)-1); i.value=v;"
-                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">−</button>
-                  <input type="number" id="splitMoveQtyInput" value="1" min="1" max="${qty}"
-                         style="width: 70px; padding: 10px; border: 2px solid var(--primary); border-radius: 10px; font-size: 22px; font-weight: 700; text-align: center; outline: none;"
-                         onchange="var v=Math.max(1,Math.min(${qty},parseInt(this.value)||1)); this.value=v;"
-                         onkeydown="if(event.key==='Enter') confirmGoalMoveSplit('${indicatorId}','${fromDay}','${toDay}')">
-                  <button onclick="var i=document.getElementById('splitMoveQtyInput'); var v=Math.min(${qty},(parseInt(i.value)||1)+1); i.value=v;"
-                          style="width: 36px; height: 36px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 18px; font-weight: bold; cursor: pointer; color: var(--gray-600);">+</button>
-                </div>
-                <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px;">
-                  ${quickBtns}
-                </div>
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 300px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
+            <div style="padding: 24px 24px 20px;">
+              <!-- 수량 선택 -->
+              <div style="display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 14px;">
+                <button onclick="var i=document.getElementById('splitMoveQtyInput'); var v=Math.max(1,(parseInt(i.value)||1)-1); i.value=v;"
+                        style="width: 40px; height: 40px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 20px; font-weight: bold; cursor: pointer; color: var(--gray-600);">−</button>
+                <input type="number" id="splitMoveQtyInput" value="1" min="1" max="${qty}"
+                       style="width: 72px; padding: 10px; border: 2px solid var(--primary); border-radius: 10px; font-size: 24px; font-weight: 700; text-align: center; outline: none;"
+                       onchange="var v=Math.max(1,Math.min(${qty},parseInt(this.value)||1)); this.value=v;"
+                       onkeydown="if(event.key==='Enter') confirmGoalMoveSplit('${indicatorId}','${fromDay}','${toDay}')">
+                <button onclick="var i=document.getElementById('splitMoveQtyInput'); var v=Math.min(${qty},(parseInt(i.value)||1)+1); i.value=v;"
+                        style="width: 40px; height: 40px; border: 2px solid var(--gray-300); background: white; border-radius: 50%; font-size: 20px; font-weight: bold; cursor: pointer; color: var(--gray-600);">+</button>
+              </div>
+              <!-- 빠른 선택 -->
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 20px;">
+                ${quickBtns}
+              </div>
+              <!-- 모두/분할 가로 버튼 -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <button onclick="confirmGoalMove('${indicatorId}', '${fromDay}', '${toDay}', ${qty})"
+                        style="padding: 14px 0; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 700; transition: transform 0.15s;"
+                        onmouseover="this.style.transform='translateY(-1px)'"
+                        onmouseout="this.style.transform='translateY(0)'">모두 이동</button>
                 <button onclick="confirmGoalMoveSplit('${indicatorId}', '${fromDay}', '${toDay}')"
-                        style="width: 100%; padding: 10px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">이동</button>
+                        style="padding: 14px 0; background: linear-gradient(135deg, var(--primary) 0%, #2563EB 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 700; transition: transform 0.15s;"
+                        onmouseover="this.style.transform='translateY(-1px)'"
+                        onmouseout="this.style.transform='translateY(0)'">분할 이동</button>
               </div>
             </div>
-            <div style="padding: 8px 24px 16px; text-align: center;">
+            <div style="padding: 4px 24px 16px; text-align: center;">
               <button onclick="document.getElementById('goalMoveConfirmModal').remove()"
-                      style="background: none; border: none; color: var(--gray-500); font-size: 13px; cursor: pointer; padding: 8px 16px;">
-                취소
-              </button>
+                      style="background: none; border: none; color: var(--gray-500); font-size: 13px; cursor: pointer; padding: 8px 16px;">취소</button>
             </div>
           </div>
         </div>
@@ -28167,134 +28109,122 @@
 
       const modalHtml = `
         <div id="taskPlanModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;">
-          <div style="background: white; border-radius: 16px; width: 100%; max-width: 600px; max-height: 90vh; overflow-y: auto;">
-            <div style="padding: 20px; border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center;">
-              <h2 style="font-size: 18px; font-weight: 700;">${isEdit ? '업무 수정' : '새 업무 등록'}</h2>
-              <button onclick="closeTaskPlanModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--gray-400);">×</button>
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;">
+            <!-- 헤더 -->
+            <div style="padding: 18px 24px; border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+              <h2 style="margin: 0; font-size: 17px; font-weight: 700; color: var(--gray-900);">${isEdit ? '업무 수정' : '새 업무 등록'}</h2>
+              <button onclick="closeTaskPlanModal()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: var(--gray-400); line-height: 1;">×</button>
             </div>
-            <div style="padding: 20px;">
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">업무 제목 *</label>
-                <input type="text" id="taskPlanTitle" value="${task.title || ''}" placeholder="업무 제목을 입력하세요" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
-              </div>
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">상세 설명</label>
-                <textarea id="taskPlanDesc" placeholder="상세 내용을 입력하세요" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; min-height: 80px; resize: vertical;">${task.description || ''}</textarea>
+
+            <!-- 스크롤 영역 -->
+            <div style="flex: 1; overflow-y: auto; padding: 20px 24px;">
+              <!-- 1. 업무 제목 -->
+              <div style="margin-bottom: 14px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">업무 제목 *</label>
+                <input type="text" id="taskPlanTitle" value="${task.title || ''}" placeholder="업무 제목을 입력하세요"
+                       style="width: 100%; padding: 11px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
               </div>
 
-              <!-- 첨부파일 영역 -->
-              <div style="margin-bottom: 16px;">
-                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">📎 첨부파일 (사진/영상/PDF)</label>
+              <!-- 2. 상세 설명 -->
+              <div style="margin-bottom: 14px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">상세 설명</label>
+                <textarea id="taskPlanDesc" placeholder="상세 내용을 입력하세요"
+                          style="width: 100%; padding: 11px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-height: 70px; resize: vertical; box-sizing: border-box;">${task.description || ''}</textarea>
+              </div>
+
+              <!-- 3. 첨부파일 -->
+              <div style="margin-bottom: 14px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">첨부파일</label>
                 <div id="taskPlanAttachmentArea"
-                     style="border: 2px dashed var(--gray-300); border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; background: var(--gray-50); transition: all 0.2s;"
+                     style="border: 2px dashed var(--gray-300); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; background: var(--gray-50); transition: all 0.2s;"
                      onclick="document.getElementById('taskPlanFileInput').click()"
                      ondragover="event.preventDefault(); this.style.borderColor='var(--primary)'; this.style.background='var(--primary-light)';"
                      ondragleave="this.style.borderColor='var(--gray-300)'; this.style.background='var(--gray-50)';"
                      ondrop="handleTaskPlanFileDrop(event)">
-                  <div style="font-size: 32px; margin-bottom: 8px;">📷</div>
-                  <div style="font-size: 13px; color: var(--gray-600); margin-bottom: 4px;">클릭하여 파일 선택 또는 드래그 & 드롭</div>
-                  <div style="font-size: 12px; color: var(--gray-400);">Ctrl+V로 이미지/PDF 붙여넣기 가능</div>
+                  <div style="font-size: 13px; color: var(--gray-500);">클릭 또는 드래그하여 파일 추가</div>
                 </div>
                 <input type="file" id="taskPlanFileInput" multiple accept="image/*,video/*,.pdf,application/pdf" style="display: none;" onchange="handleTaskPlanFileSelect(event)">
-
-                <!-- 첨부파일 미리보기 -->
-                <div id="taskPlanAttachmentPreview" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;">
+                <div id="taskPlanAttachmentPreview" style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
                   ${taskPlanState.attachments.map((att, idx) => renderAttachmentPreview(att, idx)).join('')}
                 </div>
               </div>
 
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+              <!-- 4. 담당자, 마감일, 실행예정일 -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px;">
                 <div>
-                  <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">담당자</label>
-                  <select id="taskPlanAssignee" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; background: white;">
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">담당자</label>
+                  <select id="taskPlanAssignee" style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
                     ${assigneeOptions}
                   </select>
                 </div>
                 <div>
-                  <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">마감일</label>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">마감일</label>
                   <input type="date" id="taskPlanDeadline" value="${task.deadline || ''}"
                          data-original="${task.deadline || ''}"
-                         onchange="checkDeadlineExtension(this)"
-                         style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px;">
+                         style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">실행예정일</label>
+                  <input type="date" id="taskPlanScheduledDate" value="${task.scheduledDate || ''}"
+                         style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
                 </div>
               </div>
 
-              <!-- 지연 사유 입력 (마감일 연장 시) -->
-              <div id="delayReasonSection" style="display: ${task.delayReason ? 'block' : 'none'}; margin-bottom: 16px; padding: 12px 14px; background: #FEF3C7; border-radius: 10px; border: 1px solid #F59E0B;">
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #92400E; margin-bottom: 6px;">⚡ 지연 사유 (기한 연장 시 필수)</label>
-                <input type="text" id="taskPlanDelayReason" value="${task.delayReason || ''}"
-                       placeholder="예: 긴급 CS 대응으로 재배치"
-                       maxlength="50"
-                       style="width: 100%; padding: 10px 12px; border: 1px solid #FCD34D; border-radius: 8px; font-size: 13px; background: white;">
-                <div style="font-size: 10px; color: #B45309; margin-top: 4px;">한 줄로 간략히 작성해주세요 (최대 50자)</div>
-              </div>
-
-              <!-- 주간 일정 설정 -->
-              <div style="margin-bottom: 16px; padding: 16px; background: linear-gradient(135deg, #F0FDF4, #DCFCE7); border-radius: 12px; border: 1px solid #22C55E;">
-                <div style="font-size: 13px; font-weight: 700; color: #16A34A; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
-                  📅 주간 일정 배치 <span style="font-size: 11px; font-weight: 400; color: var(--gray-500);">(주간목표에 표시)</span>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+              <!-- 5. KPI 연결 -->
+              <div style="margin-bottom: 14px; padding: 14px; background: #F8FAFC; border-radius: 10px; border: 1px solid var(--gray-200);">
+                <div style="font-size: 12px; font-weight: 700; color: var(--gray-700); margin-bottom: 10px;">KPI 연결</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
                   <div>
-                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">실행 예정일</label>
-                    <input type="date" id="taskPlanScheduledDate" value="${task.scheduledDate || ''}" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
-                  </div>
-                  <div>
-                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">요일 지정</label>
-                    <select id="taskPlanScheduledDay" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
-                      <option value="">요일 선택 (선택사항)</option>
-                      <option value="1" ${task.scheduledDay === '1' ? 'selected' : ''}>월요일</option>
-                      <option value="2" ${task.scheduledDay === '2' ? 'selected' : ''}>화요일</option>
-                      <option value="3" ${task.scheduledDay === '3' ? 'selected' : ''}>수요일</option>
-                      <option value="4" ${task.scheduledDay === '4' ? 'selected' : ''}>목요일</option>
-                      <option value="5" ${task.scheduledDay === '5' ? 'selected' : ''}>금요일</option>
-                    </select>
-                  </div>
-                </div>
-                <div style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">💡 실행 예정일이나 요일을 지정하면 주간목표 보드에 표시됩니다</div>
-              </div>
-              <!-- KPI 연결 섹션 -->
-              <div style="margin-bottom: 16px; padding: 16px; background: linear-gradient(135deg, #EEF2FF, #E0E7FF); border-radius: 12px; border: 1px solid var(--primary);">
-                <div style="font-size: 13px; font-weight: 700; color: var(--primary); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
-                  🎯 KPI 연결 <span style="font-size: 11px; font-weight: 400; color: var(--gray-500);">(OKR 성과에 자동 반영)</span>
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
-                  <div>
-                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">메인 KPI</label>
-                    <select id="taskPlanKr" onchange="updateTaskPlanKpiOptions()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                    <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">메인 KPI</label>
+                    <select id="taskPlanKr" onchange="updateTaskPlanKpiOptions()" style="width: 100%; padding: 8px 6px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
                       ${krOptions}
                     </select>
                   </div>
                   <div>
-                    <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">서브 KPI</label>
-                    <select id="taskPlanKpi" onchange="updateTaskPlanLagOptions()" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                    <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">서브 KPI</label>
+                    <select id="taskPlanKpi" onchange="updateTaskPlanLagOptions()" style="width: 100%; padding: 8px 6px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
                       <option value="">서브 KPI 선택</option>
                     </select>
                   </div>
                 </div>
                 <div>
-                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px;">연결 지표 (행동/성과)</label>
-                  <select id="taskPlanLag" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
+                  <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">연결 지표</label>
+                  <select id="taskPlanLag" style="width: 100%; padding: 8px 6px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
                     <option value="">지표 선택 (선택사항)</option>
                   </select>
-                  <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">💡 지표를 선택하면 업무 완료 시 자동으로 OKR에 기록됩니다</div>
                 </div>
               </div>
+
+              <!-- 6. 지연 사유 (항상 노출) -->
+              <div style="margin-bottom: 8px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">지연 사유</label>
+                <input type="text" id="taskPlanDelayReason" value="${task.delayReason || ''}"
+                       placeholder="필요시 기재 (예: 긴급 CS 대응으로 재배치)"
+                       maxlength="50"
+                       style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+              </div>
+            </div>
+
+            <!-- 하단 고정 바 -->
+            <div style="flex-shrink: 0; border-top: 1px solid var(--gray-200); background: white; padding: 14px 24px;">
               ${isEdit ? `
-                <div style="margin-bottom: 16px;">
-                  <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px;">상태</label>
-                  <select id="taskPlanStatus" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 10px; font-size: 14px; background: white;">
-                    <option value="waiting" ${task.status === 'waiting' ? 'selected' : ''}>대기</option>
-                    <option value="doing" ${task.status === 'doing' ? 'selected' : ''}>진행중</option>
-                    <option value="done" ${task.status === 'done' ? 'selected' : ''}>완료</option>
-                  </select>
+                <!-- 상태 토글 -->
+                <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+                  <button onclick="selectTaskStatus('waiting')" id="statusBtn_waiting"
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'waiting' ? 'var(--primary)' : 'var(--gray-300)'}; background: ${task.status === 'waiting' ? 'var(--primary-light)' : 'white'}; color: ${task.status === 'waiting' ? 'var(--primary)' : 'var(--gray-600)'}; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">대기</button>
+                  <button onclick="selectTaskStatus('doing')" id="statusBtn_doing"
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'doing' ? '#2563EB' : 'var(--gray-300)'}; background: ${task.status === 'doing' ? '#EFF6FF' : 'white'}; color: ${task.status === 'doing' ? '#2563EB' : 'var(--gray-600)'}; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">진행중</button>
+                  <button onclick="selectTaskStatus('done')" id="statusBtn_done"
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'done' ? '#16A34A' : 'var(--gray-300)'}; background: ${task.status === 'done' ? '#F0FDF4' : 'white'}; color: ${task.status === 'done' ? '#16A34A' : 'var(--gray-600)'}; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">완료</button>
                 </div>
+                <input type="hidden" id="taskPlanStatus" value="${task.status || 'waiting'}">
               ` : ''}
-              <div style="display: flex; gap: 12px; justify-content: ${isEdit ? 'space-between' : 'flex-end'};">
-                ${isEdit ? `<button onclick="closeTaskPlanModal(); deleteTaskPlan('${task.id}')" style="padding: 12px 24px; border: 1px solid var(--gray-300); border-radius: 10px; background: white; cursor: pointer; font-size: 14px; font-weight: 600; color: #DC2626;">삭제</button>` : ''}
-                <div style="display: flex; gap: 12px;">
-                  <button onclick="closeTaskPlanModal()" style="padding: 12px 24px; border: 1px solid var(--gray-300); border-radius: 10px; background: white; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--gray-700);">취소</button>
-                  <button onclick="saveTaskPlan()" style="padding: 12px 24px; border: none; border-radius: 10px; background: var(--primary); color: white; cursor: pointer; font-size: 14px; font-weight: 600;">${isEdit ? '수정' : '등록'}</button>
+              <!-- 액션 버튼 -->
+              <div style="display: flex; gap: 10px; justify-content: ${isEdit ? 'space-between' : 'flex-end'};">
+                ${isEdit ? `<button id="taskDeleteBtn" onclick="handleTaskDeleteClick('${task.id}')" style="padding: 10px 18px; border: 1px solid #FCA5A5; border-radius: 8px; background: #FEF2F2; cursor: pointer; font-size: 13px; font-weight: 600; color: #DC2626;">삭제</button>` : ''}
+                <div style="display: flex; gap: 10px;">
+                  <button onclick="closeTaskPlanModal()" style="padding: 10px 20px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--gray-600);">취소</button>
+                  <button onclick="saveTaskPlan()" style="padding: 10px 24px; border: none; border-radius: 8px; background: var(--primary); color: white; cursor: pointer; font-size: 13px; font-weight: 600;">${isEdit ? '수정' : '등록'}</button>
                 </div>
               </div>
             </div>
@@ -28382,6 +28312,52 @@
         const typeLabel = lag.type === 'output' ? '성과' : '행동';
         lagSelect.innerHTML += `<option value="${lag.id}">${typeIcon} ${lag.name} (${typeLabel})</option>`;
       });
+    }
+
+    // 상태 토글 버튼 선택
+    function selectTaskStatus(status) {
+      document.getElementById('taskPlanStatus').value = status;
+      const configs = {
+        waiting: { border: 'var(--primary)', bg: 'var(--primary-light)', color: 'var(--primary)' },
+        doing: { border: '#2563EB', bg: '#EFF6FF', color: '#2563EB' },
+        done: { border: '#16A34A', bg: '#F0FDF4', color: '#16A34A' }
+      };
+      ['waiting', 'doing', 'done'].forEach(s => {
+        const btn = document.getElementById('statusBtn_' + s);
+        if (!btn) return;
+        const active = s === status;
+        const c = configs[s];
+        btn.style.borderColor = active ? c.border : 'var(--gray-300)';
+        btn.style.background = active ? c.bg : 'white';
+        btn.style.color = active ? c.color : 'var(--gray-600)';
+      });
+    }
+
+    // 삭제 2중 확인
+    let _deleteConfirmPending = false;
+    function handleTaskDeleteClick(taskId) {
+      const btn = document.getElementById('taskDeleteBtn');
+      if (!btn) return;
+      if (!_deleteConfirmPending) {
+        _deleteConfirmPending = true;
+        btn.textContent = '정말 삭제?';
+        btn.style.background = '#DC2626';
+        btn.style.color = 'white';
+        btn.style.borderColor = '#DC2626';
+        setTimeout(() => {
+          if (_deleteConfirmPending) {
+            _deleteConfirmPending = false;
+            btn.textContent = '삭제';
+            btn.style.background = '#FEF2F2';
+            btn.style.color = '#DC2626';
+            btn.style.borderColor = '#FCA5A5';
+          }
+        }, 3000);
+      } else {
+        _deleteConfirmPending = false;
+        closeTaskPlanModal();
+        deleteTaskPlan(taskId);
+      }
     }
 
     // 첨부파일 미리보기 렌더링
@@ -28584,13 +28560,7 @@
       // 지연 사유 추출
       const delayReason = document.getElementById('taskPlanDelayReason')?.value.trim() || '';
 
-      // 마감일 연장 시 지연 사유 필수 체크
-      const originalDeadline = document.getElementById('taskPlanDeadline')?.dataset.original || '';
-      if (originalDeadline && deadline && new Date(deadline) > new Date(originalDeadline) && !delayReason) {
-        alert('마감일이 연장되었습니다. 지연 사유를 입력해주세요.');
-        document.getElementById('taskPlanDelayReason')?.focus();
-        return;
-      }
+      // 지연 사유는 선택 입력 (필수 아님)
 
       // 담당자 정보 추출 (ID 기반)
       const assigneeSelect = document.getElementById('taskPlanAssignee');
