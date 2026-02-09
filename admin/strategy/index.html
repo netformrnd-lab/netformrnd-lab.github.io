@@ -9523,10 +9523,11 @@
         const registeredTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
         // 일일 로그 저장 (기존 데이터 구조와 일치하도록 모든 필드 포함)
+        const kpiForLog = lag?.kpiId ? okrState.kpis?.find(k => k.id === lag.kpiId) : null;
         const logData = {
           lagId: indicatorId,
           laggingIndicatorId: indicatorId,
-          krId: lag?.krId || '',
+          krId: lag?.krId || kpiForLog?.keyResultId || '',
           kpiId: lag?.kpiId || '',
           resultValue: qty,
           quantity: qty,
@@ -11098,10 +11099,11 @@
       const member = getCurrentMember();
 
       try {
+        const resolvedKrId = lag.krId || (lag.kpiId ? (okrState.kpis?.find(k => k.id === lag.kpiId)?.keyResultId || '') : '');
         await db.collection('okr_dailyLogs').add({
           lagId: indicatorId, // weeklyGoalConfigs와 일치하는 필드명
           laggingIndicatorId: indicatorId,
-          krId: lag.krId || '',
+          krId: resolvedKrId,
           kpiId: lag.kpiId || '',
           resultValue: value,
           quantity: value, // weeklyGoalConfigs와 일치
@@ -11233,10 +11235,11 @@
       const member = getCurrentMember();
 
       try {
+        const resolvedKrId = lag.krId || (lag.kpiId ? (okrState.kpis?.find(k => k.id === lag.kpiId)?.keyResultId || '') : '');
         const logData = {
           lagId: indicatorId, // weeklyGoalConfigs와 일치하는 필드명
           laggingIndicatorId: indicatorId,
-          krId: lag.krId || '',
+          krId: resolvedKrId,
           kpiId: lag.kpiId || '',
           resultValue: value,
           quantity: value, // weeklyGoalConfigs와 일치
@@ -11340,7 +11343,7 @@
             ${indicators.length === 0 ? `
               <div style="padding: 40px; text-align: center; color: var(--gray-400);">
                 등록된 지표가 없습니다.<br>
-                <span style="font-size: 12px;">OKR Tracker에서 지표를 먼저 설정해주세요.</span>
+                <span style="font-size: 12px;">아래에서 신규 지표를 추가하세요.</span>
               </div>
             ` : indicators.map(lag => `
               <div class="day-indicator-item" data-id="${lag.id}" data-name="${lag.name}" data-kpi="${lag.kpiName}" data-kr="${lag.krName}"
@@ -11357,6 +11360,63 @@
                 </div>
               </div>
             `).join('')}
+            <!-- 하단 액션 버튼 -->
+            <div style="padding: 10px 14px; display: flex; gap: 8px; border-top: 1px solid var(--gray-200); background: white;">
+              <button onclick="showInlineNewIndicatorForm()"
+                      style="flex: 1; padding: 10px; background: var(--gray-50); border: 1px dashed var(--primary); border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--primary); transition: all 0.15s;"
+                      onmouseover="this.style.background='var(--primary-light)'" onmouseout="this.style.background='var(--gray-50)'">+ 신규 지표</button>
+              <button onclick="openTaskFromDayIndicator()"
+                      style="flex: 1; padding: 10px; background: var(--gray-50); border: 1px dashed var(--gray-400); border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--gray-700); transition: all 0.15s;"
+                      onmouseover="this.style.background='#F3F4F6'" onmouseout="this.style.background='var(--gray-50)'">+ 업무 등록</button>
+            </div>
+          </div>
+
+          <!-- 신규 지표 인라인 생성 폼 (초기 숨김) -->
+          <div id="dayIndicatorNewForm" style="display: none; margin-top: 12px; flex-shrink: 0;">
+            <div style="background: #F0F9FF; border: 1px solid #93C5FD; border-radius: 10px; padding: 14px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div style="font-size: 13px; font-weight: 700; color: #1D4ED8;">+ 신규 지표 추가</div>
+                <button onclick="hideInlineNewIndicatorForm()" style="background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 14px;">✕</button>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                <div>
+                  <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">메인 KPI</label>
+                  <select id="newLagKR" onchange="updateNewLagKPIs()"
+                          style="width: 100%; padding: 8px 6px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
+                    <option value="">선택</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">서브 KPI</label>
+                  <select id="newLagKPI"
+                          style="width: 100%; padding: 8px 6px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
+                    <option value="">먼저 메인 KPI 선택</option>
+                  </select>
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; margin-bottom: 10px;">
+                <div>
+                  <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">지표명 *</label>
+                  <input type="text" id="newLagName" placeholder="예: 전화 상담"
+                         style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">단위</label>
+                  <input type="text" id="newLagUnit" value="건" placeholder="건"
+                         style="width: 100%; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 11px; color: var(--gray-500); margin-bottom: 3px;">유형</label>
+                  <select id="newLagType"
+                          style="width: 100%; padding: 8px 4px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px; background: white;">
+                    <option value="input">활동형</option>
+                    <option value="output">성과형</option>
+                  </select>
+                </div>
+              </div>
+              <button onclick="saveInlineNewIndicator()"
+                      style="width: 100%; padding: 10px; background: #1D4ED8; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">지표 추가 후 선택</button>
+            </div>
           </div>
 
           <!-- 선택된 지표 표시 영역 (초기 숨김) -->
@@ -11413,6 +11473,134 @@
 
       // 붙여넣기 이벤트 리스너 추가
       document.addEventListener('paste', handleDayIndicatorPaste);
+    }
+
+    // 신규 지표 인라인 폼 표시
+    function showInlineNewIndicatorForm() {
+      const listEl = document.getElementById('dayIndicatorList');
+      const formEl = document.getElementById('dayIndicatorNewForm');
+      const searchEl = document.getElementById('dayIndicatorSearch');
+      if (listEl) listEl.style.display = 'none';
+      if (searchEl) searchEl.parentElement.style.display = 'none';
+      if (formEl) formEl.style.display = 'block';
+
+      // KR 옵션 채우기
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member?.loginId ||
+        kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member?.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+      const myKeyResults = okrState.keyResults.filter(kr => myKrIds.includes(kr.id));
+
+      const krSelect = document.getElementById('newLagKR');
+      if (krSelect) {
+        krSelect.innerHTML = '<option value="">선택</option>' +
+          myKeyResults.map(kr => `<option value="${kr.id}">${kr.name}</option>`).join('');
+      }
+    }
+
+    // 신규 지표 인라인 폼 숨기기
+    function hideInlineNewIndicatorForm() {
+      const listEl = document.getElementById('dayIndicatorList');
+      const formEl = document.getElementById('dayIndicatorNewForm');
+      const searchEl = document.getElementById('dayIndicatorSearch');
+      if (listEl) listEl.style.display = '';
+      if (searchEl) searchEl.parentElement.style.display = '';
+      if (formEl) formEl.style.display = 'none';
+    }
+
+    // 신규 지표 폼: 메인 KPI 선택 시 서브 KPI 업데이트
+    function updateNewLagKPIs() {
+      const krId = document.getElementById('newLagKR')?.value;
+      const kpiSelect = document.getElementById('newLagKPI');
+      if (!kpiSelect) return;
+
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || member?.uid || '';
+      const myKpis = okrState.kpis.filter(kpi =>
+        kpi.mainAssignee === currentMemberId ||
+        kpi.mainAssignee === member?.loginId ||
+        kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) ||
+        (kpi.subAssignees || []).includes(member?.loginId) ||
+        (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+      const kpisForKR = okrState.kpis.filter(k => k.keyResultId === krId && myKpiIds.includes(k.id));
+
+      kpiSelect.innerHTML = kpisForKR.length > 0
+        ? kpisForKR.map(kpi => `<option value="${kpi.id}">${kpi.name}</option>`).join('')
+        : '<option value="" disabled>담당 서브 KPI 없음</option>';
+    }
+
+    // 신규 지표 저장 후 자동 선택
+    async function saveInlineNewIndicator() {
+      const kpiId = document.getElementById('newLagKPI')?.value;
+      const name = document.getElementById('newLagName')?.value.trim();
+      const unit = document.getElementById('newLagUnit')?.value.trim() || '건';
+      const lagType = document.getElementById('newLagType')?.value || 'input';
+
+      if (!kpiId) { showToast('서브 KPI를 선택해주세요', 'error'); return; }
+      if (!name) { showToast('지표명을 입력해주세요', 'error'); return; }
+
+      // KPI에서 krId 파생
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const krId = kpi?.keyResultId || '';
+
+      try {
+        const docRef = await db.collection('okr_laggingIndicators').add({
+          kpiId,
+          krId,
+          name,
+          unit,
+          type: lagType,
+          version: 'A',
+          totalValue: 0,
+          logCount: 0,
+          isActive: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        showToast(`"${name}" 지표 추가됨`, 'success');
+
+        // OKR 데이터 새로고침
+        await loadOkrData();
+
+        // 인라인 폼 숨기고 리스트 복원
+        hideInlineNewIndicatorForm();
+
+        // 새로 생성된 지표 자동 선택
+        selectedDayIndicatorId = docRef.id;
+        selectDayIndicator(docRef.id);
+      } catch (e) {
+        console.error('지표 추가 오류:', e);
+        showToast('지표 추가 실패', 'error');
+      }
+    }
+
+    // 업무 등록으로 전환 (지표 모달 닫고 업무 모달 열기)
+    function openTaskFromDayIndicator() {
+      const dayCode = dayIndicatorSelectedDay;
+      closeDayIndicatorModal();
+
+      // 업무 등록 모달 열기
+      openTaskPlanModal();
+
+      // 약간 딜레이 후 실행예정일 자동 설정
+      if (dayCode) {
+        setTimeout(() => {
+          const scheduledDateInput = document.getElementById('taskPlanScheduledDate');
+          if (scheduledDateInput) {
+            scheduledDateInput.value = getDateForDay(dayCode);
+          }
+        }, 150);
+      }
     }
 
     // 모달 닫기
@@ -11540,11 +11728,14 @@
       const currentUser = state.currentUser;
       const member = getCurrentMember();
 
+      // krId 폴백: lag에 krId가 없으면 kpi의 keyResultId에서 파생
+      const resolvedKrId = lag.krId || (lag.kpiId ? (okrState.kpis?.find(k => k.id === lag.kpiId)?.keyResultId || '') : '');
+
       try {
         const logData = {
           lagId: selectedDayIndicatorId,
           laggingIndicatorId: selectedDayIndicatorId,
-          krId: lag.krId || '',
+          krId: resolvedKrId,
           kpiId: lag.kpiId || '',
           resultValue: value,
           quantity: value,
@@ -18064,7 +18255,7 @@
             });
             for (const lag of lags) {
               await db.collection('okr_laggingIndicators').add({
-                kpiId: kpiRef.id, version: lag.version, name: lag.name,
+                kpiId: kpiRef.id, krId: krId, version: lag.version, name: lag.name,
                 totalValue: 0, logCount: 0, isActive: true,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
               });
@@ -21286,12 +21477,17 @@
         return;
       }
 
+      // KPI에서 krId 파생 (그로스보드 호환성)
+      const kpiObj = okrState.kpis?.find(k => k.id === kpiId);
+      const krId = kpiObj?.keyResultId || '';
+
       try {
         const lagData = {
           name,
           unit,
           type: type === 'output' ? 'output' : 'input',
           kpiId,
+          krId,
           target: 0,
           current: 0,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -22580,6 +22776,7 @@
       try {
         const newLag = {
           kpiId,
+          krId,  // ★ krId 추가 (그로스보드 호환성)
           name,
           description,
           version,
@@ -25845,6 +26042,7 @@
           if (version && lagName) {
             const lagData = {
               kpiId: savedKpiId,
+              krId: krId,
               version,
               name: lagName,
               type: lagType,
@@ -26053,9 +26251,12 @@
 
       if (!kpiId) { showToast('서브 KPI를 선택해주세요', 'error'); return; }
       if (!name) { showToast('Metric 이름을 입력해주세요', 'error'); return; }
+      // KPI에서 krId 파생 (그로스보드 호환성)
+      const kpiObj = okrState.kpis.find(k => k.id === kpiId);
+      const krId = kpiObj?.keyResultId || '';
       try {
         await db.collection('okr_laggingIndicators').add({
-          kpiId, version, name,
+          kpiId, krId, version, name,
           type: lagType,  // ★ type 필드 저장
           totalValue: 0, logCount: 0, isActive: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -28773,11 +28974,15 @@
             lagInfo = okrState.laggingIndicators.find(l => l.id === task.laggingIndicatorId);
           }
 
+          // krId 결정: task.krId → 지표의 krId → KPI의 keyResultId
+          const taskKpi = task.kpiId ? okrState.kpis?.find(k => k.id === task.kpiId) : null;
+          const resolvedKrId = task.krId || lagInfo?.krId || taskKpi?.keyResultId || '';
+
           const logData = {
             date: okrToday,
             memberId: state.currentUser?.id || state.currentUser?.uid || 'anonymous',
             memberName: task.assignee || state.currentUser?.name || '사용자',
-            krId: task.krId || '',
+            krId: resolvedKrId,
             kpiId: task.kpiId || '',
             laggingIndicatorId: task.laggingIndicatorId || '',
             laggingIndicatorName: lagInfo?.name || task.linkedLagName || '',
@@ -29026,9 +29231,9 @@
 
       // 선택된 지표의 kpiId, krId 가져오기
       const selectedLag = okrState.laggingIndicators.find(l => l.id === laggingIndicatorId);
-      const kpiId = selectedLag?.kpiId || null;
-      const kpi = okrState.kpis.find(k => k.id === kpiId);
-      const krId = kpi?.keyResultId || task.krId || null;
+      const kpiId = selectedLag?.kpiId || '';
+      const kpi = kpiId ? okrState.kpis.find(k => k.id === kpiId) : null;
+      const krId = selectedLag?.krId || kpi?.keyResultId || task.krId || '';
 
       try {
         const now = new Date();
