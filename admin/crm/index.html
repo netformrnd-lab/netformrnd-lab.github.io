@@ -9597,11 +9597,17 @@
       const hasLicense = !!doc.businessLicense;
       const hasBank = !!doc.bankAccount;
       const hasChecklist = !!doc.checklist;
+      const hasContract = !!doc.contractFile;
+
+      // 변경이력 체크 (updatedAt > createdAt)
+      const createdTime = doc.createdAt?.toDate ? doc.createdAt.toDate().getTime() : (doc.createdAt ? new Date(doc.createdAt).getTime() : 0);
+      const updatedTime = doc.updatedAt?.toDate ? doc.updatedAt.toDate().getTime() : (doc.updatedAt ? new Date(doc.updatedAt).getTime() : 0);
+      const hasUpdates = updatedTime > createdTime + 60000; // 1분 이상 차이
 
       return `
-        <div style="background: white; border: 1px solid var(--gray-200); border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.04);"
+        <div style="background: white; border: 1px solid ${hasUpdates ? '#f59e0b' : 'var(--gray-200)'}; border-radius: 12px; padding: 16px; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.04); ${hasUpdates ? 'border-width: 2px;' : ''}"
              onmouseover="this.style.borderColor='var(--primary)'; this.style.boxShadow='0 4px 12px rgba(0,192,115,0.15)';"
-             onmouseout="this.style.borderColor='var(--gray-200)'; this.style.boxShadow='0 1px 2px rgba(0,0,0,0.04)';"
+             onmouseout="this.style.borderColor='${hasUpdates ? '#f59e0b' : 'var(--gray-200)'}'; this.style.boxShadow='0 1px 2px rgba(0,0,0,0.04)';"
              onclick="openOnboardingDetailModal('${doc.id}')">
 
           <!-- 상단: 기업명 + 상태 -->
@@ -9611,6 +9617,7 @@
                 ${companyName || '회사명 미확인'}
               </span>
               <span style="background: ${sourceColor}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;">${sourceLabel}</span>
+              ${hasUpdates ? `<span style="background: #fef3c7; color: #b45309; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; animation: pulse 2s infinite;">🔄 변경됨</span>` : ''}
             </div>
             <span style="font-size: 12px; color: var(--gray-500);">${formattedDate}</span>
           </div>
@@ -9639,6 +9646,11 @@
                 📋 협업조건
               </span>
             ` : ''}
+            ${isSupplier ? `
+              <span style="padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500; ${hasContract ? 'background: #fce7f3; color: #9d174d;' : 'background: #f5f5f5; color: #737373;'}">
+                ${hasContract ? '✅ 계약서' : '⏳ 계약서'}
+              </span>
+            ` : ''}
           </div>
 
           <!-- 액션 버튼 (클릭 이벤트 전파 방지) -->
@@ -9647,7 +9659,11 @@
               <button onclick="openSupplierMatchModalCRM('${doc.id}')" style="flex: 1; padding: 8px; background: #7c3aed; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
                 🔗 공급사 매칭
               </button>
-              ${hasExcel ? `
+              ${hasContract ? `
+                <button onclick="completeContractAndOnboarding('${doc.id}')" style="flex: 1; padding: 8px; background: linear-gradient(135deg, #059669, #10b981); color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                  ✅ 입점완료 처리
+                </button>
+              ` : hasExcel ? `
                 <button onclick="importProductsFromOnboardingCRM('${doc.id}')" style="flex: 1; padding: 8px; background: #8b5cf6; color: white; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
                   📦 상품 이관
                 </button>
@@ -9695,6 +9711,14 @@
       const sourceColor = doc.source === 'inbound_onboarding' ? '#10b981' : '#3b82f6';
       const checklist = doc.checklist || {};
 
+      // 변경이력 체크
+      const createdTime = doc.createdAt?.toDate ? doc.createdAt.toDate().getTime() : (doc.createdAt ? new Date(doc.createdAt).getTime() : 0);
+      const updatedTime = doc.updatedAt?.toDate ? doc.updatedAt.toDate().getTime() : (doc.updatedAt ? new Date(doc.updatedAt).getTime() : 0);
+      const hasUpdates = updatedTime > createdTime + 60000;
+      const updatedDate = doc.updatedAt?.toDate ? doc.updatedAt.toDate() : (doc.updatedAt ? new Date(doc.updatedAt) : null);
+      const formattedUpdatedDate = updatedDate ? updatedDate.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      const hasContract = !!doc.contractFile;
+
       // 협업조건 라벨 매핑
       const dealTimingLabels = {
         'asap': '빠른 시일 내',
@@ -9723,6 +9747,7 @@
             <div style="display: flex; align-items: center; gap: 12px;">
               <h2 class="modal-title" style="margin: 0;">📄 온보딩 상세</h2>
               <span style="background: ${sourceColor}; color: white; padding: 4px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;">${sourceLabel}</span>
+              ${hasUpdates ? `<span style="background: #fef3c7; color: #b45309; padding: 4px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;">🔄 ${formattedUpdatedDate} 변경됨</span>` : ''}
             </div>
             <button class="modal-close" onclick="closeModal()">×</button>
           </div>
@@ -9798,6 +9823,22 @@
                     <span style="font-size: 11px; color: #b91c1c;">미제출</span>
                   </div>
                 `}
+
+                ${isSupplier ? `
+                  ${hasContract ? `
+                    <a href="${doc.contractFile}" target="_blank" style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #fce7f3; border: 2px solid #f9a8d4; border-radius: 12px; padding: 20px; text-decoration: none; color: inherit;">
+                      <span style="font-size: 36px;">📜</span>
+                      <span style="font-size: 13px; font-weight: 600; color: #9d174d;">계약서</span>
+                      <span style="font-size: 11px; color: #be185d;">클릭하여 보기</span>
+                    </a>
+                  ` : `
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; background: #f5f5f5; border: 2px dashed #d4d4d4; border-radius: 12px; padding: 20px;">
+                      <span style="font-size: 36px; opacity: 0.5;">📜</span>
+                      <span style="font-size: 13px; font-weight: 600; color: #737373;">계약서</span>
+                      <span style="font-size: 11px; color: #a3a3a3;">전달 대기</span>
+                    </div>
+                  `}
+                ` : ''}
               </div>
             </div>
 
@@ -9864,12 +9905,17 @@
           </div>
 
           <!-- 액션 버튼 -->
-          <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end;">
+          <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200); display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap;">
             ${isSupplier ? `
               <button onclick="closeModal(); openSupplierMatchModalCRM('${doc.id}')" style="padding: 10px 20px; background: #7c3aed; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">🔗 공급사 매칭</button>
               ${doc.productInfoExcel ? `
                 <button onclick="closeModal(); importProductsFromOnboardingCRM('${doc.id}')" style="padding: 10px 20px; background: #8b5cf6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📦 상품 이관</button>
               ` : ''}
+              ${hasContract ? `
+                <button onclick="closeModal(); completeContractAndOnboarding('${doc.id}')" style="padding: 10px 20px; background: linear-gradient(135deg, #059669, #10b981); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">✅ 입점완료 처리</button>
+              ` : `
+                <button onclick="closeModal(); openContractDeliveryModal('${doc.id}')" style="padding: 10px 20px; background: #f59e0b; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">📜 계약서 전달완료</button>
+              `}
             ` : `
               <button onclick="closeModal(); openSellerMatchModalCRM('${doc.id}')" style="padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">🔗 셀러 매칭</button>
             `}
@@ -9877,6 +9923,243 @@
           </div>
         </div>
       `;
+    }
+
+    // 계약서 전달완료 모달
+    function openContractDeliveryModal(docId) {
+      const pendingDoc = state.pendingSupplierOnboardings.find(d => d.id === docId);
+      if (!pendingDoc) { showToast('서류를 찾을 수 없습니다.'); return; }
+
+      const tracking = pendingDoc.sourceTracking || {};
+      let companyInfo = null;
+      if (tracking.inboundId) {
+        companyInfo = (state.supplierInquiries || []).find(i => i.id === tracking.inboundId) ||
+                      (state.proposalRequests || []).find(p => p.id === tracking.inboundId) ||
+                      (state.supplierApplications || []).find(a => a.id === tracking.inboundId);
+      }
+      const companyName = companyInfo?.companyName || companyInfo?.name || pendingDoc.companyName || '-';
+
+      const modal = document.getElementById('modal');
+      if (!modal) return;
+
+      modal.className = 'modal show';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+          <div class="modal-header">
+            <h2 class="modal-title">📜 계약서 전달 완료</h2>
+            <button class="modal-close" onclick="closeModal()">×</button>
+          </div>
+          <div style="padding: 24px;">
+            <div style="background: #f0fdf4; padding: 16px; border-radius: 12px; margin-bottom: 20px;">
+              <div style="font-size: 14px; font-weight: 700; color: #166534; margin-bottom: 4px;">🏢 ${companyName}</div>
+              <div style="font-size: 12px; color: #15803d;">계약서가 전달되었음을 기록합니다.</div>
+            </div>
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">계약서 파일 (선택)</label>
+              <input type="file" id="contractFileInput" accept=".pdf,.doc,.docx,.hwp,image/*" style="width: 100%; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+              <p style="font-size: 11px; color: var(--gray-500); margin-top: 6px;">파일이 없으면 URL로 입력하거나 건너뛸 수 있습니다.</p>
+            </div>
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">또는 계약서 URL</label>
+              <input type="text" id="contractUrlInput" placeholder="https://..." style="width: 100%; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            </div>
+            <div style="margin-bottom: 20px;">
+              <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="proceedToCompletion" checked style="width: 18px; height: 18px;">
+                <span style="font-size: 13px; font-weight: 500; color: var(--gray-700);">계약서 저장 후 바로 <strong style="color: #059669;">입점완료</strong> 처리</span>
+              </label>
+            </div>
+            <div style="display: flex; gap: 12px;">
+              <button onclick="saveContractDelivery('${docId}')" style="flex: 1; padding: 14px; background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;">
+                📜 계약서 저장
+              </button>
+              <button onclick="closeModal()" style="padding: 14px 20px; background: var(--gray-200); color: var(--gray-700); border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;">취소</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // 계약서 저장 처리
+    async function saveContractDelivery(docId) {
+      const fileInput = document.getElementById('contractFileInput');
+      const urlInput = document.getElementById('contractUrlInput');
+      const proceedCheckbox = document.getElementById('proceedToCompletion');
+
+      let contractFile = urlInput?.value?.trim() || '';
+
+      // 파일 업로드 처리
+      if (fileInput?.files?.[0] && typeof firebase !== 'undefined' && firebase.storage) {
+        try {
+          showToast('계약서 파일 업로드 중...');
+          const file = fileInput.files[0];
+          const storageRef = firebase.storage().ref();
+          const fileRef = storageRef.child(`contracts/${docId}_${Date.now()}_${file.name}`);
+          await fileRef.put(file);
+          contractFile = await fileRef.getDownloadURL();
+        } catch (e) {
+          console.error('파일 업로드 실패:', e);
+          showToast('파일 업로드 실패. URL로 진행합니다.');
+        }
+      }
+
+      if (!contractFile) {
+        // 파일 없이도 진행 가능하게 (계약서 전달 완료만 기록)
+        contractFile = 'delivered_without_file';
+      }
+
+      try {
+        // pendingSupplierOnboardings에 계약서 정보 업데이트
+        await db.collection('pendingSupplierOnboardings').doc(docId).update({
+          contractFile: contractFile,
+          contractDeliveredAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        showToast('✅ 계약서가 저장되었습니다!');
+
+        // 바로 입점완료 처리 체크되어 있으면 진행
+        if (proceedCheckbox?.checked) {
+          closeModal();
+          await completeContractAndOnboarding(docId);
+        } else {
+          closeModal();
+          renderOnboardingDocs();
+        }
+      } catch (error) {
+        console.error('계약서 저장 실패:', error);
+        showToast('저장 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 입점완료 처리 (계약서 완료된 건에 대해)
+    async function completeContractAndOnboarding(docId) {
+      const pendingDoc = state.pendingSupplierOnboardings.find(d => d.id === docId);
+      if (!pendingDoc) { showToast('서류를 찾을 수 없습니다.'); return; }
+
+      const tracking = pendingDoc.sourceTracking || {};
+      let companyInfo = null;
+      if (tracking.inboundId) {
+        companyInfo = (state.supplierInquiries || []).find(i => i.id === tracking.inboundId) ||
+                      (state.proposalRequests || []).find(p => p.id === tracking.inboundId) ||
+                      (state.supplierApplications || []).find(a => a.id === tracking.inboundId);
+      }
+
+      const companyName = companyInfo?.companyName || companyInfo?.name || pendingDoc.companyName || '(미확인)';
+      const managerName = companyInfo?.managerName || pendingDoc.managerName || '';
+      const contact = companyInfo?.contact || companyInfo?.phone || pendingDoc.contact || '';
+      const email = companyInfo?.email || pendingDoc.email || '';
+
+      // 확인 모달
+      if (!confirm(`${companyName}\을(를) 입점완료 공급사로 등록하시겠습니까?\n\n이 작업은:\n1. 공급사 DB에 입점완료 상태로 추가\n2. 모든 서류 정보 이관\n3. 대기 서류에서 삭제\n\n를 수행합니다.`)) {
+        return;
+      }
+
+      try {
+        showToast('입점완료 처리 중...');
+
+        // 새 공급사로 등록
+        const newSupplier = {
+          name: companyName,
+          contact: managerName,
+          phone: contact,
+          email: email,
+          managerName: managerName,
+          managerPhone: contact,
+          managerEmail: email,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          status: 'active',
+          onboardingStatus: '입점완료',
+          dealCount: 0,
+          contractStatus: 'completed',
+          sourceTracking: tracking,
+          sourceApplicationId: tracking.inboundId || null,
+          sourceType: tracking.sourceType || null,
+          businessType: companyInfo?.businessType || '',
+          address: companyInfo?.address || '',
+          notes: companyInfo?.notes || '',
+          website: companyInfo?.website || '',
+          productLink: companyInfo?.productLink || '',
+          category: companyInfo?.category || '',
+          // 온보딩 서류 정보
+          onboardingData: {
+            productInfoOption: pendingDoc.productInfoOption || 'later',
+            inputMethod: pendingDoc.inputMethod || '',
+            productInfoExcel: pendingDoc.productInfoExcel || null,
+            productInfoDirect: pendingDoc.productInfoDirect || [],
+            qnaDirect: pendingDoc.qnaDirect || [],
+            businessLicense: pendingDoc.businessLicense || null,
+            bankAccount: pendingDoc.bankAccount || null,
+            contractFile: pendingDoc.contractFile || null,
+            contractDeliveredAt: pendingDoc.contractDeliveredAt || new Date().toISOString(),
+            checklist: pendingDoc.checklist || null,
+            submittedAt: pendingDoc.submittedAt || new Date().toISOString(),
+            completedAt: new Date().toISOString()
+          },
+          documentsSubmitted: true,
+          csHistory: [
+            {
+              type: 'note',
+              content: '입점완료 - CRM센터에서 계약서 전달 후 등록',
+              date: new Date().toLocaleDateString('ko-KR'),
+              createdAt: new Date().toISOString(),
+              createdBy: state.currentUser?.name || state.currentUser?.email || '시스템'
+            }
+          ]
+        };
+
+        // 기존 CS 이력 병합
+        if (companyInfo?.csHistory && Array.isArray(companyInfo.csHistory)) {
+          newSupplier.csHistory = [...companyInfo.csHistory, ...newSupplier.csHistory];
+        }
+
+        const docRef = await db.collection('suppliers').add(newSupplier);
+        const supplierId = docRef.id;
+
+        // 상품 자동 이관 (엑셀 있으면)
+        if (pendingDoc.productInfoExcel) {
+          try {
+            const importedCount = await importProductsFromExcelCRM(supplierId, pendingDoc);
+            if (importedCount > 0) {
+              await db.collection('suppliers').doc(supplierId).update({
+                hasProductInfo: true,
+                productCount: importedCount
+              });
+            }
+          } catch (e) {
+            console.error('상품 이관 실패:', e);
+          }
+        }
+
+        // 대기 서류 삭제
+        await db.collection('pendingSupplierOnboardings').doc(docId).delete();
+
+        // 원본 인바운드 상태 업데이트 (있으면)
+        if (tracking.inboundId) {
+          try {
+            const collections = ['supplierInquiries', 'proposalRequests', 'supplierApplications'];
+            for (const coll of collections) {
+              const docSnap = await db.collection(coll).doc(tracking.inboundId).get();
+              if (docSnap.exists) {
+                await db.collection(coll).doc(tracking.inboundId).update({
+                  status: 'completed',
+                  linkedSupplierId: supplierId,
+                  completedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                break;
+              }
+            }
+          } catch (e) {
+            console.error('원본 상태 업데이트 실패:', e);
+          }
+        }
+
+        showToast(`✅ ${companyName} 입점완료!`);
+        renderOnboardingDocs();
+
+      } catch (error) {
+        console.error('입점완료 처리 실패:', error);
+        showToast('처리 중 오류가 발생했습니다.');
+      }
     }
 
     // 공급사 매칭 모달 열기
@@ -11931,6 +12214,10 @@
 
 <!-- 전화문의 빠른 등록 FAB -->
 <style>
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
   @keyframes phone-fab-glow {
     0%, 100% { box-shadow: 0 0 20px rgba(34, 197, 94, 0.4), 0 0 40px rgba(34, 197, 94, 0.2), 0 4px 16px rgba(0,0,0,0.3); }
     50% { box-shadow: 0 0 25px rgba(34, 197, 94, 0.6), 0 0 50px rgba(34, 197, 94, 0.3), 0 4px 16px rgba(0,0,0,0.3); }
