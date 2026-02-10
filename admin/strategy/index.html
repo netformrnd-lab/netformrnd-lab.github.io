@@ -11571,6 +11571,9 @@
           unit,
           type: lagType,
           version: 'A',
+          description: '',
+          target: 0,
+          valuePerUnit: 0,
           totalValue: 0,
           logCount: 0,
           isActive: true,
@@ -18231,9 +18234,120 @@
         // 주간 목표 설정 로드
         await loadWeeklyGoalConfigs();
 
+        // ★ 지표 데이터 무결성 검증 및 자동 복구
+        setTimeout(() => validateAndRepairIndicators(), 2000);
+
       } catch (e) {
         console.error('OKR 데이터 로드 오류:', e);
       }
+    }
+
+    // ★ 지표 데이터 무결성 검증 + 자동복구 + 경고 모달
+    async function validateAndRepairIndicators() {
+      const requiredFields = {
+        type: 'input',
+        version: 'A',
+        unit: '건',
+        totalValue: 0,
+        logCount: 0,
+        isActive: true,
+        target: 0,
+        valuePerUnit: 0,
+        description: ''
+      };
+
+      const brokenIndicators = [];
+      const batch = db.batch();
+      let batchCount = 0;
+
+      for (const lag of okrState.laggingIndicators) {
+        const missingFields = {};
+        let needsFix = false;
+
+        // 필수 필드 체크
+        for (const [field, defaultValue] of Object.entries(requiredFields)) {
+          if (lag[field] === undefined || lag[field] === null) {
+            missingFields[field] = defaultValue;
+            needsFix = true;
+          }
+        }
+
+        // krId 체크 (kpiId에서 파생 가능)
+        if (!lag.krId && lag.kpiId) {
+          const kpi = okrState.kpis?.find(k => k.id === lag.kpiId);
+          if (kpi?.keyResultId) {
+            missingFields.krId = kpi.keyResultId;
+            needsFix = true;
+          }
+        }
+
+        if (needsFix) {
+          brokenIndicators.push({ lag, missingFields });
+          const lagRef = db.collection('okr_laggingIndicators').doc(lag.id);
+          batch.update(lagRef, missingFields);
+          batchCount++;
+
+          // 로컬 상태도 업데이트
+          Object.assign(lag, missingFields);
+
+          // Firestore batch 제한 (500개)
+          if (batchCount >= 490) break;
+        }
+      }
+
+      if (batchCount > 0) {
+        try {
+          await batch.commit();
+          console.log(`✅ 지표 데이터 무결성 복구: ${batchCount}개 지표 업데이트`);
+
+          // 경고 모달 표시
+          showIndicatorRepairNotification(brokenIndicators);
+        } catch (e) {
+          console.error('지표 데이터 복구 오류:', e);
+        }
+      }
+    }
+
+    // 복구 완료 알림 모달
+    function showIndicatorRepairNotification(brokenIndicators) {
+      if (brokenIndicators.length === 0) return;
+
+      const summaryItems = brokenIndicators.slice(0, 5).map(({ lag, missingFields }) =>
+        `<div style="padding: 8px 10px; background: var(--gray-50); border-radius: 6px; margin-bottom: 4px; font-size: 11px;">
+          <strong>${lag.name || '(이름없음)'}</strong>
+          <span style="color: var(--gray-400); margin-left: 6px;">복구: ${Object.keys(missingFields).join(', ')}</span>
+        </div>`
+      ).join('');
+
+      const moreText = brokenIndicators.length > 5 ? `<div style="font-size: 11px; color: var(--gray-400); text-align: center; margin-top: 4px;">외 ${brokenIndicators.length - 5}개 지표</div>` : '';
+
+      const modal = document.createElement('div');
+      modal.id = 'indicatorRepairModal';
+      modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center; padding: 20px;';
+      modal.innerHTML = `
+        <div style="background: white; border-radius: 16px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;">
+          <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200);">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 24px;">🔧</span>
+              <div>
+                <div style="font-size: 16px; font-weight: 700; color: var(--gray-900);">지표 데이터 자동 복구 완료</div>
+                <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">${brokenIndicators.length}개 지표의 누락된 필드를 복구했습니다</div>
+              </div>
+            </div>
+          </div>
+          <div style="padding: 16px 24px; max-height: 250px; overflow-y: auto;">
+            <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 8px;">복구된 지표:</div>
+            ${summaryItems}
+            ${moreText}
+          </div>
+          <div style="padding: 12px 24px 20px; display: flex; gap: 8px;">
+            <button onclick="document.getElementById('indicatorRepairModal').remove()"
+                    style="flex: 1; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer;">확인</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
     }
 
     // OKR 초기 데이터 시드
@@ -18295,6 +18409,7 @@
             for (const lag of lags) {
               await db.collection('okr_laggingIndicators').add({
                 kpiId: kpiRef.id, krId: krId, version: lag.version, name: lag.name,
+                type: 'input', unit: '건', description: '', target: 0, valuePerUnit: 0,
                 totalValue: 0, logCount: 0, isActive: true,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
               });
@@ -21527,8 +21642,13 @@
           type: type === 'output' ? 'output' : 'input',
           kpiId,
           krId,
+          version: 'A',
+          description: '',
           target: 0,
-          current: 0,
+          valuePerUnit: 0,
+          totalValue: 0,
+          logCount: 0,
+          isActive: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
@@ -22822,8 +22942,11 @@
           target: 10,
           type: lagType, // 'input' 또는 'output'
           valuePerUnit: lagType === 'output' ? valuePerUnit : 0, // 성과형일 때만 건당 값
-          unit: lagType === 'output' ? lagUnit : '', // ★ 성과형일 때만 단위 (서브 KPI에서 상속)
+          unit: lagType === 'output' ? lagUnit : (lagUnit || '건'), // ★ input도 단위 보존
           linkedToSettlement: lagType === 'output' ? settlementLink : '', // ★ 정산 연동 설정
+          totalValue: 0,
+          logCount: 0,
+          isActive: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
