@@ -11323,6 +11323,9 @@
         return { ...lag, kpiName: kpi?.name || '', krName: kr?.name || '' };
       });
 
+      // KPI 필터용 옵션 생성
+      const kpiOptions = [...new Set(indicators.map(i => i.kpiName).filter(Boolean))].sort();
+
       showModal(`
         <div style="padding: 24px; max-width: 500px; max-height: 85vh; display: flex; flex-direction: column;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-shrink: 0;">
@@ -11333,11 +11336,16 @@
             <button onclick="closeDayIndicatorModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
           </div>
 
-          <!-- 지표 검색 -->
-          <div style="margin-bottom: 12px; flex-shrink: 0;">
+          <!-- 지표 검색 + KPI 필터 -->
+          <div style="display: flex; gap: 8px; margin-bottom: 12px; flex-shrink: 0;">
             <input type="text" id="dayIndicatorSearch" placeholder="🔍 지표 검색..."
                    oninput="filterDayIndicators()"
-                   style="width: 100%; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+                   style="flex: 1; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px;">
+            <select id="dayIndicatorKpiFilter" onchange="filterDayIndicators()"
+                    style="padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white; color: var(--gray-700); max-width: 140px; cursor: pointer;">
+              <option value="">전체 KPI</option>
+              ${kpiOptions.map(kpi => `<option value="${kpi}">${kpi}</option>`).join('')}
+            </select>
           </div>
 
           <!-- 지표 목록 -->
@@ -11615,20 +11623,49 @@
 
     // 지표 검색 필터
     function filterDayIndicators() {
-      const query = document.getElementById('dayIndicatorSearch').value.toLowerCase();
+      const query = (document.getElementById('dayIndicatorSearch')?.value || '').toLowerCase();
+      const kpiFilter = (document.getElementById('dayIndicatorKpiFilter')?.value || '').toLowerCase();
       const items = document.querySelectorAll('.day-indicator-item');
+      let visibleCount = 0;
 
       items.forEach(item => {
         const name = item.dataset.name?.toLowerCase() || '';
         const kpi = item.dataset.kpi?.toLowerCase() || '';
         const kr = item.dataset.kr?.toLowerCase() || '';
 
-        if (name.includes(query) || kpi.includes(query) || kr.includes(query)) {
+        const matchesSearch = !query || name.includes(query) || kpi.includes(query) || kr.includes(query);
+        const matchesKpi = !kpiFilter || kpi === kpiFilter;
+
+        if (matchesSearch && matchesKpi) {
           item.style.display = 'block';
+          visibleCount++;
         } else {
           item.style.display = 'none';
         }
       });
+
+      // 검색 결과 없을 때 안내 메시지
+      let noResultEl = document.getElementById('dayIndicatorNoResult');
+      if (visibleCount === 0 && (query || kpiFilter)) {
+        if (!noResultEl) {
+          const listEl = document.getElementById('dayIndicatorList');
+          if (listEl) {
+            const msgDiv = document.createElement('div');
+            msgDiv.id = 'dayIndicatorNoResult';
+            msgDiv.style.cssText = 'padding: 24px; text-align: center;';
+            msgDiv.innerHTML = `
+              <div style="font-size: 13px; color: var(--gray-400); margin-bottom: 12px;">검색 결과가 없습니다</div>
+              <button onclick="showInlineNewIndicatorForm()"
+                      style="padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">+ 신규 지표 추가</button>
+            `;
+            // 액션 버튼 앞에 삽입
+            const actionDiv = listEl.querySelector('div:last-child');
+            listEl.insertBefore(msgDiv, actionDiv);
+          }
+        }
+      } else if (noResultEl) {
+        noResultEl.remove();
+      }
     }
 
     // 지표 선택
