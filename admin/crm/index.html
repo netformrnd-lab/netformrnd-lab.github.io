@@ -1987,12 +1987,25 @@
         </div>
 
         <!-- 공급사/셀러 탭 -->
-        <div style="display: flex; gap: 4px; margin-bottom: 20px; background: var(--gray-100); padding: 4px; border-radius: var(--btn-radius); width: fit-content;">
+        <div style="display: flex; gap: 4px; margin-bottom: 12px; background: var(--gray-100); padding: 4px; border-radius: var(--btn-radius); width: fit-content;">
           <button onclick="switchOnboardingType('supplier')" id="onboarding-tab-supplier" style="padding: 10px 24px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: #7c3aed; color: white;">
             🏭 공급사 <span id="onboarding-supplier-count" style="background: rgba(255,255,255,0.3); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 4px;">0</span>
           </button>
           <button onclick="switchOnboardingType('seller')" id="onboarding-tab-seller" style="padding: 10px 24px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; background: var(--gray-200); color: var(--gray-700);">
             👩‍💼 셀러 <span id="onboarding-seller-count" style="background: rgba(0,0,0,0.1); padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 4px;">0</span>
+          </button>
+        </div>
+
+        <!-- 계약서 전달상태 필터 (공급사일 때만 표시) -->
+        <div id="contract-filter-container" style="display: flex; gap: 8px; margin-bottom: 20px;">
+          <button onclick="filterOnboardingByContract('all')" id="contract-filter-all" style="padding: 6px 14px; border: none; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--gray-800); color: white;">
+            전체
+          </button>
+          <button onclick="filterOnboardingByContract('pending')" id="contract-filter-pending" style="padding: 6px 14px; border: none; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--gray-200); color: var(--gray-700);">
+            📋 전달대기 <span id="contract-pending-count" style="font-size: 11px;">0</span>
+          </button>
+          <button onclick="filterOnboardingByContract('sent')" id="contract-filter-sent" style="padding: 6px 14px; border: none; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--gray-200); color: var(--gray-700);">
+            ✅ 전달완료 <span id="contract-sent-count" style="font-size: 11px;">0</span>
           </button>
         </div>
 
@@ -2521,6 +2534,7 @@
 
     // 온보딩 대기 서류 필터 상태
     let onboardingType = 'supplier';  // supplier or seller
+    let onboardingContractFilter = 'all';  // all, pending, sent
 
     let adminPassword = 'admin1234';
 
@@ -9526,23 +9540,52 @@
     // 온보딩 타입 전환 (공급사/셀러)
     function switchOnboardingType(type) {
       onboardingType = type;
+      onboardingContractFilter = 'all';  // 타입 변경 시 필터 초기화
 
       const supplierTab = document.getElementById('onboarding-tab-supplier');
       const sellerTab = document.getElementById('onboarding-tab-seller');
+      const filterContainer = document.getElementById('contract-filter-container');
 
       if (type === 'supplier') {
         supplierTab.style.background = '#7c3aed';
         supplierTab.style.color = 'white';
         sellerTab.style.background = 'var(--gray-200)';
         sellerTab.style.color = 'var(--gray-700)';
+        if (filterContainer) filterContainer.style.display = 'flex';
       } else {
         sellerTab.style.background = '#3b82f6';
         sellerTab.style.color = 'white';
         supplierTab.style.background = 'var(--gray-200)';
         supplierTab.style.color = 'var(--gray-700)';
+        if (filterContainer) filterContainer.style.display = 'none';
       }
 
+      // 필터 버튼 초기화
+      updateContractFilterButtons();
       renderOnboardingDocs();
+    }
+
+    // 계약서 전달상태 필터 전환
+    function filterOnboardingByContract(filter) {
+      onboardingContractFilter = filter;
+      updateContractFilterButtons();
+      renderOnboardingDocs();
+    }
+
+    // 필터 버튼 스타일 업데이트
+    function updateContractFilterButtons() {
+      ['all', 'pending', 'sent'].forEach(f => {
+        const btn = document.getElementById(`contract-filter-${f}`);
+        if (btn) {
+          if (f === onboardingContractFilter) {
+            btn.style.background = 'var(--gray-800)';
+            btn.style.color = 'white';
+          } else {
+            btn.style.background = 'var(--gray-200)';
+            btn.style.color = 'var(--gray-700)';
+          }
+        }
+      });
     }
 
     // 온보딩 대기 서류 렌더링
@@ -9552,15 +9595,39 @@
 
       updateOnboardingBadge();
 
-      const data = onboardingType === 'supplier'
+      const allData = onboardingType === 'supplier'
         ? (state.pendingSupplierOnboardings || [])
         : (state.pendingSellerOnboardings || []);
 
+      // 공급사일 때만 계약서 전달상태 필터 카운트 업데이트
+      if (onboardingType === 'supplier') {
+        const pendingCount = allData.filter(d => !d.contractSent && !d.contractFile).length;
+        const sentCount = allData.filter(d => d.contractSent || d.contractFile).length;
+
+        const pendingCountEl = document.getElementById('contract-pending-count');
+        const sentCountEl = document.getElementById('contract-sent-count');
+        if (pendingCountEl) pendingCountEl.textContent = pendingCount;
+        if (sentCountEl) sentCountEl.textContent = sentCount;
+      }
+
+      // 필터 적용
+      let data = allData;
+      if (onboardingType === 'supplier' && onboardingContractFilter !== 'all') {
+        if (onboardingContractFilter === 'pending') {
+          data = allData.filter(d => !d.contractSent && !d.contractFile);
+        } else if (onboardingContractFilter === 'sent') {
+          data = allData.filter(d => d.contractSent || d.contractFile);
+        }
+      }
+
       if (data.length === 0) {
+        const emptyMsg = onboardingContractFilter === 'pending' ? '전달대기 서류가 없습니다' :
+                         onboardingContractFilter === 'sent' ? '전달완료 서류가 없습니다' :
+                         '대기 중인 서류가 없습니다';
         container.innerHTML = `
           <div style="background: var(--white); border-radius: var(--card-radius); padding: 60px 20px; text-align: center; box-shadow: var(--card-shadow);">
             <div style="font-size: 48px; margin-bottom: 16px;">📄</div>
-            <div style="font-size: 16px; color: var(--gray-500);">대기 중인 서류가 없습니다</div>
+            <div style="font-size: 16px; color: var(--gray-500);">${emptyMsg}</div>
           </div>
         `;
         return;
