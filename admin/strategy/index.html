@@ -9119,14 +9119,29 @@
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() + mondayOffset);
 
-      // 전체 업무 목록 가져오기 (진행중, 대기만)
-      const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
+      // 전체 업무 목록 가져오기 (진행중, 대기)
+      const activeTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
         if (task.status !== 'doing' && task.status !== 'waiting') return false;
-        // 내 업무 필터링
         if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
           if (task.assigneeId !== currentMemberId) return false;
         }
         return true;
+      });
+
+      // 이번 주에 완료된 업무 (실제완료일 기준)
+      const weekEndDate = new Date(weekStart);
+      weekEndDate.setDate(weekStart.getDate() + 4); // 금요일
+      const weekStartStr = weekStart.toISOString().split('T')[0];
+      const weekEndStr = weekEndDate.toISOString().split('T')[0];
+
+      const completedThisWeek = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
+        if (task.status !== 'done' && task.status !== 'completed') return false;
+        if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
+          if (task.assigneeId !== currentMemberId) return false;
+        }
+        const completionDate = task.actualCompletionDate;
+        if (!completionDate) return false;
+        return completionDate >= weekStartStr && completionDate <= weekEndStr;
       });
 
       ['mon', 'tue', 'wed', 'thu', 'fri'].forEach((day, index) => {
@@ -9139,15 +9154,27 @@
           let html = '';
 
           // 1. 해당 날짜에 마감인 업무들 표시 (진행중/대기)
-          const dayTasks = allTasks.filter(task => {
+          const dayTasks = activeTasks.filter(task => {
             const taskDeadline = task.deadline || task.dueDate || task.scheduledDate;
             if (!taskDeadline) return false;
             return taskDeadline === dateStr;
           });
 
+          // 2. 해당 날짜에 완료된 업무들 표시 (실제완료일 기준)
+          const dayCompletedTasks = completedThisWeek.filter(task => task.actualCompletionDate === dateStr);
+
           if (dayTasks.length > 0) {
             dayTasks.forEach(task => {
               html += createDayTaskCard(task);
+            });
+          }
+
+          if (dayCompletedTasks.length > 0) {
+            if (dayTasks.length > 0) {
+              html += '<div style="border-top: 1px dashed #BBF7D0; margin: 4px 0;"></div>';
+            }
+            dayCompletedTasks.forEach(task => {
+              html += createCompletedDayTaskCard(task);
             });
           }
 
@@ -9198,6 +9225,21 @@
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span style="font-size: 9px; color: ${statusColor}; font-weight: 600;">${statusText}</span>
             ${task.delayReason ? '<span style="font-size: 9px; color: #EF4444;">⚡</span>' : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // 요일별 완료 업무 카드 생성
+    function createCompletedDayTaskCard(task) {
+      return `
+        <div onclick="openScheduledTaskDetail('${task.id}')"
+             style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; font-size: 10px; transition: all 0.2s; opacity: 0.85;"
+             onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'; this.style.opacity='1'"
+             onmouseout="this.style.boxShadow='none'; this.style.opacity='0.85'">
+          <div style="font-weight: 600; color: var(--gray-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; text-decoration: line-through;" title="${task.title}">✓ ${task.title || '제목 없음'}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 9px; color: #16A34A; font-weight: 600;">완료</span>
           </div>
         </div>
       `;
@@ -9783,6 +9825,11 @@
                 <div style="color: var(--primary); font-weight: 500;">${assignedDateText}</div>
                 ` : ''}
 
+                ${task.actualCompletionDate ? `
+                <div style="color: var(--gray-500);">✅ 실제완료일</div>
+                <div style="color: #16A34A; font-weight: 600;">${task.actualCompletionDate}</div>
+                ` : ''}
+
                 <div style="color: var(--gray-500);">👤 담당자</div>
                 <div style="color: var(--gray-900);">${assigneeName}</div>
 
@@ -9837,7 +9884,7 @@
       document.body.insertAdjacentHTML('beforeend', modalHTML);
     }
 
-    // 예약된 업무 완료 처리 (지연 시에만 이유 작성)
+    // 예약된 업무 완료 처리 (실제완료일 선택 + 지연 시 이유 작성)
     async function completeScheduledTask(taskId) {
       const tasks = taskPlanState?.tasks || state.taskPlans || [];
       const task = tasks.find(t => t.id === taskId);
@@ -9853,19 +9900,60 @@
         deadlineDate.setHours(0, 0, 0, 0);
 
         if (now > deadlineDate) {
-          // 지연된 경우 - 이유 입력 모달 표시
+          // 지연된 경우 - 이유 입력 + 실제완료일 모달 표시
           showScheduledTaskDelayModal(taskId, task.title, deadline);
           return;
         }
       }
 
-      // 지연이 아닌 경우 - 바로 완료 처리
-      await executeScheduledTaskCompletion(taskId);
+      // 지연이 아닌 경우 - 실제완료일 선택 모달
+      showScheduledTaskCompletionDateModal(taskId, task.title);
+    }
+
+    // 예약된 업무 완료일 선택 모달 (지연 아닌 경우)
+    function showScheduledTaskCompletionDateModal(taskId, taskTitle) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const modalHtml = `
+        <div id="scheduledTaskCompletionDateModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #16A34A; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ✅ 업무 완료
+            </div>
+            <div style="background: #F0FDF4; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #166534; font-weight: 600;">
+                ${taskTitle || '업무'}
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="scheduledTaskCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid #16A34A; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜를 선택하세요</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="document.getElementById('scheduledTaskCompletionDateModal')?.remove()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmScheduledTaskCompletionDate('${taskId}')" style="flex: 1; padding: 12px; background: #16A34A; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                완료 처리
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    async function confirmScheduledTaskCompletionDate(taskId) {
+      const completionDate = document.getElementById('scheduledTaskCompletionDateInput')?.value;
+      document.getElementById('scheduledTaskCompletionDateModal')?.remove();
+      await executeScheduledTaskCompletion(taskId, null, completionDate);
     }
 
     // 예약된 업무 지연 완료 모달
     function showScheduledTaskDelayModal(taskId, taskTitle, deadline) {
       const deadlineStr = new Date(deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+      const todayStr = new Date().toISOString().split('T')[0];
       const modalHtml = `
         <div id="scheduledTaskDelayModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -9880,6 +9968,12 @@
                 마감일: <strong>${deadlineStr}</strong><br>
                 오늘까지 완료해야 했던 업무입니다
               </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="scheduledTaskDelayCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜</div>
             </div>
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
@@ -9908,14 +10002,19 @@
         alert('지연 사유를 입력해주세요.');
         return;
       }
+      const completionDate = document.getElementById('scheduledTaskDelayCompletionDateInput')?.value || null;
       document.getElementById('scheduledTaskDelayModal')?.remove();
-      await executeScheduledTaskCompletion(taskId, delayReason);
+      await executeScheduledTaskCompletion(taskId, delayReason, completionDate);
     }
 
-    async function executeScheduledTaskCompletion(taskId, delayReason = null) {
+    async function executeScheduledTaskCompletion(taskId, delayReason = null, actualCompletionDate = null) {
       try {
+        // 실제완료일: 지정값 → 오늘 날짜
+        const completionDate = actualCompletionDate || new Date().toISOString().split('T')[0];
+
         const updateData = {
           status: 'done',
+          actualCompletionDate: completionDate,
           completedAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
@@ -10230,13 +10329,17 @@
       const currentUserId = state.currentUser?.id;
       const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
         if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
-        return task.deadline || task.dueDate;
+        return task.deadline || task.dueDate || task.actualCompletionDate;
       });
 
-      // 날짜별로 업무 그룹화
+      // 날짜별로 업무 그룹화 (완료 업무는 실제완료일 기준, 미완료는 마감일 기준)
       const tasksByDate = {};
       allTasks.forEach(task => {
-        const dateStr = task.deadline || task.dueDate;
+        const isDone = task.status === 'done' || task.status === 'completed';
+        const dateStr = isDone
+          ? (task.actualCompletionDate || task.deadline || task.dueDate)
+          : (task.deadline || task.dueDate);
+        if (!dateStr) return;
         if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
         tasksByDate[dateStr].push(task);
       });
@@ -10322,6 +10425,13 @@
       const currentUserId = state.currentUser?.id;
       const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
         if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
+        const isDone = task.status === 'done' || task.status === 'completed';
+        if (isDone) {
+          // 완료 업무: 실제완료일 기준, 없으면 마감일 기준
+          const displayDate = task.actualCompletionDate || task.deadline || task.dueDate;
+          return displayDate === dateStr;
+        }
+        // 미완료 업무: 마감일 기준
         return (task.deadline === dateStr || task.dueDate === dateStr);
       });
 
@@ -28739,11 +28849,14 @@
       const currentMemberId = member?.id || '';
       const viewMode = taskPlanState.filter.viewMode || 'my';
 
-      // 전체 업무를 날짜별로 그룹화 (마감일 기준)
+      // 전체 업무를 날짜별로 그룹화 (완료 업무는 실제완료일 기준, 미완료는 마감일 기준)
       const allTasks = taskPlanState.tasks || [];
       const tasksByDate = {};
       allTasks.forEach(task => {
-        const dateStr = task.deadline || task.dueDate;
+        const isDone = task.status === 'done' || task.status === 'completed';
+        const dateStr = isDone
+          ? (task.actualCompletionDate || task.deadline || task.dueDate)
+          : (task.deadline || task.dueDate);
         if (dateStr) {
           if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
           tasksByDate[dateStr].push(task);
@@ -29382,8 +29495,8 @@
                 </div>
               </div>
 
-              <!-- 4. 담당자, 마감일, 실행예정일 -->
-              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+              <!-- 4. 담당자, 마감일, 실행예정일, 실제완료일 -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
                 <div>
                   <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">담당자</label>
                   <select id="taskPlanAssignee" style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
@@ -29400,6 +29513,11 @@
                   <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">실행예정일</label>
                   <input type="date" id="taskPlanScheduledDate" value="${task.scheduledDate || ''}"
                          style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">실제완료일</label>
+                  <input type="date" id="taskPlanActualCompletionDate" value="${task.actualCompletionDate || ''}"
+                         style="width: 100%; padding: 10px 8px; border: 1px solid ${task.actualCompletionDate ? '#16A34A' : 'var(--gray-300)'}; border-radius: 8px; font-size: 13px; box-sizing: border-box; ${task.actualCompletionDate ? 'background: #F0FDF4;' : ''}">
                 </div>
               </div>
 
@@ -29790,6 +29908,9 @@
       const scheduledDay = document.getElementById('taskPlanScheduledDay')?.value || '';
       const isWeeklyRecurring = document.getElementById('taskPlanWeeklyRecurring')?.checked || false;
 
+      // 실제완료일 추출
+      const actualCompletionDate = document.getElementById('taskPlanActualCompletionDate')?.value || '';
+
       // 지연 사유 추출
       const delayReason = document.getElementById('taskPlanDelayReason')?.value.trim() || '';
 
@@ -29828,6 +29949,7 @@
         dueDate: deadline, // 호환성을 위해 dueDate도 저장
         delayReason,       // 지연 사유 (기한 연장 시)
         scheduledDate,     // 실행 예정일
+        actualCompletionDate, // 실제 완료일
         scheduledDay,      // 요일 지정 (1-5: 월-금)
         isWeeklyRecurring, // 주간 고정 목표 여부
         krId,              // 메인 KPI (KR)
@@ -29896,7 +30018,7 @@
       }
     }
 
-    // 업무 완료 처리 (업무기록 연동) - 지연 시에만 이유 작성
+    // 업무 완료 처리 (업무기록 연동) - 실제완료일 선택 + 지연 시 이유 작성
     async function completeTaskPlan(taskId) {
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
@@ -29911,19 +30033,60 @@
         deadlineDate.setHours(0, 0, 0, 0);
 
         if (now > deadlineDate) {
-          // 지연된 경우 - 이유 입력 모달 표시
+          // 지연된 경우 - 이유 입력 + 실제완료일 모달 표시
           showTaskDelayReasonModal(taskId, task.title, deadline);
           return;
         }
       }
 
-      // 지연이 아닌 경우 - 바로 완료 처리
-      await executeTaskCompletion(taskId);
+      // 지연이 아닌 경우 - 실제완료일 선택 모달
+      showTaskCompletionDateModal(taskId, task.title);
     }
 
-    // 업무 지연 완료 모달 (지연 사유 입력)
+    // 업무 완료일 선택 모달 (지연 아닌 경우)
+    function showTaskCompletionDateModal(taskId, taskTitle) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const modalHtml = `
+        <div id="taskCompletionDateModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #16A34A; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ✅ 업무 완료
+            </div>
+            <div style="background: #F0FDF4; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #166534; font-weight: 600;">
+                ${taskTitle || '업무'}
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="taskCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid #16A34A; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜를 선택하세요</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="document.getElementById('taskCompletionDateModal')?.remove()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmTaskCompletionDate('${taskId}')" style="flex: 1; padding: 12px; background: #16A34A; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                완료 처리
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    async function confirmTaskCompletionDate(taskId) {
+      const completionDate = document.getElementById('taskCompletionDateInput')?.value;
+      document.getElementById('taskCompletionDateModal')?.remove();
+      await executeTaskCompletion(taskId, null, completionDate);
+    }
+
+    // 업무 지연 완료 모달 (지연 사유 + 실제완료일 입력)
     function showTaskDelayReasonModal(taskId, taskTitle, deadline) {
       const deadlineStr = new Date(deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+      const todayStr = new Date().toISOString().split('T')[0];
       const modalHtml = `
         <div id="taskDelayReasonModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -29938,6 +30101,12 @@
                 마감일: <strong>${deadlineStr}</strong><br>
                 오늘까지 완료해야 했던 업무입니다
               </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="taskDelayCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜</div>
             </div>
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
@@ -29970,19 +30139,24 @@
         alert('지연 사유를 입력해주세요.');
         return;
       }
+      const completionDate = document.getElementById('taskDelayCompletionDateInput')?.value || null;
       closeTaskDelayReasonModal();
-      await executeTaskCompletion(taskId, delayReason);
+      await executeTaskCompletion(taskId, delayReason, completionDate);
     }
 
     // 실제 업무 완료 실행
-    async function executeTaskCompletion(taskId, delayReason = null) {
+    async function executeTaskCompletion(taskId, delayReason = null, actualCompletionDate = null) {
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
 
       try {
+        // 실제완료일: 지정값 → 오늘 날짜
+        const completionDate = actualCompletionDate || new Date().toISOString().split('T')[0];
+
         // 1. 업무 상태 변경
         const updateData = {
           status: 'done',
+          actualCompletionDate: completionDate,
           completedAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
