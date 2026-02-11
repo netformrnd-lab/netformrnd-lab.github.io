@@ -1444,7 +1444,7 @@
           <h1 class="page-title" style="margin: 0;">📋 업무 관리</h1>
           <div style="display: flex; align-items: center; gap: 12px; flex: 1; justify-content: flex-end;">
             <input type="text" id="taskPlanSearchHeader" placeholder="🔍 업무 검색..." oninput="document.getElementById('taskPlanSearch').value = this.value; filterTaskPlan();" style="max-width: 220px; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
-            <button onclick="openTaskMemoModal()" style="padding: 10px 14px; border: 1px solid #BBF7D0; border-radius: 8px; background: #F0FDF4; cursor: pointer; font-size: 13px; font-weight: 600; color: #16A34A;">📝 메모</button>
+            <button onclick="openTaskMemoModal()" style="padding: 10px 14px; border: 1px solid #BBF7D0; border-radius: 8px; background: #F0FDF4; cursor: pointer; font-size: 13px; font-weight: 600; color: #16A34A;">✅ 업무메모</button>
             <button onclick="openTaskRequestModal()" style="padding: 10px 14px; border: 1px solid #BFDBFE; border-radius: 8px; background: #EFF6FF; cursor: pointer; font-size: 13px; font-weight: 600; color: #1D4ED8;">📨 업무 요청</button>
             <button class="btn btn-primary" onclick="openTaskPlanModal()">+ 업무 등록</button>
           </div>
@@ -30219,46 +30219,148 @@
     }
 
     // ========================================
-    // ★ 업무 메모 시스템 (메모 작성 → KPI 통합검색 연결)
+    // ★ 업무메모 시스템 (실행 완료 업무 등록 → KPI 직접 반영)
     // ========================================
     function openTaskMemoModal() {
       const member = getCurrentMember();
       const memberName = member?.name || '';
 
+      // 메인 KPI(KR) 드롭다운 옵션 생성
+      const krOptions = (okrState.keyResults || []).map(kr => {
+        const idx = okrState.keyResults.indexOf(kr);
+        return `<option value="${kr.id}">메인 ${idx + 1}. ${kr.name}</option>`;
+      }).join('');
+
+      // 서브 KPI 드롭다운 옵션 (전체)
+      const kpiOptions = (okrState.kpis || []).map(kpi => {
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        const krLabel = kr ? `메인 ${okrState.keyResults.indexOf(kr) + 1}` : '';
+        return `<option value="${kpi.id}" data-kr-id="${kpi.keyResultId || ''}">서브. ${kpi.name} ${krLabel ? '(' + krLabel + ')' : ''}</option>`;
+      }).join('');
+
+      const todayStr = new Date().toISOString().split('T')[0];
+
       const modalHtml = `
         <div id="taskMemoModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;" onclick="if(event.target===this) closeTaskMemoModal()">
-          <div style="background: white; border-radius: 16px; width: 100%; max-width: 480px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden;">
-            <div style="padding: 18px 24px; border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center;">
-              <h2 style="margin: 0; font-size: 17px; font-weight: 700; color: var(--gray-900);">📝 업무 메모</h2>
-              <button onclick="closeTaskMemoModal()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: var(--gray-400);">×</button>
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 520px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.2);">
+            <!-- 헤더 - 완료된 업무 기록 느낌 -->
+            <div style="padding: 18px 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #DCFCE7, #D1FAE5); border-radius: 16px 16px 0 0;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <h2 style="margin: 0; font-size: 17px; font-weight: 700; color: #166534;">✅ 업무메모 등록</h2>
+                  <div style="font-size: 11px; color: #15803D; margin-top: 4px;">실행 완료한 업무를 기록하고 KPI에 반영합니다</div>
+                </div>
+                <button onclick="closeTaskMemoModal()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: #166534;">×</button>
+              </div>
             </div>
             <div style="flex: 1; overflow-y: auto; padding: 20px 24px;">
+
+              <!-- 완료일 -->
               <div style="margin-bottom: 14px;">
-                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">메모 내용 *</label>
-                <textarea id="memoContent" placeholder="업무 관련 메모를 작성하세요..." style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; min-height: 120px; resize: vertical; box-sizing: border-box;"></textarea>
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">📅 완료일</label>
+                <input type="date" id="memoCompletionDate" value="${todayStr}" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
               </div>
-              <!-- KPI 통합검색 연결 -->
-              <div style="margin-bottom: 14px; padding: 14px; background: #F8FAFC; border-radius: 10px; border: 1px solid var(--gray-200);">
-                <div style="font-size: 12px; font-weight: 700; color: var(--gray-700); margin-bottom: 8px;">🔍 KPI 연결 (선택사항)</div>
-                <input type="text" id="memoKpiSearch" placeholder="KPI/지표 검색..." oninput="filterMemoKpiSearch(this.value)" style="width: 100%; padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
-                <div id="memoKpiSearchResults" style="max-height: 120px; overflow-y: auto; display: none; margin-top: 4px; border: 1px solid var(--gray-200); border-radius: 8px;"></div>
-                <div id="memoKpiSelected" style="display: none; padding: 8px 12px; background: var(--primary-light); border-radius: 8px; margin-top: 8px;">
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span id="memoKpiSelectedText" style="font-size: 12px; color: var(--primary); font-weight: 600;"></span>
-                    <button onclick="clearMemoKpi()" style="background: none; border: none; cursor: pointer; color: var(--gray-400); font-size: 14px;">✕</button>
+
+              <!-- 업무 내용 -->
+              <div style="margin-bottom: 14px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">📝 완료한 업무 내용 *</label>
+                <textarea id="memoContent" placeholder="실행 완료한 업무 내용을 작성하세요...&#10;예) OO업체 계약 완료, 신규 공급사 3곳 미팅 진행" style="width: 100%; padding: 12px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 14px; min-height: 100px; resize: vertical; box-sizing: border-box; line-height: 1.6;"></textarea>
+              </div>
+
+              <!-- KPI 연결 (필수 선택 유도) -->
+              <div style="margin-bottom: 14px; padding: 16px; background: #F0FDF4; border-radius: 12px; border: 1px solid #BBF7D0;">
+                <div style="font-size: 13px; font-weight: 700; color: #166534; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+                  🎯 KPI 연결
+                  <span style="font-size: 10px; font-weight: 500; color: #15803D; background: #DCFCE7; padding: 2px 6px; border-radius: 4px;">완료 업무 → KPI 반영</span>
+                </div>
+
+                <!-- 지표 유형 선택 (행동지표/성과지표) -->
+                <div style="margin-bottom: 12px;">
+                  <label style="display: block; font-size: 11px; font-weight: 600; color: var(--gray-600); margin-bottom: 6px;">이 업무는 어떤 유형인가요?</label>
+                  <div style="display: flex; gap: 8px;">
+                    <label id="memoTypeNone" onclick="selectMemoIndicatorType('none')" style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid var(--primary); border-radius: 8px; cursor: pointer; background: var(--primary-light); transition: all 0.15s;">
+                      <input type="radio" name="memoIndicatorType" value="none" checked style="accent-color: var(--primary);">
+                      <div>
+                        <div style="font-size: 12px; font-weight: 600; color: var(--primary);">📋 기록만</div>
+                        <div style="font-size: 10px; color: var(--gray-500);">KPI 반영 없음</div>
+                      </div>
+                    </label>
+                    <label id="memoTypeInput" onclick="selectMemoIndicatorType('input')" style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; background: white; transition: all 0.15s;">
+                      <input type="radio" name="memoIndicatorType" value="input" style="accent-color: #2563EB;">
+                      <div>
+                        <div style="font-size: 12px; font-weight: 600; color: var(--gray-800);">🏃 행동지표</div>
+                        <div style="font-size: 10px; color: var(--gray-500);">활동/실행 기록</div>
+                      </div>
+                    </label>
+                    <label id="memoTypeOutput" onclick="selectMemoIndicatorType('output')" style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer; background: white; transition: all 0.15s;">
+                      <input type="radio" name="memoIndicatorType" value="output" style="accent-color: #16A34A;">
+                      <div>
+                        <div style="font-size: 12px; font-weight: 600; color: var(--gray-800);">🎯 성과지표</div>
+                        <div style="font-size: 10px; color: var(--gray-500);">달성 결과 기록</div>
+                      </div>
+                    </label>
                   </div>
                 </div>
-                <input type="hidden" id="memoLagId" value="">
+
+                <!-- KPI 검색/필터 영역 (행동/성과 선택 시 표시) -->
+                <div id="memoKpiSection" style="display: none;">
+                  <!-- KPI 드롭다운 필터 (첨부1 스타일) -->
+                  <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                    <div style="flex: 1; position: relative;">
+                      <input type="text" id="memoKpiSearch" placeholder="🔍 지표 검색..." oninput="filterMemoKpiSearch(this.value)" style="width: 100%; padding: 9px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+                    </div>
+                    <select id="memoKpiFilter" onchange="filterMemoKpiByCategory()" style="padding: 9px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white; color: var(--gray-700); max-width: 180px; cursor: pointer;">
+                      <option value="">전체 KPI</option>
+                      ${(okrState.keyResults || []).map((kr, idx) => {
+                        const subKpis = (okrState.kpis || []).filter(k => k.keyResultId === kr.id);
+                        return '<optgroup label="[메인] ' + kr.name + '">' +
+                          subKpis.map(kpi => '<option value="' + kpi.id + '">' + kpi.name + '</option>').join('') +
+                          '</optgroup>';
+                      }).join('')}
+                    </select>
+                  </div>
+
+                  <!-- 검색 결과 -->
+                  <div id="memoKpiSearchResults" style="max-height: 180px; overflow-y: auto; border: 1px solid var(--gray-200); border-radius: 8px; background: white;"></div>
+
+                  <!-- 선택된 지표 표시 -->
+                  <div id="memoKpiSelected" style="display: none; padding: 10px 14px; background: white; border: 2px solid #16A34A; border-radius: 10px; margin-top: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                      <div style="display: flex; align-items: center; gap: 6px;">
+                        <span id="memoKpiSelectedIcon" style="font-size: 14px;">📥</span>
+                        <div>
+                          <span id="memoKpiSelectedText" style="font-size: 13px; color: #166534; font-weight: 600;"></span>
+                          <div id="memoKpiSelectedPath" style="font-size: 10px; color: var(--gray-500); margin-top: 2px;"></div>
+                        </div>
+                      </div>
+                      <button onclick="clearMemoKpi()" style="background: none; border: none; cursor: pointer; color: var(--gray-400); font-size: 16px;">✕</button>
+                    </div>
+                    <!-- 수량 입력 -->
+                    <div style="display: flex; gap: 10px; align-items: center; padding-top: 8px; border-top: 1px solid var(--gray-200);">
+                      <label style="font-size: 12px; font-weight: 600; color: var(--gray-600); white-space: nowrap;">실행 수량</label>
+                      <input type="number" id="memoResultValue" value="1" min="0" step="0.1" style="width: 80px; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 14px; text-align: center;">
+                      <span id="memoResultUnit" style="font-size: 12px; color: var(--gray-600);">건</span>
+                      <div style="flex: 1; text-align: right; font-size: 10px; color: #16A34A; font-weight: 600;">→ KPI에 직접 반영</div>
+                    </div>
+                  </div>
+                  <input type="hidden" id="memoLagId" value="">
+                  <input type="hidden" id="memoLagType" value="">
+                </div>
               </div>
             </div>
-            <div style="padding: 14px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: flex-end;">
+
+            <!-- 푸터 -->
+            <div style="padding: 14px 24px; border-top: 1px solid var(--gray-200); display: flex; gap: 10px; justify-content: flex-end; background: #FAFAFA;">
               <button onclick="closeTaskMemoModal()" style="padding: 10px 20px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--gray-600);">취소</button>
-              <button onclick="saveTaskMemo()" style="padding: 10px 24px; border: none; border-radius: 8px; background: #16A34A; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">메모 저장</button>
+              <button onclick="saveTaskMemo()" style="padding: 10px 24px; border: none; border-radius: 8px; background: #16A34A; color: white; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 4px;">✅ 업무메모 저장</button>
             </div>
           </div>
         </div>
       `;
       document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 초기 지표 목록 표시 (전체)
+      filterMemoKpiByCategory();
     }
 
     function closeTaskMemoModal() {
@@ -30266,61 +30368,219 @@
       if (modal) modal.remove();
     }
 
-    function filterMemoKpiSearch(query) {
+    // 지표 유형 선택 (기록만/행동지표/성과지표)
+    function selectMemoIndicatorType(type) {
+      const noneLabel = document.getElementById('memoTypeNone');
+      const inputLabel = document.getElementById('memoTypeInput');
+      const outputLabel = document.getElementById('memoTypeOutput');
+      const kpiSection = document.getElementById('memoKpiSection');
+
+      // 스타일 초기화
+      [noneLabel, inputLabel, outputLabel].forEach(el => {
+        el.style.border = '2px solid var(--gray-200)';
+        el.style.background = 'white';
+      });
+
+      if (type === 'none') {
+        noneLabel.style.border = '2px solid var(--primary)';
+        noneLabel.style.background = 'var(--primary-light)';
+        kpiSection.style.display = 'none';
+      } else if (type === 'input') {
+        inputLabel.style.border = '2px solid #2563EB';
+        inputLabel.style.background = '#EFF6FF';
+        kpiSection.style.display = 'block';
+        filterMemoKpiByCategory();
+      } else if (type === 'output') {
+        outputLabel.style.border = '2px solid #16A34A';
+        outputLabel.style.background = '#F0FDF4';
+        kpiSection.style.display = 'block';
+        filterMemoKpiByCategory();
+      }
+    }
+
+    // KPI 카테고리 필터링 (드롭다운 기반)
+    function filterMemoKpiByCategory() {
+      const filterValue = document.getElementById('memoKpiFilter')?.value || '';
+      const searchQuery = document.getElementById('memoKpiSearch')?.value?.toLowerCase() || '';
+      const selectedType = document.querySelector('input[name="memoIndicatorType"]:checked')?.value || 'none';
+
       const container = document.getElementById('memoKpiSearchResults');
-      if (!container || !query || query.length < 1) { if (container) container.style.display = 'none'; return; }
-      const q = query.toLowerCase();
-      const results = [];
-      (okrState.laggingIndicators || []).forEach(lag => {
-        if (lag.name?.toLowerCase().includes(q)) {
-          const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
-          results.push({ id: lag.id, name: lag.name, desc: kpi?.name || '지표', type: lag.type });
-        }
+      if (!container) return;
+
+      let indicators = (okrState.laggingIndicators || []).map(lag => {
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+        const krIdx = kr ? okrState.keyResults.indexOf(kr) : -1;
+        return {
+          id: lag.id,
+          name: lag.name,
+          type: lag.type,
+          unit: lag.unit || '건',
+          kpiId: lag.kpiId,
+          kpiName: kpi?.name || '',
+          krId: kr?.id || '',
+          krName: kr?.name || '',
+          krIdx: krIdx,
+          isMainKpi: false,
+          path: `${kr?.name || '?'} > ${kpi?.name || '?'}`
+        };
       });
-      (okrState.kpis || []).forEach(kpi => {
-        if (kpi.name?.toLowerCase().includes(q)) {
-          results.push({ id: kpi.id, name: kpi.name, desc: '서브 KPI', type: 'kpi' });
+
+      // 지표 유형 필터 (행동/성과)
+      if (selectedType === 'input') {
+        indicators = indicators.filter(i => i.type !== 'output');
+      } else if (selectedType === 'output') {
+        indicators = indicators.filter(i => i.type === 'output');
+      }
+
+      // KPI 카테고리 필터
+      if (filterValue) {
+        indicators = indicators.filter(i => i.kpiId === filterValue);
+      }
+
+      // 검색어 필터
+      if (searchQuery) {
+        indicators = indicators.filter(i =>
+          i.name?.toLowerCase().includes(searchQuery) ||
+          i.kpiName?.toLowerCase().includes(searchQuery) ||
+          i.krName?.toLowerCase().includes(searchQuery)
+        );
+      }
+
+      // 메인 KPI별 그룹화
+      const grouped = {};
+      indicators.forEach(ind => {
+        const groupKey = ind.krId || 'no-kr';
+        if (!grouped[groupKey]) {
+          grouped[groupKey] = {
+            krName: ind.krName,
+            krIdx: ind.krIdx,
+            isMainKpi: true,
+            items: []
+          };
         }
+        grouped[groupKey].items.push(ind);
       });
-      container.innerHTML = results.length === 0 ? '<div style="padding: 10px; text-align: center; color: var(--gray-400); font-size: 12px;">결과 없음</div>' :
-        results.slice(0, 8).map(r => `<div onclick="selectMemoKpi('${r.id}', '${r.name.replace(/'/g, "\\'")}', '${r.desc.replace(/'/g, "\\'")}')" style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--gray-100); font-size: 12px;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">${r.type === 'output' ? '📤' : r.type === 'kpi' ? '📊' : '📥'} ${r.name} <span style="color:var(--gray-400);">${r.desc}</span></div>`).join('');
+
+      // 그룹 정렬
+      const sortedGroups = Object.entries(grouped).sort((a, b) => a[1].krIdx - b[1].krIdx);
+
+      if (indicators.length === 0) {
+        container.innerHTML = `<div style="padding: 20px; text-align: center; color: var(--gray-400); font-size: 12px;">
+          ${selectedType === 'input' ? '행동지표' : selectedType === 'output' ? '성과지표' : '지표'}가 없습니다.
+        </div>`;
+      } else {
+        let html = '';
+        sortedGroups.forEach(([key, group]) => {
+          // 메인 KPI 그룹 헤더
+          html += `<div style="padding: 6px 12px; background: #F1F5F9; font-size: 10px; font-weight: 700; color: var(--gray-500); border-bottom: 1px solid var(--gray-200); display: flex; align-items: center; gap: 4px; position: sticky; top: 0;">
+            <span style="background: #3B82F6; color: white; padding: 1px 5px; border-radius: 3px; font-size: 9px;">메인 KPI</span>
+            ${group.krName || '미분류'}
+          </div>`;
+
+          // 서브 KPI별 하위 그룹
+          const subGroups = {};
+          group.items.forEach(item => {
+            const subKey = item.kpiId || 'no-kpi';
+            if (!subGroups[subKey]) {
+              subGroups[subKey] = { kpiName: item.kpiName, items: [] };
+            }
+            subGroups[subKey].items.push(item);
+          });
+
+          Object.entries(subGroups).forEach(([subKey, sub]) => {
+            html += `<div style="padding: 4px 12px 4px 20px; background: #FAFBFC; font-size: 10px; color: var(--gray-400); border-bottom: 1px solid var(--gray-100); display: flex; align-items: center; gap: 4px;">
+              <span style="background: #E0E7FF; color: #4338CA; padding: 1px 4px; border-radius: 3px; font-size: 9px;">서브 KPI</span>
+              ${sub.kpiName}
+            </div>`;
+
+            sub.items.forEach(r => {
+              const icon = r.type === 'output' ? '📤' : '📥';
+              const typeLabel = r.type === 'output' ? '성과' : '행동';
+              const typeBg = r.type === 'output' ? '#DCFCE7' : '#DBEAFE';
+              const typeColor = r.type === 'output' ? '#166534' : '#1E40AF';
+              html += `<div onclick="selectMemoKpi('${r.id}', '${r.name.replace(/'/g, "\\'")}', '${r.path.replace(/'/g, "\\'")}', '${r.type}', '${r.unit}')"
+                style="padding: 10px 12px 10px 28px; cursor: pointer; border-bottom: 1px solid var(--gray-100); font-size: 12px; display: flex; align-items: center; gap: 8px; transition: background 0.1s;"
+                onmouseover="this.style.background='#F0FDF4'" onmouseout="this.style.background='white'">
+                <span>${icon}</span>
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-weight: 600; color: var(--gray-800);">${r.name}</div>
+                </div>
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 4px; background: ${typeBg}; color: ${typeColor}; font-weight: 600; white-space: nowrap;">${typeLabel}</span>
+                <span style="font-size: 10px; color: var(--gray-400);">${r.unit}</span>
+              </div>`;
+            });
+          });
+        });
+        container.innerHTML = html;
+      }
       container.style.display = 'block';
     }
 
-    function selectMemoKpi(id, name, desc) {
+    function filterMemoKpiSearch(query) {
+      filterMemoKpiByCategory();
+    }
+
+    function selectMemoKpi(id, name, path, type, unit) {
       document.getElementById('memoLagId').value = id;
+      document.getElementById('memoLagType').value = type || '';
       document.getElementById('memoKpiSearch').value = '';
       document.getElementById('memoKpiSearchResults').style.display = 'none';
       document.getElementById('memoKpiSelected').style.display = 'block';
-      document.getElementById('memoKpiSelectedText').textContent = name + ' (' + desc + ')';
+      document.getElementById('memoKpiSelectedIcon').textContent = type === 'output' ? '📤' : '📥';
+      document.getElementById('memoKpiSelectedText').textContent = name;
+      document.getElementById('memoKpiSelectedPath').textContent = path;
+      document.getElementById('memoResultUnit').textContent = unit || '건';
     }
 
     function clearMemoKpi() {
       document.getElementById('memoLagId').value = '';
+      document.getElementById('memoLagType').value = '';
       document.getElementById('memoKpiSelected').style.display = 'none';
+      document.getElementById('memoKpiSearchResults').style.display = 'block';
+      filterMemoKpiByCategory();
     }
 
     async function saveTaskMemo() {
       const content = document.getElementById('memoContent')?.value.trim();
-      if (!content) { alert('메모 내용을 입력해주세요.'); return; }
+      if (!content) { alert('완료한 업무 내용을 입력해주세요.'); return; }
+
       const lagId = document.getElementById('memoLagId')?.value || '';
+      const lagType = document.getElementById('memoLagType')?.value || '';
+      const indicatorType = document.querySelector('input[name="memoIndicatorType"]:checked')?.value || 'none';
+      const resultValue = lagId ? (parseFloat(document.getElementById('memoResultValue')?.value) || 0) : 0;
+      const completionDate = document.getElementById('memoCompletionDate')?.value || new Date().toISOString().split('T')[0];
       const member = getCurrentMember();
+
       try {
-        await db.collection('okr_dailyLogs').add({
+        const logData = {
           memberId: member?.id || '',
           memberName: member?.name || '',
           laggingIndicatorId: lagId,
-          resultValue: 0,
+          resultValue: resultValue,
           memo: content,
-          type: 'memo',
-          date: new Date().toISOString().split('T')[0],
+          type: 'work_memo',
+          indicatorType: indicatorType,  // none, input, output
+          date: completionDate,
+          completionDate: completionDate,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        showToast('메모가 저장되었습니다', 'success');
+        };
+
+        await db.collection('okr_dailyLogs').add(logData);
+
+        // KPI에 값 반영된 경우 알림
+        if (lagId && resultValue > 0) {
+          const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+          showToast(`업무메모 저장 완료! ${lag?.name || '지표'}에 ${resultValue}${lag?.unit || '건'} 반영됨`, 'success');
+        } else {
+          showToast('업무메모가 저장되었습니다', 'success');
+        }
         closeTaskMemoModal();
+        // 데이터 리프레시 (KPI 달성도 갱신)
+        if (typeof renderAll === 'function') renderAll();
       } catch (e) {
-        console.error('메모 저장 오류:', e);
-        alert('메모 저장 중 오류가 발생했습니다.');
+        console.error('업무메모 저장 오류:', e);
+        alert('업무메모 저장 중 오류가 발생했습니다.');
       }
     }
 
@@ -31471,18 +31731,43 @@
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
 
-      // 활동지표(행동) 옵션 생성
+      // 활동지표(행동) 옵션 생성 - 메인/서브 KPI 표시
       const activityLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
       let activityOptions = '<option value="">활동지표 선택</option>';
+      // 메인 KPI별로 그룹화
+      const activityByKR = {};
       activityLags.forEach(lag => {
-        activityOptions += `<option value="${lag.id}">${lag.name}</option>`;
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+        const krKey = kr?.id || 'none';
+        if (!activityByKR[krKey]) activityByKR[krKey] = { name: kr?.name || '미분류', items: [] };
+        activityByKR[krKey].items.push({ lag, kpiName: kpi?.name || '' });
+      });
+      Object.values(activityByKR).forEach(group => {
+        activityOptions += `<optgroup label="[메인] ${group.name}">`;
+        group.items.forEach(item => {
+          activityOptions += `<option value="${item.lag.id}">[서브:${item.kpiName}] ${item.lag.name}</option>`;
+        });
+        activityOptions += `</optgroup>`;
       });
 
-      // 성과지표 옵션 생성
+      // 성과지표 옵션 생성 - 메인/서브 KPI 표시
       const resultLags = okrState.laggingIndicators.filter(l => l.type === 'output');
       let resultOptions = '<option value="">성과지표 선택</option>';
+      const resultByKR = {};
       resultLags.forEach(lag => {
-        resultOptions += `<option value="${lag.id}">${lag.name}</option>`;
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+        const krKey = kr?.id || 'none';
+        if (!resultByKR[krKey]) resultByKR[krKey] = { name: kr?.name || '미분류', items: [] };
+        resultByKR[krKey].items.push({ lag, kpiName: kpi?.name || '' });
+      });
+      Object.values(resultByKR).forEach(group => {
+        resultOptions += `<optgroup label="[메인] ${group.name}">`;
+        group.items.forEach(item => {
+          resultOptions += `<option value="${item.lag.id}">[서브:${item.kpiName}] ${item.lag.name}</option>`;
+        });
+        resultOptions += `</optgroup>`;
       });
 
       const modalHtml = `
