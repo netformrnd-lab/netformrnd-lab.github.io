@@ -1582,10 +1582,7 @@
             </div>
           </div>
 
-          <!-- 진행중 업무 간트 바 (실행예정일 ~ 오늘) -->
-          <div id="weeklyGanttBars" style="margin-top: 10px; display: none;">
-            <!-- 동적으로 렌더링 -->
-          </div>
+          <!-- 진행중 업무 간트 바 제거됨 -->
         </div>
 
         <!-- 업무 컨트롤 바 (카드 1줄 정리) -->
@@ -9358,8 +9355,7 @@
         }
       });
 
-      // ★ 진행중 업무 간트 바 렌더링 (실행예정일 ~ 오늘)
-      renderWeeklyGanttBars(activeTasks, weekStart);
+      // 진행중 업무 간트 바 제거됨 - 월간 캘린더에서 표시
     }
 
     // ★ 진행중 업무 간트 바 렌더링
@@ -29431,17 +29427,49 @@
       const currentMemberId = member?.id || '';
       const viewMode = taskPlanState.filter.viewMode || 'my';
 
-      // 전체 업무를 날짜별로 그룹화 (완료 업무는 실제완료일 기준, 미완료는 마감일 기준)
+      // 전체 업무를 날짜별로 그룹화 (완료 업무는 실제완료일 기준, 진행중은 시작일~오늘 범위, 미완료는 마감일 기준)
       const allTasks = taskPlanState.tasks || [];
       const tasksByDate = {};
+      const calToday = new Date(); calToday.setHours(0, 0, 0, 0);
       allTasks.forEach(task => {
         const isDone = task.status === 'done' || task.status === 'completed';
-        const dateStr = isDone
-          ? (task.actualCompletionDate || task.deadline || task.dueDate)
-          : (task.deadline || task.dueDate);
-        if (dateStr) {
-          if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
-          tasksByDate[dateStr].push(task);
+        const isDoing = task.status === 'doing';
+        if (isDone) {
+          const dateStr = task.actualCompletionDate || task.deadline || task.dueDate;
+          if (dateStr) {
+            if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
+            tasksByDate[dateStr].push(task);
+          }
+        } else if (isDoing) {
+          // 진행중 업무: scheduledDate(시작일)부터 오늘까지 모든 날짜에 표시
+          const startStr = task.scheduledDate || task.deadline || task.dueDate;
+          if (startStr) {
+            const startDt = new Date(startStr + 'T00:00:00');
+            const endDt = new Date(calToday);
+            // 시작일부터 오늘까지 반복하며 각 날짜에 추가
+            for (let dt = new Date(startDt); dt <= endDt; dt.setDate(dt.getDate() + 1)) {
+              const ds = dt.toISOString().split('T')[0];
+              if (!tasksByDate[ds]) tasksByDate[ds] = [];
+              tasksByDate[ds].push(task);
+            }
+            // 마감일이 오늘 이후이면 마감일에도 표시
+            const deadlineStr = task.deadline || task.dueDate;
+            if (deadlineStr && deadlineStr !== startStr) {
+              const deadlineDt = new Date(deadlineStr + 'T00:00:00');
+              if (deadlineDt > calToday) {
+                if (!tasksByDate[deadlineStr]) tasksByDate[deadlineStr] = [];
+                if (!tasksByDate[deadlineStr].includes(task)) {
+                  tasksByDate[deadlineStr].push(task);
+                }
+              }
+            }
+          }
+        } else {
+          const dateStr = task.deadline || task.dueDate;
+          if (dateStr) {
+            if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
+            tasksByDate[dateStr].push(task);
+          }
         }
       });
 
