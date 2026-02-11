@@ -3149,6 +3149,15 @@
                 ${m.status === MEETING_STATUS.COMPLETED && m.postSummary ? `
                   <span style="font-size: 11px; padding: 4px 8px; background: #DCFCE7; color: #16A34A; border-radius: 4px;">📝 회의록 작성됨</span>
                 ` : ''}
+                ${(() => {
+                  const actions = m.postActionItems || [];
+                  if (actions.length === 0) return '';
+                  const completedActions = actions.filter(a => a.status === 'completed').length;
+                  const allDone = completedActions === actions.length;
+                  return `<span style="font-size: 11px; padding: 4px 8px; background: ${allDone ? '#DCFCE7' : '#FEF3C7'}; color: ${allDone ? '#16A34A' : '#B45309'}; border-radius: 4px;">
+                    ✔️ ${completedActions}/${actions.length} 액션 완료
+                  </span>`;
+                })()}
               </div>
             </div>
           `;
@@ -12423,7 +12432,7 @@
           }
         }
 
-        await loadOkrData();
+        // ★ 실시간 리스너가 자동 갱신하므로 대시보드만 렌더링
         renderOkrDashboard();
 
         if (!continueRegistration) {
@@ -12737,6 +12746,23 @@
       setTimeout(() => {
         parseActionItemsPreview(meetingId);
         loadMeetingLinkedTasks(meetingId);
+
+        // ★ 자동 저장 이벤트 연동
+        ['postSummary', 'postDecisions', 'postRequestsReceived', 'postRequestsMade'].forEach(fieldId => {
+          const el = document.getElementById(fieldId);
+          if (el) {
+            el.addEventListener('input', () => scheduleMeetingAutoSave(meetingId));
+          }
+        });
+
+        // 자동저장 인디케이터 삽입
+        const saveSection = document.querySelector('#meetingLinkedTasks')?.parentElement;
+        if (saveSection) {
+          const indicator = document.createElement('div');
+          indicator.id = 'meetingAutoSaveIndicator';
+          indicator.style.cssText = 'font-size: 12px; color: var(--gray-500); text-align: right; padding: 4px 0; min-height: 20px;';
+          saveSection.insertBefore(indicator, saveSection.firstChild);
+        }
       }, 100);
     }
 
@@ -13177,11 +13203,11 @@
         });
 
         showToast('미팅이 수정되었습니다', 'success');
-        await loadOkrData();
+        // ★ 실시간 리스너가 UI 자동 갱신 - 상세 모달만 다시 열기
         renderOkrDashboard();
-        if (state.currentTab === 'meeting-history') renderMeetingHistory();
         closeModal();
-        openMeetingDetailModal(meetingId);
+        // 실시간 리스너 반영 대기 후 상세 모달 열기
+        setTimeout(() => openMeetingDetailModal(meetingId), 300);
       } catch (error) {
         console.error('미팅 수정 오류:', error);
         showToast('미팅 수정 중 오류가 발생했습니다', 'error');
@@ -13196,9 +13222,8 @@
         const meeting = okrState.meetings?.find(m => m.id === meetingId);
         await softDelete('okr_meetings', meetingId, meeting, meeting?.title || meeting?.meetingDate);
         showToast('휴지통으로 이동되었습니다', 'success');
-        await loadOkrData();
+        // ★ 실시간 리스너가 자동 갱신
         renderOkrDashboard();
-        if (state.currentTab === 'meeting-history') renderMeetingHistory();
         closeModal();
       } catch (error) {
         console.error('삭제 실패:', error);
@@ -13228,9 +13253,11 @@
       return labels[status] || status;
     }
 
-    // 미팅 완료 처리
+    // ★ 미팅 완료 처리 (동기화 고도화 - 배치 처리 + 변경이력 + 참석자 알림)
     async function completeMeeting(meetingId) {
       const meeting = okrState.meetings.find(m => m.id === meetingId);
+      if (!meeting) return;
+
       const postSummary = document.getElementById('postSummary')?.value.trim();
       const postDecisionsStr = document.getElementById('postDecisions')?.value.trim();
       const postActionItemsStr = document.getElementById('postActionItems')?.value.trim();
@@ -13249,26 +13276,22 @@
         lines.forEach(line => {
           const match = line.match(/\[@([^\]]+)\]\s*(.+)/);
           if (match) {
-            postActionItems.push({
-              assignee: match[1],
-              task: match[2],
-              status: 'pending'
-            });
+            postActionItems.push({ assignee: match[1], task: match[2], status: 'pending' });
           } else if (line) {
-            // [@담당자] 형식이 아닌 경우 담당자 미지정
-            postActionItems.push({
-              assignee: '',
-              task: line,
-              status: 'pending'
-            });
+            postActionItems.push({ assignee: '', task: line, status: 'pending' });
           }
         });
       }
 
       try {
-        await db.collection('okr_meetings').doc(meetingId).update({
+        // ★ 배치 처리: 미팅 완료 + 변경이력 + 참석자 알림을 원자적으로 처리
+        const batch = db.batch();
+
+        // 1. 미팅 문서 업데이트
+        const meetingRef = db.collection('okr_meetings').doc(meetingId);
+        batch.update(meetingRef, {
           status: MEETING_STATUS.COMPLETED,
-          actualKRIds: actualKRIds,  // 실제 논의된 KR 저장
+          actualKRIds: actualKRIds,
           postSummary: postSummary || '',
           postDecisions: postDecisions,
           postActionItems: postActionItems,
@@ -13278,13 +13301,49 @@
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // ★ 액션 아이템 자동 업무 등록
+        // 2. 변경이력 기록
+        const changeLogRef = db.collection('okr_changeLogs').doc();
+        batch.set(changeLogRef, {
+          entityType: 'meeting',
+          entityId: meetingId,
+          action: 'update',
+          userName: state.currentUser?.name || state.user?.email || '사용자',
+          data: {
+            name: meeting.title,
+            changes: {
+              status: { from: meeting.status, to: MEETING_STATUS.COMPLETED }
+            }
+          },
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 3. 참석자에게 미팅 완료 알림
+        const participantIds = meeting.participantIds || [];
+        const currentUserId = state.currentUser?.id || state.user?.uid;
+        participantIds.forEach(pid => {
+          if (pid === currentUserId) return; // 본인 제외
+          const notifRef = db.collection('notifications').doc();
+          batch.set(notifRef, {
+            recipientId: pid,
+            type: 'meeting_completed',
+            message: `"${meeting.title}" 미팅이 완료되었습니다${postActionItems.length > 0 ? ` (액션 ${postActionItems.length}건)` : ''}`,
+            targetId: meetingId,
+            isRead: false,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        });
+
+        // 배치 커밋
+        await batch.commit();
+
+        // ★ 액션 아이템 자동 업무 등록 (배치 외부 - 복잡한 로직)
         if (postActionItems.length > 0) {
           await autoRegisterActionItemsAsTasks(meetingId, meeting, postActionItems);
         }
 
         showToast('미팅이 완료되었습니다', 'success');
-        await loadOkrData();
+
+        // 실시간 리스너가 자동으로 UI 갱신하므로 수동 갱신은 대시보드만
         renderOkrDashboard();
         closeModal();
       } catch (error) {
@@ -13678,7 +13737,7 @@
         });
 
         showToast('미팅 정보가 수정되었습니다', 'success');
-        await loadOkrData();
+        // ★ 실시간 리스너가 자동 갱신
         renderOkrDashboard();
         closeModal();
       } catch (error) {
@@ -17995,6 +18054,11 @@
       CANCELLED: 'cancelled'      // 취소
     };
 
+    // ★ 미팅 실시간 동기화 상태
+    let unsubscribeMeetingListener = null;
+    let meetingAutoSaveTimer = null;
+    const MEETING_AUTOSAVE_DELAY = 2000; // 2초 디바운스
+
     let okrState = {
       objective: null,
       keyResults: [],
@@ -18140,14 +18204,8 @@
           .get();
         okrState.weeklyPlans = weeklyPlansSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // 미팅 일지 로드 (최근 90일)
-        const ninetyDaysAgo = new Date();
-        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-        const meetingSnapshot = await db.collection('okr_meetings')
-          .where('date', '>=', ninetyDaysAgo.toISOString().split('T')[0])
-          .orderBy('date', 'desc')
-          .get();
-        okrState.meetings = meetingSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // ★ 미팅 일지 실시간 동기화 (onSnapshot)
+        await setupMeetingRealtimeSync();
 
         // 초기 데이터 없으면 시드
         if (okrState.allObjectives.length === 0) {
@@ -18156,6 +18214,9 @@
 
         // 미팅 리마인더 체크 (알림 생성)
         setTimeout(() => checkMeetingReminders(), 1000);
+
+        // ★ 미팅 상태 자동 진행 (scheduled → in_progress)
+        setTimeout(() => autoProgressMeetingStatus(), 1200);
 
         // KPI 마감일 알림 체크
         setTimeout(() => checkKPIDeadlineNotifications(), 1500);
@@ -18171,6 +18232,219 @@
 
       } catch (e) {
         console.error('OKR 데이터 로드 오류:', e);
+      }
+    }
+
+    // ========================================
+    // ★ 미팅 실시간 동기화 시스템
+    // ========================================
+
+    // 미팅 실시간 리스너 설정
+    async function setupMeetingRealtimeSync() {
+      // 기존 리스너 해제
+      if (unsubscribeMeetingListener) {
+        unsubscribeMeetingListener();
+        unsubscribeMeetingListener = null;
+      }
+
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+      return new Promise((resolve) => {
+        let isFirstLoad = true;
+
+        unsubscribeMeetingListener = db.collection('okr_meetings')
+          .where('date', '>=', ninetyDaysAgo.toISOString().split('T')[0])
+          .orderBy('date', 'desc')
+          .onSnapshot(snapshot => {
+            const prevMeetings = okrState.meetings;
+            okrState.meetings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            if (isFirstLoad) {
+              isFirstLoad = false;
+              resolve();
+              return;
+            }
+
+            // 변경사항 감지 및 UI 자동 갱신
+            console.log(`📅 미팅 실시간 동기화: ${okrState.meetings.length}건`);
+
+            // 미팅 관련 탭이 활성화되어 있으면 자동 렌더링
+            if (state.currentTab === 'meeting-history') {
+              renderMeetingHistory();
+            }
+
+            // 대시보드의 이번주 미팅 위젯도 갱신
+            if (typeof renderThisWeekMeetings === 'function') {
+              renderThisWeekMeetings();
+            }
+
+            // 새로 추가/완료된 미팅 감지하여 토스트 알림
+            detectMeetingChanges(prevMeetings, okrState.meetings);
+
+          }, error => {
+            console.error('미팅 실시간 동기화 오류:', error);
+            // 에러 시 일회성 로드로 폴백
+            fallbackLoadMeetings().then(resolve);
+          });
+      });
+    }
+
+    // 미팅 변경 감지 및 알림
+    function detectMeetingChanges(prevMeetings, newMeetings) {
+      const prevIds = new Set(prevMeetings.map(m => m.id));
+      const newIds = new Set(newMeetings.map(m => m.id));
+
+      // 새로 추가된 미팅
+      const addedMeetings = newMeetings.filter(m => !prevIds.has(m.id));
+      addedMeetings.forEach(m => {
+        if (m.createdBy !== (state.user?.uid || '')) {
+          showToast(`📅 새 미팅: ${m.title}`, 'info');
+        }
+      });
+
+      // 상태가 변경된 미팅 (완료 등)
+      newMeetings.forEach(newM => {
+        const prevM = prevMeetings.find(p => p.id === newM.id);
+        if (prevM && prevM.status !== newM.status && newM.status === MEETING_STATUS.COMPLETED) {
+          if (newM.createdBy !== (state.user?.uid || '')) {
+            showToast(`✅ 미팅 완료: ${newM.title}`, 'success');
+          }
+        }
+      });
+    }
+
+    // 폴백: 일회성 미팅 로드
+    async function fallbackLoadMeetings() {
+      try {
+        const ninetyDaysAgo = new Date();
+        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+        const snapshot = await db.collection('okr_meetings')
+          .where('date', '>=', ninetyDaysAgo.toISOString().split('T')[0])
+          .orderBy('date', 'desc')
+          .get();
+        okrState.meetings = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      } catch (e) {
+        console.error('미팅 폴백 로드 오류:', e);
+      }
+    }
+
+    // 미팅 상태 자동 진행 (scheduled → in_progress)
+    async function autoProgressMeetingStatus() {
+      const now = new Date();
+      const meetings = okrState.meetings || [];
+
+      for (const meeting of meetings) {
+        if (meeting.status !== MEETING_STATUS.SCHEDULED) continue;
+
+        const meetingDateTime = new Date(`${meeting.date}T${meeting.time || '09:00'}`);
+
+        // 미팅 시작 시간이 지났으면 자동으로 진행중으로 변경
+        if (now >= meetingDateTime) {
+          try {
+            await db.collection('okr_meetings').doc(meeting.id).update({
+              status: MEETING_STATUS.IN_PROGRESS,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            console.log(`📅 미팅 자동 진행: ${meeting.title}`);
+          } catch (e) {
+            console.error('미팅 상태 자동 변경 오류:', e);
+          }
+        }
+      }
+    }
+
+    // 미팅 후 정리 자동 저장 (디바운스)
+    function scheduleMeetingAutoSave(meetingId) {
+      if (meetingAutoSaveTimer) {
+        clearTimeout(meetingAutoSaveTimer);
+      }
+
+      meetingAutoSaveTimer = setTimeout(async () => {
+        await executeMeetingAutoSave(meetingId);
+      }, MEETING_AUTOSAVE_DELAY);
+    }
+
+    async function executeMeetingAutoSave(meetingId) {
+      const postSummary = document.getElementById('postSummary')?.value?.trim();
+      const postDecisionsStr = document.getElementById('postDecisions')?.value?.trim();
+      const postActionItemsStr = document.getElementById('postActionItems')?.value?.trim();
+      const requestsReceived = document.getElementById('postRequestsReceived')?.value?.trim() || '';
+      const requestsMade = document.getElementById('postRequestsMade')?.value?.trim() || '';
+
+      // 아무 내용도 없으면 저장하지 않음
+      if (!postSummary && !postDecisionsStr && !postActionItemsStr && !requestsReceived && !requestsMade) return;
+
+      const actualKRIds = Array.from(document.querySelectorAll('.actual-kr-checkbox:checked')).map(cb => cb.value);
+      const postDecisions = postDecisionsStr ? postDecisionsStr.split('\n').map(d => d.trim()).filter(d => d) : [];
+
+      const postActionItems = [];
+      if (postActionItemsStr) {
+        postActionItemsStr.split('\n').map(l => l.trim()).filter(l => l).forEach(line => {
+          const match = line.match(/\[@([^\]]+)\]\s*(.+)/);
+          if (match) {
+            postActionItems.push({ assignee: match[1], task: match[2], status: 'pending' });
+          } else {
+            postActionItems.push({ assignee: '', task: line, status: 'pending' });
+          }
+        });
+      }
+
+      try {
+        await db.collection('okr_meetings').doc(meetingId).update({
+          actualKRIds,
+          postSummary: postSummary || '',
+          postDecisions,
+          postActionItems,
+          requestsReceived,
+          requestsMade,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 자동저장 표시
+        const indicator = document.getElementById('meetingAutoSaveIndicator');
+        if (indicator) {
+          indicator.textContent = '자동 저장됨';
+          indicator.style.color = '#10B981';
+          setTimeout(() => {
+            if (indicator) {
+              indicator.textContent = '';
+            }
+          }, 2000);
+        }
+      } catch (e) {
+        console.error('미팅 자동저장 오류:', e);
+      }
+    }
+
+    // 액션아이템 완료 시 미팅 역동기화
+    async function syncTaskCompletionToMeeting(taskId, taskData) {
+      if (!taskData.meetingId) return;
+
+      try {
+        const meetingDoc = await db.collection('okr_meetings').doc(taskData.meetingId).get();
+        if (!meetingDoc.exists) return;
+
+        const meeting = meetingDoc.data();
+        const actionItems = meeting.postActionItems || [];
+
+        // 매칭되는 액션아이템 찾기
+        const updatedItems = actionItems.map(item => {
+          if (item.task === taskData.title ||
+              (item.assignee && taskData.assignee && item.assignee === taskData.assignee && item.task === taskData.title)) {
+            return { ...item, status: 'completed', completedAt: new Date().toISOString(), taskPlanId: taskId };
+          }
+          return item;
+        });
+
+        await db.collection('okr_meetings').doc(taskData.meetingId).update({
+          postActionItems: updatedItems,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        console.log(`✅ 미팅 액션아이템 역동기화 완료: ${taskData.title}`);
+      } catch (e) {
+        console.error('미팅 액션아이템 역동기화 오류:', e);
       }
     }
 
@@ -30209,6 +30483,11 @@
           okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
         }
 
+        // ★ 미팅 액션아이템 역동기화
+        if (task.meetingId) {
+          syncTaskCompletionToMeeting(taskId, task);
+        }
+
         showToast('업무가 완료 처리되었습니다.');
         loadTaskPlanData();
 
@@ -30640,6 +30919,11 @@
           const docRef = await db.collection('okr_dailyLogs').add(logData);
           okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
           okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === okrToday);
+        }
+
+        // ★ 미팅 액션아이템 역동기화
+        if (task.meetingId) {
+          syncTaskCompletionToMeeting(taskId, task);
         }
 
         closeCompleteTaskModal();
