@@ -9119,14 +9119,29 @@
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() + mondayOffset);
 
-      // 전체 업무 목록 가져오기 (진행중, 대기만)
-      const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
+      // 전체 업무 목록 가져오기 (진행중, 대기)
+      const activeTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
         if (task.status !== 'doing' && task.status !== 'waiting') return false;
-        // 내 업무 필터링
         if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
           if (task.assigneeId !== currentMemberId) return false;
         }
         return true;
+      });
+
+      // 이번 주에 완료된 업무 (실제완료일 기준)
+      const weekEndDate = new Date(weekStart);
+      weekEndDate.setDate(weekStart.getDate() + 4); // 금요일
+      const weekStartStr = weekStart.toISOString().split('T')[0];
+      const weekEndStr = weekEndDate.toISOString().split('T')[0];
+
+      const completedThisWeek = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
+        if (task.status !== 'done' && task.status !== 'completed') return false;
+        if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
+          if (task.assigneeId !== currentMemberId) return false;
+        }
+        const completionDate = task.actualCompletionDate;
+        if (!completionDate) return false;
+        return completionDate >= weekStartStr && completionDate <= weekEndStr;
       });
 
       ['mon', 'tue', 'wed', 'thu', 'fri'].forEach((day, index) => {
@@ -9139,15 +9154,27 @@
           let html = '';
 
           // 1. 해당 날짜에 마감인 업무들 표시 (진행중/대기)
-          const dayTasks = allTasks.filter(task => {
+          const dayTasks = activeTasks.filter(task => {
             const taskDeadline = task.deadline || task.dueDate || task.scheduledDate;
             if (!taskDeadline) return false;
             return taskDeadline === dateStr;
           });
 
+          // 2. 해당 날짜에 완료된 업무들 표시 (실제완료일 기준)
+          const dayCompletedTasks = completedThisWeek.filter(task => task.actualCompletionDate === dateStr);
+
           if (dayTasks.length > 0) {
             dayTasks.forEach(task => {
               html += createDayTaskCard(task);
+            });
+          }
+
+          if (dayCompletedTasks.length > 0) {
+            if (dayTasks.length > 0) {
+              html += '<div style="border-top: 1px dashed #BBF7D0; margin: 4px 0;"></div>';
+            }
+            dayCompletedTasks.forEach(task => {
+              html += createCompletedDayTaskCard(task);
             });
           }
 
@@ -9198,6 +9225,21 @@
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span style="font-size: 9px; color: ${statusColor}; font-weight: 600;">${statusText}</span>
             ${task.delayReason ? '<span style="font-size: 9px; color: #EF4444;">⚡</span>' : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    // 요일별 완료 업무 카드 생성
+    function createCompletedDayTaskCard(task) {
+      return `
+        <div onclick="openScheduledTaskDetail('${task.id}')"
+             style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 6px; padding: 6px 8px; margin-bottom: 4px; cursor: pointer; font-size: 10px; transition: all 0.2s; opacity: 0.85;"
+             onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'; this.style.opacity='1'"
+             onmouseout="this.style.boxShadow='none'; this.style.opacity='0.85'">
+          <div style="font-weight: 600; color: var(--gray-500); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; text-decoration: line-through;" title="${task.title}">✓ ${task.title || '제목 없음'}</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 9px; color: #16A34A; font-weight: 600;">완료</span>
           </div>
         </div>
       `;
@@ -9783,6 +9825,11 @@
                 <div style="color: var(--primary); font-weight: 500;">${assignedDateText}</div>
                 ` : ''}
 
+                ${task.actualCompletionDate ? `
+                <div style="color: var(--gray-500);">✅ 실제완료일</div>
+                <div style="color: #16A34A; font-weight: 600;">${task.actualCompletionDate}</div>
+                ` : ''}
+
                 <div style="color: var(--gray-500);">👤 담당자</div>
                 <div style="color: var(--gray-900);">${assigneeName}</div>
 
@@ -9837,7 +9884,7 @@
       document.body.insertAdjacentHTML('beforeend', modalHTML);
     }
 
-    // 예약된 업무 완료 처리 (지연 시에만 이유 작성)
+    // 예약된 업무 완료 처리 (실제완료일 선택 + 지연 시 이유 작성)
     async function completeScheduledTask(taskId) {
       const tasks = taskPlanState?.tasks || state.taskPlans || [];
       const task = tasks.find(t => t.id === taskId);
@@ -9853,19 +9900,60 @@
         deadlineDate.setHours(0, 0, 0, 0);
 
         if (now > deadlineDate) {
-          // 지연된 경우 - 이유 입력 모달 표시
+          // 지연된 경우 - 이유 입력 + 실제완료일 모달 표시
           showScheduledTaskDelayModal(taskId, task.title, deadline);
           return;
         }
       }
 
-      // 지연이 아닌 경우 - 바로 완료 처리
-      await executeScheduledTaskCompletion(taskId);
+      // 지연이 아닌 경우 - 실제완료일 선택 모달
+      showScheduledTaskCompletionDateModal(taskId, task.title);
+    }
+
+    // 예약된 업무 완료일 선택 모달 (지연 아닌 경우)
+    function showScheduledTaskCompletionDateModal(taskId, taskTitle) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const modalHtml = `
+        <div id="scheduledTaskCompletionDateModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #16A34A; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ✅ 업무 완료
+            </div>
+            <div style="background: #F0FDF4; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #166534; font-weight: 600;">
+                ${taskTitle || '업무'}
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="scheduledTaskCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid #16A34A; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜를 선택하세요</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="document.getElementById('scheduledTaskCompletionDateModal')?.remove()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmScheduledTaskCompletionDate('${taskId}')" style="flex: 1; padding: 12px; background: #16A34A; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                완료 처리
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    async function confirmScheduledTaskCompletionDate(taskId) {
+      const completionDate = document.getElementById('scheduledTaskCompletionDateInput')?.value;
+      document.getElementById('scheduledTaskCompletionDateModal')?.remove();
+      await executeScheduledTaskCompletion(taskId, null, completionDate);
     }
 
     // 예약된 업무 지연 완료 모달
     function showScheduledTaskDelayModal(taskId, taskTitle, deadline) {
       const deadlineStr = new Date(deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+      const todayStr = new Date().toISOString().split('T')[0];
       const modalHtml = `
         <div id="scheduledTaskDelayModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -9880,6 +9968,12 @@
                 마감일: <strong>${deadlineStr}</strong><br>
                 오늘까지 완료해야 했던 업무입니다
               </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="scheduledTaskDelayCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜</div>
             </div>
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
@@ -9908,14 +10002,19 @@
         alert('지연 사유를 입력해주세요.');
         return;
       }
+      const completionDate = document.getElementById('scheduledTaskDelayCompletionDateInput')?.value || null;
       document.getElementById('scheduledTaskDelayModal')?.remove();
-      await executeScheduledTaskCompletion(taskId, delayReason);
+      await executeScheduledTaskCompletion(taskId, delayReason, completionDate);
     }
 
-    async function executeScheduledTaskCompletion(taskId, delayReason = null) {
+    async function executeScheduledTaskCompletion(taskId, delayReason = null, actualCompletionDate = null) {
       try {
+        // 실제완료일: 지정값 → 오늘 날짜
+        const completionDate = actualCompletionDate || new Date().toISOString().split('T')[0];
+
         const updateData = {
           status: 'done',
+          actualCompletionDate: completionDate,
           completedAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
@@ -10230,13 +10329,17 @@
       const currentUserId = state.currentUser?.id;
       const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
         if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
-        return task.deadline || task.dueDate;
+        return task.deadline || task.dueDate || task.actualCompletionDate;
       });
 
-      // 날짜별로 업무 그룹화
+      // 날짜별로 업무 그룹화 (완료 업무는 실제완료일 기준, 미완료는 마감일 기준)
       const tasksByDate = {};
       allTasks.forEach(task => {
-        const dateStr = task.deadline || task.dueDate;
+        const isDone = task.status === 'done' || task.status === 'completed';
+        const dateStr = isDone
+          ? (task.actualCompletionDate || task.deadline || task.dueDate)
+          : (task.deadline || task.dueDate);
+        if (!dateStr) return;
         if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
         tasksByDate[dateStr].push(task);
       });
@@ -10322,6 +10425,13 @@
       const currentUserId = state.currentUser?.id;
       const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
         if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
+        const isDone = task.status === 'done' || task.status === 'completed';
+        if (isDone) {
+          // 완료 업무: 실제완료일 기준, 없으면 마감일 기준
+          const displayDate = task.actualCompletionDate || task.deadline || task.dueDate;
+          return displayDate === dateStr;
+        }
+        // 미완료 업무: 마감일 기준
         return (task.deadline === dateStr || task.dueDate === dateStr);
       });
 
@@ -26875,13 +26985,8 @@
       const dayOfWeek = now.getDay();
       const monday = new Date(now);
       monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-
-      const weekDays = ['월', '화', '수', '목', '금'];
-      const weekDates = weekDays.map((_, i) => {
-        const date = new Date(monday);
-        date.setDate(monday.getDate() + i);
-        return date.toISOString().split('T')[0];
-      });
+      const friday = new Date(monday);
+      friday.setDate(monday.getDate() + 4);
 
       // 주간 목표에서 행동지표 가져오기
       const memberGoals = (okrState.personalGoals || []).filter(g => g.memberId === state.currentUser?.id && g.indicatorType === 'input');
@@ -26895,17 +27000,28 @@
       const weeklyPlanDoc = okrState.weeklyPlans.find(wp =>
         wp.memberId === state.currentUser?.id && wp.weekStart === currentWeekKey
       );
-      const savedPlan = { [currentWeekKey]: weeklyPlanDoc?.plan || {} };
+      const savedPlanText = getWeeklyPlanText(weeklyPlanDoc?.plan);
+
+      // 진행중/대기 업무 리스트 (참고용)
+      const weekDates = [];
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        weekDates.push(d.toISOString().split('T')[0]);
+      }
+      const myWeeklyTasks = getWeeklyTasksForMember(
+        state.currentUser?.id, memberName, state.currentUser?.loginId, currentWeekKey, weekDates
+      );
 
       showModal(`
-        <div style="padding: 24px; max-width: 900px; max-height: 85vh; overflow-y: auto;">
+        <div style="padding: 24px; max-width: 600px; max-height: 85vh; overflow-y: auto;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <div>
               <div style="font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
                 📅 ${memberName}님의 주간 업무 계획
               </div>
               <p style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
-                ${monday.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} ~ ${new Date(monday.getTime() + 4 * 24 * 60 * 60 * 1000).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}
+                ${monday.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })} ~ ${friday.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}
               </p>
             </div>
             <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
@@ -26915,8 +27031,8 @@
           <div style="background: #FEF3C7; border-radius: 10px; padding: 14px; margin-bottom: 20px; border: 1px solid #F59E0B;">
             <div style="font-size: 13px; color: #92400E; font-weight: 600;">💡 주간 계획 수립 방법</div>
             <div style="font-size: 12px; color: #78350F; margin-top: 4px; line-height: 1.6;">
-              매주 월요일에 이번 주 목표를 확인하고 요일별로 업무를 분배하세요.<br>
-              주간 목표를 요일별로 나눠 구체적인 계획을 세우세요.
+              이번 주에 처리할 업무를 한 줄에 하나씩 작성하세요.<br>
+              요일 구분 없이 주간 단위로 업무를 관리합니다.
             </div>
           </div>
 
@@ -26925,7 +27041,7 @@
             <div style="margin-bottom: 24px;">
               <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px;">📊 이번 주 목표</div>
               <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
-                ${inputLags.map(g => {
+                ${inputLags.slice(0, 10).map(g => {
                   return `
                     <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 10px; padding: 12px;">
                       <div style="font-size: 12px; font-weight: 600; color: var(--gray-700);">${g.indicatorName}</div>
@@ -26947,24 +27063,29 @@
             </div>
           `}
 
-          <!-- 요일별 업무 배분 -->
-          <div style="margin-bottom: 20px;">
-            <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px;">📋 요일별 업무 배분</div>
-            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;">
-              ${weekDays.map((day, i) => {
-                const dateStr = weekDates[i];
-                const dayPlan = savedPlan[currentWeekKey]?.[day] || '';
-                const isToday = dateStr === now.toISOString().split('T')[0];
-                return `
-                  <div style="background: ${isToday ? '#EEF2FF' : 'white'}; border: 2px solid ${isToday ? 'var(--primary)' : 'var(--gray-200)'}; border-radius: 10px; padding: 12px;">
-                    <div style="font-size: 12px; font-weight: 700; color: ${isToday ? 'var(--primary)' : 'var(--gray-600)'}; margin-bottom: 8px; text-align: center;">
-                      ${day}요일 ${isToday ? '(오늘)' : ''}
-                      <div style="font-size: 10px; font-weight: 400; color: var(--gray-400);">${dateStr.slice(5)}</div>
-                    </div>
-                    <textarea id="weeklyPlan_${day}" rows="4" placeholder="이 날 할 일..." style="width: 100%; padding: 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; resize: none;">${dayPlan}</textarea>
-                  </div>
-                `;
+          ${myWeeklyTasks.length > 0 ? `
+          <!-- 현재 진행중/대기 업무 참고 -->
+          <div style="margin-bottom: 16px; background: var(--gray-50); border-radius: 10px; padding: 12px;">
+            <div style="font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 8px;">📌 현재 등록된 업무 (진행중/대기)</div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              ${myWeeklyTasks.map(t => {
+                const sc = t.status === 'doing' ? '#3B82F6' : '#F59E0B';
+                const sb = t.status === 'doing' ? '#EFF6FF' : '#FEF3C7';
+                const st = t.status === 'doing' ? '진행중' : '대기';
+                return `<div style="font-size: 11px; color: var(--gray-600); display: flex; align-items: center; gap: 6px;">
+                  <span style="background: ${sb}; color: ${sc}; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 600;">${st}</span>
+                  ${t.title}
+                </div>`;
               }).join('')}
+            </div>
+          </div>
+          ` : ''}
+
+          <!-- 주간 업무 계획 입력 (단일 텍스트) -->
+          <div style="margin-bottom: 20px;">
+            <div style="font-size: 14px; font-weight: 700; color: var(--gray-800); margin-bottom: 12px;">📋 주간 업무 계획</div>
+            <div style="background: white; border: 2px solid var(--gray-200); border-radius: 10px; padding: 12px;">
+              <textarea id="weeklyPlan_weekly" rows="10" placeholder="이번 주 할 일을 한 줄에 하나씩 작성하세요...\n\n예시:\n파트너 소개사이트 고도화\n신규 공급사 미팅 3건\n맞춤제안서 작성" style="width: 100%; padding: 10px; border: 1px solid var(--gray-200); border-radius: 8px; font-size: 13px; resize: vertical; line-height: 1.8;">${savedPlanText}</textarea>
             </div>
           </div>
 
@@ -26976,7 +27097,7 @@
       `);
     }
 
-    // 주간 계획 저장 (Firebase)
+    // 주간 계획 저장 (Firebase) - 주간 리스트 형식
     async function saveWeeklyPlan() {
       const now = new Date();
       const dayOfWeek = now.getDay();
@@ -26991,15 +27112,8 @@
         return;
       }
 
-      const weekDays = ['월', '화', '수', '목', '금'];
-      const plan = {};
-
-      weekDays.forEach(day => {
-        const textarea = document.getElementById('weeklyPlan_' + day);
-        if (textarea) {
-          plan[day] = textarea.value.trim();
-        }
-      });
+      const textarea = document.getElementById('weeklyPlan_weekly');
+      const plan = { weekly: textarea ? textarea.value.trim() : '' };
 
       try {
         // 기존 주간 계획 찾기
@@ -27035,7 +27149,7 @@
       }
     }
 
-    // 주간 계획 미리보기 업데이트 (Firebase 데이터 사용)
+    // 주간 계획 미리보기 업데이트 (Firebase 데이터 사용) - 주간 리스트 형식
     function updateWeeklyPlanPreview() {
       const now = new Date();
       const dayOfWeek = now.getDay();
@@ -27058,41 +27172,14 @@
       const weeklyPlan = okrState.weeklyPlans.find(wp =>
         wp.memberId === memberId && wp.weekStart === weekStart
       );
-      const weekPlan = weeklyPlan?.plan || {};
+      const planText = getWeeklyPlanText(weeklyPlan?.plan);
+      const planItems = planText.split('\n').filter(l => l.trim());
 
-      // 업무 계획에서 내 업무 필터링 (일정 또는 주간 고정 목표 설정된 것)
-      const myTasks = taskPlanState.tasks.filter(t =>
-        (t.assigneeId === memberId || t.assignee === memberName || t.assigneeLoginId === memberLoginId) &&
-        t.status !== 'done' &&
-        (t.scheduledDate || t.scheduledDay || t.isWeeklyRecurring)
-      );
+      // 주간 업무 (진행중+대기) 가져오기
+      const weeklyTasks = getWeeklyTasksForMember(memberId, memberName, memberLoginId, weekStart, weekDates);
+      const totalCount = weeklyTasks.length + planItems.filter(item => !weeklyTasks.map(t => t.title).includes(item)).length;
 
-      // 요일별로 업무 그룹화
-      const tasksByDay = { '월': [], '화': [], '수': [], '목': [], '금': [] };
-      const dayMap = { '1': '월', '2': '화', '3': '수', '4': '목', '5': '금' };
-
-      myTasks.forEach(task => {
-        // 실행 예정일로 요일 결정
-        if (task.scheduledDate && weekDates.includes(task.scheduledDate)) {
-          const taskDate = new Date(task.scheduledDate + 'T00:00:00');
-          const taskDayIdx = taskDate.getDay();
-          const dayName = ['일', '월', '화', '수', '목', '금', '토'][taskDayIdx];
-          if (tasksByDay[dayName]) tasksByDay[dayName].push(task);
-        }
-        // 요일 지정으로 결정
-        else if (task.scheduledDay && dayMap[task.scheduledDay]) {
-          tasksByDay[dayMap[task.scheduledDay]].push(task);
-        }
-        // 주간 고정 목표는 모든 요일에 표시 (완료되지 않은 경우만)
-        else if (task.isWeeklyRecurring) {
-          Object.keys(tasksByDay).forEach(day => {
-            if (!tasksByDay[day].some(t => t.id === task.id)) {
-              tasksByDay[day].push({ ...task, isRecurring: true });
-            }
-          });
-        }
-      });
-
+      // 기존 요일별 엘리먼트들에 주간 합산 정보 표시 (하위 호환)
       const dayElements = {
         '월': document.getElementById('weeklyMon'),
         '화': document.getElementById('weeklyTue'),
@@ -27101,40 +27188,42 @@
         '금': document.getElementById('weeklyFri')
       };
 
+      // 모든 요일 엘리먼트 초기화 (주간 리스트 모드)
+      const doingCount = weeklyTasks.filter(t => t.status === 'doing').length;
+      const waitingCount = weeklyTasks.filter(t => t.status === 'waiting').length;
+
       Object.entries(dayElements).forEach(([day, el]) => {
         if (el) {
-          const planText = weekPlan[day] || '';
-          const planCount = planText ? planText.split('\n').filter(l => l.trim()).length : 0;
-          const taskCount = tasksByDay[day]?.length || 0;
-          const totalCount = planCount + taskCount;
+          // 첫번째 요일(월)에만 주간 합계 표시
+          if (day === '월') {
+            if (totalCount > 0) {
+              let displayParts = [];
+              if (doingCount > 0) displayParts.push(`<span style="color: #3B82F6;">${doingCount}진행</span>`);
+              if (waitingCount > 0) displayParts.push(`<span style="color: #F59E0B;">${waitingCount}대기</span>`);
+              el.innerHTML = displayParts.length > 0 ? displayParts.join('+') : `<span style="color: var(--primary);">${totalCount}건</span>`;
 
-          if (totalCount > 0) {
-            // 업무와 계획 수 표시
-            let displayText = '';
-            if (taskCount > 0 && planCount > 0) {
-              displayText = `${taskCount}+${planCount}`;
-            } else {
-              displayText = totalCount + '건';
-            }
-            el.innerHTML = `<span style="color: ${taskCount > 0 ? '#22C55E' : 'var(--primary)'};">${displayText}</span>`;
-            el.style.color = 'var(--primary)';
-
-            // 업무 제목 미리보기 (상위 2개)
-            const previewTasks = tasksByDay[day].slice(0, 2);
-            if (previewTasks.length > 0) {
+              // 업무 미리보기 (상위 3개)
               const parent = el.parentElement;
               const existingPreview = parent.querySelector('.task-preview');
               if (existingPreview) existingPreview.remove();
 
-              const previewHtml = `<div class="task-preview" style="font-size: 9px; color: var(--gray-500); margin-top: 4px; line-height: 1.3; max-height: 30px; overflow: hidden;">
-                ${previewTasks.map(t => `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${t.isRecurring ? '🔄' : ''} ${t.title}</div>`).join('')}
-              </div>`;
-              el.insertAdjacentHTML('afterend', previewHtml);
+              const previewItems = weeklyTasks.slice(0, 3);
+              if (previewItems.length > 0) {
+                const previewHtml = `<div class="task-preview" style="font-size: 9px; color: var(--gray-500); margin-top: 4px; line-height: 1.3; max-height: 40px; overflow: hidden;">
+                  ${previewItems.map(t => `<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${t.status === 'doing' ? '🔵' : '⏸️'} ${t.title}</div>`).join('')}
+                </div>`;
+                el.insertAdjacentHTML('afterend', previewHtml);
+              }
+            } else {
+              el.textContent = '-';
+              el.style.color = 'var(--gray-400)';
+              const parent = el.parentElement;
+              const existingPreview = parent.querySelector('.task-preview');
+              if (existingPreview) existingPreview.remove();
             }
           } else {
-            el.textContent = '-';
-            el.style.color = 'var(--gray-400)';
-            // 미리보기 제거
+            // 나머지 요일은 비움
+            el.textContent = '';
             const parent = el.parentElement;
             const existingPreview = parent.querySelector('.task-preview');
             if (existingPreview) existingPreview.remove();
@@ -27306,6 +27395,62 @@
       return result;
     }
 
+    // 주간 업무 리스트 가져오기 (요일 구분 없이, 진행중+대기 모두 포함)
+    function getWeeklyTasksForMember(memberId, memberName, memberLoginId, weekStart, weekDates) {
+      const monday = new Date(weekStart + 'T00:00:00');
+      const friday = new Date(weekDates[4] + 'T23:59:59');
+      const result = [];
+      const addedIds = new Set();
+
+      (state.taskPlans || []).forEach(task => {
+        const isMyTask = task.assignee === memberId || task.assigneeId === memberId ||
+          task.assignee === memberName || task.assigneeName === memberName ||
+          task.assigneeLoginId === memberLoginId;
+        if (!isMyTask) return;
+        if (task.status === 'done' || task.status === 'completed') return;
+        // 진행중 또는 대기 상태만 포함
+        if (task.status !== 'doing' && task.status !== 'waiting') return;
+
+        // 주간 고정 업무
+        if (task.isWeeklyRecurring) {
+          if (!addedIds.has(task.id)) {
+            addedIds.add(task.id);
+            result.push({ title: task.title || task.name || '(제목없음)', status: task.status });
+          }
+          return;
+        }
+
+        // 일반 업무: 마감일이 해당 주 범위 내
+        const taskDeadline = task.deadline || task.dueDate;
+        if (taskDeadline) {
+          const dueDate = new Date(taskDeadline + 'T00:00:00');
+          if (dueDate >= monday && dueDate <= friday) {
+            if (!addedIds.has(task.id)) {
+              addedIds.add(task.id);
+              result.push({ title: task.title || task.name || '(제목없음)', status: task.status });
+            }
+            return;
+          }
+        }
+
+        // 마감일 없어도 진행중/대기 상태인 업무는 포함
+        if (!addedIds.has(task.id)) {
+          addedIds.add(task.id);
+          result.push({ title: task.title || task.name || '(제목없음)', status: task.status });
+        }
+      });
+      return result;
+    }
+
+    // 주간 계획 텍스트 가져오기 (이전 요일별 데이터 호환)
+    function getWeeklyPlanText(plan) {
+      if (!plan) return '';
+      if (plan.weekly !== undefined) return plan.weekly;
+      // 이전 요일별 데이터 병합
+      const days = ['월', '화', '수', '목', '금'];
+      return days.map(d => plan[d] || '').filter(t => t.trim()).join('\n');
+    }
+
     function openWeeklyShareModal(viewMode) {
       const { monday, friday, weekStart, weekDates } = getWeekDatesForOffset(weeklyShareWeekOffset);
       const currentUser = state.currentUser || {};
@@ -27316,7 +27461,7 @@
 
       const dayLabels = ['월', '화', '수', '목', '금'];
 
-      // 현재 탭: 'my' or 'team'
+      // 현재 탭: 'my', 'team', 'history'
       const currentView = viewMode || 'my';
 
       if (currentView === 'team') {
@@ -27324,20 +27469,27 @@
         return;
       }
 
+      if (currentView === 'history') {
+        renderSubmittedHistoryModal();
+        return;
+      }
+
       // === 내 계획 캡쳐 모달 ===
 
-      // 1) 주간 목표 (weeklyGoalConfigs)
+      // 1) 주간 목표 (weeklyGoalConfigs) - 최대 10개
       const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === memberId);
-      const goals = config?.goals || [];
+      const allGoals = config?.goals || [];
+      const goals = allGoals.slice(0, 10);
 
-      // 2) 요일별 업무 (taskPlans)
-      const tasksByDay = getTasksByDayForMember(memberId, memberName, memberLoginId, weekStart, weekDates);
+      // 2) 주간 업무 리스트 (taskPlans - 진행중+대기 모두)
+      const weeklyTasks = getWeeklyTasksForMember(memberId, memberName, memberLoginId, weekStart, weekDates);
 
       // 3) 텍스트 계획 (okr_weeklyPlans)
       const weeklyPlan = (okrState.weeklyPlans || []).find(wp =>
         wp.memberId === memberId && wp.weekStart === weekStart
       );
-      const textPlan = weeklyPlan?.plan || {};
+      const planText = getWeeklyPlanText(weeklyPlan?.plan);
+      const textItems = planText.split('\n').filter(l => l.trim());
 
       // 4) 연결 지표 (내 담당)
       const myLags = (okrState.laggingIndicators || []).filter(lag => {
@@ -27353,17 +27505,10 @@
       const mondayStr = `${monday.getMonth() + 1}.${monday.getDate()}`;
       const fridayStr = `${friday.getMonth() + 1}.${friday.getDate()}`;
 
-      // 요일별 내용 합산 (텍스트 + 태스크)
-      const dayContents = dayLabels.map((label, i) => {
-        const dayKey = ['mon', 'tue', 'wed', 'thu', 'fri'][i];
-        const tasks = tasksByDay[dayKey] || [];
-        const textLines = (textPlan[label] || '').split('\n').filter(l => l.trim());
-        // 합산 (중복 제거)
-        const allItems = [...new Set([...tasks, ...textLines])];
-        return { label, date: weekDates[i]?.slice(5) || '', items: allItems };
-      });
-
-      const hasAnyContent = dayContents.some(d => d.items.length > 0) || goals.length > 0;
+      // 주간 리스트: 업무 + 텍스트 항목 합산 (중복 제거)
+      const taskTitles = weeklyTasks.map(t => t.title);
+      const allTextItems = textItems.filter(item => !taskTitles.includes(item));
+      const hasAnyContent = weeklyTasks.length > 0 || allTextItems.length > 0 || goals.length > 0;
 
       showModal(`
         <div style="padding: 0; max-width: 520px; max-height: 90vh; overflow-y: auto; background: white;">
@@ -27386,9 +27531,9 @@
             </div>
 
             ${goals.length > 0 ? `
-            <!-- 주간 목표 -->
+            <!-- 주간 목표 (최대 10개) -->
             <div style="background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
-              <div style="font-size: 12px; font-weight: 700; color: #059669; margin-bottom: 8px;">🎯 이번 주 목표</div>
+              <div style="font-size: 12px; font-weight: 700; color: #059669; margin-bottom: 8px;">🎯 이번 주 목표${allGoals.length > 10 ? ' (상위 10개)' : ''}</div>
               <div style="display: flex; flex-wrap: wrap; gap: 8px;">
                 ${goals.map(g => `
                   <div style="background: white; border-radius: 8px; padding: 8px 12px; border: 1px solid #D1FAE5;">
@@ -27400,28 +27545,38 @@
             </div>
             ` : ''}
 
-            <!-- 요일별 계획 -->
+            <!-- 주간 업무 리스트 (요일 구분 없이) -->
             <div style="border: 1px solid var(--gray-200); border-radius: 10px; overflow: hidden;">
-              ${dayContents.map((day, idx) => {
-                const isToday = weekDates[idx] === new Date().toISOString().split('T')[0];
-                return `
-                <div style="display: flex; border-bottom: ${idx < 4 ? '1px solid var(--gray-200)' : 'none'}; ${isToday ? 'background: #EEF2FF;' : ''}">
-                  <div style="width: 60px; padding: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--gray-200); ${isToday ? 'background: var(--primary); color: white;' : 'background: var(--gray-50);'}">
-                    <div style="font-size: 14px; font-weight: 700;">${day.label}</div>
-                    <div style="font-size: 10px; ${isToday ? 'color: rgba(255,255,255,0.8);' : 'color: var(--gray-400);'}">${day.date}</div>
-                  </div>
-                  <div style="flex: 1; padding: 10px 14px; min-height: 44px;">
-                    ${day.items.length > 0 ? day.items.map(item => `
-                      <div style="font-size: 12px; color: var(--gray-700); line-height: 1.8; display: flex; align-items: flex-start; gap: 6px;">
-                        <span style="color: var(--gray-400); flex-shrink: 0;">•</span>
-                        <span>${item.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
-                      </div>
-                    `).join('') : `
-                      <div style="font-size: 11px; color: var(--gray-300); padding: 4px 0;">-</div>
-                    `}
-                  </div>
+              <div style="background: var(--gray-50); padding: 10px 14px; border-bottom: 1px solid var(--gray-200);">
+                <div style="font-size: 12px; font-weight: 700; color: var(--gray-700); display: flex; align-items: center; gap: 6px;">
+                  📋 이번 주 업무
+                  <span style="font-size: 11px; font-weight: 500; color: var(--gray-500);">${weeklyTasks.length + allTextItems.length}건</span>
                 </div>
-              `}).join('')}
+              </div>
+              ${weeklyTasks.length > 0 || allTextItems.length > 0 ? `
+                <div style="padding: 10px 14px;">
+                  ${weeklyTasks.map(task => {
+                    const statusColor = task.status === 'doing' ? '#3B82F6' : '#F59E0B';
+                    const statusBg = task.status === 'doing' ? '#EFF6FF' : '#FEF3C7';
+                    const statusText = task.status === 'doing' ? '진행중' : '대기';
+                    return `
+                    <div style="font-size: 12px; color: var(--gray-700); line-height: 1.8; display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--gray-100);">
+                      <span style="background: ${statusBg}; color: ${statusColor}; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">${statusText}</span>
+                      <span>${task.title.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+                    </div>`;
+                  }).join('')}
+                  ${allTextItems.map(item => `
+                    <div style="font-size: 12px; color: var(--gray-700); line-height: 1.8; display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--gray-100);">
+                      <span style="background: var(--gray-100); color: var(--gray-500); padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; flex-shrink: 0;">계획</span>
+                      <span>${item.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : `
+                <div style="padding: 20px; text-align: center; color: var(--gray-400); font-size: 12px;">
+                  등록된 업무가 없습니다
+                </div>
+              `}
             </div>
 
             ${myLags.length > 0 ? `
@@ -27461,9 +27616,14 @@
                 ${isSubmitted ? '✅ 제출완료' : '📤 제출하기'}
               </button>
             </div>
-            <button onclick="openWeeklyShareModal('team')" style="width: 100%; padding: 10px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--gray-600);">
-              👥 전체 팀원 현황 보기
-            </button>
+            <div style="display: flex; gap: 8px;">
+              <button onclick="openWeeklyShareModal('team')" style="flex: 1; padding: 10px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--gray-600);">
+                👥 전체 팀원 현황 보기
+              </button>
+              <button onclick="openWeeklyShareModal('history')" style="flex: 1; padding: 10px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--gray-600);">
+                📚 제출 이력 보기
+              </button>
+            </div>
           </div>
         </div>
       `);
@@ -27473,33 +27633,32 @@
       const mondayStr = `${monday.getMonth() + 1}.${monday.getDate()}`;
       const fridayStr = `${friday.getMonth() + 1}.${friday.getDate()}`;
 
-      // 팀원별 제출 현황 수집
+      // 팀원별 제출 현황 수집 (주간 리스트 형식)
       const memberPlans = teamMembers.map(member => {
         const plan = (okrState.weeklyPlans || []).find(wp =>
           wp.memberId === member.id && wp.weekStart === weekStart
         );
-        const textPlan = plan?.plan || {};
-        const hasPlan = Object.values(textPlan).some(v => v && v.trim());
+        const planText = getWeeklyPlanText(plan?.plan);
+        const hasPlanText = planText.trim().length > 0;
 
-        const tasksByDay = getTasksByDayForMember(member.id, member.name, member.loginId, weekStart, weekDates);
-        const hasTasks = Object.values(tasksByDay).some(arr => arr.length > 0);
+        const weeklyTasks = getWeeklyTasksForMember(member.id, member.name, member.loginId, weekStart, weekDates);
+        const hasTasks = weeklyTasks.length > 0;
 
         const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === member.id);
-        const goals = config?.goals || [];
+        const goals = (config?.goals || []).slice(0, 10);
 
         const isSubmitted = plan?.submittedAt;
         const submittedTime = isSubmitted ? new Date(plan.submittedAt.seconds ? plan.submittedAt.seconds * 1000 : plan.submittedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : null;
 
-        // 요일별 합산
-        const dayContents = dayLabels.map((label, i) => {
-          const dayKey = ['mon', 'tue', 'wed', 'thu', 'fri'][i];
-          const tasks = tasksByDay[dayKey] || [];
-          const textLines = (textPlan[label] || '').split('\n').filter(l => l.trim());
-          return [...new Set([...tasks, ...textLines])];
-        });
-        const totalItems = dayContents.reduce((s, items) => s + items.length, 0);
+        // 주간 리스트 합산
+        const textItems = planText.split('\n').filter(l => l.trim());
+        const taskTitles = weeklyTasks.map(t => t.title);
+        const uniqueTextItems = textItems.filter(item => !taskTitles.includes(item));
+        const totalItems = weeklyTasks.length + uniqueTextItems.length;
+        const doingCount = weeklyTasks.filter(t => t.status === 'doing').length;
+        const waitingCount = weeklyTasks.filter(t => t.status === 'waiting').length;
 
-        return { member, hasPlan: hasPlan || hasTasks, isSubmitted, submittedTime, goals, dayContents, totalItems };
+        return { member, hasPlan: hasPlanText || hasTasks, isSubmitted, submittedTime, goals, weeklyTasks, uniqueTextItems, totalItems, doingCount, waitingCount };
       });
 
       const submittedCount = memberPlans.filter(p => p.isSubmitted).length;
@@ -27519,7 +27678,7 @@
             </div>
 
             <div style="display: flex; flex-direction: column; gap: 12px;">
-              ${memberPlans.map(({ member, hasPlan, isSubmitted, submittedTime, goals, dayContents, totalItems }) => `
+              ${memberPlans.map(({ member, hasPlan, isSubmitted, submittedTime, goals, weeklyTasks, uniqueTextItems, totalItems, doingCount, waitingCount }) => `
                 <div style="border: 1px solid ${isSubmitted ? '#BBF7D0' : 'var(--gray-200)'}; border-radius: 10px; overflow: hidden;">
                   <!-- 멤버 헤더 -->
                   <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: ${isSubmitted ? '#F0FDF4' : 'var(--gray-50)'};">
@@ -27533,24 +27692,31 @@
                     <div style="display: flex; align-items: center; gap: 6px;">
                       ${isSubmitted ? `<span style="font-size: 11px; color: #059669; font-weight: 600;">✅ ${submittedTime}</span>` : hasPlan ? `<span style="font-size: 11px; color: #D97706; font-weight: 600;">⏳ 작성중</span>` : `<span style="font-size: 11px; color: var(--gray-400);">미작성</span>`}
                       ${totalItems > 0 ? `<span style="background: var(--primary); color: white; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 700;">${totalItems}건</span>` : ''}
+                      ${doingCount > 0 ? `<span style="background: #EFF6FF; color: #3B82F6; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600;">${doingCount}진행</span>` : ''}
+                      ${waitingCount > 0 ? `<span style="background: #FEF3C7; color: #F59E0B; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600;">${waitingCount}대기</span>` : ''}
                     </div>
                   </div>
 
                   ${hasPlan ? `
-                  <!-- 요일별 요약 -->
+                  <!-- 주간 업무 요약 -->
                   <div style="padding: 10px 14px;">
                     ${goals.length > 0 ? `
                       <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;">
-                        ${goals.slice(0, 4).map(g => `<span style="background: #F0FDF4; border: 1px solid #D1FAE5; border-radius: 4px; padding: 2px 6px; font-size: 9px; color: #059669;">${g.name || ''} ${g.target || ''}${g.unit || ''}</span>`).join('')}
+                        ${goals.slice(0, 4).map(g => `<span style="background: #F0FDF4; border: 1px solid #D1FAE5; border-radius: 4px; padding: 2px 6px; font-size: 9px; color: #059669;">${g.name || ''} ${g.target || ''}${g.unit || ''}/주</span>`).join('')}
                       </div>
                     ` : ''}
-                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px;">
-                      ${dayContents.map((items, i) => `
-                        <div style="background: var(--gray-50); border-radius: 6px; padding: 6px; min-height: 40px;">
-                          <div style="font-size: 9px; color: var(--gray-400); text-align: center; margin-bottom: 4px;">${dayLabels[i]}</div>
-                          ${items.length > 0 ? items.slice(0, 2).map(item => `<div style="font-size: 9px; color: var(--gray-600); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">• ${item.replace(/</g, '&lt;')}</div>`).join('') + (items.length > 2 ? `<div style="font-size: 8px; color: var(--gray-400);">+${items.length - 2}</div>` : '') : `<div style="font-size: 9px; color: var(--gray-300); text-align: center;">-</div>`}
-                        </div>
-                      `).join('')}
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                      ${weeklyTasks.slice(0, 4).map(t => {
+                        const sc = t.status === 'doing' ? '#3B82F6' : '#F59E0B';
+                        const sb = t.status === 'doing' ? '#EFF6FF' : '#FEF3C7';
+                        const st = t.status === 'doing' ? '진행' : '대기';
+                        return `<div style="font-size: 10px; color: var(--gray-600); display: flex; align-items: center; gap: 4px; line-height: 1.5;">
+                          <span style="background: ${sb}; color: ${sc}; padding: 1px 4px; border-radius: 3px; font-size: 8px; font-weight: 600; flex-shrink: 0;">${st}</span>
+                          <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${t.title.replace(/</g, '&lt;')}</span>
+                        </div>`;
+                      }).join('')}
+                      ${uniqueTextItems.slice(0, 2).map(item => `<div style="font-size: 10px; color: var(--gray-500); line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">• ${item.replace(/</g, '&lt;')}</div>`).join('')}
+                      ${(weeklyTasks.length + uniqueTextItems.length) > 6 ? `<div style="font-size: 9px; color: var(--gray-400);">+${(weeklyTasks.length + uniqueTextItems.length) - 6}건 더</div>` : ''}
                     </div>
                   </div>
                   ` : ''}
@@ -27574,7 +27740,7 @@
       `);
     }
 
-    // 텍스트 복사
+    // 텍스트 복사 (주간 리스트 형식)
     function copyWeeklyShareText() {
       const { monday, friday, weekStart, weekDates } = getWeekDatesForOffset(weeklyShareWeekOffset);
       const currentUser = state.currentUser || {};
@@ -27582,12 +27748,14 @@
       const memberName = currentUser.name || '사용자';
       const memberLoginId = currentUser.loginId;
 
-      const dayLabels = ['월', '화', '수', '목', '금'];
       const config = (okrState.weeklyGoalConfigs || []).find(c => c.memberId === memberId);
-      const goals = config?.goals || [];
-      const tasksByDay = getTasksByDayForMember(memberId, memberName, memberLoginId, weekStart, weekDates);
+      const goals = (config?.goals || []).slice(0, 10);
+      const weeklyTasks = getWeeklyTasksForMember(memberId, memberName, memberLoginId, weekStart, weekDates);
       const weeklyPlan = (okrState.weeklyPlans || []).find(wp => wp.memberId === memberId && wp.weekStart === weekStart);
-      const textPlan = weeklyPlan?.plan || {};
+      const planText = getWeeklyPlanText(weeklyPlan?.plan);
+      const textItems = planText.split('\n').filter(l => l.trim());
+      const taskTitles = weeklyTasks.map(t => t.title);
+      const uniqueTextItems = textItems.filter(item => !taskTitles.includes(item));
 
       const mondayStr = `${monday.getMonth() + 1}.${monday.getDate()}`;
       const fridayStr = `${friday.getMonth() + 1}.${friday.getDate()}`;
@@ -27599,14 +27767,17 @@
         goals.forEach(g => { text += `  • ${g.name || ''} ${g.target || 0}${g.unit || '건'}/주\n`; });
       }
 
-      text += `\n📅 요일별 계획\n`;
-      dayLabels.forEach((label, i) => {
-        const dayKey = ['mon', 'tue', 'wed', 'thu', 'fri'][i];
-        const tasks = tasksByDay[dayKey] || [];
-        const textLines = (textPlan[label] || '').split('\n').filter(l => l.trim());
-        const allItems = [...new Set([...tasks, ...textLines])];
-        text += `[${label}] ${allItems.length > 0 ? allItems.join(' / ') : '-'}\n`;
+      text += `\n📋 이번 주 업무\n`;
+      weeklyTasks.forEach(t => {
+        const statusLabel = t.status === 'doing' ? '[진행중]' : '[대기]';
+        text += `  ${statusLabel} ${t.title}\n`;
       });
+      uniqueTextItems.forEach(item => {
+        text += `  [계획] ${item}\n`;
+      });
+      if (weeklyTasks.length === 0 && uniqueTextItems.length === 0) {
+        text += `  (등록된 업무 없음)\n`;
+      }
 
       navigator.clipboard.writeText(text).then(() => {
         showToast('클립보드에 복사되었습니다! 메신저에 붙여넣기하세요.', 'success');
@@ -27652,6 +27823,97 @@
         console.error('주간계획 제출 오류:', e);
         showToast('제출 실패: ' + e.message, 'error');
       }
+    }
+
+    // 제출 이력 보기 모달
+    function renderSubmittedHistoryModal() {
+      const currentUser = state.currentUser || {};
+      const memberId = currentUser.id;
+      const memberName = currentUser.name || '사용자';
+
+      // 내 제출된 주간계획 (최근 8주)
+      const myPlans = (okrState.weeklyPlans || [])
+        .filter(wp => wp.memberId === memberId && wp.submittedAt)
+        .sort((a, b) => {
+          const aDate = a.weekStart || '';
+          const bDate = b.weekStart || '';
+          return bDate.localeCompare(aDate);
+        });
+
+      showModal(`
+        <div style="padding: 0; max-width: 520px; max-height: 90vh; overflow-y: auto; background: white;">
+          <div style="background: white; padding: 24px;">
+            <!-- 헤더 -->
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+              <div>
+                <div style="font-size: 18px; font-weight: 800; color: var(--gray-900); letter-spacing: -0.5px;">
+                  📚 제출 이력
+                </div>
+                <div style="font-size: 13px; color: var(--gray-500); margin-top: 4px;">
+                  ${memberName} | 최근 제출한 주간계획
+                </div>
+              </div>
+              <button onclick="closeModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
+            </div>
+
+            ${myPlans.length > 0 ? `
+              <div style="display: flex; flex-direction: column; gap: 12px;">
+                ${myPlans.map(plan => {
+                  const ws = plan.weekStart;
+                  const wsDate = new Date(ws + 'T00:00:00');
+                  const weDate = new Date(wsDate);
+                  weDate.setDate(wsDate.getDate() + 4);
+                  const wsStr = `${wsDate.getMonth() + 1}.${wsDate.getDate()}`;
+                  const weStr = `${weDate.getMonth() + 1}.${weDate.getDate()}`;
+                  const submittedAt = plan.submittedAt;
+                  const submittedDate = submittedAt ? new Date(submittedAt.seconds ? submittedAt.seconds * 1000 : submittedAt) : null;
+                  const submittedStr = submittedDate ? submittedDate.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+
+                  const planText = getWeeklyPlanText(plan.plan);
+                  const items = planText.split('\\n').filter(l => l.trim());
+
+                  return `
+                    <div style="border: 1px solid #BBF7D0; border-radius: 10px; overflow: hidden;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; background: #F0FDF4;">
+                        <div style="font-size: 13px; font-weight: 700; color: var(--gray-800);">
+                          ${wsDate.getFullYear()}년 ${wsStr} ~ ${weStr}
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                          <span style="font-size: 11px; color: #059669; font-weight: 600;">✅ 제출완료</span>
+                          <span style="font-size: 10px; color: var(--gray-500);">${submittedStr}</span>
+                        </div>
+                      </div>
+                      <div style="padding: 10px 14px;">
+                        ${items.length > 0 ? items.slice(0, 5).map(item => `
+                          <div style="font-size: 11px; color: var(--gray-600); line-height: 1.8; display: flex; align-items: flex-start; gap: 6px;">
+                            <span style="color: var(--gray-400); flex-shrink: 0;">•</span>
+                            <span>${item.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+                          </div>
+                        `).join('') + (items.length > 5 ? `<div style="font-size: 10px; color: var(--gray-400); margin-top: 4px;">+${items.length - 5}건 더</div>` : '') : `
+                          <div style="font-size: 11px; color: var(--gray-400); padding: 8px 0;">작성된 계획 없음 (업무 목록으로 제출)</div>
+                        `}
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : `
+              <div style="text-align: center; padding: 40px; background: var(--gray-50); border-radius: 12px;">
+                <div style="font-size: 36px; margin-bottom: 12px;">📭</div>
+                <div style="font-size: 14px; color: var(--gray-500);">아직 제출한 주간계획이 없습니다</div>
+                <div style="font-size: 12px; color: var(--gray-400); margin-top: 4px;">주간계획을 작성하고 제출하면 여기에 이력이 표시됩니다</div>
+              </div>
+            `}
+          </div>
+
+          <!-- 하단 버튼 -->
+          <div style="padding: 16px 24px; background: var(--gray-50); border-top: 1px solid var(--gray-200);">
+            <button onclick="openWeeklyShareModal('my')" style="width: 100%; padding: 10px; background: white; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--gray-700);">
+              ◀ 내 계획으로 돌아가기
+            </button>
+          </div>
+        </div>
+      `);
     }
 
     // 월요일 알림 체크
@@ -28587,11 +28849,14 @@
       const currentMemberId = member?.id || '';
       const viewMode = taskPlanState.filter.viewMode || 'my';
 
-      // 전체 업무를 날짜별로 그룹화 (마감일 기준)
+      // 전체 업무를 날짜별로 그룹화 (완료 업무는 실제완료일 기준, 미완료는 마감일 기준)
       const allTasks = taskPlanState.tasks || [];
       const tasksByDate = {};
       allTasks.forEach(task => {
-        const dateStr = task.deadline || task.dueDate;
+        const isDone = task.status === 'done' || task.status === 'completed';
+        const dateStr = isDone
+          ? (task.actualCompletionDate || task.deadline || task.dueDate)
+          : (task.deadline || task.dueDate);
         if (dateStr) {
           if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
           tasksByDate[dateStr].push(task);
@@ -29230,8 +29495,8 @@
                 </div>
               </div>
 
-              <!-- 4. 담당자, 마감일, 실행예정일 -->
-              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+              <!-- 4. 담당자, 마감일, 실행예정일, 실제완료일 -->
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
                 <div>
                   <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">담당자</label>
                   <select id="taskPlanAssignee" style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
@@ -29248,6 +29513,11 @@
                   <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">실행예정일</label>
                   <input type="date" id="taskPlanScheduledDate" value="${task.scheduledDate || ''}"
                          style="width: 100%; padding: 10px 8px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+                </div>
+                <div>
+                  <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">실제완료일</label>
+                  <input type="date" id="taskPlanActualCompletionDate" value="${task.actualCompletionDate || ''}"
+                         style="width: 100%; padding: 10px 8px; border: 1px solid ${task.actualCompletionDate ? '#16A34A' : 'var(--gray-300)'}; border-radius: 8px; font-size: 13px; box-sizing: border-box; ${task.actualCompletionDate ? 'background: #F0FDF4;' : ''}">
                 </div>
               </div>
 
@@ -29638,6 +29908,9 @@
       const scheduledDay = document.getElementById('taskPlanScheduledDay')?.value || '';
       const isWeeklyRecurring = document.getElementById('taskPlanWeeklyRecurring')?.checked || false;
 
+      // 실제완료일 추출
+      const actualCompletionDate = document.getElementById('taskPlanActualCompletionDate')?.value || '';
+
       // 지연 사유 추출
       const delayReason = document.getElementById('taskPlanDelayReason')?.value.trim() || '';
 
@@ -29676,6 +29949,7 @@
         dueDate: deadline, // 호환성을 위해 dueDate도 저장
         delayReason,       // 지연 사유 (기한 연장 시)
         scheduledDate,     // 실행 예정일
+        actualCompletionDate, // 실제 완료일
         scheduledDay,      // 요일 지정 (1-5: 월-금)
         isWeeklyRecurring, // 주간 고정 목표 여부
         krId,              // 메인 KPI (KR)
@@ -29744,7 +30018,7 @@
       }
     }
 
-    // 업무 완료 처리 (업무기록 연동) - 지연 시에만 이유 작성
+    // 업무 완료 처리 (업무기록 연동) - 실제완료일 선택 + 지연 시 이유 작성
     async function completeTaskPlan(taskId) {
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
@@ -29759,19 +30033,60 @@
         deadlineDate.setHours(0, 0, 0, 0);
 
         if (now > deadlineDate) {
-          // 지연된 경우 - 이유 입력 모달 표시
+          // 지연된 경우 - 이유 입력 + 실제완료일 모달 표시
           showTaskDelayReasonModal(taskId, task.title, deadline);
           return;
         }
       }
 
-      // 지연이 아닌 경우 - 바로 완료 처리
-      await executeTaskCompletion(taskId);
+      // 지연이 아닌 경우 - 실제완료일 선택 모달
+      showTaskCompletionDateModal(taskId, task.title);
     }
 
-    // 업무 지연 완료 모달 (지연 사유 입력)
+    // 업무 완료일 선택 모달 (지연 아닌 경우)
+    function showTaskCompletionDateModal(taskId, taskTitle) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const modalHtml = `
+        <div id="taskCompletionDateModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="font-size: 18px; font-weight: 700; color: #16A34A; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;">
+              ✅ 업무 완료
+            </div>
+            <div style="background: #F0FDF4; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+              <div style="font-size: 13px; color: #166534; font-weight: 600;">
+                ${taskTitle || '업무'}
+              </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="taskCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid #16A34A; border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜를 선택하세요</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              <button onclick="document.getElementById('taskCompletionDateModal')?.remove()" style="flex: 1; padding: 12px; background: var(--gray-100); border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                취소
+              </button>
+              <button onclick="confirmTaskCompletionDate('${taskId}')" style="flex: 1; padding: 12px; background: #16A34A; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                완료 처리
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    async function confirmTaskCompletionDate(taskId) {
+      const completionDate = document.getElementById('taskCompletionDateInput')?.value;
+      document.getElementById('taskCompletionDateModal')?.remove();
+      await executeTaskCompletion(taskId, null, completionDate);
+    }
+
+    // 업무 지연 완료 모달 (지연 사유 + 실제완료일 입력)
     function showTaskDelayReasonModal(taskId, taskTitle, deadline) {
       const deadlineStr = new Date(deadline).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+      const todayStr = new Date().toISOString().split('T')[0];
       const modalHtml = `
         <div id="taskDelayReasonModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center;">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 400px; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -29786,6 +30101,12 @@
                 마감일: <strong>${deadlineStr}</strong><br>
                 오늘까지 완료해야 했던 업무입니다
               </div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">실제 완료일</label>
+              <input type="date" id="taskDelayCompletionDateInput" value="${todayStr}"
+                     style="width: 100%; padding: 12px; border: 2px solid var(--gray-300); border-radius: 8px; font-size: 14px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">실제로 업무를 완료한 날짜</div>
             </div>
             <div style="margin-bottom: 16px;">
               <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">지연 사유 (필수)</label>
@@ -29818,19 +30139,24 @@
         alert('지연 사유를 입력해주세요.');
         return;
       }
+      const completionDate = document.getElementById('taskDelayCompletionDateInput')?.value || null;
       closeTaskDelayReasonModal();
-      await executeTaskCompletion(taskId, delayReason);
+      await executeTaskCompletion(taskId, delayReason, completionDate);
     }
 
     // 실제 업무 완료 실행
-    async function executeTaskCompletion(taskId, delayReason = null) {
+    async function executeTaskCompletion(taskId, delayReason = null, actualCompletionDate = null) {
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
 
       try {
+        // 실제완료일: 지정값 → 오늘 날짜
+        const completionDate = actualCompletionDate || new Date().toISOString().split('T')[0];
+
         // 1. 업무 상태 변경
         const updateData = {
           status: 'done',
+          actualCompletionDate: completionDate,
           completedAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
