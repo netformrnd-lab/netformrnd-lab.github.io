@@ -1471,8 +1471,8 @@
           <div style="display: flex; align-items: center; gap: 12px; flex: 1; justify-content: flex-end;">
             <input type="text" id="taskPlanSearchHeader" placeholder="🔍 업무 검색..." oninput="document.getElementById('taskPlanSearch').value = this.value; filterTaskPlan();" style="max-width: 220px; padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: white;">
             <button onclick="openTaskMemoModal()" style="padding: 10px 14px; border: 1px solid #BBF7D0; border-radius: 8px; background: #F0FDF4; cursor: pointer; font-size: 13px; font-weight: 600; color: #16A34A; display: flex; align-items: center; gap: 6px;">✅ 완료기록 <span style="font-size: 10px; font-weight: 500; color: #15803D; opacity: 0.8;">(실행완료)</span></button>
-            <button onclick="openTaskRequestModal()" style="padding: 10px 14px; border: 1px solid #BFDBFE; border-radius: 8px; background: #EFF6FF; cursor: pointer; font-size: 13px; font-weight: 600; color: #1D4ED8;">📨 업무 요청</button>
             <button class="btn btn-primary" onclick="openTaskPlanModal()" style="display: flex; align-items: center; gap: 6px;">📅 업무예약 <span style="font-size: 10px; font-weight: 500; opacity: 0.85;">(실행예정)</span></button>
+            <button onclick="openTaskRequestModal()" style="padding: 10px 14px; border: 1px solid #BFDBFE; border-radius: 8px; background: #EFF6FF; cursor: pointer; font-size: 13px; font-weight: 600; color: #1D4ED8;">📨 업무 요청</button>
           </div>
         </div>
 
@@ -1532,7 +1532,7 @@
           <!-- 요일별 업무 배치 보드 -->
           <div style="display: flex; gap: 12px;">
             <!-- 배치 필요 영역 (고정 높이) -->
-            <div id="unassignedTasksPool" style="width: 288px; height: 330px; background: white; border-radius: 10px; border: 2px dashed var(--gray-300); padding: 10px; display: flex; flex-direction: column;">
+            <div id="unassignedTasksPool" style="width: 160px; flex-shrink: 0; height: 330px; background: white; border-radius: 10px; border: 2px dashed var(--gray-300); padding: 10px; display: flex; flex-direction: column;">
               <div style="font-size: 12px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; display: flex; align-items: center; gap: 4px; flex-shrink: 0;">
                 <span style="color: #EF4444;">⚠️</span> 배치 필요
                 <span id="unassignedCount" style="background: #FEE2E2; color: #DC2626; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 700;">0</span>
@@ -20467,6 +20467,33 @@
       }
     }
 
+    // 분기별 목표 현황 모달 열기
+    function openQuarterlyStatusModal() {
+      const html = personalDashboardState.quarterlyStatusHtml || '';
+      if (!html) {
+        showToast('표시할 목표 현황이 없습니다', 'info');
+        return;
+      }
+
+      const overlay = document.createElement('div');
+      overlay.id = 'quarterlyStatusModalOverlay';
+      overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.2s ease;';
+      overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+      const modal = document.createElement('div');
+      modal.style.cssText = 'background: white; border-radius: 20px; padding: 24px; max-width: 900px; width: 95%; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3); animation: fadeIn 0.3s ease;';
+      modal.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div style="font-size: 18px; font-weight: 700; color: var(--gray-900);">📊 분기별 목표 현황</div>
+          <button onclick="document.getElementById('quarterlyStatusModalOverlay').remove()" style="background: var(--gray-100); border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;">✕</button>
+        </div>
+        ${html}
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+    }
+
     // 개인 마인드맵 렌더링 (중앙 배치, AB테스트 버전별 행동→성과 연결)
     function renderPersonalMindmap() {
       const container = document.getElementById('personalMindmapContent');
@@ -20815,6 +20842,102 @@
         g.memberId === memberId && g.year === currentYear && g.quarter === currentQuarter
       );
 
+      // 분기별 목표 현황 HTML 미리 생성 (모달용)
+      const quarterlyStatusHtml = (() => {
+          const now2 = new Date();
+          const quarter = Math.floor(now2.getMonth() / 3) + 1;
+          const quarterLabel = now2.getFullYear() + '년 ' + quarter + '분기';
+          const quarterStart = new Date(now2.getFullYear(), (quarter - 1) * 3, 1);
+          const quarterEnd = new Date(now2.getFullYear(), quarter * 3, 0);
+          const quarterStartStr = quarterStart.toISOString().split('T')[0];
+          const quarterEndStr = quarterEnd.toISOString().split('T')[0];
+
+          const myKpis = okrState.kpis.filter(kpi =>
+            kpi.mainAssignee === memberId ||
+            kpi.mainAssignee === memberLoginId ||
+            kpi.mainAssigneeName === memberName ||
+            (kpi.subAssignees || []).includes(memberId) ||
+            (kpi.subAssignees || []).includes(memberLoginId) ||
+            (kpi.subAssigneeNames || []).includes(memberName)
+          );
+
+          const quarterLogs = filteredLogs.filter(log =>
+            log.date >= quarterStartStr && log.date <= quarterEndStr
+          );
+
+          const totalLogCount = quarterLogs.length;
+          const totalLogValue = quarterLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+          const allInputLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
+          const allOutputLags = okrState.laggingIndicators.filter(l => l.type === 'output');
+
+          const inputLogs = quarterLogs.filter(log => allInputLags.some(l => l.id === log.laggingIndicatorId));
+          const outputLogs = quarterLogs.filter(log => allOutputLags.some(l => l.id === log.laggingIndicatorId));
+          const unlinkedLogs = quarterLogs.filter(log => !log.laggingIndicatorId);
+
+          const totalInputCount = inputLogs.length;
+          const totalOutputCount = outputLogs.length;
+          const unlinkedLogCount = unlinkedLogs.length;
+          const unlinkedLogValue = unlinkedLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+          if (totalLogCount === 0 && myKpis.length === 0) return '';
+
+          const kpiProgress = myKpis.map(kpi => {
+            const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+            const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
+            const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
+            const inputLagsKPI = lagsForKPI.filter(l => l.type !== 'output');
+            const outputLagsKPI = lagsForKPI.filter(l => l.type === 'output');
+
+            const inputTotal = quarterLogs.filter(log => inputLagsKPI.some(l => l.id === log.laggingIndicatorId))
+              .reduce((sum, l) => sum + (l.resultValue || 0), 0);
+            const outputTotal = quarterLogs.filter(log => outputLagsKPI.some(l => l.id === log.laggingIndicatorId))
+              .reduce((sum, l) => sum + (l.resultValue || 0), 0);
+
+            const targetValue = kpi.targetValue || 0;
+            const rate = targetValue > 0 ? Math.round((outputTotal / targetValue) * 100) : 0;
+
+            return { kpi, kr, krIdx, inputTotal, outputTotal, targetValue, rate, unit: kpi.unit || '' };
+          });
+
+          const totalTarget = kpiProgress.reduce((sum, k) => sum + k.targetValue, 0);
+          const totalOutputValue = outputLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
+          const avgRate = totalTarget > 0 ? Math.round((totalOutputValue / totalTarget) * 100) : 0;
+
+          return '<div style="background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%); color: white; padding: 16px; border-radius: 16px;">' +
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">' +
+              '<div style="font-size: 15px; font-weight: 700;">🎯 ' + quarterLabel + ' 목표 현황</div>' +
+              '<div style="display: flex; align-items: center; gap: 10px;">' +
+                '<span style="font-size: 12px; opacity: 0.9;">전체 <b>' + totalLogCount + '</b>건</span>' +
+                '<span style="font-size: 12px; opacity: 0.9;">행동 <b>' + totalInputCount + '</b>건</span>' +
+                '<span style="font-size: 12px; opacity: 0.9;">성과 <b>' + totalOutputCount + '</b>건</span>' +
+                (unlinkedLogCount > 0 ? '<span style="font-size: 12px; opacity: 0.9; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">미분류 <b>' + unlinkedLogCount + '</b>건</span>' : '') +
+                '<span style="font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 8px; background: ' + (avgRate >= 100 ? '#10B981' : avgRate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.2)') + ';">' + avgRate + '%</span>' +
+              '</div>' +
+            '</div>' +
+            (myKpis.length > 0 ? '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;">' +
+              kpiProgress.map(item => {
+                const color = okrColors[item.krIdx % 4] || '#6366F1';
+                return '<div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 12px; backdrop-filter: blur(10px);">' +
+                  '<div style="font-size: 10px; opacity: 0.85; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">' + okrIcons[item.krIdx % 4] + ' ' + (item.kpi.name || '').slice(0, 12) + '</div>' +
+                  '<div style="display: flex; justify-content: space-between; align-items: baseline;">' +
+                    '<div><span style="font-size: 16px; font-weight: 800;">' + item.outputTotal + '</span><span style="font-size: 10px; opacity: 0.7;">/' + item.targetValue + item.unit + '</span></div>' +
+                    '<span style="font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: ' + (item.rate >= 100 ? '#10B981' : item.rate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.25)') + ';">' + item.rate + '%</span>' +
+                  '</div>' +
+                '</div>';
+              }).join('') +
+              (unlinkedLogCount > 0 ? '<div style="background: rgba(255,255,255,0.1); border-radius: 10px; padding: 12px; border: 1px dashed rgba(255,255,255,0.3);">' +
+                '<div style="font-size: 10px; opacity: 0.85; margin-bottom: 4px;">📋 미분류 활동</div>' +
+                '<div style="display: flex; justify-content: space-between; align-items: baseline;">' +
+                  '<div><span style="font-size: 16px; font-weight: 800;">' + unlinkedLogCount + '</span><span style="font-size: 10px; opacity: 0.7;">건</span></div>' +
+                  '<span style="font-size: 11px; opacity: 0.7; padding: 2px 6px;">+' + unlinkedLogValue + '</span>' +
+                '</div>' +
+              '</div>' : '') +
+            '</div>' : '<div style="font-size: 13px; opacity: 0.9; text-align: center; padding: 12px;">담당 KPI가 없습니다. 전체 기록: ' + totalLogCount + '건</div>') +
+          '</div>';
+      })();
+      personalDashboardState.quarterlyStatusHtml = quarterlyStatusHtml;
+
       container.innerHTML = `
         <!-- 헤더 -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
@@ -20827,6 +20950,9 @@
           <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <button onclick="openQuarterlyGoalModal('${memberId}')" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: linear-gradient(135deg, #10B981, #059669); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
               🎯 분기목표 설정
+            </button>
+            <button onclick="openQuarterlyStatusModal()" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              📊 목표 현황
             </button>
             <button onclick="savePersonalDashboardAsPng()" style="padding: 8px 14px; font-size: 12px; font-weight: 600; background: #6366F1; color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
               📸 전체 PNG 저장
@@ -20939,108 +21065,6 @@
             <div id="personalMindmapContent" style="padding: 20px; background: var(--gray-50); min-height: 300px;"></div>
           </div>
         </div>
-
-        <!-- 분기별 목표 현황 카드 (기여비율 위) -->
-        ${(() => {
-          // 현재 분기 계산
-          const now = new Date();
-          const quarter = Math.floor(now.getMonth() / 3) + 1;
-          const quarterLabel = now.getFullYear() + '년 ' + quarter + '분기';
-          const quarterStart = new Date(now.getFullYear(), (quarter - 1) * 3, 1);
-          const quarterEnd = new Date(now.getFullYear(), quarter * 3, 0);
-          const quarterStartStr = quarterStart.toISOString().split('T')[0];
-          const quarterEndStr = quarterEnd.toISOString().split('T')[0];
-
-          // 선택된 팀원의 담당 KPI 필터링
-          const myKpis = okrState.kpis.filter(kpi =>
-            kpi.mainAssignee === memberId ||
-            kpi.mainAssignee === memberLoginId ||
-            kpi.mainAssigneeName === memberName ||
-            (kpi.subAssignees || []).includes(memberId) ||
-            (kpi.subAssignees || []).includes(memberLoginId) ||
-            (kpi.subAssigneeNames || []).includes(memberName)
-          );
-
-          // 분기별 로그 (선택된 팀원 기준) - 전체 로그
-          const quarterLogs = filteredLogs.filter(log =>
-            log.date >= quarterStartStr && log.date <= quarterEndStr
-          );
-
-          // ★ 전체 로그 수 (업무일지와 동일)
-          const totalLogCount = quarterLogs.length;
-          const totalLogValue = quarterLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-
-          // ★ 전체 laggingIndicator 기준으로 행동/성과 분류 (담당 KPI 무관)
-          const allInputLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
-          const allOutputLags = okrState.laggingIndicators.filter(l => l.type === 'output');
-
-          const inputLogs = quarterLogs.filter(log => allInputLags.some(l => l.id === log.laggingIndicatorId));
-          const outputLogs = quarterLogs.filter(log => allOutputLags.some(l => l.id === log.laggingIndicatorId));
-          const unlinkedLogs = quarterLogs.filter(log => !log.laggingIndicatorId);
-
-          const totalInputCount = inputLogs.length;
-          const totalInputValue = inputLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-          const totalOutputCount = outputLogs.length;
-          const totalOutputValue = outputLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-          const unlinkedLogCount = unlinkedLogs.length;
-          const unlinkedLogValue = unlinkedLogs.reduce((sum, l) => sum + (l.resultValue || 0), 0);
-
-          if (totalLogCount === 0 && myKpis.length === 0) return '';
-
-          // KPI별 목표 달성 현황 (myKpis가 있을 때만)
-          const kpiProgress = myKpis.map(kpi => {
-            const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
-            const krIdx = okrState.keyResults.findIndex(k => k.id === kpi.keyResultId);
-            const lagsForKPI = okrState.laggingIndicators.filter(l => l.kpiId === kpi.id);
-            const inputLagsKPI = lagsForKPI.filter(l => l.type !== 'output');
-            const outputLagsKPI = lagsForKPI.filter(l => l.type === 'output');
-
-            const inputTotal = quarterLogs.filter(log => inputLagsKPI.some(l => l.id === log.laggingIndicatorId))
-              .reduce((sum, l) => sum + (l.resultValue || 0), 0);
-            const outputTotal = quarterLogs.filter(log => outputLagsKPI.some(l => l.id === log.laggingIndicatorId))
-              .reduce((sum, l) => sum + (l.resultValue || 0), 0);
-
-            const targetValue = kpi.targetValue || 0;
-            const rate = targetValue > 0 ? Math.round((outputTotal / targetValue) * 100) : 0;
-
-            return { kpi, kr, krIdx, inputTotal, outputTotal, targetValue, rate, unit: kpi.unit || '' };
-          });
-
-          const totalTarget = kpiProgress.reduce((sum, k) => sum + k.targetValue, 0);
-          const avgRate = totalTarget > 0 ? Math.round((totalOutputValue / totalTarget) * 100) : 0;
-
-          return '<div class="card" style="margin-bottom: 16px; background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%); color: white; padding: 16px;">' +
-            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">' +
-              '<div style="font-size: 15px; font-weight: 700;">🎯 ' + quarterLabel + ' 목표 현황</div>' +
-              '<div style="display: flex; align-items: center; gap: 10px;">' +
-                '<span style="font-size: 12px; opacity: 0.9;">전체 <b>' + totalLogCount + '</b>건</span>' +
-                '<span style="font-size: 12px; opacity: 0.9;">행동 <b>' + totalInputCount + '</b>건</span>' +
-                '<span style="font-size: 12px; opacity: 0.9;">성과 <b>' + totalOutputCount + '</b>건</span>' +
-                (unlinkedLogCount > 0 ? '<span style="font-size: 12px; opacity: 0.9; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 4px;">미분류 <b>' + unlinkedLogCount + '</b>건</span>' : '') +
-                '<span style="font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 8px; background: ' + (avgRate >= 100 ? '#10B981' : avgRate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.2)') + ';">' + avgRate + '%</span>' +
-              '</div>' +
-            '</div>' +
-            (myKpis.length > 0 ? '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;">' +
-              kpiProgress.map(item => {
-                const color = okrColors[item.krIdx % 4] || '#6366F1';
-                return '<div style="background: rgba(255,255,255,0.15); border-radius: 10px; padding: 12px; backdrop-filter: blur(10px);">' +
-                  '<div style="font-size: 10px; opacity: 0.85; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">' + okrIcons[item.krIdx % 4] + ' ' + (item.kpi.name || '').slice(0, 12) + '</div>' +
-                  '<div style="display: flex; justify-content: space-between; align-items: baseline;">' +
-                    '<div><span style="font-size: 16px; font-weight: 800;">' + item.outputTotal + '</span><span style="font-size: 10px; opacity: 0.7;">/' + item.targetValue + item.unit + '</span></div>' +
-                    '<span style="font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: ' + (item.rate >= 100 ? '#10B981' : item.rate >= 50 ? '#F59E0B' : 'rgba(255,255,255,0.25)') + ';">' + item.rate + '%</span>' +
-                  '</div>' +
-                '</div>';
-              }).join('') +
-              (unlinkedLogCount > 0 ? '<div style="background: rgba(255,255,255,0.1); border-radius: 10px; padding: 12px; border: 1px dashed rgba(255,255,255,0.3);">' +
-                '<div style="font-size: 10px; opacity: 0.85; margin-bottom: 4px;">📋 미분류 활동</div>' +
-                '<div style="display: flex; justify-content: space-between; align-items: baseline;">' +
-                  '<div><span style="font-size: 16px; font-weight: 800;">' + unlinkedLogCount + '</span><span style="font-size: 10px; opacity: 0.7;">건</span></div>' +
-                  '<span style="font-size: 11px; opacity: 0.7; padding: 2px 6px;">+' + unlinkedLogValue + '</span>' +
-                '</div>' +
-              '</div>' : '') +
-            '</div>' : '<div style="font-size: 13px; opacity: 0.9; text-align: center; padding: 12px;">담당 KPI가 없습니다. 전체 기록: ' + totalLogCount + '건</div>') +
-          '</div>';
-        })()}
 
         <!-- 메인 KPI별 기여 현황 (카드 그리드) -->
         <div class="card" style="margin-bottom: 16px;">
