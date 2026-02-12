@@ -1634,8 +1634,8 @@
 
           <!-- 뷰 전환 토글 (리스트 | 월간 | 기록분석) -->
           <div class="card" style="padding: 4px; display: flex; align-items: center; gap: 2px; flex-shrink: 0;">
-            <button onclick="setTaskViewType('list')" id="viewTypeListBtn" style="padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; background: var(--primary); color: white; transition: all 0.15s;">리스트</button>
-            <button onclick="setTaskViewType('monthly')" id="viewTypeMonthlyBtn" style="padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; background: transparent; color: var(--gray-500); transition: all 0.15s;">월간</button>
+            <button onclick="setTaskViewType('list')" id="viewTypeListBtn" style="padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; background: transparent; color: var(--gray-500); transition: all 0.15s;">리스트</button>
+            <button onclick="setTaskViewType('monthly')" id="viewTypeMonthlyBtn" style="padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; background: var(--primary); color: white; transition: all 0.15s;">월간</button>
             <button onclick="setTaskViewType('record')" id="viewTypeRecordBtn" style="padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; background: transparent; color: var(--gray-500); transition: all 0.15s;">기록분석</button>
           </div>
 
@@ -10527,16 +10527,41 @@
     // 특정 날짜의 업무 목록 모달
     function openDayTasksModal(dateStr) {
       const currentUserId = state.currentUser?.id;
+      const currentUserName = state.currentUser?.name || '';
+      const currentUserLoginId = state.currentUser?.loginId || '';
+      const viewMode = taskPlanState?.filter?.viewMode || 'my';
+      const calToday = new Date(); calToday.setHours(0, 0, 0, 0);
+
+      const isAssignedToMe = (task) => {
+        const a = (task.assignee || '').trim();
+        const aid = (task.assigneeId || '').trim();
+        return a === currentUserId || aid === currentUserId ||
+               a === currentUserName || a === currentUserLoginId ||
+               aid === currentUserLoginId;
+      };
+
       const allTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
-        if (task.assignee !== currentUserId && task.assigneeId !== currentUserId) return false;
+        // 뷰 모드에 따라 필터링
+        if (viewMode === 'my' && !isAssignedToMe(task)) return false;
+
         const isDone = task.status === 'done' || task.status === 'completed';
+        const isDoing = task.status === 'doing';
+
         if (isDone) {
-          // 완료 업무: 실제완료일 기준, 없으면 마감일 기준
           const displayDate = task.actualCompletionDate || task.deadline || task.dueDate;
           return displayDate === dateStr;
         }
-        // 미완료 업무: 마감일 기준
-        return (task.deadline === dateStr || task.dueDate === dateStr);
+        if (isDoing) {
+          // 진행중: 시작일~마감일(또는 오늘) 범위에 해당 날짜가 포함되면 표시
+          const startStr = task.scheduledDate || task.deadline || task.dueDate;
+          if (!startStr) return false;
+          let endStr = calToday.toISOString().split('T')[0];
+          const deadlineStr = task.deadline || task.dueDate;
+          if (deadlineStr && deadlineStr > endStr) endStr = deadlineStr;
+          return dateStr >= startStr && dateStr <= endStr;
+        }
+        // 대기 업무: 마감일 기준
+        return (task.deadline === dateStr || task.dueDate === dateStr || task.scheduledDate === dateStr);
       });
 
       const date = new Date(dateStr);
@@ -10557,7 +10582,7 @@
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <div>
               <div style="font-size: 18px; font-weight: 700; color: var(--gray-900);">📅 ${formattedDate}</div>
-              <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">총 ${allTasks.length}건 (완료 ${doneTasks.length} / 대기 ${waitingTasks.length})</div>
+              <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">총 ${allTasks.length}건 (진행중 ${doingTasks.length} / 대기 ${waitingTasks.length} / 완료 ${doneTasks.length})</div>
             </div>
             <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
           </div>
@@ -20361,17 +20386,18 @@
         });
 
         return { kr, krIdx, logsForKR, versionStats };
-      }).filter(d => d.logsForKR.length > 0);
+      });
 
       // KR을 왼쪽/오른쪽으로 분할 (균등 배분)
       const leftKRs = krDataList.filter((_, i) => i % 2 === 0);
       const rightKRs = krDataList.filter((_, i) => i % 2 === 1);
 
-      // KR 노드 HTML 생성 (개선된 간격)
+      // KR 노드 HTML 생성 (팀 마인드맵과 동일한 스타일)
       const renderKRNode = (data, direction) => {
         const { kr, krIdx, logsForKR, versionStats } = data;
         const isLeft = direction === 'left';
         const branchColor = okrColors[krIdx];
+        const krRate = typeof calcOkrKRRate === 'function' ? calcOkrKRRate(kr.id) : '0.000';
 
         const versionHtml = Object.entries(versionStats).filter(([v, s]) => s.totalInput > 0 || s.totalOutput > 0).map(([version, stats]) => {
           const vColor = versionColors[version] || '#6B7280';
@@ -20395,52 +20421,59 @@
 
         if (isLeft) {
           return '<div style="display: flex; align-items: center; justify-content: flex-end; margin-bottom: 24px;">' +
-            '<div style="display: flex; flex-direction: column; align-items: flex-end;">' + versionHtml + '</div>' +
-            '<div style="width: 50px; height: 2px; background: linear-gradient(90deg, transparent, ' + branchColor + '); margin: 0 10px;"></div>' +
-            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 14px; padding: 14px 18px; text-align: center; min-width: 140px; box-shadow: 0 4px 12px ' + branchColor + '20;">' +
+            (versionHtml ? '<div style="display: flex; flex-direction: column; align-items: flex-end;">' + versionHtml + '</div>' +
+            '<div style="width: 50px; height: 2px; background: linear-gradient(90deg, transparent, ' + branchColor + '); margin: 0 10px;"></div>' : '') +
+            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 14px; padding: 14px 18px; text-align: center; min-width: 150px; box-shadow: 0 4px 12px ' + branchColor + '20;">' +
               '<div style="font-size: 10px; color: ' + branchColor + '; font-weight: 600; margin-bottom: 4px;">메인 KPI ' + (krIdx + 1) + '</div>' +
               '<div style="font-size: 12px; font-weight: 700; color: var(--gray-800); margin: 6px 0; line-height: 1.3;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
-              '<div style="font-size: 10px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
+              '<div style="font-size: 20px; font-weight: 800; color: ' + branchColor + ';">' + krRate + '%</div>' +
+              '<div style="font-size: 9px; color: var(--gray-500); margin-top: 4px;">기여: ' + logsForKR.length + '건</div>' +
             '</div>' +
+            (!versionHtml ? '<div style="width: 50px; height: 2px; background: linear-gradient(90deg, ' + branchColor + ', transparent); margin: 0 10px;"></div>' : '') +
           '</div>';
         } else {
           return '<div style="display: flex; align-items: center; justify-content: flex-start; margin-bottom: 24px;">' +
-            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 14px; padding: 14px 18px; text-align: center; min-width: 140px; box-shadow: 0 4px 12px ' + branchColor + '20;">' +
+            (!versionHtml ? '<div style="width: 50px; height: 2px; background: linear-gradient(90deg, transparent, ' + branchColor + '); margin: 0 10px;"></div>' : '') +
+            '<div style="background: ' + branchColor + '15; border: 2px solid ' + branchColor + '; border-radius: 14px; padding: 14px 18px; text-align: center; min-width: 150px; box-shadow: 0 4px 12px ' + branchColor + '20;">' +
               '<div style="font-size: 10px; color: ' + branchColor + '; font-weight: 600; margin-bottom: 4px;">메인 KPI ' + (krIdx + 1) + '</div>' +
               '<div style="font-size: 12px; font-weight: 700; color: var(--gray-800); margin: 6px 0; line-height: 1.3;">' + okrIcons[krIdx] + ' ' + kr.name + '</div>' +
-              '<div style="font-size: 10px; color: var(--gray-500);">기여: ' + logsForKR.length + '건</div>' +
+              '<div style="font-size: 20px; font-weight: 800; color: ' + branchColor + ';">' + krRate + '%</div>' +
+              '<div style="font-size: 9px; color: var(--gray-500); margin-top: 4px;">기여: ' + logsForKR.length + '건</div>' +
             '</div>' +
-            '<div style="width: 50px; height: 2px; background: linear-gradient(90deg, ' + branchColor + ', transparent); margin: 0 10px;"></div>' +
-            '<div style="display: flex; flex-direction: column; align-items: flex-start;">' + versionHtml + '</div>' +
+            (versionHtml ? '<div style="width: 50px; height: 2px; background: linear-gradient(90deg, ' + branchColor + ', transparent); margin: 0 10px;"></div>' +
+            '<div style="display: flex; flex-direction: column; align-items: flex-start;">' + versionHtml + '</div>' : '') +
           '</div>';
         }
       };
 
+      const oRate = typeof calcOkrObjectiveRate === 'function' ? calcOkrObjectiveRate() : '0.000';
+
       container.innerHTML = `
-        <div class="personal-mindmap" style="padding: 30px; overflow: auto;">
-          ${hasActivity ? `
-          <div style="display: flex; align-items: center; justify-content: center; min-width: 900px; min-height: 400px; gap: 20px;">
+        <div class="personal-mindmap" style="padding: 30px; overflow: auto; position: relative;">
+          ${krDataList.length > 0 ? `
+          <div style="display: flex; align-items: stretch; justify-content: center; min-width: 1000px; min-height: 500px;">
             <!-- 왼쪽 KR들 -->
-            <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding-right: 20px; max-width: 400px;">
+            <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding-right: 20px;">
               ${leftKRs.map(data => renderKRNode(data, 'left')).join('')}
-              ${leftKRs.length === 0 && rightKRs.length > 0 ? '<div style="min-height: 100px;"></div>' : ''}
+              ${leftKRs.length === 0 ? '<div style="color: var(--gray-400); font-size: 12px; text-align: center;">KPI 없음</div>' : ''}
             </div>
 
             <!-- 중앙 목표 노드 -->
             <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0;">
-              <div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 28px; border-radius: 50%; text-align: center; box-shadow: 0 8px 40px rgba(99, 102, 241, 0.4); width: 170px; height: 170px; display: flex; flex-direction: column; justify-content: center; align-items: center;">
-                <div style="font-size: 11px; opacity: 0.9; margin-bottom: 6px;">🎯 목표</div>
-                <div style="font-size: 12px; font-weight: 700; line-height: 1.4; max-width: 130px; word-break: keep-all;">${okrState.objective.name}</div>
+              <div style="background: linear-gradient(135deg, var(--primary), #8B5CF6); color: white; padding: 30px; border-radius: 50%; text-align: center; box-shadow: 0 8px 40px rgba(99, 102, 241, 0.4); width: 200px; height: 200px; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                <div style="font-size: 12px; opacity: 0.85; margin-bottom: 6px;">🎯 목표</div>
+                <div style="font-size: 13px; font-weight: 700; margin-bottom: 8px; word-break: keep-all; line-height: 1.3; max-width: 140px;">${okrState.objective.name}</div>
+                <div style="font-size: 32px; font-weight: 800;">${oRate}%</div>
               </div>
             </div>
 
             <!-- 오른쪽 KR들 -->
-            <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding-left: 20px; max-width: 400px;">
+            <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding-left: 20px;">
               ${rightKRs.map(data => renderKRNode(data, 'right')).join('')}
-              ${rightKRs.length === 0 && leftKRs.length > 0 ? '<div style="min-height: 100px;"></div>' : ''}
+              ${rightKRs.length === 0 ? '<div style="color: var(--gray-400); font-size: 12px; text-align: center;">KPI 없음</div>' : ''}
             </div>
           </div>
-          ` : '<div style="text-align: center; color: var(--gray-400); padding: 60px; font-size: 14px;">기록된 활동이 없습니다<br><span style="font-size: 12px; margin-top: 8px; display: block;">업무일지에서 활동을 기록해보세요</span></div>'}
+          ` : '<div style="text-align: center; color: var(--gray-400); padding: 60px; font-size: 14px;">KPI가 설정되지 않았습니다<br><span style="font-size: 12px; margin-top: 8px; display: block;">목표 설정에서 KPI를 추가해주세요</span></div>'}
         </div>
       `;
     }
@@ -28357,7 +28390,7 @@
       filter: { status: 'all', assignee: 'all', member: 'all', search: '', groupBy: 'status', quickFilter: 'doing', viewMode: 'my' },
       editingTask: null,
       attachments: [], // 첨부파일 임시 저장
-      viewType: 'list' // 'list' | 'monthly' | 'record'
+      viewType: 'monthly' // 'list' | 'monthly' | 'record'
     };
 
     // 업무 계획 렌더링
@@ -29244,10 +29277,16 @@
       const currentMemberId = member?.id || '';
       const viewMode = taskPlanState.filter.viewMode || 'my';
 
-      // 전체 업무를 날짜별로 그룹화 (완료 업무는 실제완료일 기준, 진행중은 시작일~오늘 범위, 미완료는 마감일 기준)
       const allTasks = taskPlanState.tasks || [];
-      const tasksByDate = {};
       const calToday = new Date(); calToday.setHours(0, 0, 0, 0);
+      const monthStartStr = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+      const monthEndStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+
+      // 진행중 멀티데이 업무 수집 (간트 바로 표시)
+      const multiDayDoingTasks = [];
+      // 단일일 업무를 날짜별로 그룹화
+      const tasksByDate = {};
+
       allTasks.forEach(task => {
         const isDone = task.status === 'done' || task.status === 'completed';
         const isDoing = task.status === 'doing';
@@ -29258,27 +29297,28 @@
             tasksByDate[dateStr].push(task);
           }
         } else if (isDoing) {
-          // 진행중 업무: scheduledDate(시작일)부터 오늘까지 모든 날짜에 표시
           const startStr = task.scheduledDate || task.deadline || task.dueDate;
           if (startStr) {
             const startDt = new Date(startStr + 'T00:00:00');
             const endDt = new Date(calToday);
-            // 시작일부터 오늘까지 반복하며 각 날짜에 추가
-            for (let dt = new Date(startDt); dt <= endDt; dt.setDate(dt.getDate() + 1)) {
-              const ds = dt.toISOString().split('T')[0];
-              if (!tasksByDate[ds]) tasksByDate[ds] = [];
-              tasksByDate[ds].push(task);
-            }
-            // 마감일이 오늘 이후이면 마감일에도 표시
             const deadlineStr = task.deadline || task.dueDate;
-            if (deadlineStr && deadlineStr !== startStr) {
+            if (deadlineStr) {
               const deadlineDt = new Date(deadlineStr + 'T00:00:00');
-              if (deadlineDt > calToday) {
-                if (!tasksByDate[deadlineStr]) tasksByDate[deadlineStr] = [];
-                if (!tasksByDate[deadlineStr].includes(task)) {
-                  tasksByDate[deadlineStr].push(task);
-                }
-              }
+              if (deadlineDt > endDt) endDt.setTime(deadlineDt.getTime());
+            }
+            const daySpan = Math.round((endDt - startDt) / (1000 * 60 * 60 * 24)) + 1;
+            if (daySpan > 1) {
+              // 멀티데이 → 간트 바로 표시
+              multiDayDoingTasks.push({
+                ...task,
+                _ganttStart: startStr,
+                _ganttEnd: endDt.toISOString().split('T')[0],
+                _daySpan: daySpan
+              });
+            } else {
+              // 단일일 진행중 업무
+              if (!tasksByDate[startStr]) tasksByDate[startStr] = [];
+              tasksByDate[startStr].push(task);
             }
           }
         } else {
@@ -29294,7 +29334,6 @@
       const logsByDate = {};
       (okrState.dailyLogs || []).forEach(log => {
         if (viewMode === 'my' && log.memberId !== currentMemberId) return;
-        if (viewMode === 'team') { /* 팀 전체 */ }
         const dateStr = log.date;
         if (!dateStr) return;
         if (!logsByDate[dateStr]) logsByDate[dateStr] = [];
@@ -29302,73 +29341,158 @@
         logsByDate[dateStr].push({ ...log, lagName: lag?.name || '지표', lagUnit: lag?.unit || '건' });
       });
 
-      let cellsHtml = '';
-      // 이전 달 빈 칸
-      for (let i = 0; i < startDayOfWeek; i++) {
-        cellsHtml += '<div style="min-height: 120px; background: var(--gray-50); border-radius: 8px;"></div>';
-      }
+      // 간트 바 색상 배열
+      const ganttColors = ['#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#6366F1', '#14B8A6'];
 
-      // 날짜별 셀
-      for (let day = 1; day <= daysInMonth; day++) {
-        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const dayTasks = tasksByDate[dateStr] || [];
-        const dayLogs = logsByDate[dateStr] || [];
-        const currentDate = new Date(year, month, day);
-        const isToday = currentDate.getTime() === today.getTime();
-        const isPast = currentDate < today;
-        const dayOfWeek = currentDate.getDay();
-        const totalItems = dayTasks.length + dayLogs.length;
+      // 주차별로 간트 바 HTML 생성
+      function renderWeekGanttBars(weekStartDay, weekEndDay) {
+        const barsHtml = [];
+        multiDayDoingTasks.forEach((task, taskIdx) => {
+          const gStart = new Date(task._ganttStart + 'T00:00:00');
+          const gEnd = new Date(task._ganttEnd + 'T00:00:00');
 
-        const doneTasks = dayTasks.filter(t => t.status === 'done');
-        const pendingTasks = dayTasks.filter(t => t.status !== 'done');
-        const overdueTasks = isPast ? pendingTasks : [];
+          // 이 주에 겹치는지 확인
+          const weekStartDate = new Date(year, month, weekStartDay);
+          const weekEndDate = new Date(year, month, weekEndDay);
 
-        let bgColor = 'white'; let borderColor = 'var(--gray-200)';
-        if (isToday) { bgColor = '#EFF6FF'; borderColor = 'var(--primary)'; }
-        else if (overdueTasks.length > 0) { bgColor = '#FEF2F2'; borderColor = '#FECACA'; }
-        else if (doneTasks.length > 0 && pendingTasks.length === 0 && dayTasks.length > 0) { bgColor = '#F0FDF4'; borderColor = '#BBF7D0'; }
-        else if (dayLogs.length > 0 && dayTasks.length === 0) { bgColor = '#F0FDF4'; borderColor = '#BBF7D0'; }
+          if (gStart > weekEndDate || gEnd < weekStartDate) return; // 이 주에 안 겹침
 
-        // 표시 아이템: 업무(파랑) + 지표(초록) 합쳐서 최대 5줄
-        const displayItems = [];
-        dayTasks.slice(0, 5).forEach(task => {
-          const isDone = task.status === 'done';
-          const isTaskOverdue = !isDone && isPast;
-          const isDoing = task.status === 'doing';
-          const isScheduled = task.status === 'waiting' && task.scheduledDate;
-          let itemBg = 'var(--gray-100)'; let itemColor = 'var(--gray-600)'; let itemBorder = '';
-          if (isDone) { itemBg = '#DCFCE7'; itemColor = '#15803D'; itemBorder = 'border-left: 2px solid #22C55E;'; }
-          else if (isTaskOverdue) { itemBg = '#FEE2E2'; itemColor = '#DC2626'; itemBorder = 'border-left: 2px solid #EF4444;'; }
-          else if (isDoing) { itemBg = '#EFF6FF'; itemColor = '#1D4ED8'; itemBorder = 'border-left: 2px solid #3B82F6;'; }
-          else if (isScheduled) { itemBg = '#FEF3C7'; itemColor = '#92400E'; itemBorder = 'border-left: 2px solid #F59E0B;'; }
-          displayItems.push(`<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: ${itemBg}; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: ${itemColor}; ${itemBorder} ${isDone ? 'font-weight: 600;' : ''}">${isDone ? '✓ ' : isDoing ? '● ' : isScheduled ? '◻ ' : ''}${task.title}</div>`);
-        });
-        const logSlots = Math.max(0, 5 - displayItems.length);
-        dayLogs.slice(0, logSlots).forEach(log => {
-          displayItems.push(`<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: #ECFDF5; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #059669;">📊 ${log.lagName} ${log.resultValue || ''}${log.lagUnit}</div>`);
-        });
-        const remaining = totalItems - displayItems.length;
+          // 이 주에서의 시작/끝 위치 계산
+          const effectiveStart = gStart < weekStartDate ? weekStartDate : gStart;
+          const effectiveEnd = gEnd > weekEndDate ? weekEndDate : gEnd;
 
-        cellsHtml += `
-          <div onclick="${totalItems > 0 ? `openDayTasksModal('${dateStr}')` : ''}" style="min-height: 120px; background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 8px; padding: 6px; cursor: ${totalItems > 0 ? 'pointer' : 'default'}; transition: all 0.15s; overflow: hidden;"
-               ${totalItems > 0 ? `onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'" onmouseout="this.style.boxShadow='none'"` : ''}>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span style="font-size: 12px; font-weight: ${isToday ? '700' : '500'}; color: ${dayOfWeek === 0 ? '#EF4444' : dayOfWeek === 6 ? '#3B82F6' : 'var(--gray-700)'};">
-                ${day}${isToday ? ' <span style="font-size: 9px; color: var(--primary);">(오늘)</span>' : ''}
-              </span>
-              ${totalItems > 0 ? `<span style="font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: ${overdueTasks.length > 0 ? '#FEE2E2' : '#DCFCE7'}; color: ${overdueTasks.length > 0 ? '#DC2626' : '#16A34A'};">${totalItems}</span>` : ''}
+          const startCol = effectiveStart.getDay(); // 0(일) ~ 6(토)
+          const endCol = effectiveEnd.getDay();
+
+          const barColor = ganttColors[taskIdx % ganttColors.length];
+          const isStart = gStart >= weekStartDate && gStart <= weekEndDate;
+          const isEnd = gEnd >= weekStartDate && gEnd <= weekEndDate;
+
+          let borderRadius = '0';
+          if (isStart && isEnd) borderRadius = '6px';
+          else if (isStart) borderRadius = '6px 0 0 6px';
+          else if (isEnd) borderRadius = '0 6px 6px 0';
+          const borderExtra = (!isStart ? 'border-left: none;' : '') + (!isEnd ? 'border-right: none;' : '');
+
+          barsHtml.push(`
+            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}18; border: 1.5px solid ${barColor}; border-radius: ${borderRadius}; ${borderExtra} padding: 3px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; min-height: 22px; transition: all 0.15s; white-space: nowrap; overflow: hidden;"
+                 onmouseover="this.style.background='${barColor}30'" onmouseout="this.style.background='${barColor}18'">
+              <span style="font-size: 9px; color: ${barColor}; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">● ${task.title || '제목 없음'}</span>
+              ${isStart ? '<span style="font-size: 8px; color: ' + barColor + '80; flex-shrink: 0;">' + task._ganttStart.slice(5).replace('-','/') + '~' + task._ganttEnd.slice(5).replace('-','/') + '</span>' : ''}
             </div>
-            ${displayItems.join('')}
-            ${remaining > 0 ? `<div style="font-size: 8px; color: var(--gray-400); text-align: center;">+${remaining}개</div>` : ''}
+          `);
+        });
+        return barsHtml.length > 0 ? `
+          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 2px;">
+            ${barsHtml.join('')}
           </div>
-        `;
+        ` : '';
       }
 
-      // 남은 빈 칸
-      const remainingCells = (7 - ((startDayOfWeek + daysInMonth) % 7)) % 7;
-      for (let i = 0; i < remainingCells; i++) {
-        cellsHtml += '<div style="min-height: 120px; background: var(--gray-50); border-radius: 8px;"></div>';
+      // 주차 계산
+      const weeks = [];
+      let weekStart = 1;
+      // 첫번째 주: 1일부터 첫번째 토요일까지
+      const firstWeekEnd = Math.min(7 - startDayOfWeek, daysInMonth);
+      weeks.push({ start: 1, end: firstWeekEnd });
+      // 나머지 주
+      let d = firstWeekEnd + 1;
+      while (d <= daysInMonth) {
+        const wEnd = Math.min(d + 6, daysInMonth);
+        weeks.push({ start: d, end: wEnd });
+        d = wEnd + 1;
       }
+
+      let calendarHtml = '';
+
+      weeks.forEach((week, weekIdx) => {
+        // 간트 바 렌더링
+        const ganttHtml = renderWeekGanttBars(week.start, week.end);
+        calendarHtml += ganttHtml;
+
+        // 날짜 셀 렌더링
+        calendarHtml += '<div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 4px;">';
+
+        // 첫번째 주 앞의 빈칸
+        if (weekIdx === 0) {
+          for (let i = 0; i < startDayOfWeek; i++) {
+            calendarHtml += '<div style="min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>';
+          }
+        }
+
+        for (let day = week.start; day <= week.end; day++) {
+          const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const dayTasks = tasksByDate[dateStr] || [];
+          const dayLogs = logsByDate[dateStr] || [];
+          const currentDate = new Date(year, month, day);
+          const isToday = currentDate.getTime() === today.getTime();
+          const isPast = currentDate < today;
+          const dayOfWeek = currentDate.getDay();
+          const totalItems = dayTasks.length + dayLogs.length;
+
+          // 이 날짜에 간트 바 업무가 있는지 체크 (클릭 시 포함하기 위해)
+          const ganttTasksForDay = multiDayDoingTasks.filter(t => dateStr >= t._ganttStart && dateStr <= t._ganttEnd);
+          const totalClickItems = totalItems + ganttTasksForDay.length;
+
+          const doneTasks = dayTasks.filter(t => t.status === 'done');
+          const pendingTasks = dayTasks.filter(t => t.status !== 'done');
+          const overdueTasks = isPast ? pendingTasks : [];
+
+          // 배경색: 업무 없는 날은 회색
+          let bgColor = '#F3F4F6'; let borderColor = '#E5E7EB';
+          if (isToday) { bgColor = '#EFF6FF'; borderColor = 'var(--primary)'; }
+          else if (totalItems > 0 || ganttTasksForDay.length > 0) {
+            bgColor = 'white'; borderColor = 'var(--gray-200)';
+            if (overdueTasks.length > 0) { bgColor = '#FEF2F2'; borderColor = '#FECACA'; }
+            else if (doneTasks.length > 0 && pendingTasks.length === 0 && dayTasks.length > 0) { bgColor = '#F0FDF4'; borderColor = '#BBF7D0'; }
+            else if (dayLogs.length > 0 && dayTasks.length === 0 && ganttTasksForDay.length === 0) { bgColor = '#F0FDF4'; borderColor = '#BBF7D0'; }
+          }
+
+          // 표시 아이템: 업무 + 지표 합쳐서 최대 5줄
+          const displayItems = [];
+          dayTasks.slice(0, 5).forEach(task => {
+            const isDone = task.status === 'done';
+            const isTaskOverdue = !isDone && isPast;
+            const isDoing = task.status === 'doing';
+            const isScheduled = task.status === 'waiting' && task.scheduledDate;
+            let itemBg = 'var(--gray-100)'; let itemColor = 'var(--gray-600)'; let itemBorder = '';
+            if (isDone) { itemBg = '#DCFCE7'; itemColor = '#15803D'; itemBorder = 'border-left: 2px solid #22C55E;'; }
+            else if (isTaskOverdue) { itemBg = '#FEE2E2'; itemColor = '#DC2626'; itemBorder = 'border-left: 2px solid #EF4444;'; }
+            else if (isDoing) { itemBg = '#EFF6FF'; itemColor = '#1D4ED8'; itemBorder = 'border-left: 2px solid #3B82F6;'; }
+            else if (isScheduled) { itemBg = '#FEF3C7'; itemColor = '#92400E'; itemBorder = 'border-left: 2px solid #F59E0B;'; }
+            displayItems.push(`<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: ${itemBg}; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: ${itemColor}; ${itemBorder} ${isDone ? 'font-weight: 600;' : ''}">${isDone ? '✓ ' : isDoing ? '● ' : isScheduled ? '◻ ' : ''}${task.title}</div>`);
+          });
+          const logSlots = Math.max(0, 5 - displayItems.length);
+          dayLogs.slice(0, logSlots).forEach(log => {
+            displayItems.push(`<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: #ECFDF5; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #059669;">📊 ${log.lagName} ${log.resultValue || ''}${log.lagUnit}</div>`);
+          });
+          const remaining = totalClickItems - displayItems.length;
+
+          calendarHtml += `
+            <div onclick="${totalClickItems > 0 ? `openDayTasksModal('${dateStr}')` : ''}" style="min-height: 120px; background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 8px; padding: 6px; cursor: ${totalClickItems > 0 ? 'pointer' : 'default'}; transition: all 0.15s; overflow: hidden;"
+                 ${totalClickItems > 0 ? `onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'" onmouseout="this.style.boxShadow='none'"` : ''}>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-size: 12px; font-weight: ${isToday ? '700' : '500'}; color: ${dayOfWeek === 0 ? '#EF4444' : dayOfWeek === 6 ? '#3B82F6' : 'var(--gray-700)'};">
+                  ${day}${isToday ? ' <span style="font-size: 9px; color: var(--primary);">(오늘)</span>' : ''}
+                </span>
+                ${totalClickItems > 0 ? `<span style="font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: ${overdueTasks.length > 0 ? '#FEE2E2' : '#DCFCE7'}; color: ${overdueTasks.length > 0 ? '#DC2626' : '#16A34A'};">${totalClickItems}</span>` : ''}
+              </div>
+              ${displayItems.join('')}
+              ${remaining > 0 ? `<div style="font-size: 8px; color: var(--gray-400); text-align: center;">+${remaining}개</div>` : ''}
+            </div>
+          `;
+        }
+
+        // 마지막 주 뒤의 빈칸
+        if (weekIdx === weeks.length - 1) {
+          const lastDayOfWeek = new Date(year, month, week.end).getDay();
+          for (let i = lastDayOfWeek + 1; i <= 6; i++) {
+            calendarHtml += '<div style="min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>';
+          }
+        }
+
+        calendarHtml += '</div>';
+      });
 
       return `
         <div style="margin-top: 8px;">
@@ -29391,10 +29515,8 @@
             <div style="text-align: center; font-size: 11px; font-weight: 600; color: var(--gray-600); padding: 6px;">금</div>
             <div style="text-align: center; font-size: 11px; font-weight: 600; color: #3B82F6; padding: 6px;">토</div>
           </div>
-          <!-- 캘린더 그리드 -->
-          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;">
-            ${cellsHtml}
-          </div>
+          <!-- 캘린더 그리드 (주차별 간트 바 포함) -->
+          ${calendarHtml}
         </div>
       `;
     }
