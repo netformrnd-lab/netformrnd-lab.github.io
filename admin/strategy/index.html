@@ -9181,20 +9181,13 @@
     }
 
     // ★ 완료 목표일 계산 (마감일 2일 전)
-    function getCompletionTargetDate(deadline) {
-      if (!deadline) return null;
-      const deadlineDate = new Date(deadline);
-      deadlineDate.setDate(deadlineDate.getDate() - 2);
-      return deadlineDate;
-    }
-
-    // ★ D-day 계산 (완료 목표일 기준, 2일 여유)
+    // ★ D-day 계산 (마감일 기준, 해당일 23:59 지나면 지연)
     function getTaskDday(deadline) {
       if (!deadline) return null;
-      const completionTarget = getCompletionTargetDate(deadline);
+      const deadlineDate = new Date(deadline + 'T00:00:00');
       const now = new Date();
       now.setHours(0, 0, 0, 0);
-      const diffDays = Math.ceil((completionTarget - now) / (1000 * 60 * 60 * 24));
+      const diffDays = Math.ceil((deadlineDate - now) / (1000 * 60 * 60 * 24));
       return diffDays;
     }
 
@@ -9956,7 +9949,7 @@
 
     // 요일별 배치된 업무 상세보기 모달
     function openScheduledTaskDetail(taskId) {
-      event.stopPropagation();
+      if (typeof event !== 'undefined' && event) event.stopPropagation();
 
       // taskPlanState 또는 state에서 업무 찾기
       const tasks = taskPlanState?.tasks || state.taskPlans || [];
@@ -10570,12 +10563,21 @@
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const isPast = date < today;
 
       // 상태별 분류
       const doneTasks = allTasks.filter(t => t.status === 'done' || t.status === 'completed');
       const doingTasks = allTasks.filter(t => t.status === 'doing');
       const waitingTasks = allTasks.filter(t => t.status !== 'done' && t.status !== 'completed' && t.status !== 'doing');
+
+      // 지연 판단: 각 업무의 마감일 기준 (해당일 23:59 지나면 지연)
+      const isTaskOverdue = (task) => {
+        const dl = task.deadline || task.dueDate;
+        if (!dl) return false;
+        const dlDate = new Date(dl + 'T00:00:00');
+        return dlDate < today;
+      };
+      const overdueDoingTasks = doingTasks.filter(t => isTaskOverdue(t));
+      const activeDoingTasks = doingTasks.filter(t => !isTaskOverdue(t));
 
       showModal(`
         <div style="padding: 24px; max-width: 500px;">
@@ -10587,14 +10589,33 @@
             <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
           </div>
 
-          ${doingTasks.length > 0 ? `
+          ${overdueDoingTasks.length > 0 ? `
             <div style="margin-bottom: 16px;">
-              <div style="font-size: 12px; font-weight: 600; color: ${isPast ? '#DC2626' : '#3B82F6'}; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
-                ${isPast ? '⚠️ 지연' : '🏃 진행 중'} <span style="background: ${isPast ? '#FEE2E2' : '#EFF6FF'}; color: ${isPast ? '#DC2626' : '#3B82F6'}; padding: 2px 6px; border-radius: 4px;">${doingTasks.length}</span>
+              <div style="font-size: 12px; font-weight: 600; color: #DC2626; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
+                ⚠️ 지연 <span style="background: #FEE2E2; color: #DC2626; padding: 2px 6px; border-radius: 4px;">${overdueDoingTasks.length}</span>
               </div>
               <div style="display: flex; flex-direction: column; gap: 8px;">
-                ${doingTasks.map(task => `
-                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: ${isPast ? '#FEF2F2' : 'white'}; border: 1px solid ${isPast ? '#FECACA' : '#BFDBFE'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
+                ${overdueDoingTasks.map(task => `
+                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${task.title}</div>
+                    <div style="font-size: 11px; color: #DC2626; margin-top: 4px;">
+                      ⚠️ 마감일 ${task.deadline || task.dueDate || ''} 초과
+                      ${task.krName ? ` • ${task.krName}` : ''}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          ${activeDoingTasks.length > 0 ? `
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 12px; font-weight: 600; color: #3B82F6; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
+                🏃 진행 중 <span style="background: #EFF6FF; color: #3B82F6; padding: 2px 6px; border-radius: 4px;">${activeDoingTasks.length}</span>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                ${activeDoingTasks.map(task => `
+                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: white; border: 1px solid #BFDBFE; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
                     <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${task.title}</div>
                     <div style="font-size: 11px; color: #3B82F6; margin-top: 4px;">
                       🔵 진행중
@@ -10612,15 +10633,17 @@
                 📋 대기 <span style="background: #FEF3C7; color: #B45309; padding: 2px 6px; border-radius: 4px;">${waitingTasks.length}</span>
               </div>
               <div style="display: flex; flex-direction: column; gap: 8px;">
-                ${waitingTasks.map(task => `
-                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
+                ${waitingTasks.map(task => {
+                  const overdue = isTaskOverdue(task);
+                  return `
+                  <div onclick="closeModal(); setTimeout(() => openScheduledTaskDetail('${task.id}'), 300);" style="padding: 12px; background: ${overdue ? '#FEF2F2' : '#FFFBEB'}; border: 1px solid ${overdue ? '#FECACA' : '#FDE68A'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)'" onmouseout="this.style.boxShadow='none'">
                     <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">${task.title}</div>
-                    <div style="font-size: 11px; color: #F59E0B; margin-top: 4px;">
-                      📋 대기
+                    <div style="font-size: 11px; color: ${overdue ? '#DC2626' : '#F59E0B'}; margin-top: 4px;">
+                      ${overdue ? '⚠️ 마감일 ' + (task.deadline || task.dueDate || '') + ' 초과' : '📋 대기'}
                       ${task.krName ? ` • ${task.krName}` : ''}
                     </div>
                   </div>
-                `).join('')}
+                `}).join('')}
               </div>
             </div>
           ` : ''}
@@ -29344,9 +29367,10 @@
       // 간트 바 색상 배열
       const ganttColors = ['#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#6366F1', '#14B8A6'];
 
-      // 주차별로 간트 바 HTML 생성
+      // 주차별로 간트 바 HTML 생성 (날짜 셀 그리드 안에 포함)
       function renderWeekGanttBars(weekStartDay, weekEndDay) {
         const barsHtml = [];
+        let rowIdx = 0;
         multiDayDoingTasks.forEach((task, taskIdx) => {
           const gStart = new Date(task._ganttStart + 'T00:00:00');
           const gEnd = new Date(task._ganttEnd + 'T00:00:00');
@@ -29369,24 +29393,20 @@
           const isEnd = gEnd >= weekStartDate && gEnd <= weekEndDate;
 
           let borderRadius = '0';
-          if (isStart && isEnd) borderRadius = '6px';
-          else if (isStart) borderRadius = '6px 0 0 6px';
-          else if (isEnd) borderRadius = '0 6px 6px 0';
-          const borderExtra = (!isStart ? 'border-left: none;' : '') + (!isEnd ? 'border-right: none;' : '');
+          if (isStart && isEnd) borderRadius = '4px';
+          else if (isStart) borderRadius = '4px 0 0 4px';
+          else if (isEnd) borderRadius = '0 4px 4px 0';
 
+          rowIdx++;
           barsHtml.push(`
-            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}18; border: 1.5px solid ${barColor}; border-radius: ${borderRadius}; ${borderExtra} padding: 3px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; min-height: 22px; transition: all 0.15s; white-space: nowrap; overflow: hidden;"
-                 onmouseover="this.style.background='${barColor}30'" onmouseout="this.style.background='${barColor}18'">
-              <span style="font-size: 9px; color: ${barColor}; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">● ${task.title || '제목 없음'}</span>
-              ${isStart ? '<span style="font-size: 8px; color: ' + barColor + '80; flex-shrink: 0;">' + task._ganttStart.slice(5).replace('-','/') + '~' + task._ganttEnd.slice(5).replace('-','/') + '</span>' : ''}
+            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-row: ${rowIdx}; grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}; border-radius: ${borderRadius}; padding: 2px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 20px; transition: all 0.15s; white-space: nowrap; overflow: hidden;"
+                 onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">
+              <span style="font-size: 9px; color: white; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">● ${task.title || '제목 없음'}</span>
+              ${isStart ? '<span style="font-size: 8px; color: rgba(255,255,255,0.75); flex-shrink: 0;">' + task._ganttStart.slice(5).replace('-','/') + '~' + task._ganttEnd.slice(5).replace('-','/') + '</span>' : ''}
             </div>
           `);
         });
-        return barsHtml.length > 0 ? `
-          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 2px;">
-            ${barsHtml.join('')}
-          </div>
-        ` : '';
+        return { html: barsHtml.join(''), rowCount: rowIdx };
       }
 
       // 주차 계산
@@ -29406,17 +29426,18 @@
       let calendarHtml = '';
 
       weeks.forEach((week, weekIdx) => {
-        // 간트 바 렌더링
-        const ganttHtml = renderWeekGanttBars(week.start, week.end);
-        calendarHtml += ganttHtml;
+        // 간트 바 렌더링 (날짜 셀과 같은 그리드에 포함)
+        const ganttResult = renderWeekGanttBars(week.start, week.end);
+        const dateRow = ganttResult.rowCount + 1;
 
-        // 날짜 셀 렌더링
-        calendarHtml += '<div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 4px;">';
+        // 날짜 셀 + 간트 바 통합 그리드
+        calendarHtml += '<div style="display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 4px; row-gap: 2px; margin-bottom: 4px;">';
+        calendarHtml += ganttResult.html;
 
         // 첫번째 주 앞의 빈칸
         if (weekIdx === 0) {
           for (let i = 0; i < startDayOfWeek; i++) {
-            calendarHtml += '<div style="min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>';
+            calendarHtml += `<div style="grid-row: ${dateRow}; min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>`;
           }
         }
 
@@ -29469,7 +29490,7 @@
           const remaining = totalClickItems - displayItems.length;
 
           calendarHtml += `
-            <div onclick="${totalClickItems > 0 ? `openDayTasksModal('${dateStr}')` : ''}" style="min-height: 120px; background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 8px; padding: 6px; cursor: ${totalClickItems > 0 ? 'pointer' : 'default'}; transition: all 0.15s; overflow: hidden;"
+            <div onclick="${totalClickItems > 0 ? `openDayTasksModal('${dateStr}')` : ''}" style="grid-row: ${dateRow}; min-height: 120px; background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 8px; padding: 6px; cursor: ${totalClickItems > 0 ? 'pointer' : 'default'}; transition: all 0.15s; overflow: hidden;"
                  ${totalClickItems > 0 ? `onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'" onmouseout="this.style.boxShadow='none'"` : ''}>
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <span style="font-size: 12px; font-weight: ${isToday ? '700' : '500'}; color: ${dayOfWeek === 0 ? '#EF4444' : dayOfWeek === 6 ? '#3B82F6' : 'var(--gray-700)'};">
@@ -29487,7 +29508,7 @@
         if (weekIdx === weeks.length - 1) {
           const lastDayOfWeek = new Date(year, month, week.end).getDay();
           for (let i = lastDayOfWeek + 1; i <= 6; i++) {
-            calendarHtml += '<div style="min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>';
+            calendarHtml += `<div style="grid-row: ${dateRow}; min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>`;
           }
         }
 
