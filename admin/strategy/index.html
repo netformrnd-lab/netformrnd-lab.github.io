@@ -29415,7 +29415,7 @@
       // 간트 바 색상 배열
       const ganttColors = ['#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#6366F1', '#14B8A6'];
 
-      // 주차별로 간트 바 HTML 생성 (날짜 셀 그리드 안에 포함)
+      // 주차별로 간트 바 HTML 생성 (overlay용 - grid-column만 사용)
       function renderWeekGanttBars(weekStartDay, weekEndDay) {
         const barsHtml = [];
         let rowIdx = 0;
@@ -29423,17 +29423,15 @@
           const gStart = new Date(task._ganttStart + 'T00:00:00');
           const gEnd = new Date(task._ganttEnd + 'T00:00:00');
 
-          // 이 주에 겹치는지 확인
           const weekStartDate = new Date(year, month, weekStartDay);
           const weekEndDate = new Date(year, month, weekEndDay);
 
-          if (gStart > weekEndDate || gEnd < weekStartDate) return; // 이 주에 안 겹침
+          if (gStart > weekEndDate || gEnd < weekStartDate) return;
 
-          // 이 주에서의 시작/끝 위치 계산
           const effectiveStart = gStart < weekStartDate ? weekStartDate : gStart;
           const effectiveEnd = gEnd > weekEndDate ? weekEndDate : gEnd;
 
-          const startCol = effectiveStart.getDay(); // 0(일) ~ 6(토)
+          const startCol = effectiveStart.getDay();
           const endCol = effectiveEnd.getDay();
 
           const barColor = task._isDone ? '#9CA3AF' : ganttColors[taskIdx % ganttColors.length];
@@ -29447,7 +29445,7 @@
 
           rowIdx++;
           barsHtml.push(`
-            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-row: ${rowIdx}; grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}; ${task._isDone ? 'opacity: 0.6;' : ''} border-radius: ${borderRadius}; padding: 2px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 20px; transition: all 0.15s; white-space: nowrap; overflow: hidden;"
+            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}; ${task._isDone ? 'opacity: 0.6;' : ''} border-radius: ${borderRadius}; padding: 1px 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 18px; transition: all 0.15s; white-space: nowrap; overflow: hidden; pointer-events: auto;"
                  onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='${task._isDone ? '0.6' : '1'}'">
               <span style="font-size: 9px; color: white; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">${task._isDone ? '✓' : '●'} ${task.title || '제목 없음'}</span>
               ${isStart ? '<span style="font-size: 8px; color: rgba(255,255,255,0.75); flex-shrink: 0;">' + task._ganttStart.slice(5).replace('-','/') + '~' + task._ganttEnd.slice(5).replace('-','/') + '</span>' : ''}
@@ -29460,10 +29458,8 @@
       // 주차 계산
       const weeks = [];
       let weekStart = 1;
-      // 첫번째 주: 1일부터 첫번째 토요일까지
       const firstWeekEnd = Math.min(7 - startDayOfWeek, daysInMonth);
       weeks.push({ start: 1, end: firstWeekEnd });
-      // 나머지 주
       let d = firstWeekEnd + 1;
       while (d <= daysInMonth) {
         const wEnd = Math.min(d + 6, daysInMonth);
@@ -29474,23 +29470,23 @@
       let calendarHtml = '';
 
       weeks.forEach((week, weekIdx) => {
-        // 간트 바 렌더링 (날짜 셀과 같은 그리드에 포함)
         const ganttResult = renderWeekGanttBars(week.start, week.end);
-        const dateRow = ganttResult.rowCount + 1;
+        const ganttAreaHeight = ganttResult.rowCount > 0 ? ganttResult.rowCount * 20 + 2 : 0;
 
-        // 날짜 셀 + 간트 바 통합 그리드
-        calendarHtml += '<div style="display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 4px; row-gap: 2px; margin-bottom: 4px;">';
-        calendarHtml += ganttResult.html;
+        // 네이버 캘린더 스타일: wrapper(relative) + 날짜셀 + 간트 overlay(absolute)
+        calendarHtml += '<div style="position: relative; margin-bottom: 4px;">';
 
-        // 첫번째 주 앞의 빈칸
+        // 날짜 셀 그리드
+        calendarHtml += '<div style="display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 4px;">';
+
         if (weekIdx === 0) {
           for (let i = 0; i < startDayOfWeek; i++) {
-            calendarHtml += `<div style="grid-row: ${dateRow}; min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>`;
+            calendarHtml += '<div style="min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>';
           }
         }
 
         for (let day = week.start; day <= week.end; day++) {
-          const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
           const dayTasks = tasksByDate[dateStr] || [];
           const dayLogs = logsByDate[dateStr] || [];
           const currentDate = new Date(year, month, day);
@@ -29499,7 +29495,6 @@
           const dayOfWeek = currentDate.getDay();
           const totalItems = dayTasks.length + dayLogs.length;
 
-          // 이 날짜에 간트 바 업무가 있는지 체크 (클릭 시 포함하기 위해)
           const ganttTasksForDay = multiDayDoingTasks.filter(t => dateStr >= t._ganttStart && dateStr <= t._ganttEnd);
           const totalClickItems = totalItems + ganttTasksForDay.length;
 
@@ -29507,7 +29502,6 @@
           const pendingTasks = dayTasks.filter(t => t.status !== 'done');
           const overdueTasks = isPast ? pendingTasks : [];
 
-          // 배경색: 업무 없는 날은 회색
           let bgColor = '#F3F4F6'; let borderColor = '#E5E7EB';
           if (isToday) { bgColor = '#EFF6FF'; borderColor = 'var(--primary)'; }
           else if (totalItems > 0 || ganttTasksForDay.length > 0) {
@@ -29517,7 +29511,6 @@
             else if (dayLogs.length > 0 && dayTasks.length === 0 && ganttTasksForDay.length === 0) { bgColor = '#F0FDF4'; borderColor = '#BBF7D0'; }
           }
 
-          // 표시 아이템: 업무 + 지표 합쳐서 최대 5줄
           const displayItems = [];
           dayTasks.slice(0, 5).forEach(task => {
             const isDone = task.status === 'done';
@@ -29529,38 +29522,44 @@
             else if (isTaskOverdue) { itemBg = '#FEE2E2'; itemColor = '#DC2626'; itemBorder = 'border-left: 2px solid #EF4444;'; }
             else if (isDoing) { itemBg = '#EFF6FF'; itemColor = '#1D4ED8'; itemBorder = 'border-left: 2px solid #3B82F6;'; }
             else if (isScheduled) { itemBg = '#FEF3C7'; itemColor = '#92400E'; itemBorder = 'border-left: 2px solid #F59E0B;'; }
-            displayItems.push(`<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: ${itemBg}; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: ${itemColor}; ${itemBorder} ${isDone ? 'font-weight: 600;' : ''}">${isDone ? '✓ ' : isDoing ? '● ' : isScheduled ? '◻ ' : ''}${task.title}</div>`);
+            displayItems.push('<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: ' + itemBg + '; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: ' + itemColor + '; ' + itemBorder + ' ' + (isDone ? 'font-weight: 600;' : '') + '">' + (isDone ? '✓ ' : isDoing ? '● ' : isScheduled ? '◻ ' : '') + task.title + '</div>');
           });
           const logSlots = Math.max(0, 5 - displayItems.length);
           dayLogs.slice(0, logSlots).forEach(log => {
-            displayItems.push(`<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: #ECFDF5; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #059669;">📊 ${log.lagName} ${log.resultValue || ''}${log.lagUnit}</div>`);
+            displayItems.push('<div style="font-size: 9px; padding: 2px 4px; margin-bottom: 1px; background: #ECFDF5; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #059669;">📊 ' + log.lagName + ' ' + (log.resultValue || '') + log.lagUnit + '</div>');
           });
           const remaining = totalClickItems - displayItems.length;
 
-          calendarHtml += `
-            <div onclick="${totalClickItems > 0 ? `openDayTasksModal('${dateStr}')` : ''}" style="grid-row: ${dateRow}; min-height: 120px; background: ${bgColor}; border: 1px solid ${borderColor}; border-radius: 8px; padding: 6px; cursor: ${totalClickItems > 0 ? 'pointer' : 'default'}; transition: all 0.15s; overflow: hidden;"
-                 ${totalClickItems > 0 ? `onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'" onmouseout="this.style.boxShadow='none'"` : ''}>
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span style="font-size: 12px; font-weight: ${isToday ? '700' : '500'}; color: ${dayOfWeek === 0 ? '#EF4444' : dayOfWeek === 6 ? '#3B82F6' : 'var(--gray-700)'};">
-                  ${day}${isToday ? ' <span style="font-size: 9px; color: var(--primary);">(오늘)</span>' : ''}
-                </span>
-                ${totalClickItems > 0 ? `<span style="font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: ${overdueTasks.length > 0 ? '#FEE2E2' : '#DCFCE7'}; color: ${overdueTasks.length > 0 ? '#DC2626' : '#16A34A'};">${totalClickItems}</span>` : ''}
-              </div>
-              ${displayItems.join('')}
-              ${remaining > 0 ? `<div style="font-size: 8px; color: var(--gray-400); text-align: center;">+${remaining}개</div>` : ''}
-            </div>
-          `;
+          calendarHtml += '<div onclick="' + (totalClickItems > 0 ? "openDayTasksModal('" + dateStr + "')" : '') + '" style="min-height: 120px; background: ' + bgColor + '; border: 1px solid ' + borderColor + '; border-radius: 8px; padding: 6px; cursor: ' + (totalClickItems > 0 ? 'pointer' : 'default') + '; transition: all 0.15s; overflow: hidden;"' +
+            (totalClickItems > 0 ? ' onmouseover="this.style.boxShadow=\'0 2px 8px rgba(0,0,0,0.08)\'" onmouseout="this.style.boxShadow=\'none\'"' : '') + '>' +
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: ' + (ganttAreaHeight > 0 ? ganttAreaHeight + 4 : 4) + 'px;">' +
+              '<span style="font-size: 12px; font-weight: ' + (isToday ? '700' : '500') + '; color: ' + (dayOfWeek === 0 ? '#EF4444' : dayOfWeek === 6 ? '#3B82F6' : 'var(--gray-700)') + ';">' +
+                day + (isToday ? ' <span style="font-size: 9px; color: var(--primary);">(오늘)</span>' : '') +
+              '</span>' +
+              (totalClickItems > 0 ? '<span style="font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: ' + (overdueTasks.length > 0 ? '#FEE2E2' : '#DCFCE7') + '; color: ' + (overdueTasks.length > 0 ? '#DC2626' : '#16A34A') + ';">' + totalClickItems + '</span>' : '') +
+            '</div>' +
+            displayItems.join('') +
+            (remaining > 0 ? '<div style="font-size: 8px; color: var(--gray-400); text-align: center;">+' + remaining + '개</div>' : '') +
+          '</div>';
         }
 
-        // 마지막 주 뒤의 빈칸
         if (weekIdx === weeks.length - 1) {
           const lastDayOfWeek = new Date(year, month, week.end).getDay();
           for (let i = lastDayOfWeek + 1; i <= 6; i++) {
-            calendarHtml += `<div style="grid-row: ${dateRow}; min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>`;
+            calendarHtml += '<div style="min-height: 120px; background: #F3F4F6; border-radius: 8px;"></div>';
           }
         }
 
-        calendarHtml += '</div>';
+        calendarHtml += '</div>'; // 날짜 셀 그리드 닫기
+
+        // 간트 바 overlay (날짜 셀 위에 absolute로 겹침 - 네이버 캘린더 스타일)
+        if (ganttResult.rowCount > 0) {
+          calendarHtml += '<div style="position: absolute; top: 27px; left: 0; right: 0; pointer-events: none; display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 4px; row-gap: 2px;">';
+          calendarHtml += ganttResult.html;
+          calendarHtml += '</div>';
+        }
+
+        calendarHtml += '</div>'; // wrapper 닫기
       });
 
       return `
