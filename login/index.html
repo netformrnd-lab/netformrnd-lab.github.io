@@ -1988,8 +1988,11 @@
           <button type="submit" class="btn btn-supplier" id="login-btn">로그인</button>
         </form>
         
-        <div class="help-text">
-          로그인 정보는 담당자에게 문의하세요.
+        <div class="help-text" style="display: flex; flex-direction: column; gap: 8px; align-items: center;">
+          <a href="javascript:void(0)" onclick="openPasswordRecoveryModal()" style="color: var(--primary); text-decoration: none; font-weight: 500;">
+            🔐 비밀번호 찾기
+          </a>
+          <span style="color: #999; font-size: 12px;">문의: 담당자에게 연락</span>
         </div>
       </div>
       
@@ -2041,6 +2044,7 @@
 
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <script>
@@ -2487,6 +2491,563 @@ async function submitPasswordChange() {
   } catch (error) {
     console.error('비밀번호 변경 오류:', error);
     alert('비밀번호 변경에 실패했습니다.\n잠시 후 다시 시도해주세요.');
+  }
+}
+
+// ===== 비밀번호 찾기 (휴대폰 인증) =====
+let passwordRecoveryState = {
+  step: 1,  // 1: 정보입력, 2: 인증코드, 3: 새비밀번호
+  userType: null,
+  foundUser: null,
+  confirmationResult: null,
+  recaptchaVerifier: null
+};
+
+function openPasswordRecoveryModal() {
+  // 상태 초기화
+  passwordRecoveryState = {
+    step: 1,
+    userType: null,
+    foundUser: null,
+    confirmationResult: null,
+    recaptchaVerifier: null
+  };
+
+  // 기존 모달이 있으면 제거
+  const existingModal = document.getElementById('passwordRecoveryModal');
+  if (existingModal) existingModal.remove();
+
+  renderPasswordRecoveryModal();
+}
+
+function renderPasswordRecoveryModal() {
+  const existingModal = document.getElementById('passwordRecoveryModal');
+  if (existingModal) existingModal.remove();
+
+  const { step } = passwordRecoveryState;
+
+  let stepContent = '';
+  let stepTitle = '';
+
+  if (step === 1) {
+    stepTitle = '계정 정보 입력';
+    stepContent = `
+      <!-- 사용자 유형 선택 -->
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px;">
+          계정 유형
+        </label>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" onclick="selectRecoveryUserType('supplier')" id="recovery-type-supplier" style="
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            background: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+          ">🏭 공급사</button>
+          <button type="button" onclick="selectRecoveryUserType('seller')" id="recovery-type-seller" style="
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            background: white;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+          ">👤 셀러</button>
+        </div>
+      </div>
+
+      <!-- 아이디 입력 -->
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px;">
+          아이디
+        </label>
+        <input type="text" id="recovery-loginId" placeholder="등록된 아이디 입력" style="
+          width: 100%;
+          padding: 12px 14px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          font-size: 14px;
+          box-sizing: border-box;
+        ">
+      </div>
+
+      <!-- 휴대폰 번호 입력 -->
+      <div style="margin-bottom: 20px;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px;">
+          휴대폰 번호
+        </label>
+        <input type="tel" id="recovery-phone" placeholder="010-1234-5678" style="
+          width: 100%;
+          padding: 12px 14px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          font-size: 14px;
+          box-sizing: border-box;
+        ">
+        <p style="font-size: 11px; color: #6b7280; margin-top: 6px;">
+          * 등록된 휴대폰 번호와 일치해야 합니다
+        </p>
+      </div>
+
+      <!-- reCAPTCHA 컨테이너 -->
+      <div id="recaptcha-container" style="margin-bottom: 16px;"></div>
+
+      <!-- 버튼 -->
+      <button onclick="verifyUserAndSendCode()" style="
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(145deg, #f59e0b, #d97706);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(245,158,11,0.3);
+      ">인증번호 받기</button>
+    `;
+  } else if (step === 2) {
+    stepTitle = '인증번호 확인';
+    stepContent = `
+      <div style="
+        background: #f0f9ff;
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 20px;
+        text-align: center;
+      ">
+        <p style="font-size: 13px; color: #0369a1; margin: 0;">
+          📱 <b>${passwordRecoveryState.foundUser?.phone || ''}</b>로<br>
+          인증번호를 발송했습니다
+        </p>
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px;">
+          인증번호 6자리
+        </label>
+        <input type="text" id="recovery-code" placeholder="123456" maxlength="6" style="
+          width: 100%;
+          padding: 14px;
+          border: 2px solid #d1d5db;
+          border-radius: 10px;
+          font-size: 24px;
+          font-weight: 700;
+          text-align: center;
+          letter-spacing: 8px;
+          box-sizing: border-box;
+        ">
+      </div>
+
+      <button onclick="verifyCode()" style="
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(145deg, #3b82f6, #2563eb);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(59,130,246,0.3);
+      ">인증 확인</button>
+
+      <button onclick="passwordRecoveryState.step = 1; renderPasswordRecoveryModal();" style="
+        width: 100%;
+        padding: 12px;
+        background: transparent;
+        color: #6b7280;
+        border: none;
+        font-size: 13px;
+        cursor: pointer;
+        margin-top: 10px;
+      ">← 다시 입력하기</button>
+    `;
+  } else if (step === 3) {
+    stepTitle = '새 비밀번호 설정';
+    stepContent = `
+      <div style="
+        background: #dcfce7;
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 20px;
+        text-align: center;
+      ">
+        <p style="font-size: 13px; color: #166534; margin: 0;">
+          ✅ 인증이 완료되었습니다!<br>
+          새 비밀번호를 설정해주세요.
+        </p>
+      </div>
+
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px;">
+          새 비밀번호
+        </label>
+        <input type="password" id="recovery-newPw" placeholder="새 비밀번호 (4자 이상)" style="
+          width: 100%;
+          padding: 12px 14px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          font-size: 14px;
+          box-sizing: border-box;
+        ">
+      </div>
+
+      <div style="margin-bottom: 20px;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px;">
+          새 비밀번호 확인
+        </label>
+        <input type="password" id="recovery-newPwConfirm" placeholder="새 비밀번호 다시 입력" style="
+          width: 100%;
+          padding: 12px 14px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          font-size: 14px;
+          box-sizing: border-box;
+        ">
+      </div>
+
+      <button onclick="resetPassword()" style="
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(145deg, #10b981, #059669);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(16,185,129,0.3);
+      ">비밀번호 변경 완료</button>
+    `;
+  }
+
+  const modalHtml = `
+    <div id="passwordRecoveryModal" style="
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    " onclick="if(event.target === this) closePasswordRecoveryModal()">
+      <div style="
+        background: white;
+        border-radius: 16px;
+        max-width: 400px;
+        width: 100%;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      ">
+        <!-- 헤더 -->
+        <div style="
+          padding: 20px 24px;
+          border-bottom: 1px solid #e5e7eb;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        ">
+          <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0;">
+            🔐 비밀번호 찾기
+          </h2>
+          <button onclick="closePasswordRecoveryModal()" style="
+            background: none;
+            border: none;
+            font-size: 24px;
+            color: #9ca3af;
+            cursor: pointer;
+          ">&times;</button>
+        </div>
+
+        <!-- 단계 표시 -->
+        <div style="padding: 16px 24px; background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+          <div style="display: flex; justify-content: center; gap: 8px; align-items: center;">
+            <div style="
+              width: 28px; height: 28px; border-radius: 50%;
+              background: ${step >= 1 ? '#f59e0b' : '#e5e7eb'};
+              color: ${step >= 1 ? 'white' : '#9ca3af'};
+              display: flex; align-items: center; justify-content: center;
+              font-size: 12px; font-weight: 700;
+            ">1</div>
+            <div style="width: 40px; height: 2px; background: ${step >= 2 ? '#f59e0b' : '#e5e7eb'};"></div>
+            <div style="
+              width: 28px; height: 28px; border-radius: 50%;
+              background: ${step >= 2 ? '#f59e0b' : '#e5e7eb'};
+              color: ${step >= 2 ? 'white' : '#9ca3af'};
+              display: flex; align-items: center; justify-content: center;
+              font-size: 12px; font-weight: 700;
+            ">2</div>
+            <div style="width: 40px; height: 2px; background: ${step >= 3 ? '#f59e0b' : '#e5e7eb'};"></div>
+            <div style="
+              width: 28px; height: 28px; border-radius: 50%;
+              background: ${step >= 3 ? '#f59e0b' : '#e5e7eb'};
+              color: ${step >= 3 ? 'white' : '#9ca3af'};
+              display: flex; align-items: center; justify-content: center;
+              font-size: 12px; font-weight: 700;
+            ">3</div>
+          </div>
+          <p style="text-align: center; font-size: 13px; color: #6b7280; margin: 8px 0 0 0;">
+            ${stepTitle}
+          </p>
+        </div>
+
+        <!-- 내용 -->
+        <div style="padding: 24px;">
+          ${stepContent}
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  // Step 1에서 reCAPTCHA 초기화
+  if (step === 1) {
+    setTimeout(() => {
+      initRecaptcha();
+    }, 100);
+  }
+}
+
+function closePasswordRecoveryModal() {
+  const modal = document.getElementById('passwordRecoveryModal');
+  if (modal) modal.remove();
+
+  // reCAPTCHA 정리
+  if (passwordRecoveryState.recaptchaVerifier) {
+    try {
+      passwordRecoveryState.recaptchaVerifier.clear();
+    } catch (e) {}
+    passwordRecoveryState.recaptchaVerifier = null;
+  }
+}
+
+function selectRecoveryUserType(type) {
+  passwordRecoveryState.userType = type;
+
+  // 버튼 스타일 업데이트
+  const supplierBtn = document.getElementById('recovery-type-supplier');
+  const sellerBtn = document.getElementById('recovery-type-seller');
+
+  if (type === 'supplier') {
+    supplierBtn.style.borderColor = '#f59e0b';
+    supplierBtn.style.background = '#fef3c7';
+    sellerBtn.style.borderColor = '#e5e7eb';
+    sellerBtn.style.background = 'white';
+  } else {
+    sellerBtn.style.borderColor = '#10b981';
+    sellerBtn.style.background = '#dcfce7';
+    supplierBtn.style.borderColor = '#e5e7eb';
+    supplierBtn.style.background = 'white';
+  }
+}
+
+function initRecaptcha() {
+  try {
+    if (passwordRecoveryState.recaptchaVerifier) {
+      passwordRecoveryState.recaptchaVerifier.clear();
+    }
+
+    passwordRecoveryState.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+      'size': 'normal',
+      'callback': (response) => {
+        console.log('reCAPTCHA verified');
+      },
+      'expired-callback': () => {
+        console.log('reCAPTCHA expired');
+        alert('보안 인증이 만료되었습니다. 다시 시도해주세요.');
+      }
+    });
+
+    passwordRecoveryState.recaptchaVerifier.render();
+  } catch (error) {
+    console.error('reCAPTCHA 초기화 오류:', error);
+  }
+}
+
+function formatPhoneNumber(phone) {
+  // 숫자만 추출
+  let digits = phone.replace(/\D/g, '');
+
+  // 한국 번호 형식으로 변환 (+82)
+  if (digits.startsWith('010')) {
+    digits = '+82' + digits.substring(1);
+  } else if (digits.startsWith('82')) {
+    digits = '+' + digits;
+  } else if (!digits.startsWith('+')) {
+    digits = '+82' + digits;
+  }
+
+  return digits;
+}
+
+async function verifyUserAndSendCode() {
+  const userType = passwordRecoveryState.userType;
+  const loginId = document.getElementById('recovery-loginId')?.value.trim();
+  const phone = document.getElementById('recovery-phone')?.value.trim();
+
+  // 유효성 검사
+  if (!userType) {
+    alert('계정 유형을 선택해주세요.');
+    return;
+  }
+
+  if (!loginId) {
+    alert('아이디를 입력해주세요.');
+    return;
+  }
+
+  if (!phone) {
+    alert('휴대폰 번호를 입력해주세요.');
+    return;
+  }
+
+  // 사용자 찾기
+  const users = userType === 'supplier' ? state.suppliers : state.sellers;
+  const foundUser = users.find(u => u.loginId === loginId);
+
+  if (!foundUser) {
+    alert('등록된 아이디가 없습니다.\n아이디를 확인해주세요.');
+    return;
+  }
+
+  // 휴대폰 번호 확인
+  const userPhone = (foundUser.phone || foundUser.tel || foundUser.mobile || '').replace(/\D/g, '');
+  const inputPhone = phone.replace(/\D/g, '');
+
+  if (!userPhone) {
+    alert('해당 계정에 등록된 휴대폰 번호가 없습니다.\n담당자에게 문의해주세요.');
+    return;
+  }
+
+  // 뒤 8자리로 비교 (010 제외 부분)
+  const userPhoneLast8 = userPhone.slice(-8);
+  const inputPhoneLast8 = inputPhone.slice(-8);
+
+  if (userPhoneLast8 !== inputPhoneLast8) {
+    alert('등록된 휴대폰 번호와 일치하지 않습니다.');
+    return;
+  }
+
+  // reCAPTCHA 확인
+  if (!passwordRecoveryState.recaptchaVerifier) {
+    alert('보안 인증을 완료해주세요.');
+    return;
+  }
+
+  // 인증번호 발송
+  try {
+    const formattedPhone = formatPhoneNumber(phone);
+    console.log('Sending verification to:', formattedPhone);
+
+    const confirmationResult = await firebase.auth().signInWithPhoneNumber(
+      formattedPhone,
+      passwordRecoveryState.recaptchaVerifier
+    );
+
+    passwordRecoveryState.confirmationResult = confirmationResult;
+    passwordRecoveryState.foundUser = { ...foundUser, phone: phone };
+    passwordRecoveryState.step = 2;
+
+    renderPasswordRecoveryModal();
+
+  } catch (error) {
+    console.error('인증번호 발송 오류:', error);
+
+    let errorMsg = '인증번호 발송에 실패했습니다.';
+    if (error.code === 'auth/invalid-phone-number') {
+      errorMsg = '올바른 휴대폰 번호 형식이 아닙니다.\n예: 010-1234-5678';
+    } else if (error.code === 'auth/too-many-requests') {
+      errorMsg = '너무 많은 요청이 있었습니다.\n잠시 후 다시 시도해주세요.';
+    } else if (error.code === 'auth/quota-exceeded') {
+      errorMsg = 'SMS 발송 한도를 초과했습니다.\n담당자에게 문의해주세요.';
+    }
+
+    alert(errorMsg);
+
+    // reCAPTCHA 재초기화
+    initRecaptcha();
+  }
+}
+
+async function verifyCode() {
+  const code = document.getElementById('recovery-code')?.value.trim();
+
+  if (!code || code.length !== 6) {
+    alert('인증번호 6자리를 입력해주세요.');
+    return;
+  }
+
+  try {
+    await passwordRecoveryState.confirmationResult.confirm(code);
+
+    // 인증 성공 - 3단계로 이동
+    passwordRecoveryState.step = 3;
+    renderPasswordRecoveryModal();
+
+  } catch (error) {
+    console.error('인증 확인 오류:', error);
+
+    if (error.code === 'auth/invalid-verification-code') {
+      alert('인증번호가 올바르지 않습니다.\n다시 확인해주세요.');
+    } else if (error.code === 'auth/code-expired') {
+      alert('인증번호가 만료되었습니다.\n다시 시도해주세요.');
+      passwordRecoveryState.step = 1;
+      renderPasswordRecoveryModal();
+    } else {
+      alert('인증에 실패했습니다.\n다시 시도해주세요.');
+    }
+  }
+}
+
+async function resetPassword() {
+  const newPw = document.getElementById('recovery-newPw')?.value;
+  const newPwConfirm = document.getElementById('recovery-newPwConfirm')?.value;
+
+  if (!newPw) {
+    alert('새 비밀번호를 입력해주세요.');
+    return;
+  }
+
+  if (newPw.length < 4) {
+    alert('비밀번호는 4자 이상이어야 합니다.');
+    return;
+  }
+
+  if (newPw !== newPwConfirm) {
+    alert('비밀번호가 일치하지 않습니다.');
+    return;
+  }
+
+  try {
+    const collection = passwordRecoveryState.userType === 'supplier' ? 'suppliers' : 'sellers';
+    const docId = passwordRecoveryState.foundUser?.id;
+
+    await db.collection(collection).doc(docId).update({
+      loginPw: newPw,
+      passwordChangedAt: new Date().toISOString()
+    });
+
+    alert('비밀번호가 성공적으로 변경되었습니다!\n새 비밀번호로 로그인해주세요.');
+    closePasswordRecoveryModal();
+
+    // 아이디 필드에 자동 입력
+    document.getElementById('login-id').value = passwordRecoveryState.foundUser?.loginId || '';
+
+  } catch (error) {
+    console.error('비밀번호 변경 오류:', error);
+    alert('비밀번호 변경에 실패했습니다.\n다시 시도해주세요.');
   }
 }
 
