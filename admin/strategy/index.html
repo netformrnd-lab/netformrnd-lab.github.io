@@ -18313,6 +18313,7 @@
       kpis: [],
       totalMetrics: [],  // 총 성과지표 (NEW)
       laggingIndicators: [],  // 성과지표(단위별)
+      checklistTemplates: [],  // KPI별 체크리스트 템플릿
       subIndicators: [],  // 하위지표 (NEW)
       dailyLogs: [],
       todayLogs: [],
@@ -18416,6 +18417,10 @@
         // 성과지표(단위별) - 모두 로드
         const lagSnapshot = await db.collection('okr_laggingIndicators').get();
         okrState.laggingIndicators = lagSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // KPI별 체크리스트 템플릿
+        const clTemplateSnapshot = await db.collection('okr_checklistTemplates').get();
+        okrState.checklistTemplates = clTemplateSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 하위지표 (NEW)
         const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
@@ -30729,8 +30734,11 @@
               <!-- 6. 체크리스트 (단계별 지표 자동연동) -->
               <div style="margin-bottom: 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                  <label style="font-size: 12px; font-weight: 600; color: var(--gray-600);">체크리스트 <span style="font-weight: 400; color: var(--gray-400);">(체크 시 지표 자동 반영)</span></label>
-                  <button onclick="loadProjectTemplate()" style="background: none; border: 1px solid var(--gray-300); border-radius: 6px; padding: 3px 8px; font-size: 10px; color: var(--gray-500); cursor: pointer;">📋 템플릿</button>
+                  <label style="font-size: 12px; font-weight: 600; color: var(--gray-600);">체크리스트 <span style="font-weight: 400; color: var(--gray-400);">(KPI 선택 시 자동 채움 · 체크 시 지표 반영)</span></label>
+                  <div style="display: flex; gap: 4px;">
+                    <button onclick="openChecklistTemplateManager()" style="background: none; border: 1px solid #059669; border-radius: 6px; padding: 3px 8px; font-size: 10px; color: #059669; cursor: pointer;">⚙ 양식설정</button>
+                    <button onclick="loadProjectTemplate()" style="background: none; border: 1px solid var(--gray-300); border-radius: 6px; padding: 3px 8px; font-size: 10px; color: var(--gray-500); cursor: pointer;">📋 템플릿</button>
+                  </div>
                 </div>
                 <div id="taskPlanChecklist" style="display: flex; flex-direction: column; gap: 6px;">
                   ${(task.checklist || []).map((item, idx) => `
@@ -30930,6 +30938,9 @@
 
       if (selectedContainer) selectedContainer.style.display = 'block';
       if (selectedText) selectedText.innerHTML = `${type === 'kr' ? '🎯' : type === 'kpi' ? '📊' : '📈'} ${name} <span style="font-size: 10px; color: var(--gray-500);">${desc}</span>`;
+
+      // KPI 선택 시 → 체크리스트 템플릿 자동 채움
+      autoFillChecklistFromKpi(type, id, krId, kpiId);
     }
 
     function clearTaskPlanKpiSelection() {
@@ -30938,6 +30949,257 @@
       document.getElementById('taskPlanLag').value = '';
       const selected = document.getElementById('taskPlanKpiSelected');
       if (selected) selected.style.display = 'none';
+    }
+
+    // ========================================
+    // ★ KPI별 체크리스트 템플릿 자동 채움
+    // ========================================
+
+    // KPI 선택 시 → 매칭되는 템플릿 찾아서 체크리스트 자동 채움
+    function autoFillChecklistFromKpi(type, id, krId, kpiId) {
+      const container = document.getElementById('taskPlanChecklist');
+      if (!container) return;
+
+      // 이미 체크리스트 항목이 있으면 확인
+      const existingRows = container.querySelectorAll('.checklist-row');
+      const hasExisting = Array.from(existingRows).some(row => row.querySelector('input[type="text"]')?.value.trim());
+
+      // 선택된 KPI에 맞는 템플릿 찾기 (우선순위: kpi > kr)
+      let template = null;
+      if (type === 'kpi' || kpiId) {
+        template = okrState.checklistTemplates.find(t => t.kpiId === (type === 'kpi' ? id : kpiId));
+      }
+      if (!template && (type === 'kr' || krId)) {
+        template = okrState.checklistTemplates.find(t => t.krId === (type === 'kr' ? id : krId) && !t.kpiId);
+      }
+
+      if (!template || !template.steps || template.steps.length === 0) return;
+
+      if (hasExisting) {
+        if (!confirm(`이 KPI에 맞는 체크리스트 템플릿(${template.name})이 있습니다.\n현재 체크리스트를 덮어쓸까요?`)) return;
+      }
+
+      // 기존 체크리스트 비우기
+      container.innerHTML = '';
+
+      // 템플릿 적용
+      template.steps.forEach(step => {
+        addChecklistRow();
+        const lastRow = container.lastElementChild;
+        if (lastRow) {
+          const input = lastRow.querySelector('input[type="text"]');
+          const select = lastRow.querySelector('select');
+          if (input) input.value = step.text || '';
+          if (select && step.lagId) {
+            select.value = step.lagId;
+            select.style.color = '#059669';
+          }
+        }
+      });
+
+      // 안내 토스트
+      showToast(`📋 "${template.name}" 양식이 자동 적용되었습니다`);
+    }
+
+    // ========================================
+    // ★ KPI별 체크리스트 양식 설정
+    // ========================================
+
+    function openChecklistTemplateManager() {
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || '';
+
+      // 내 담당 KPI 목록
+      const myKpis = (okrState.kpis || []).filter(kpi =>
+        kpi.mainAssignee === currentMemberId || kpi.mainAssignee === member?.loginId || kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) || (kpi.subAssignees || []).includes(member?.loginId) || (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+      const myKrs = (okrState.keyResults || []).filter(kr => myKrIds.includes(kr.id));
+
+      // KPI별 템플릿 현황
+      const templateListHtml = myKrs.map(kr => {
+        const kpisUnderKr = myKpis.filter(k => k.keyResultId === kr.id);
+        const kpiItems = kpisUnderKr.map(kpi => {
+          const tpl = okrState.checklistTemplates.find(t => t.kpiId === kpi.id);
+          const stepCount = tpl?.steps?.length || 0;
+          return `
+            <div onclick="openChecklistTemplateEditor('kpi', '${kpi.id}', '${kr.id}')"
+                 style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: white; border: 1px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: all 0.15s;"
+                 onmouseover="this.style.background='var(--gray-50)'; this.style.borderColor='var(--primary)'" onmouseout="this.style.background='white'; this.style.borderColor='var(--gray-200)'">
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📊 ${kpi.name}</div>
+                ${stepCount > 0 ? `<div style="font-size: 11px; color: #059669; margin-top: 2px;">${tpl.steps.map(s => s.text).join(' → ')}</div>` : `<div style="font-size: 11px; color: var(--gray-400); margin-top: 2px;">양식 미설정</div>`}
+              </div>
+              <div style="flex-shrink: 0; display: flex; align-items: center; gap: 6px;">
+                ${stepCount > 0 ? `<span style="font-size: 10px; padding: 2px 8px; border-radius: 10px; background: #ECFDF5; color: #059669; font-weight: 600;">${stepCount}단계</span>` : ''}
+                <span style="color: var(--gray-400); font-size: 14px;">›</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div style="margin-bottom: 14px;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--gray-500); margin-bottom: 6px; padding-left: 2px;">🎯 ${kr.name}</div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              ${kpiItems}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      showModal(`<div style="padding: 24px; max-width: 520px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div>
+            <div style="font-size: 17px; font-weight: 700; color: var(--gray-900);">📋 KPI별 체크리스트 양식</div>
+            <div style="font-size: 12px; color: var(--gray-400); margin-top: 2px;">프로젝트 등록 시 KPI 선택하면 자동 적용</div>
+          </div>
+          <button onclick="closeModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
+        </div>
+        <div style="max-height: 450px; overflow-y: auto;">
+          ${templateListHtml || '<div style="text-align: center; padding: 40px; color: var(--gray-400);">담당 KPI가 없습니다</div>'}
+        </div>
+      </div>`);
+    }
+
+    // 개별 KPI 체크리스트 양식 편집
+    function openChecklistTemplateEditor(type, kpiId, krId) {
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const kr = okrState.keyResults.find(k => k.id === krId);
+      if (!kpi) return;
+
+      const existing = okrState.checklistTemplates.find(t => t.kpiId === kpiId);
+      const steps = existing?.steps || [];
+
+      // KPI에 연결된 지표들
+      const lags = (okrState.laggingIndicators || []).filter(l => l.kpiId === kpiId);
+      const lagOptions = lags.map(l => `<option value="${l.id}">${l.type === 'output' ? '📤' : '📥'} ${l.name} (${l.unit || '건'})</option>`).join('');
+
+      const stepsHtml = steps.map((step, idx) => `
+        <div class="tpl-step-row" style="display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200);">
+          <span style="color: var(--gray-300); font-size: 11px; font-weight: 700; width: 16px; text-align: center;">${idx + 1}</span>
+          <input type="text" value="${step.text || ''}" placeholder="단계명" style="flex: 1; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
+          <select style="padding: 6px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; max-width: 130px; color: ${step.lagId ? '#059669' : 'var(--gray-400)'};" onchange="this.style.color = this.value ? '#059669' : 'var(--gray-400)'">
+            <option value="">지표 미연결</option>
+            ${lags.map(l => `<option value="${l.id}" ${step.lagId === l.id ? 'selected' : ''}>${l.type === 'output' ? '📤' : '📥'} ${l.name}</option>`).join('')}
+          </select>
+          <button onclick="this.closest('.tpl-step-row').remove(); reindexTplSteps()" style="background: none; border: none; cursor: pointer; color: var(--gray-300); font-size: 14px; padding: 0 2px;">✕</button>
+        </div>
+      `).join('');
+
+      showModal(`<div style="padding: 24px; max-width: 520px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <div>
+            <div style="font-size: 15px; font-weight: 700; color: var(--gray-900);">📊 ${kpi.name}</div>
+            <div style="font-size: 11px; color: var(--gray-400);">🎯 ${kr?.name || ''}</div>
+          </div>
+          <button onclick="openChecklistTemplateManager()" style="background: none; border: none; font-size: 13px; cursor: pointer; color: var(--primary);">← 목록</button>
+        </div>
+
+        <div style="margin: 14px 0 8px; font-size: 12px; font-weight: 600; color: var(--gray-600);">체크리스트 단계</div>
+        <div style="font-size: 10px; color: var(--gray-400); margin-bottom: 10px;">이 KPI로 프로젝트 등록 시 아래 단계가 자동으로 채워집니다</div>
+
+        <div id="tplStepsContainer" style="display: flex; flex-direction: column; gap: 6px;">
+          ${stepsHtml}
+        </div>
+        <button onclick="addTplStepRow('${kpiId}')" style="margin-top: 8px; width: 100%; padding: 8px; border: 1px dashed var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 12px; color: var(--gray-500);">+ 단계 추가</button>
+
+        <div style="display: flex; gap: 10px; margin-top: 16px;">
+          ${existing ? `<button onclick="deleteChecklistTemplate('${existing.id}', '${kpiId}')" style="flex: 1; padding: 10px; border: 1px solid #FCA5A5; border-radius: 8px; background: #FEF2F2; cursor: pointer; font-size: 13px; font-weight: 600; color: #DC2626;">삭제</button>` : ''}
+          <button onclick="saveChecklistTemplate('${kpiId}', '${krId}')" style="flex: 2; padding: 10px; border: none; border-radius: 8px; background: var(--primary); color: white; cursor: pointer; font-size: 13px; font-weight: 600;">💾 양식 저장</button>
+        </div>
+      </div>`);
+    }
+
+    // 양식 편집에서 단계 추가
+    function addTplStepRow(kpiId) {
+      const container = document.getElementById('tplStepsContainer');
+      if (!container) return;
+
+      const lags = (okrState.laggingIndicators || []).filter(l => l.kpiId === kpiId);
+      const lagOptions = lags.map(l => `<option value="${l.id}">${l.type === 'output' ? '📤' : '📥'} ${l.name}</option>`).join('');
+
+      const idx = container.querySelectorAll('.tpl-step-row').length + 1;
+      container.insertAdjacentHTML('beforeend', `
+        <div class="tpl-step-row" style="display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: var(--gray-50); border-radius: 8px; border: 1px solid var(--gray-200);">
+          <span style="color: var(--gray-300); font-size: 11px; font-weight: 700; width: 16px; text-align: center;">${idx}</span>
+          <input type="text" placeholder="단계명 (예: 셀러 컨택)" style="flex: 1; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
+          <select style="padding: 6px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; max-width: 130px; color: var(--gray-400);" onchange="this.style.color = this.value ? '#059669' : 'var(--gray-400)'">
+            <option value="">지표 미연결</option>
+            ${lagOptions}
+          </select>
+          <button onclick="this.closest('.tpl-step-row').remove(); reindexTplSteps()" style="background: none; border: none; cursor: pointer; color: var(--gray-300); font-size: 14px; padding: 0 2px;">✕</button>
+        </div>
+      `);
+      container.lastElementChild?.querySelector('input[type="text"]')?.focus();
+    }
+
+    // 단계 번호 재정렬
+    function reindexTplSteps() {
+      const rows = document.querySelectorAll('#tplStepsContainer .tpl-step-row');
+      rows.forEach((row, idx) => {
+        const numEl = row.querySelector('span');
+        if (numEl) numEl.textContent = idx + 1;
+      });
+    }
+
+    // 양식 저장 (Firestore)
+    async function saveChecklistTemplate(kpiId, krId) {
+      const rows = document.querySelectorAll('#tplStepsContainer .tpl-step-row');
+      const steps = Array.from(rows).map(row => {
+        const text = row.querySelector('input[type="text"]')?.value.trim() || '';
+        const lagId = row.querySelector('select')?.value || '';
+        const lag = lagId ? okrState.laggingIndicators.find(l => l.id === lagId) : null;
+        return { text, lagId, lagName: lag?.name || '' };
+      }).filter(s => s.text);
+
+      if (steps.length === 0) {
+        alert('최소 1개 단계를 입력해주세요.');
+        return;
+      }
+
+      const kpi = okrState.kpis.find(k => k.id === kpiId);
+      const existing = okrState.checklistTemplates.find(t => t.kpiId === kpiId);
+
+      const templateData = {
+        kpiId,
+        krId,
+        name: kpi?.name || 'KPI 양식',
+        steps,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      try {
+        if (existing) {
+          await db.collection('okr_checklistTemplates').doc(existing.id).update(templateData);
+          Object.assign(existing, templateData);
+          showToast(`✅ "${kpi?.name}" 양식이 수정되었습니다`);
+        } else {
+          templateData.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+          const docRef = await db.collection('okr_checklistTemplates').add(templateData);
+          okrState.checklistTemplates.push({ ...templateData, id: docRef.id });
+          showToast(`✅ "${kpi?.name}" 양식이 저장되었습니다`);
+        }
+        closeModal();
+      } catch (error) {
+        console.error('양식 저장 오류:', error);
+        alert('저장 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 양식 삭제
+    async function deleteChecklistTemplate(templateId, kpiId) {
+      if (!confirm('이 양식을 삭제하시겠습니까?\n(기존 프로젝트의 체크리스트에는 영향 없음)')) return;
+      try {
+        await db.collection('okr_checklistTemplates').doc(templateId).delete();
+        okrState.checklistTemplates = okrState.checklistTemplates.filter(t => t.id !== templateId);
+        showToast('양식이 삭제되었습니다');
+        openChecklistTemplateManager();
+      } catch (error) {
+        console.error('양식 삭제 오류:', error);
+      }
     }
 
     // ========================================
