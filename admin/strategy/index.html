@@ -10541,20 +10541,24 @@
         const isDoing = task.status === 'doing';
 
         if (isDone) {
-          const displayDate = task.actualCompletionDate || task.deadline || task.dueDate;
-          return displayDate === dateStr;
+          // 완료 업무: 시작일~완료일 범위 또는 완료일에 표시
+          const startStr = task.startedAt ? (typeof task.startedAt === 'string' ? task.startedAt.split('T')[0] : (task.startedAt.toDate ? task.startedAt.toDate().toISOString().split('T')[0] : '')) : '';
+          const endStr = task.actualCompletionDate || task.deadline || task.dueDate;
+          if (startStr && endStr && startStr !== endStr) {
+            return dateStr >= startStr && dateStr <= endStr;
+          }
+          return endStr === dateStr;
         }
         if (isDoing) {
-          // 진행중: 시작일~마감일(또는 오늘) 범위에 해당 날짜가 포함되면 표시
-          const startStr = task.scheduledDate || task.deadline || task.dueDate;
+          // 진행중: 시작일(startedAt 또는 scheduledDate)~오늘까지만
+          const startStr = task.startedAt ? (typeof task.startedAt === 'string' ? task.startedAt.split('T')[0] : (task.startedAt.toDate ? task.startedAt.toDate().toISOString().split('T')[0] : '')) : (task.scheduledDate || task.deadline || task.dueDate);
           if (!startStr) return false;
-          let endStr = calToday.toISOString().split('T')[0];
-          const deadlineStr = task.deadline || task.dueDate;
-          if (deadlineStr && deadlineStr > endStr) endStr = deadlineStr;
+          const endStr = calToday.toISOString().split('T')[0];
           return dateStr >= startStr && dateStr <= endStr;
         }
-        // 대기 업무: 마감일 기준
-        return (task.deadline === dateStr || task.dueDate === dateStr || task.scheduledDate === dateStr);
+        // 대기 업무: 예정일(scheduledDate) 기준, 없으면 마감일
+        const taskDate = task.scheduledDate || task.deadline || task.dueDate;
+        return taskDate === dateStr;
       });
 
       const date = new Date(dateStr);
@@ -10569,12 +10573,13 @@
       const doingTasks = allTasks.filter(t => t.status === 'doing');
       const waitingTasks = allTasks.filter(t => t.status !== 'done' && t.status !== 'completed' && t.status !== 'doing');
 
-      // 지연 판단: 각 업무의 마감일 기준 (해당일 23:59 지나면 지연)
+      // 지연 판단: 마감일 당일 23:59 지나면 지연 (마감일 다음날 0시부터 지연)
       const isTaskOverdue = (task) => {
+        if (task.status === 'done' || task.status === 'completed') return false;
         const dl = task.deadline || task.dueDate;
         if (!dl) return false;
         const dlDate = new Date(dl + 'T00:00:00');
-        return dlDate < today;
+        return dlDate < today; // 마감일 자정 < 오늘 자정 = 마감일이 어제 이전
       };
       const overdueDoingTasks = doingTasks.filter(t => isTaskOverdue(t));
       const activeDoingTasks = doingTasks.filter(t => !isTaskOverdue(t));
@@ -29314,21 +29319,38 @@
         const isDone = task.status === 'done' || task.status === 'completed';
         const isDoing = task.status === 'doing';
         if (isDone) {
-          const dateStr = task.actualCompletionDate || task.deadline || task.dueDate;
-          if (dateStr) {
-            if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
-            tasksByDate[dateStr].push(task);
+          // 완료 업무: 시작일~완료일까지 간트 바로 표시
+          const startStr = task.startedAt ? (typeof task.startedAt === 'string' ? task.startedAt.split('T')[0] : (task.startedAt.toDate ? task.startedAt.toDate().toISOString().split('T')[0] : '')) : (task.scheduledDate || '');
+          const endStr = task.actualCompletionDate || task.deadline || task.dueDate;
+          if (startStr && endStr && startStr !== endStr) {
+            const startDt = new Date(startStr + 'T00:00:00');
+            const endDt = new Date(endStr + 'T00:00:00');
+            const daySpan = Math.round((endDt - startDt) / (1000 * 60 * 60 * 24)) + 1;
+            if (daySpan > 1) {
+              multiDayDoingTasks.push({
+                ...task,
+                _ganttStart: startStr,
+                _ganttEnd: endStr,
+                _daySpan: daySpan,
+                _isDone: true
+              });
+            } else {
+              if (!tasksByDate[endStr]) tasksByDate[endStr] = [];
+              tasksByDate[endStr].push(task);
+            }
+          } else {
+            const dateStr = endStr || startStr;
+            if (dateStr) {
+              if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
+              tasksByDate[dateStr].push(task);
+            }
           }
         } else if (isDoing) {
-          const startStr = task.scheduledDate || task.deadline || task.dueDate;
+          // 진행중 업무: 시작일(startedAt 또는 scheduledDate)부터 오늘까지만 표시
+          const startStr = task.startedAt ? (typeof task.startedAt === 'string' ? task.startedAt.split('T')[0] : (task.startedAt.toDate ? task.startedAt.toDate().toISOString().split('T')[0] : '')) : (task.scheduledDate || task.deadline || task.dueDate);
           if (startStr) {
             const startDt = new Date(startStr + 'T00:00:00');
-            const endDt = new Date(calToday);
-            const deadlineStr = task.deadline || task.dueDate;
-            if (deadlineStr) {
-              const deadlineDt = new Date(deadlineStr + 'T00:00:00');
-              if (deadlineDt > endDt) endDt.setTime(deadlineDt.getTime());
-            }
+            const endDt = new Date(calToday); // 오늘까지만! (마감일로 늘리지 않음)
             const daySpan = Math.round((endDt - startDt) / (1000 * 60 * 60 * 24)) + 1;
             if (daySpan > 1) {
               // 멀티데이 → 간트 바로 표시
@@ -29339,13 +29361,14 @@
                 _daySpan: daySpan
               });
             } else {
-              // 단일일 진행중 업무
+              // 단일일 진행중 업무 (오늘 시작)
               if (!tasksByDate[startStr]) tasksByDate[startStr] = [];
               tasksByDate[startStr].push(task);
             }
           }
         } else {
-          const dateStr = task.deadline || task.dueDate;
+          // 대기 업무: 예정일(scheduledDate) 기준으로 표시, 없으면 마감일
+          const dateStr = task.scheduledDate || task.deadline || task.dueDate;
           if (dateStr) {
             if (!tasksByDate[dateStr]) tasksByDate[dateStr] = [];
             tasksByDate[dateStr].push(task);
@@ -29362,6 +29385,31 @@
         if (!logsByDate[dateStr]) logsByDate[dateStr] = [];
         const lag = okrState.laggingIndicators.find(l => l.id === log.laggingIndicatorId);
         logsByDate[dateStr].push({ ...log, lagName: lag?.name || '지표', lagUnit: lag?.unit || '건' });
+      });
+
+      // 마감임박 업무 계산 (평일 기준 2일 전, 내 업무만, 아직 시작 안 한 것)
+      function addBusinessDays(date, days) {
+        const result = new Date(date);
+        let added = 0;
+        while (added < days) {
+          result.setDate(result.getDate() - 1);
+          const dow = result.getDay();
+          if (dow !== 0 && dow !== 6) added++;
+        }
+        return result;
+      }
+      const urgentTasks = allTasks.filter(task => {
+        if (task.status === 'done' || task.status === 'completed') return false;
+        if (task.status === 'doing') return false; // 이미 시작한 건 제외
+        if (task.assigneeId !== currentMemberId) return false; // 내 업무만
+        const deadlineStr = task.deadline || task.dueDate;
+        if (!deadlineStr) return false;
+        const deadlineDt = new Date(deadlineStr + 'T23:59:59');
+        if (deadlineDt < calToday) return false; // 이미 지난건 제외
+        // 평일 기준 2일 전 체크
+        const warningDate = addBusinessDays(deadlineDt, 2);
+        warningDate.setHours(0,0,0,0);
+        return calToday >= warningDate;
       });
 
       // 간트 바 색상 배열
@@ -29388,7 +29436,7 @@
           const startCol = effectiveStart.getDay(); // 0(일) ~ 6(토)
           const endCol = effectiveEnd.getDay();
 
-          const barColor = ganttColors[taskIdx % ganttColors.length];
+          const barColor = task._isDone ? '#9CA3AF' : ganttColors[taskIdx % ganttColors.length];
           const isStart = gStart >= weekStartDate && gStart <= weekEndDate;
           const isEnd = gEnd >= weekStartDate && gEnd <= weekEndDate;
 
@@ -29399,9 +29447,9 @@
 
           rowIdx++;
           barsHtml.push(`
-            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-row: ${rowIdx}; grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}; border-radius: ${borderRadius}; padding: 2px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 20px; transition: all 0.15s; white-space: nowrap; overflow: hidden;"
-                 onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">
-              <span style="font-size: 9px; color: white; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">● ${task.title || '제목 없음'}</span>
+            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-row: ${rowIdx + 1}; grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barColor}; ${task._isDone ? 'opacity: 0.6;' : ''} border-radius: ${borderRadius}; padding: 2px 8px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 20px; transition: all 0.15s; white-space: nowrap; overflow: hidden;"
+                 onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='${task._isDone ? '0.6' : '1'}'">
+              <span style="font-size: 9px; color: white; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">${task._isDone ? '✓' : '●'} ${task.title || '제목 없음'}</span>
               ${isStart ? '<span style="font-size: 8px; color: rgba(255,255,255,0.75); flex-shrink: 0;">' + task._ganttStart.slice(5).replace('-','/') + '~' + task._ganttEnd.slice(5).replace('-','/') + '</span>' : ''}
             </div>
           `);
@@ -29428,7 +29476,7 @@
       weeks.forEach((week, weekIdx) => {
         // 간트 바 렌더링 (날짜 셀과 같은 그리드에 포함)
         const ganttResult = renderWeekGanttBars(week.start, week.end);
-        const dateRow = ganttResult.rowCount + 1;
+        const dateRow = 1;
 
         // 날짜 셀 + 간트 바 통합 그리드
         calendarHtml += '<div style="display: grid; grid-template-columns: repeat(7, 1fr); column-gap: 4px; row-gap: 2px; margin-bottom: 4px;">';
@@ -29524,7 +29572,14 @@
               <span style="font-size: 17px; font-weight: 700; color: var(--gray-900);">${year}년 ${month + 1}월</span>
               <button onclick="changeInlineCalendarMonth(1)" style="background: var(--gray-100); border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; font-size: 14px;">▶</button>
             </div>
-            <div style="font-size: 12px; color: var(--gray-500);">전체 ${tasks.length}건</div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <span style="font-size: 12px; color: var(--gray-500);">전체 ${tasks.length}건</span>
+              ${urgentTasks.length > 0 ? `
+                <span onclick="showUrgentTasksTooltip(event)" style="position: relative; display: inline-flex; align-items: center; gap: 4px; background: #FEF2F2; border: 1px solid #FECACA; color: #DC2626; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; cursor: pointer; animation: urgentPulse 2s infinite;">
+                  ⚠ 마감임박 ${urgentTasks.length}건
+                </span>
+              ` : ''}
+            </div>
           </div>
           <!-- 요일 헤더 -->
           <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 6px;">
@@ -29540,6 +29595,71 @@
           ${calendarHtml}
         </div>
       `;
+    }
+
+    // 마감임박 업무 상세 팝업
+    function showUrgentTasksTooltip(event) {
+      event.stopPropagation();
+      // 기존 팝업 제거
+      document.getElementById('urgentTasksPopup')?.remove();
+
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || '';
+      const calToday = new Date(); calToday.setHours(0,0,0,0);
+      const allTasks = taskPlanState.tasks || [];
+
+      function addBizDaysBack(date, days) {
+        const result = new Date(date);
+        let added = 0;
+        while (added < days) {
+          result.setDate(result.getDate() - 1);
+          const dow = result.getDay();
+          if (dow !== 0 && dow !== 6) added++;
+        }
+        return result;
+      }
+      const urgent = allTasks.filter(task => {
+        if (task.status === 'done' || task.status === 'completed' || task.status === 'doing') return false;
+        if (task.assigneeId !== currentMemberId) return false;
+        const dl = task.deadline || task.dueDate;
+        if (!dl) return false;
+        const ddt = new Date(dl + 'T23:59:59');
+        if (ddt < calToday) return false;
+        const wd = addBizDaysBack(ddt, 2); wd.setHours(0,0,0,0);
+        return calToday >= wd;
+      });
+
+      const itemsHtml = urgent.map(t => {
+        const dl = t.deadline || t.dueDate;
+        const ddt = new Date(dl + 'T00:00:00');
+        const diff = Math.round((ddt - calToday) / (1000*60*60*24));
+        const ddayText = diff === 0 ? 'D-Day' : diff > 0 ? `D-${diff}` : `D+${Math.abs(diff)}`;
+        return `<div onclick="document.getElementById('urgentTasksPopup')?.remove(); openTaskDetailModal('${t.id}')" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 8px; background: white; cursor: pointer; border: 1px solid #FEE2E2;" onmouseover="this.style.background='#FEF2F2'" onmouseout="this.style.background='white'">
+          <span style="font-size: 12px; color: var(--gray-800); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">${t.title}</span>
+          <span style="font-size: 11px; font-weight: 700; color: #DC2626; flex-shrink: 0; margin-left: 8px;">${ddayText}</span>
+        </div>`;
+      }).join('');
+
+      const popup = document.createElement('div');
+      popup.id = 'urgentTasksPopup';
+      popup.innerHTML = `
+        <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999;" onclick="this.parentElement.remove()">
+          <div onclick="event.stopPropagation()" style="position: absolute; top: ${event.clientY + 10}px; right: 20px; width: 320px; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.15); border: 1px solid #FECACA; padding: 16px; max-height: 400px; overflow-y: auto;">
+            <div style="font-size: 14px; font-weight: 700; color: #DC2626; margin-bottom: 12px;">⚠ 마감임박 업무 (${urgent.length}건)</div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">${itemsHtml}</div>
+            <div style="font-size: 10px; color: var(--gray-400); margin-top: 10px; text-align: center;">마감일 평일 2일 전부터 표시됩니다</div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(popup);
+    }
+
+    // CSS 애니메이션 추가 (마감임박 배지)
+    if (!document.getElementById('urgentPulseStyle')) {
+      const style = document.createElement('style');
+      style.id = 'urgentPulseStyle';
+      style.textContent = `@keyframes urgentPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }`;
+      document.head.appendChild(style);
     }
 
     // 인라인 캘린더 월 변경
@@ -29971,6 +30091,55 @@
         }
       }
 
+      // 진행 기간 정보 계산
+      let durationHtml = '';
+      const startedAtStr = task.startedAt ? (typeof task.startedAt === 'string' ? task.startedAt.split('T')[0] : (task.startedAt.toDate ? task.startedAt.toDate().toISOString().split('T')[0] : '')) : '';
+      const completedAtStr = task.actualCompletionDate || '';
+      if (startedAtStr || completedAtStr || task.status === 'doing' || task.status === 'done') {
+        const startLabel = startedAtStr ? new Date(startedAtStr + 'T00:00:00').toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' }) : '-';
+        let endLabel = '-';
+        let durationLabel = '';
+        if (task.status === 'done' && completedAtStr) {
+          endLabel = new Date(completedAtStr + 'T00:00:00').toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
+          if (startedAtStr) {
+            const s = new Date(startedAtStr + 'T00:00:00');
+            const e = new Date(completedAtStr + 'T00:00:00');
+            // 평일만 계산
+            let bizDays = 0;
+            const cur = new Date(s);
+            while (cur <= e) {
+              const dow = cur.getDay();
+              if (dow !== 0 && dow !== 6) bizDays++;
+              cur.setDate(cur.getDate() + 1);
+            }
+            const totalDays = Math.round((e - s) / (1000*60*60*24)) + 1;
+            durationLabel = `총 ${totalDays}일 (영업일 ${bizDays}일)`;
+          }
+        } else if (task.status === 'doing' && startedAtStr) {
+          endLabel = '진행중';
+          const s = new Date(startedAtStr + 'T00:00:00');
+          const e = new Date(); e.setHours(0,0,0,0);
+          let bizDays = 0;
+          const cur = new Date(s);
+          while (cur <= e) {
+            const dow = cur.getDay();
+            if (dow !== 0 && dow !== 6) bizDays++;
+            cur.setDate(cur.getDate() + 1);
+          }
+          const totalDays = Math.round((e - s) / (1000*60*60*24)) + 1;
+          durationLabel = `${totalDays}일째 진행중 (영업일 ${bizDays}일)`;
+        }
+        durationHtml = `
+          <div style="background: ${task.status === 'done' ? '#F0FDF4' : '#EFF6FF'}; border-radius: 12px; padding: 16px; grid-column: span 2;">
+            <div style="font-size: 12px; color: ${task.status === 'done' ? '#16A34A' : 'var(--primary)'}; margin-bottom: 6px;">진행 기간</div>
+            <div style="font-size: 14px; font-weight: 600; color: var(--gray-800);">
+              ${startLabel} → ${endLabel}
+              ${durationLabel ? `<span style="font-size: 12px; font-weight: 500; color: var(--gray-500); margin-left: 8px;">(${durationLabel})</span>` : ''}
+            </div>
+          </div>
+        `;
+      }
+
       const modalHtml = `
         <div id="taskDetailModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;" onclick="if(event.target === this) closeTaskDetailModal()">
           <div style="background: white; border-radius: 16px; width: 90%; max-width: 700px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
@@ -29998,6 +30167,7 @@
                   <div style="font-size: 12px; color: var(--gray-500); margin-bottom: 6px;">마감일</div>
                   <div style="font-size: 15px; font-weight: 600; color: ${isOverdue ? '#DC2626' : 'var(--gray-800)'};">📅 ${deadlineDisplay}</div>
                 </div>
+                ${durationHtml}
                 ${krInfo ? `
                 <div style="background: var(--primary-light); border-radius: 12px; padding: 16px; grid-column: span 2;">
                   <div style="font-size: 12px; color: var(--primary); margin-bottom: 6px;">연결된 KR</div>
@@ -31675,10 +31845,16 @@
     // 업무 상태 변경
     async function updateTaskPlanStatus(taskId, newStatus) {
       try {
-        await db.collection('taskPlans').doc(taskId).update({
+        const updateData = {
           status: newStatus,
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        };
+        // 진행중으로 변경 시 시작일시 기록
+        if (newStatus === 'doing') {
+          updateData.startedAt = new Date().toISOString().split('T')[0];
+          updateData.startedTimestamp = firebase.firestore.FieldValue.serverTimestamp();
+        }
+        await db.collection('taskPlans').doc(taskId).update(updateData);
         showToast(newStatus === 'doing' ? '업무를 시작합니다.' : '상태가 변경되었습니다.');
         loadTaskPlanData();
       } catch (error) {
