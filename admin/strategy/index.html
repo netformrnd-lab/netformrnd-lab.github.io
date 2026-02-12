@@ -30476,29 +30476,38 @@
       document.body.insertAdjacentHTML('beforeend', modalHtml);
     }
 
-    // 체크리스트 항목 토글 + 지표 자동 로그
+    // 체크리스트 항목 토글 + 지표 자동 로그 (디바운싱 락 포함)
+    let _checklistToggleLock = false;
     async function toggleChecklistItem(taskId, idx) {
-      const task = taskPlanState.tasks.find(t => t.id === taskId);
-      if (!task || !task.checklist || !task.checklist[idx]) return;
+      // 래피드 클릭 방지
+      if (_checklistToggleLock) return;
+      _checklistToggleLock = true;
 
-      const item = task.checklist[idx];
-      const wasChecked = item.done;
-      const nowChecked = !wasChecked;
-
-      // UI 즉시 반영
-      item.done = nowChecked;
-      item.doneAt = nowChecked ? new Date().toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }) : null;
-
-      // Firestore 업데이트
       try {
+        const task = taskPlanState.tasks.find(t => t.id === taskId);
+        if (!task || !task.checklist || !task.checklist[idx]) return;
+
+        const item = task.checklist[idx];
+        const wasChecked = item.done;
+        const nowChecked = !wasChecked;
+
+        // 로컬 상태 즉시 반영
+        item.done = nowChecked;
+        item.doneAt = nowChecked ? new Date().toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }) : null;
+
+        // Firestore 업데이트
         await db.collection('taskPlans').doc(taskId).update({
           checklist: task.checklist,
           updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         });
 
-        // 지표 자동 로그: 체크 ON + 지표 연결된 경우만
-        if (nowChecked && item.lagId) {
-          await autoLogIndicatorFromChecklist(item, task);
+        // 지표 로그 처리
+        if (item.lagId) {
+          if (nowChecked) {
+            await autoLogIndicatorFromChecklist(item, task);
+          } else {
+            await rollbackIndicatorLog(item, task);
+          }
         }
 
         // 모달 새로고침
@@ -30507,21 +30516,44 @@
 
         if (nowChecked) {
           showToast(`✅ "${item.text}" 완료` + (item.lagId ? ` → 📊 ${item.lagName} +1 자동 반영` : ''));
+        } else if (item.lagId) {
+          showToast(`↩ "${item.text}" 해제 → 📊 ${item.lagName} 로그 취소됨`);
         }
       } catch (error) {
         console.error('체크리스트 업데이트 오류:', error);
-        item.done = wasChecked;
-        item.doneAt = wasChecked ? item.doneAt : null;
+        // 로컬 롤백
+        const task = taskPlanState.tasks.find(t => t.id === taskId);
+        if (task?.checklist?.[idx]) {
+          task.checklist[idx].done = !task.checklist[idx].done;
+          task.checklist[idx].doneAt = task.checklist[idx].done ? task.checklist[idx].doneAt : null;
+        }
+        showToast('오류가 발생했습니다. 다시 시도해주세요.');
+      } finally {
+        _checklistToggleLock = false;
       }
     }
 
-    // 체크리스트 → 지표 자동 로그 생성
+    // 체크리스트 → 지표 자동 로그 생성 (중복 방지 포함)
     async function autoLogIndicatorFromChecklist(item, task) {
       const lag = okrState.laggingIndicators.find(l => l.id === item.lagId);
-      if (!lag) return;
+      if (!lag) {
+        // 삭제된 지표 참조 정리
+        item.lagId = '';
+        item.lagName = '';
+        return;
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+
+      // 중복 로그 확인 (같은 프로젝트 + 같은 체크리스트 항목 + 같은 날)
+      const existingLog = okrState.dailyLogs.find(l =>
+        l.source === 'checklist' && l.sourceTaskId === task.id && l.sourceChecklistId === item.id && l.date === today
+      );
+      if (existingLog) return; // 이미 오늘 로깅됨
 
       const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
       const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+      const member = getCurrentMember();
       const now = new Date();
 
       const logData = {
@@ -30531,21 +30563,39 @@
         kpiId: kpi?.id || '',
         resultValue: 1,
         quantity: 1,
-        date: now.toISOString().split('T')[0],
+        date: today,
         registeredTime: formatTime(now),
         registeredTimestamp: now.getTime(),
-        memberId: state.currentUser?.id || 'anonymous',
-        memberName: state.currentUser?.name || '',
+        memberId: member?.id || state.currentUser?.id || 'anonymous',
+        memberName: member?.name || state.currentUser?.name || '',
         memo: `[${task.title}] ${item.text}`,
         version: lag.version || 'A',
         source: 'checklist',
         sourceTaskId: task.id,
+        sourceChecklistId: item.id,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       };
 
       const docRef = await db.collection('okr_dailyLogs').add(logData);
       okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
-      okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === now.toISOString().split('T')[0]);
+      okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === today);
+    }
+
+    // 체크 해제 시 → 자동 로그 롤백 (당일 한정)
+    async function rollbackIndicatorLog(item, task) {
+      const today = new Date().toISOString().split('T')[0];
+      const logToDelete = okrState.dailyLogs.find(l =>
+        l.source === 'checklist' && l.sourceTaskId === task.id && l.sourceChecklistId === item.id && l.date === today
+      );
+      if (!logToDelete) return;
+
+      try {
+        await db.collection('okr_dailyLogs').doc(logToDelete.id).delete();
+        okrState.dailyLogs = okrState.dailyLogs.filter(l => l.id !== logToDelete.id);
+        okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === today);
+      } catch (error) {
+        console.error('로그 롤백 오류:', error);
+      }
     }
 
     // 업무 상세보기 모달 닫기
@@ -30765,7 +30815,7 @@
                 </div>
                 <div id="taskPlanChecklist" style="display: flex; flex-direction: column; gap: 6px;">
                   ${(task.checklist || []).map((item, idx) => `
-                    <div class="checklist-row" data-idx="${idx}" style="display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: ${item.done ? '#F0FDF4' : 'var(--gray-50)'}; border-radius: 8px; border: 1px solid ${item.done ? '#BBF7D0' : 'var(--gray-200)'};">
+                    <div class="checklist-row" data-clid="${item.id || ''}" style="display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: ${item.done ? '#F0FDF4' : 'var(--gray-50)'}; border-radius: 8px; border: 1px solid ${item.done ? '#BBF7D0' : 'var(--gray-200)'};">
                       <span style="cursor: move; color: var(--gray-300); font-size: 10px;">⠿</span>
                       <input type="text" value="${item.text || ''}" placeholder="단계명" style="flex: 1; padding: 6px 8px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 12px; background: white;">
                       <select style="padding: 6px; border: 1px solid var(--gray-200); border-radius: 6px; font-size: 11px; max-width: 120px; color: ${item.lagId ? '#059669' : 'var(--gray-400)'};" onchange="this.style.color = this.value ? '#059669' : 'var(--gray-400)'">
@@ -31073,13 +31123,13 @@
         `;
       }).join('');
 
-      showModal(`<div style="padding: 24px; max-width: 520px;">
+      showOverlayModal(`<div style="padding: 24px; max-width: 520px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <div>
             <div style="font-size: 17px; font-weight: 700; color: var(--gray-900);">📋 KPI별 체크리스트 양식</div>
             <div style="font-size: 12px; color: var(--gray-400); margin-top: 2px;">프로젝트 등록 시 KPI 선택하면 자동 적용</div>
           </div>
-          <button onclick="closeModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
+          <button onclick="closeOverlayModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
         </div>
         <div style="max-height: 450px; overflow-y: auto;">
           ${templateListHtml || '<div style="text-align: center; padding: 40px; color: var(--gray-400);">담당 KPI가 없습니다</div>'}
@@ -31112,7 +31162,7 @@
         </div>
       `).join('');
 
-      showModal(`<div style="padding: 24px; max-width: 520px;">
+      showOverlayModal(`<div style="padding: 24px; max-width: 520px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
           <div>
             <div style="font-size: 15px; font-weight: 700; color: var(--gray-900);">📊 ${kpi.name}</div>
@@ -31205,7 +31255,7 @@
           okrState.checklistTemplates.push({ ...templateData, id: docRef.id });
           showToast(`✅ "${kpi?.name}" 양식이 저장되었습니다`);
         }
-        closeModal();
+        closeOverlayModal();
       } catch (error) {
         console.error('양식 저장 오류:', error);
         alert('저장 중 오류가 발생했습니다.');
@@ -32355,6 +32405,21 @@
       }
     }
 
+    // 프로젝트 모달 위에 뜨는 독립 오버레이 (z-index: 10002, 기존 모달 1000 위)
+    function showOverlayModal(content) {
+      closeOverlayModal(); // 기존 것 제거
+      const overlay = document.createElement('div');
+      overlay.id = 'checklistOverlayModal';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:10002;display:flex;align-items:center;justify-content:center;padding:20px;';
+      overlay.onclick = (e) => { if (e.target === overlay) closeOverlayModal(); };
+      overlay.innerHTML = `<div style="background:white;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-height:85vh;overflow-y:auto;">${content}</div>`;
+      document.body.appendChild(overlay);
+    }
+    function closeOverlayModal() {
+      const el = document.getElementById('checklistOverlayModal');
+      if (el) el.remove();
+    }
+
     // 간단 ID 생성
     function generateId() {
       return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -32419,10 +32484,10 @@
         </div>
       `;
 
-      showModal(`<div style="padding: 24px; max-width: 420px;">
+      showOverlayModal(`<div style="padding: 24px; max-width: 420px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <div style="font-size: 16px; font-weight: 700; color: var(--gray-900);">📋 프로젝트 템플릿</div>
-          <button onclick="closeModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
+          <button onclick="closeOverlayModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
         </div>
         <div style="display: flex; flex-direction: column; gap: 8px; max-height: 350px; overflow-y: auto;">
           ${listHtml}
@@ -32444,7 +32509,7 @@
 
       // 기존 항목 지우기
       container.innerHTML = '';
-      closeModal();
+      closeOverlayModal();
 
       // 템플릿 단계를 체크리스트로 추가
       template.steps.forEach(stepName => {
@@ -32472,7 +32537,7 @@
       const templates = JSON.parse(localStorage.getItem('projectTemplates') || '[]');
       templates.push({ name, steps });
       localStorage.setItem('projectTemplates', JSON.stringify(templates));
-      closeModal();
+      closeOverlayModal();
       showToast(`"${name}" 템플릿이 저장되었습니다.`);
     }
 
@@ -32495,17 +32560,17 @@
       const statusEl = document.getElementById('taskPlanStatus');
       const status = statusEl ? statusEl.value : 'waiting';
 
-      // 체크리스트 수집
+      // 체크리스트 수집 (ID 기반 매칭으로 done 상태 보존)
       const checklistRows = document.querySelectorAll('#taskPlanChecklist .checklist-row');
+      const existingChecklist = taskPlanState.editingTask?.checklist || [];
       const checklist = Array.from(checklistRows).map(row => {
         const textEl = row.querySelector('input[type="text"]');
         const selectEl = row.querySelector('select');
         const text = textEl?.value.trim() || '';
         const lagId = selectEl?.value || '';
-        // 기존 done 상태 유지 (수정 시)
-        const existingIdx = parseInt(row.dataset.idx);
-        const existingTask = taskPlanState.editingTask;
-        const existingItem = existingTask?.checklist?.[existingIdx];
+        const rowId = row.dataset.clid || '';
+        // ID 기반 매칭 (인덱스 대신 안정적 ID로 기존 상태 추적)
+        const existingItem = rowId ? existingChecklist.find(c => c.id === rowId) : null;
         return {
           id: existingItem?.id || generateId(),
           text,
@@ -32625,12 +32690,23 @@
 
     // 업무 삭제 (소프트 삭제)
     async function deleteTaskPlan(taskId) {
-      if (!confirm('이 업무를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능)')) return;
+      if (!confirm('이 업무를 휴지통으로 이동하시겠습니까?\n(30일 내 복구 가능, 체크리스트 자동 로그도 함께 정리됩니다)')) return;
 
       try {
         const task = taskPlanState.tasks?.find(t => t.id === taskId);
+
+        // 체크리스트에서 자동 생성된 okr_dailyLogs 정리
+        if (task?.checklist?.length > 0) {
+          const logsToClean = okrState.dailyLogs.filter(l => l.source === 'checklist' && l.sourceTaskId === taskId);
+          for (const log of logsToClean) {
+            await db.collection('okr_dailyLogs').doc(log.id).delete();
+          }
+          okrState.dailyLogs = okrState.dailyLogs.filter(l => !(l.source === 'checklist' && l.sourceTaskId === taskId));
+          okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === new Date().toISOString().split('T')[0]);
+        }
+
         await softDelete('taskPlans', taskId, task, task?.taskName || task?.title);
-        showToast('휴지통으로 이동되었습니다');
+        showToast('휴지통으로 이동되었습니다 (자동 로그도 정리됨)');
         loadTaskPlanData();
       } catch (error) {
         console.error('삭제 실패:', error);
@@ -33373,6 +33449,20 @@
 
       const hasKpiLink = task.krId || task.kpiId || task.laggingIndicatorId;
 
+      // 체크리스트 미완료 경고
+      const cl = task.checklist || [];
+      const clDone = cl.filter(c => c.done).length;
+      const clTotal = cl.length;
+      const clIncomplete = clTotal > 0 && clDone < clTotal;
+      const clWarningHtml = clIncomplete ? `
+        <div style="background: #FFF7ED; border: 1px solid #FED7AA; border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+          <div style="font-size: 13px; color: #9A3412; line-height: 1.5;">
+            <strong>📋 체크리스트 미완료 (${clDone}/${clTotal})</strong><br>
+            ${cl.filter(c => !c.done).map(c => `<span style="display: inline-block; background: #FEF3C7; padding: 1px 6px; border-radius: 4px; margin: 2px 2px 0 0; font-size: 11px;">☐ ${c.text}</span>`).join('')}
+          </div>
+        </div>
+      ` : '';
+
       // 활동지표(행동) 옵션 생성 - 메인/서브 KPI 표시
       const activityLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
       let activityOptions = '<option value="">활동지표 선택</option>';
@@ -33421,6 +33511,7 @@
             </div>
             <div style="padding: 24px;">
               ${durationInfo}
+              ${clWarningHtml}
               ${!hasKpiLink ? '<div style="background: #FEE2E2; border: 1px solid #FECACA; border-radius: 10px; padding: 14px; margin-bottom: 16px;"><div style="font-size: 13px; color: #991B1B; line-height: 1.5;"><strong>⚠️ KPI 미연결 업무</strong><br>이 업무에 KPI가 연결되어 있지 않습니다. 아래에서 KPI를 연결하면 성과가 자동 추적됩니다.</div></div>' : ''}
               <div style="background: #FEF3C7; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
                 <div style="font-size: 13px; color: #92400E; line-height: 1.5;">
