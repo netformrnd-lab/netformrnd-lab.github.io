@@ -5614,15 +5614,33 @@ function updateProductList() {
   const supplierId = document.getElementById('deal-supplier').value;
   const container = document.getElementById('deal-product-list');
   const searchInput = document.getElementById('product-search');
-  
+
   if (searchInput) searchInput.value = '';
-  
+
+  // 현재 DOM에 체크된 상품의 최신 마진율 정보로 전역 변수 업데이트
+  const currentCheckedBoxes = document.querySelectorAll('input[name="deal-products"]:checked');
+  currentCheckedBoxes.forEach(cb => {
+    const marginInput = document.querySelector(`.product-margin-rate[data-product-id="${cb.value}"]`);
+    const existingIdx = (window.selectedDealProducts || []).findIndex(p => p.productId === cb.value);
+    const productData = {
+      productId: cb.value,
+      productName: cb.dataset.name,
+      marginRate: marginInput ? Number(marginInput.value) || 0 : 0
+    };
+    if (existingIdx >= 0) {
+      window.selectedDealProducts[existingIdx] = productData;
+    } else {
+      window.selectedDealProducts = window.selectedDealProducts || [];
+      window.selectedDealProducts.push(productData);
+    }
+  });
+
   if (!supplierId) {
     container.innerHTML = '<p style="color: var(--gray-500); text-align: center; padding: 20px;">공급사를 먼저 선택하세요</p>';
     return;
   }
-  
-  container.innerHTML = renderDealProductOptions(supplierId, [], '');
+
+  container.innerHTML = renderDealProductOptions(supplierId, window.selectedDealProducts || [], '');
 }
 
 // 상품 검색 필터
@@ -5701,7 +5719,7 @@ function renderDealProductOptions(supplierId, selectedIds, searchQuery = '') {
     const existingData = selectedProductsData.find(item =>
       (typeof item === 'string' ? item : item.productId) === p.id
     );
-    const marginRate = existingData && typeof existingData === 'object' ? existingData.marginRate || '' : '';
+    const marginRate = existingData && typeof existingData === 'object' ? (existingData.marginRate !== undefined && existingData.marginRate !== null && existingData.marginRate !== 0 ? existingData.marginRate : '') : '';
     const supplyPrice = Number(p.supplyPrice) || 0;
 
     return `
@@ -5715,12 +5733,21 @@ function renderDealProductOptions(supplierId, selectedIds, searchQuery = '') {
         </div>
         <div style="display: ${isChecked ? 'flex' : 'none'}; align-items: center; gap: 6px;" class="margin-rate-input">
           <span style="font-size: 12px; color: var(--gray-500);">마진율</span>
-          <input type="number" class="form-input product-margin-rate" data-product-id="${p.id}" value="${marginRate}" placeholder="0" step="0.1" min="0" max="100" style="width: 60px; padding: 4px 8px; text-align: center; font-size: 13px;" onclick="event.stopPropagation()">
+          <input type="number" class="form-input product-margin-rate" data-product-id="${p.id}" value="${marginRate}" placeholder="0" step="0.1" min="0" max="100" style="width: 60px; padding: 4px 8px; text-align: center; font-size: 13px;" onclick="event.stopPropagation()" oninput="saveMarginRateImmediate('${p.id}', this.value)">
           <span style="font-size: 12px; color: var(--gray-500);">%</span>
         </div>
       </label>
     `;
   }).join('');
+}
+
+// 마진율 입력 즉시 전역 변수에 저장
+function saveMarginRateImmediate(productId, value) {
+  window.selectedDealProducts = window.selectedDealProducts || [];
+  const idx = window.selectedDealProducts.findIndex(p => p.productId === productId);
+  if (idx >= 0) {
+    window.selectedDealProducts[idx].marginRate = Number(value) || 0;
+  }
 }
 
 // 선택된 상품 표시 업데이트
