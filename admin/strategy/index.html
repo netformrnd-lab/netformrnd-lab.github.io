@@ -9236,9 +9236,9 @@
       const weekStart = new Date(now);
       weekStart.setDate(now.getDate() + mondayOffset);
 
-      // 전체 업무 목록 가져오기 (진행중, 대기)
+      // 전체 업무 목록 가져오기 (진행중, 대기, 중단)
       const activeTasks = (taskPlanState?.tasks || state.taskPlans || []).filter(task => {
-        if (task.status !== 'doing' && task.status !== 'waiting') return false;
+        if (task.status !== 'doing' && task.status !== 'waiting' && task.status !== 'stopped') return false;
         if (taskPlanState?.viewMode === 'my' || !taskPlanState?.viewMode) {
           if (task.assigneeId !== currentMemberId) return false;
         }
@@ -9398,9 +9398,9 @@
 
     // 요일별 업무 카드 생성 (진행중/대기 업무용) - 드래그앤드롭 지원
     function createDayTaskCard(task) {
-      const statusColor = task.status === 'doing' ? 'var(--primary)' : '#F59E0B';
-      const statusBg = task.status === 'doing' ? 'var(--primary-light)' : '#FEF3C7';
-      const statusText = task.status === 'doing' ? '진행중' : '대기';
+      let statusColor = '#F59E0B', statusBg = '#FEF3C7', statusText = '대기';
+      if (task.status === 'doing') { statusColor = 'var(--primary)'; statusBg = 'var(--primary-light)'; statusText = '진행중'; }
+      else if (task.status === 'stopped') { statusColor = '#B45309'; statusBg = '#FFFBEB'; statusText = '중단'; }
 
       return `
         <div draggable="true"
@@ -10007,6 +10007,7 @@
                 ${task.status === 'doing' ? '<span style="background: var(--primary-light); color: var(--primary); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔵 진행중</span>' : ''}
                 ${task.status === 'waiting' ? '<span style="background: var(--gray-100); color: var(--gray-600); padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">⏸️ 대기</span>' : ''}
                 ${task.status === 'done' ? '<span style="background: #DCFCE7; color: #16A34A; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">✅ 완료</span>' : ''}
+                ${task.status === 'stopped' ? '<span style="background: #FEF3C7; color: #B45309; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">⏸ 중단</span>' : ''}
                 ${task.isWeeklyRecurring ? '<span style="background: #FEF3C7; color: #B45309; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">🔄 매주 반복</span>' : ''}
               </div>
 
@@ -10062,9 +10063,22 @@
                 ✏️ 수정
               </button>
               <div style="display: flex; gap: 8px;">
-                ${task.status !== 'done' ? `
+                ${task.status === 'waiting' ? `
+                <button onclick="document.getElementById('scheduledTaskDetailModal').remove(); openStartTaskModal('${taskId}')" style="background: #DBEAFE; color: #1D4ED8; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                  ▶ 시작
+                </button>
+                ` : ''}
+                ${task.status === 'doing' ? `
+                <button onclick="document.getElementById('scheduledTaskDetailModal').remove(); openStopTaskModal('${taskId}')" style="background: #FFFBEB; color: #B45309; border: 1px solid #F59E0B; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                  ⏸ 중단
+                </button>
                 <button onclick="document.getElementById('scheduledTaskDetailModal').remove(); completeScheduledTask('${taskId}')" style="background: #10B981; color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                  ✓ 완료
+                  ✅ 완료
+                </button>
+                ` : ''}
+                ${task.status === 'stopped' ? `
+                <button onclick="document.getElementById('scheduledTaskDetailModal').remove(); openStartTaskModal('${taskId}')" style="background: #DBEAFE; color: #1D4ED8; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                  ▶ 재시작
                 </button>
                 ` : ''}
                 <button onclick="document.getElementById('scheduledTaskDetailModal').remove()" style="background: var(--primary); color: white; border: none; padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
@@ -29154,6 +29168,8 @@
           if (task.status !== 'doing') return false;
         } else if (quickFilter === 'waiting') {
           if (task.status !== 'waiting') return false;
+        } else if (quickFilter === 'stopped') {
+          if (task.status !== 'stopped') return false;
         }
         // 'all'은 모든 업무 표시
 
@@ -29244,17 +29260,19 @@
           html += renderTaskGroupGrid(`👤 ${assignee}`, assigneeGroups[assignee], '#F3E8FF', '#7C3AED');
         });
       } else {
-        // 상태별 그룹핑 (기본값) - 지연 > 진행중 > 대기 > 예정 > 완료
+        // 상태별 그룹핑 (기본값) - 지연 > 진행중 > 대기 > 예정 > 중단 > 완료
         const overdueList = [];
         const doingList = [];
         const waitingList = [];
         const scheduledList = [];
+        const stoppedList = [];
         const doneList = [];
 
         filtered.forEach(task => {
-          const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+          const isOverdue = task.status !== 'done' && task.status !== 'stopped' && task.deadline && new Date(task.deadline) < now;
           if (isOverdue) overdueList.push(task);
           else if (task.status === 'done') doneList.push(task);
+          else if (task.status === 'stopped') stoppedList.push(task);
           else if (task.status === 'doing') doingList.push(task);
           else if (task.status === 'waiting' && task.scheduledDate) scheduledList.push(task);
           else if (task.status === 'waiting') waitingList.push(task);
@@ -29271,6 +29289,9 @@
         }
         if (waitingList.length > 0) {
           html += renderTaskGroupGrid('⏳ 대기', waitingList, 'var(--gray-100)', 'var(--gray-700)');
+        }
+        if (stoppedList.length > 0) {
+          html += renderTaskGroupGrid('⏸ 중단', stoppedList, '#FFFBEB', '#B45309');
         }
         if (doneList.length > 0) {
           html += renderTaskGroupGridCompleted('🏆 완료', doneList);
@@ -29308,8 +29329,8 @@
       // 정렬: 지연 > 진행중 > 대기 > 완료, 같은 상태 내에서는 마감일 순
       const sorted = [...tasks].sort((a, b) => {
         const order = { overdue: 0, doing: 1, waiting: 2, done: 3 };
-        const aIsOverdue = a.status !== 'done' && a.deadline && new Date(a.deadline) < now;
-        const bIsOverdue = b.status !== 'done' && b.deadline && new Date(b.deadline) < now;
+        const aIsOverdue = a.status !== 'done' && a.status !== 'stopped' && a.deadline && new Date(a.deadline) < now;
+        const bIsOverdue = b.status !== 'done' && b.status !== 'stopped' && b.deadline && new Date(b.deadline) < now;
         const aOrder = aIsOverdue ? 0 : (order[a.status] ?? 2);
         const bOrder = bIsOverdue ? 0 : (order[b.status] ?? 2);
         if (aOrder !== bOrder) return aOrder - bOrder;
@@ -29326,7 +29347,7 @@
           </div>
           <!-- 테이블 행 -->
           ${sorted.map(task => {
-            const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+            const isOverdue = task.status !== 'done' && task.status !== 'stopped' && task.deadline && new Date(task.deadline) < now;
             const deadlineText = task.deadline ? task.deadline.slice(5).replace('-', '/') : '-';
             const krInfo = getTaskKrInfo(task);
             const attCount = (task.attachments || []).length;
@@ -29931,7 +29952,7 @@
     function renderTaskCard(task, isCompact = false) {
       const now = new Date();
       now.setHours(0, 0, 0, 0);
-      const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+      const isOverdue = task.status !== 'done' && task.status !== 'stopped' && task.deadline && new Date(task.deadline) < now;
       const deadlineText = task.deadline ? formatDeadline(task.deadline) : '';
       const krInfo = getTaskKrInfo(task);
       const attCount = (task.attachments || []).length;
@@ -29970,7 +29991,7 @@
           </div>
           <div style="display: flex; flex-direction: column; gap: 12px;">
             ${tasks.map(task => {
-              const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+              const isOverdue = task.status !== 'done' && task.status !== 'stopped' && task.deadline && new Date(task.deadline) < now;
               const deadlineText = task.deadline ? formatDeadline(task.deadline) : '';
               const krInfo = getTaskKrInfo(task);
 
@@ -30019,7 +30040,7 @@
           </div>
           <div style="display: flex; flex-direction: column; gap: 6px;">
             ${tasks.map(task => {
-              const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+              const isOverdue = task.status !== 'done' && task.status !== 'stopped' && task.deadline && new Date(task.deadline) < now;
               const deadlineText = task.deadline ? formatDeadline(task.deadline) : '';
               const krInfo = getTaskKrInfo(task);
               const attCount = (task.attachments || []).length;
@@ -30028,6 +30049,7 @@
               let statusColor = '#9CA3AF'; let statusText = '대기'; let statusBg = 'var(--gray-100)';
               if (isOverdue) { statusColor = '#DC2626'; statusText = '지연'; statusBg = '#FEE2E2'; }
               else if (task.status === 'doing') { statusColor = '#3B82F6'; statusText = '진행중'; statusBg = '#EFF6FF'; }
+              else if (task.status === 'stopped') { statusColor = '#B45309'; statusText = '중단'; statusBg = '#FFFBEB'; }
               else if (task.status === 'done') { statusColor = '#16A34A'; statusText = '완료'; statusBg = '#F0FDF4'; }
 
               return `
@@ -30116,7 +30138,7 @@
       const krInfo = getTaskKrInfo(task);
       const now = new Date();
       now.setHours(0, 0, 0, 0);
-      const isOverdue = task.status !== 'done' && task.deadline && new Date(task.deadline) < now;
+      const isOverdue = task.status !== 'done' && task.status !== 'stopped' && task.deadline && new Date(task.deadline) < now;
 
       // 상태 텍스트 (무채색 기반)
       let statusText = '', statusColor = '', statusBg = '';
@@ -30126,6 +30148,8 @@
         statusText = '진행중'; statusColor = 'var(--primary)'; statusBg = 'var(--primary-light)';
       } else if (task.status === 'waiting') {
         statusText = '대기'; statusColor = 'var(--gray-600)'; statusBg = 'var(--gray-100)';
+      } else if (task.status === 'stopped') {
+        statusText = '중단'; statusColor = '#B45309'; statusBg = '#FFFBEB';
       } else if (task.status === 'done') {
         statusText = '완료'; statusColor = 'var(--gray-600)'; statusBg = 'var(--gray-100)';
       }
@@ -30272,9 +30296,15 @@
                 ${task.meetingId ? `<button onclick="closeTaskDetailModal(); openMeetingDetailModal('${task.meetingId}')" style="padding: 12px 20px; border: 1px solid #7C3AED; border-radius: 10px; background: white; color: #7C3AED; cursor: pointer; font-size: 14px; font-weight: 600;">📅 미팅 보기</button>` : ''}
                 <button onclick="closeTaskDetailModal(); openQuickLogFromTask('${task.id}')" style="padding: 12px 20px; border: 1px solid var(--primary); border-radius: 10px; background: white; color: var(--primary); cursor: pointer; font-size: 14px; font-weight: 600;">📝 업무일지 등록</button>
                 <button onclick="closeTaskDetailModal(); editTaskPlan('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: var(--gray-100); color: var(--gray-700); cursor: pointer; font-size: 14px; font-weight: 600;">수정</button>
-                ${task.status !== 'done' ? `
-                  ${task.status === 'waiting' ? `<button onclick="closeTaskDetailModal(); updateTaskPlanStatus('${task.id}', 'doing')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DBEAFE; color: #1D4ED8; cursor: pointer; font-size: 14px; font-weight: 600;">시작하기</button>` : ''}
-                  ${task.status === 'doing' ? `<button onclick="closeTaskDetailModal(); openCompleteTaskModal('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DCFCE7; color: #16A34A; cursor: pointer; font-size: 14px; font-weight: 600;">완료처리</button>` : ''}
+                ${task.status !== 'done' && task.status !== 'stopped' ? `
+                  ${task.status === 'waiting' ? `<button onclick="closeTaskDetailModal(); openStartTaskModal('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DBEAFE; color: #1D4ED8; cursor: pointer; font-size: 14px; font-weight: 600;">▶ 시작하기</button>` : ''}
+                  ${task.status === 'doing' ? `
+                    <button onclick="closeTaskDetailModal(); openStopTaskModal('${task.id}')" style="padding: 12px 20px; border: 1px solid #F59E0B; border-radius: 10px; background: #FFFBEB; color: #B45309; cursor: pointer; font-size: 14px; font-weight: 600;">⏸ 중단</button>
+                    <button onclick="closeTaskDetailModal(); openCompleteTaskModal('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DCFCE7; color: #16A34A; cursor: pointer; font-size: 14px; font-weight: 600;">✅ 완료처리</button>
+                  ` : ''}
+                ` : ''}
+                ${task.status === 'stopped' ? `
+                  <button onclick="closeTaskDetailModal(); openStartTaskModal('${task.id}')" style="padding: 12px 20px; border: none; border-radius: 10px; background: #DBEAFE; color: #1D4ED8; cursor: pointer; font-size: 14px; font-weight: 600;">▶ 재시작</button>
                 ` : ''}
               </div>
             </div>
@@ -30467,9 +30497,16 @@
 
               <!-- 5. KPI 통합검색 -->
               <div style="margin-bottom: 14px; padding: 14px; background: #F8FAFC; border-radius: 10px; border: 1px solid var(--gray-200);">
-                <div style="font-size: 12px; font-weight: 700; color: var(--gray-700); margin-bottom: 10px;">🔍 KPI 연결</div>
-                <input type="text" id="taskPlanKpiSearch" placeholder="KPI/지표 이름으로 검색..."
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                  <div style="font-size: 12px; font-weight: 700; color: var(--gray-700);">🔍 KPI 연결</div>
+                  <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 11px; color: var(--gray-500);">
+                    <input type="checkbox" id="taskPlanKpiMyOnly" checked onchange="filterTaskPlanKpiSearch(document.getElementById('taskPlanKpiSearch').value)" style="accent-color: var(--primary);">
+                    내 담당만
+                  </label>
+                </div>
+                <input type="text" id="taskPlanKpiSearch" placeholder="KPI/지표 이름으로 검색... (빈칸이면 전체 표시)"
                        oninput="filterTaskPlanKpiSearch(this.value)"
+                       onfocus="filterTaskPlanKpiSearch(this.value || '')"
                        style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box; margin-bottom: 8px;">
                 <div id="taskPlanKpiSearchResults" style="max-height: 150px; overflow-y: auto; display: none;"></div>
                 <div id="taskPlanKpiSelected" style="display: ${task.krId ? 'block' : 'none'}; padding: 8px 12px; background: var(--primary-light); border-radius: 8px; margin-bottom: 8px;">
@@ -30500,11 +30537,13 @@
                 <!-- 상태 토글 -->
                 <div style="display: flex; gap: 6px; margin-bottom: 12px;">
                   <button onclick="selectTaskStatus('waiting')" id="statusBtn_waiting"
-                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'waiting' ? 'var(--primary)' : 'var(--gray-300)'}; background: ${task.status === 'waiting' ? 'var(--primary-light)' : 'white'}; color: ${task.status === 'waiting' ? 'var(--primary)' : 'var(--gray-600)'}; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">대기</button>
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'waiting' ? 'var(--primary)' : 'var(--gray-300)'}; background: ${task.status === 'waiting' ? 'var(--primary-light)' : 'white'}; color: ${task.status === 'waiting' ? 'var(--primary)' : 'var(--gray-600)'}; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">대기</button>
                   <button onclick="selectTaskStatus('doing')" id="statusBtn_doing"
-                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'doing' ? '#2563EB' : 'var(--gray-300)'}; background: ${task.status === 'doing' ? '#EFF6FF' : 'white'}; color: ${task.status === 'doing' ? '#2563EB' : 'var(--gray-600)'}; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">진행중</button>
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'doing' ? '#2563EB' : 'var(--gray-300)'}; background: ${task.status === 'doing' ? '#EFF6FF' : 'white'}; color: ${task.status === 'doing' ? '#2563EB' : 'var(--gray-600)'}; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">진행중</button>
+                  <button onclick="selectTaskStatus('stopped')" id="statusBtn_stopped"
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'stopped' ? '#F59E0B' : 'var(--gray-300)'}; background: ${task.status === 'stopped' ? '#FFFBEB' : 'white'}; color: ${task.status === 'stopped' ? '#B45309' : 'var(--gray-600)'}; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">중단</button>
                   <button onclick="selectTaskStatus('done')" id="statusBtn_done"
-                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'done' ? '#16A34A' : 'var(--gray-300)'}; background: ${task.status === 'done' ? '#F0FDF4' : 'white'}; color: ${task.status === 'done' ? '#16A34A' : 'var(--gray-600)'}; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">완료</button>
+                          style="flex: 1; padding: 9px 0; border: 2px solid ${task.status === 'done' ? '#16A34A' : 'var(--gray-300)'}; background: ${task.status === 'done' ? '#F0FDF4' : 'white'}; color: ${task.status === 'done' ? '#16A34A' : 'var(--gray-600)'}; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;">완료</button>
                 </div>
                 <input type="hidden" id="taskPlanStatus" value="${task.status || 'waiting'}">
               ` : ''}
@@ -30563,37 +30602,57 @@
       }
     }
 
-    // ★ KPI 통합검색 필터
+    // ★ KPI 통합검색 필터 (내 담당만 필터 지원)
     function filterTaskPlanKpiSearch(query) {
       const container = document.getElementById('taskPlanKpiSearchResults');
       if (!container) return;
-      if (!query || query.length < 1) {
-        container.style.display = 'none';
-        return;
+
+      const myOnly = document.getElementById('taskPlanKpiMyOnly')?.checked;
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || '';
+
+      // 내 담당 KPI ID 목록
+      let myKpiIds = [];
+      let myKrIds = [];
+      if (myOnly) {
+        const myKpis = (okrState.kpis || []).filter(kpi =>
+          kpi.mainAssignee === currentMemberId ||
+          kpi.mainAssignee === member?.loginId ||
+          kpi.mainAssigneeName === member?.name ||
+          (kpi.subAssignees || []).includes(currentMemberId) ||
+          (kpi.subAssignees || []).includes(member?.loginId) ||
+          (kpi.subAssigneeNames || []).includes(member?.name)
+        );
+        myKpiIds = myKpis.map(k => k.id);
+        myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
       }
-      const q = query.toLowerCase();
+
+      const q = (query || '').toLowerCase();
       const results = [];
 
       // 메인 KPI (KR) 검색
       (okrState.keyResults || []).forEach(kr => {
-        if (kr.name?.toLowerCase().includes(q)) {
-          results.push({ type: 'kr', id: kr.id, name: kr.name, desc: '메인 KPI' });
-        }
+        if (myOnly && !myKrIds.includes(kr.id)) return;
+        if (q && !kr.name?.toLowerCase().includes(q)) return;
+        results.push({ type: 'kr', id: kr.id, name: kr.name, desc: '메인 KPI' });
       });
       // 서브 KPI 검색
       (okrState.kpis || []).forEach(kpi => {
-        if (kpi.name?.toLowerCase().includes(q)) {
-          const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
-          results.push({ type: 'kpi', id: kpi.id, krId: kpi.keyResultId, name: kpi.name, desc: kr ? kr.name : '서브 KPI' });
-        }
+        if (myOnly && !myKpiIds.includes(kpi.id)) return;
+        if (q && !kpi.name?.toLowerCase().includes(q)) return;
+        const kr = okrState.keyResults.find(k => k.id === kpi.keyResultId);
+        results.push({ type: 'kpi', id: kpi.id, krId: kpi.keyResultId, name: kpi.name, desc: kr ? kr.name : '서브 KPI' });
       });
       // 지표 검색
       (okrState.laggingIndicators || []).forEach(lag => {
-        if (lag.name?.toLowerCase().includes(q)) {
-          const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
-          const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
-          results.push({ type: 'lag', id: lag.id, kpiId: lag.kpiId, krId: kpi?.keyResultId, name: lag.name, desc: `${kpi?.name || '지표'} > ${lag.type === 'output' ? '성과' : '행동'}` });
+        if (myOnly) {
+          const lagKpi = okrState.kpis.find(k => k.id === lag.kpiId);
+          if (!lagKpi || !myKpiIds.includes(lagKpi.id)) return;
         }
+        if (q && !lag.name?.toLowerCase().includes(q)) return;
+        const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+        const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+        results.push({ type: 'lag', id: lag.id, kpiId: lag.kpiId, krId: kpi?.keyResultId, name: lag.name, desc: `${kpi?.name || '지표'} > ${lag.type === 'output' ? '성과' : '행동'}` });
       });
 
       if (results.length === 0) {
@@ -31568,9 +31627,10 @@
       const configs = {
         waiting: { border: 'var(--primary)', bg: 'var(--primary-light)', color: 'var(--primary)' },
         doing: { border: '#2563EB', bg: '#EFF6FF', color: '#2563EB' },
+        stopped: { border: '#F59E0B', bg: '#FFFBEB', color: '#B45309' },
         done: { border: '#16A34A', bg: '#F0FDF4', color: '#16A34A' }
       };
-      ['waiting', 'doing', 'done'].forEach(s => {
+      ['waiting', 'doing', 'stopped', 'done'].forEach(s => {
         const btn = document.getElementById('statusBtn_' + s);
         if (!btn) return;
         const active = s === status;
@@ -31908,7 +31968,219 @@
       }
     }
 
-    // 업무 상태 변경
+    // ★ 업무 시작 모달 (진행시작 시 내용기재 + 사진 + KPI 연결)
+    let startTaskImageData = null;
+    function openStartTaskModal(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || '';
+      const myKpis = (okrState.kpis || []).filter(kpi =>
+        kpi.mainAssignee === currentMemberId || kpi.mainAssignee === member?.loginId || kpi.mainAssigneeName === member?.name ||
+        (kpi.subAssignees || []).includes(currentMemberId) || (kpi.subAssignees || []).includes(member?.loginId) || (kpi.subAssigneeNames || []).includes(member?.name)
+      );
+      const myKpiIds = myKpis.map(k => k.id);
+      const myKrIds = [...new Set(myKpis.map(k => k.keyResultId).filter(Boolean))];
+
+      // KPI 옵션 생성 (계층형)
+      let kpiOptionsHtml = '';
+      myKrIds.forEach(krId => {
+        const kr = okrState.keyResults.find(k => k.id === krId);
+        if (!kr) return;
+        const subKpis = myKpis.filter(k => k.keyResultId === krId);
+        kpiOptionsHtml += '<div style="margin-bottom: 8px;">';
+        kpiOptionsHtml += '<div style="font-size: 11px; font-weight: 600; color: var(--primary); margin-bottom: 4px;">🎯 ' + kr.name + '</div>';
+        subKpis.forEach(kpi => {
+          const lags = (okrState.laggingIndicators || []).filter(l => l.kpiId === kpi.id);
+          lags.forEach(lag => {
+            const isSelected = task.laggingIndicatorId === lag.id;
+            kpiOptionsHtml += '<div onclick="selectStartTaskKpi(this, \'' + lag.id + '\', \'' + kpi.id + '\', \'' + krId + '\')" style="padding: 8px 10px; margin: 2px 0; border-radius: 6px; cursor: pointer; font-size: 12px; border: 1px solid ' + (isSelected ? 'var(--primary)' : 'var(--gray-200)') + '; background: ' + (isSelected ? 'var(--primary-light)' : 'white') + ';" data-selected="' + (isSelected ? 'true' : 'false') + '">' +
+              (lag.type === 'output' ? '📤' : '📥') + ' ' + lag.name + ' <span style="color: var(--gray-400); font-size: 10px;">(' + kpi.name + ')</span></div>';
+          });
+        });
+        kpiOptionsHtml += '</div>';
+      });
+
+      startTaskImageData = null;
+      const hasExistingKpi = task.krId || task.kpiId || task.laggingIndicatorId;
+
+      const modalHtml = `
+        <div id="startTaskModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center; padding: 20px;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 520px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="padding: 18px 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #DBEAFE, #EFF6FF); border-radius: 16px 16px 0 0;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <h3 style="margin: 0; font-size: 17px; font-weight: 700; color: #1D4ED8;">▶ 업무 시작</h3>
+                  <div style="font-size: 12px; color: #2563EB; margin-top: 4px;">${task.title}</div>
+                </div>
+                <button onclick="document.getElementById('startTaskModal').remove()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: #1D4ED8;">×</button>
+              </div>
+            </div>
+            <div style="flex: 1; overflow-y: auto; padding: 20px 24px;">
+              <div style="margin-bottom: 14px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">📝 시작 메모 (진행 내용, 계획 등)</label>
+                <textarea id="startTaskMemo" placeholder="이 업무를 어떻게 진행할 예정인지 메모하세요..." style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; min-height: 80px; resize: vertical; box-sizing: border-box;">${task.description || ''}</textarea>
+              </div>
+              <div style="margin-bottom: 14px;">
+                <label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">📷 이미지 첨부 (선택)</label>
+                <div id="startTaskImageArea" onclick="document.getElementById('startTaskFileInput').click()" style="border: 2px dashed var(--gray-300); border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; min-height: 60px; display: flex; align-items: center; justify-content: center;">
+                  <div style="color: var(--gray-400); font-size: 12px;">클릭하거나 Ctrl+V로 붙여넣기</div>
+                </div>
+                <input type="file" id="startTaskFileInput" accept="image/*" style="display: none;" onchange="handleStartTaskImage(event)">
+              </div>
+              ${!hasExistingKpi ? '<div style="margin-bottom: 14px;"><label style="display: block; font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 5px;">🔗 KPI 연결 (선택)</label><div id="startTaskKpiList" style="max-height: 180px; overflow-y: auto; border: 1px solid var(--gray-200); border-radius: 8px; padding: 8px;">' + (kpiOptionsHtml || '<div style="text-align: center; color: var(--gray-400); font-size: 12px; padding: 12px;">담당 KPI가 없습니다</div>') + '</div><input type="hidden" id="startTaskLagId" value=""><input type="hidden" id="startTaskKpiId" value=""><input type="hidden" id="startTaskKrId" value=""></div>' : '<div style="background: #EFF6FF; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 12px; color: var(--primary);">🔗 KPI 연결됨: ' + (task.linkedLagName || 'KPI 연결 완료') + '</div>'}
+            </div>
+            <div style="flex-shrink: 0; border-top: 1px solid var(--gray-200); padding: 14px 24px; display: flex; gap: 10px; justify-content: flex-end;">
+              <button onclick="document.getElementById('startTaskModal').remove()" style="padding: 10px 20px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--gray-600);">취소</button>
+              <button onclick="confirmStartTask('${taskId}')" style="padding: 10px 24px; border: none; border-radius: 8px; background: #2563EB; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">▶ 시작하기</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      // 붙여넣기 이벤트
+      document.getElementById('startTaskModal').addEventListener('paste', function(e) {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        for (let item of items) {
+          if (item.type.indexOf('image') !== -1) {
+            const file = item.getAsFile();
+            processStartTaskImage(file);
+            break;
+          }
+        }
+      });
+    }
+
+    function selectStartTaskKpi(el, lagId, kpiId, krId) {
+      // 토글 선택
+      const allItems = el.parentElement.parentElement.querySelectorAll('[data-selected]');
+      allItems.forEach(item => { item.dataset.selected = 'false'; item.style.borderColor = 'var(--gray-200)'; item.style.background = 'white'; });
+      el.dataset.selected = 'true'; el.style.borderColor = 'var(--primary)'; el.style.background = 'var(--primary-light)';
+      const lagEl = document.getElementById('startTaskLagId');
+      const kpiEl = document.getElementById('startTaskKpiId');
+      const krEl = document.getElementById('startTaskKrId');
+      if (lagEl) lagEl.value = lagId;
+      if (kpiEl) kpiEl.value = kpiId;
+      if (krEl) krEl.value = krId;
+    }
+
+    function handleStartTaskImage(e) {
+      const file = e.target.files[0];
+      if (file) processStartTaskImage(file);
+    }
+
+    function processStartTaskImage(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        startTaskImageData = e.target.result;
+        const area = document.getElementById('startTaskImageArea');
+        if (area) area.innerHTML = '<img src="' + e.target.result + '" style="max-width: 100%; max-height: 150px; border-radius: 6px;"><div style="font-size: 10px; color: var(--gray-400); margin-top: 4px;">클릭하여 변경</div>';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function confirmStartTask(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const memo = document.getElementById('startTaskMemo')?.value.trim() || '';
+      const lagId = document.getElementById('startTaskLagId')?.value || '';
+      const kpiId = document.getElementById('startTaskKpiId')?.value || '';
+      const krId = document.getElementById('startTaskKrId')?.value || '';
+
+      try {
+        const updateData = {
+          status: 'doing',
+          startedAt: new Date().toISOString().split('T')[0],
+          startedTimestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        if (memo) updateData.description = memo;
+        // KPI 연결 업데이트 (기존 없고 새로 선택한 경우)
+        if (lagId && !task.laggingIndicatorId) {
+          updateData.laggingIndicatorId = lagId;
+          updateData.kpiId = kpiId;
+          updateData.krId = krId;
+          const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+          if (lag) { updateData.linkedLagName = lag.name; updateData.linkedLagType = lag.type || 'input'; }
+        }
+        // 이미지 첨부
+        if (startTaskImageData) {
+          const existingAtts = task.attachments || [];
+          existingAtts.push({ name: 'start_' + Date.now() + '.png', url: startTaskImageData, type: 'image/png' });
+          updateData.attachments = existingAtts;
+        }
+
+        await db.collection('taskPlans').doc(taskId).update(updateData);
+        document.getElementById('startTaskModal')?.remove();
+        showToast('업무를 시작합니다.');
+        loadTaskPlanData();
+      } catch (error) {
+        console.error('시작 오류:', error);
+        alert('업무 시작 중 오류가 발생했습니다.');
+      }
+    }
+
+    // ★ 업무 중단 모달
+    function openStopTaskModal(taskId) {
+      const task = taskPlanState.tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const modalHtml = `
+        <div id="stopTaskModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10001; display: flex; align-items: center; justify-content: center; padding: 20px;" onclick="if(event.target === this) this.remove()">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 440px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div style="padding: 20px 24px; border-bottom: 1px solid var(--gray-200); background: linear-gradient(135deg, #FEF3C7, #FFFBEB); border-radius: 16px 16px 0 0;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <h3 style="margin: 0; font-size: 17px; font-weight: 700; color: #B45309;">⏸ 업무 중단</h3>
+                  <div style="font-size: 12px; color: #92400E; margin-top: 4px;">${task.title}</div>
+                </div>
+                <button onclick="document.getElementById('stopTaskModal').remove()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: #B45309;">×</button>
+              </div>
+            </div>
+            <div style="padding: 20px 24px;">
+              <div style="margin-bottom: 16px;">
+                <label style="display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px;">중단 사유 *</label>
+                <textarea id="stopTaskReason" placeholder="왜 이 업무를 중단하는지 사유를 작성하세요...&#10;예) 고객사 일정 변경으로 대기, 선행 업무 미완료" style="width: 100%; padding: 12px; border: 2px solid #F59E0B; border-radius: 8px; font-size: 13px; min-height: 80px; resize: vertical; box-sizing: border-box;"></textarea>
+              </div>
+              <div style="background: #FFFBEB; border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; font-size: 12px; color: #92400E;">
+                💡 중단된 업무는 나중에 다시 시작할 수 있습니다.
+              </div>
+              <div style="display: flex; gap: 10px;">
+                <button onclick="document.getElementById('stopTaskModal').remove()" style="flex: 1; padding: 12px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--gray-600);">취소</button>
+                <button onclick="confirmStopTask('${taskId}')" style="flex: 1; padding: 12px; border: none; border-radius: 8px; background: #F59E0B; color: white; cursor: pointer; font-size: 13px; font-weight: 600;">⏸ 중단하기</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      setTimeout(() => document.getElementById('stopTaskReason')?.focus(), 100);
+    }
+
+    async function confirmStopTask(taskId) {
+      const reason = document.getElementById('stopTaskReason')?.value.trim();
+      if (!reason) { alert('중단 사유를 입력해주세요.'); return; }
+
+      try {
+        await db.collection('taskPlans').doc(taskId).update({
+          status: 'stopped',
+          stoppedAt: new Date().toISOString().split('T')[0],
+          stopReason: reason,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        document.getElementById('stopTaskModal')?.remove();
+        showToast('업무가 중단되었습니다.');
+        loadTaskPlanData();
+      } catch (error) {
+        console.error('중단 오류:', error);
+        alert('중단 처리 중 오류가 발생했습니다.');
+      }
+    }
+
+    // 업무 상태 변경 (기존 호환)
     async function updateTaskPlanStatus(taskId, newStatus) {
       try {
         const updateData = {
@@ -32413,6 +32685,24 @@
       const task = taskPlanState.tasks.find(t => t.id === taskId);
       if (!task) return;
 
+      // 수행일수 계산
+      let durationInfo = '';
+      const startedAtStr = task.startedAt ? (typeof task.startedAt === 'string' ? task.startedAt.split('T')[0] : '') : '';
+      if (startedAtStr) {
+        const s = new Date(startedAtStr + 'T00:00:00');
+        const e = new Date(); e.setHours(0,0,0,0);
+        let bizDays = 0;
+        const cur = new Date(s);
+        while (cur <= e) { const dow = cur.getDay(); if (dow !== 0 && dow !== 6) bizDays++; cur.setDate(cur.getDate() + 1); }
+        const totalDays = Math.round((e - s) / (1000*60*60*24)) + 1;
+        durationInfo = `<div style="background: #EFF6FF; border-radius: 10px; padding: 12px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+          <div><div style="font-size: 11px; color: #2563EB;">📅 수행 기간</div><div style="font-size: 13px; font-weight: 600; color: var(--gray-800); margin-top: 2px;">${new Date(startedAtStr + 'T00:00:00').toLocaleDateString('ko-KR', {month:'long',day:'numeric'})} → 오늘</div></div>
+          <div style="text-align: right;"><div style="font-size: 20px; font-weight: 700; color: #2563EB;">${bizDays}일</div><div style="font-size: 10px; color: var(--gray-500);">영업일 (총 ${totalDays}일)</div></div>
+        </div>`;
+      }
+
+      const hasKpiLink = task.krId || task.kpiId || task.laggingIndicatorId;
+
       // 활동지표(행동) 옵션 생성 - 메인/서브 KPI 표시
       const activityLags = okrState.laggingIndicators.filter(l => l.type !== 'output');
       let activityOptions = '<option value="">활동지표 선택</option>';
@@ -32460,6 +32750,8 @@
               <p style="margin: 8px 0 0 0; font-size: 13px; color: #166534;">${task.title}</p>
             </div>
             <div style="padding: 24px;">
+              ${durationInfo}
+              ${!hasKpiLink ? '<div style="background: #FEE2E2; border: 1px solid #FECACA; border-radius: 10px; padding: 14px; margin-bottom: 16px;"><div style="font-size: 13px; color: #991B1B; line-height: 1.5;"><strong>⚠️ KPI 미연결 업무</strong><br>이 업무에 KPI가 연결되어 있지 않습니다. 아래에서 KPI를 연결하면 성과가 자동 추적됩니다.</div></div>' : ''}
               <div style="background: #FEF3C7; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
                 <div style="font-size: 13px; color: #92400E; line-height: 1.5;">
                   <strong>💡 KPI 연동 안내</strong><br>
