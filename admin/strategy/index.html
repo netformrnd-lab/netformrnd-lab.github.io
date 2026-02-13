@@ -11403,39 +11403,199 @@
       }
     }
 
-    // 상세 등록 모달 (캡처 포함)
-    // 지표 빠른등록 - 인라인으로 바로 +1 또는 직접입력+메모 (모달 1개로 완결)
+    // ★ 지표 등록 모달 (역순 등록: 지표선택 → 메모+사진 → 프로젝트 연결)
+    // 지표 빠른등록 - 검색/필터(내담당만) + 사진붙이기 + 프로젝트선택(기존or생성)
+    let qiState = { attachments: [], selectedProjectId: '' };
+
     function openQuickIndicatorModal() {
+      qiState.attachments = [];
+      qiState.selectedProjectId = '';
+
       const member = getCurrentMember();
       const currentMemberId = member?.id || '';
-      const myKpis = (okrState.kpis || []).filter(kpi =>
-        kpi.mainAssignee === currentMemberId ||
-        kpi.mainAssignee === member?.loginId ||
-        kpi.mainAssigneeName === member?.name ||
-        (kpi.subAssignees || []).includes(currentMemberId) ||
-        (kpi.subAssignees || []).includes(member?.loginId) ||
-        (kpi.subAssigneeNames || []).includes(member?.name)
-      );
-      const myKpiIds = myKpis.map(k => k.id);
-      const myIndicators = (okrState.laggingIndicators || []).filter(lag => myKpiIds.includes(lag.kpiId));
+      const todayStr = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
 
-      if (myIndicators.length === 0) {
-        showToast('등록된 지표가 없습니다. KPI 설정에서 지표를 먼저 추가해주세요.');
+      // 기존 모달 제거
+      const existing = document.getElementById('quickIndicatorModalV2');
+      if (existing) existing.remove();
+
+      const modalHtml = `
+        <div id="quickIndicatorModalV2" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;">
+          <div style="background: white; border-radius: 16px; width: 100%; max-width: 520px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.2);">
+            <!-- 헤더 -->
+            <div style="padding: 18px 24px; border-bottom: 1px solid var(--gray-200); flex-shrink: 0;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-size: 18px; font-weight: 700; color: var(--gray-900);">📊 지표 등록</div>
+                  <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">${todayStr} • 지표 선택 → 메모 → 프로젝트 연결</div>
+                </div>
+                <button onclick="closeQuickIndicatorModalV2()" style="background: none; border: none; font-size: 22px; cursor: pointer; color: var(--gray-400); line-height: 1;">×</button>
+              </div>
+              <!-- 검색 + 필터 -->
+              <div style="display: flex; gap: 8px; align-items: center; margin-top: 12px;">
+                <input type="text" id="qiSearchInput" placeholder="🔍 지표명 검색..." oninput="filterQiIndicators()"
+                       style="flex: 1; padding: 9px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; background: var(--gray-50);">
+                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 11px; color: var(--gray-500); white-space: nowrap; user-select: none;">
+                  <input type="checkbox" id="qiMyOnly" checked onchange="filterQiIndicators()" style="accent-color: #059669;">
+                  내 담당만
+                </label>
+              </div>
+            </div>
+
+            <!-- 스크롤 영역 -->
+            <div style="flex: 1; overflow-y: auto; padding: 16px 24px;">
+              <!-- 지표 목록 -->
+              <div id="qiIndicatorList" style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- 동적 렌더링 -->
+              </div>
+
+              <!-- 선택된 지표 상세 입력 영역 -->
+              <div id="qiDetailSection" style="display: none; margin-top: 16px; padding: 16px; background: #F0FDF4; border: 2px solid #BBF7D0; border-radius: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                  <div>
+                    <div id="qiSelectedName" style="font-size: 14px; font-weight: 700; color: #065F46;"></div>
+                    <div id="qiSelectedKpi" style="font-size: 11px; color: #059669; margin-top: 2px;"></div>
+                  </div>
+                  <button onclick="clearQiSelection()" style="background: none; border: none; cursor: pointer; color: var(--gray-400); font-size: 16px;">✕</button>
+                </div>
+                <input type="hidden" id="qiSelectedLagId" value="">
+
+                <!-- 수치 입력 -->
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                  <input type="number" id="qiDetailVal" value="1" min="1" style="width: 80px; padding: 10px; border: 1px solid #BBF7D0; border-radius: 8px; font-size: 15px; text-align: center; font-weight: 700; background: white;">
+                  <span id="qiDetailUnit" style="font-size: 13px; color: #059669; font-weight: 600;">건</span>
+                  <div style="flex: 1; display: flex; gap: 4px;">
+                    <button onclick="document.getElementById('qiDetailVal').value = 1" style="padding: 6px 10px; border: 1px solid #BBF7D0; border-radius: 6px; background: white; cursor: pointer; font-size: 11px; color: #059669;">1</button>
+                    <button onclick="document.getElementById('qiDetailVal').value = 5" style="padding: 6px 10px; border: 1px solid #BBF7D0; border-radius: 6px; background: white; cursor: pointer; font-size: 11px; color: #059669;">5</button>
+                    <button onclick="document.getElementById('qiDetailVal').value = 10" style="padding: 6px 10px; border: 1px solid #BBF7D0; border-radius: 6px; background: white; cursor: pointer; font-size: 11px; color: #059669;">10</button>
+                  </div>
+                </div>
+
+                <!-- 업무 메모 -->
+                <div style="margin-bottom: 10px;">
+                  <label style="display: block; font-size: 11px; font-weight: 600; color: #065F46; margin-bottom: 4px;">📝 업무 메모</label>
+                  <textarea id="qiDetailMemo" placeholder="업무 내용, 진행 상황, 특이사항 등을 기록하세요..." rows="3"
+                            style="width: 100%; padding: 10px 12px; border: 1px solid #BBF7D0; border-radius: 8px; font-size: 13px; resize: vertical; box-sizing: border-box; background: white; line-height: 1.5;"></textarea>
+                </div>
+
+                <!-- 사진/파일 첨부 (Ctrl+V 붙여넣기) -->
+                <div style="margin-bottom: 10px;">
+                  <label style="display: block; font-size: 11px; font-weight: 600; color: #065F46; margin-bottom: 4px;">📷 사진 첨부</label>
+                  <div id="qiAttachArea"
+                       style="border: 2px dashed #BBF7D0; border-radius: 8px; padding: 12px; text-align: center; cursor: pointer; background: white; transition: all 0.2s;"
+                       onclick="document.getElementById('qiFileInput').click()"
+                       ondragover="event.preventDefault(); this.style.borderColor='#059669'; this.style.background='#ECFDF5';"
+                       ondragleave="this.style.borderColor='#BBF7D0'; this.style.background='white';"
+                       ondrop="handleQiFileDrop(event)">
+                    <div style="font-size: 12px; color: #6B7280;">클릭 또는 드래그하여 사진 추가</div>
+                    <div style="font-size: 10px; color: #9CA3AF; margin-top: 2px;">📋 <kbd style="background: var(--gray-200); padding: 1px 5px; border-radius: 3px; font-size: 9px;">Ctrl+V</kbd> 스크린샷 붙여넣기 가능</div>
+                  </div>
+                  <input type="file" id="qiFileInput" multiple accept="image/*" style="display: none;" onchange="handleQiFileSelect(event)">
+                  <div id="qiAttachPreview" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;"></div>
+                </div>
+
+                <!-- 프로젝트 연결 (기존 선택 or 새로 생성) -->
+                <div style="margin-bottom: 4px;">
+                  <label style="display: block; font-size: 11px; font-weight: 600; color: #065F46; margin-bottom: 4px;">📁 프로젝트 연결 <span style="font-weight: 400; color: #6B7280;">(선택)</span></label>
+                  <div style="display: flex; gap: 6px; align-items: center;">
+                    <select id="qiProjectSelect" onchange="handleQiProjectChange(this.value)"
+                            style="flex: 1; padding: 9px 10px; border: 1px solid #BBF7D0; border-radius: 8px; font-size: 12px; background: white; color: var(--gray-700);">
+                      <option value="">프로젝트 미연결</option>
+                      <!-- 동적으로 채워짐 -->
+                    </select>
+                    <button onclick="toggleQiNewProject()" id="qiNewProjectBtn"
+                            style="padding: 8px 12px; border: 1px solid #BBF7D0; border-radius: 8px; background: white; cursor: pointer; font-size: 11px; color: #059669; font-weight: 600; white-space: nowrap;">+ 새 프로젝트</button>
+                  </div>
+                  <div id="qiNewProjectSection" style="display: none; margin-top: 8px; padding: 10px; background: #ECFDF5; border-radius: 8px; border: 1px solid #BBF7D0;">
+                    <input type="text" id="qiNewProjectName" placeholder="새 프로젝트 이름 입력..."
+                           style="width: 100%; padding: 8px 10px; border: 1px solid #BBF7D0; border-radius: 6px; font-size: 12px; box-sizing: border-box; margin-bottom: 6px;">
+                    <div style="display: flex; gap: 6px; justify-content: flex-end;">
+                      <button onclick="toggleQiNewProject()" style="padding: 5px 10px; border: 1px solid var(--gray-300); border-radius: 6px; background: white; cursor: pointer; font-size: 11px; color: var(--gray-500);">취소</button>
+                      <button onclick="createQiNewProject()" style="padding: 5px 10px; border: none; border-radius: 6px; background: #059669; color: white; cursor: pointer; font-size: 11px; font-weight: 600;">생성</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 하단 등록 버튼 -->
+            <div id="qiBottomBar" style="display: none; flex-shrink: 0; border-top: 1px solid var(--gray-200); background: white; padding: 14px 24px;">
+              <button onclick="submitQuickIndicatorV2()" style="width: 100%; padding: 12px; border: none; border-radius: 10px; background: linear-gradient(135deg, #059669, #10B981); color: white; cursor: pointer; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(5,150,105,0.3);">📊 지표 등록</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      // 클립보드 붙여넣기 이벤트 등록
+      const modal = document.getElementById('quickIndicatorModalV2');
+      modal.addEventListener('paste', handleQiPaste);
+
+      // 지표 목록 렌더링
+      filterQiIndicators();
+      // 프로젝트 목록 로드
+      loadQiProjectOptions();
+    }
+
+    function closeQuickIndicatorModalV2() {
+      const modal = document.getElementById('quickIndicatorModalV2');
+      if (modal) modal.remove();
+      qiState.attachments = [];
+      qiState.selectedProjectId = '';
+    }
+
+    // 지표 목록 필터링 (검색 + 내 담당만)
+    function filterQiIndicators() {
+      const searchText = (document.getElementById('qiSearchInput')?.value || '').trim().toLowerCase();
+      const myOnly = document.getElementById('qiMyOnly')?.checked ?? true;
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || '';
+      const todayIso = new Date().toISOString().split('T')[0];
+
+      let kpis = okrState.kpis || [];
+      if (myOnly) {
+        kpis = kpis.filter(kpi =>
+          kpi.mainAssignee === currentMemberId ||
+          kpi.mainAssignee === member?.loginId ||
+          kpi.mainAssigneeName === member?.name ||
+          (kpi.subAssignees || []).includes(currentMemberId) ||
+          (kpi.subAssignees || []).includes(member?.loginId) ||
+          (kpi.subAssigneeNames || []).includes(member?.name)
+        );
+      }
+      const kpiIds = kpis.map(k => k.id);
+      let indicators = (okrState.laggingIndicators || []).filter(lag => kpiIds.includes(lag.kpiId));
+
+      if (searchText) {
+        indicators = indicators.filter(lag => {
+          const kpi = kpis.find(k => k.id === lag.kpiId);
+          return lag.name.toLowerCase().includes(searchText) ||
+                 (kpi?.name || '').toLowerCase().includes(searchText);
+        });
+      }
+
+      const container = document.getElementById('qiIndicatorList');
+      if (!container) return;
+
+      if (indicators.length === 0) {
+        container.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--gray-400);">
+          <div style="font-size: 24px; margin-bottom: 8px;">📭</div>
+          <div style="font-size: 13px;">${searchText ? '검색 결과가 없습니다' : myOnly ? '담당 지표가 없습니다' : '등록된 지표가 없습니다'}</div>
+          ${myOnly ? '<div style="font-size: 11px; margin-top: 4px;">\'내 담당만\' 해제하면 전체 지표를 볼 수 있습니다</div>' : ''}
+        </div>`;
         return;
       }
 
-      const todayStr = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
-      const todayIso = new Date().toISOString().split('T')[0];
-
-      const listItems = myIndicators.map(lag => {
-        const kpi = myKpis.find(k => k.id === lag.kpiId);
+      container.innerHTML = indicators.map(lag => {
+        const kpi = kpis.find(k => k.id === lag.kpiId);
         const isOutput = lag.type === 'output';
         const todayLogs = (okrState.dailyLogs || []).filter(l => l.laggingIndicatorId === lag.id && l.date === todayIso);
         const todayTotal = todayLogs.reduce((sum, l) => sum + (Number(l.resultValue) || 0), 0);
         const icon = isOutput ? '📤' : '📥';
         const unit = lag.unit || '건';
 
-        return `<div id="qiRow_${lag.id}" style="padding: 12px; background: white; border: 1px solid var(--gray-200); border-radius: 10px; transition: all 0.15s;">
+        return `<div id="qiRow_${lag.id}" onclick="selectQiIndicator('${lag.id}')" style="padding: 12px; background: white; border: 1px solid var(--gray-200); border-radius: 10px; cursor: pointer; transition: all 0.15s;" onmouseover="this.style.borderColor='#059669'; this.style.background='#F0FDF4'" onmouseout="if(!this.classList.contains('qi-selected')){this.style.borderColor='var(--gray-200)'; this.style.background='white';}">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div style="flex: 1; min-width: 0;">
               <div style="font-size: 13px; font-weight: 600; color: var(--gray-800); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${icon} ${lag.name}</div>
@@ -11444,42 +11604,207 @@
             <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
               ${todayTotal > 0 ? `<span style="font-size: 12px; font-weight: 700; color: #059669;">${todayTotal}${unit}</span>` : ''}
               <button onclick="event.stopPropagation(); quickSubmitIndicator('${lag.id}', 1)" style="padding: 6px 12px; border: none; border-radius: 6px; background: #059669; color: white; cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap;">+1</button>
-              <button onclick="event.stopPropagation(); toggleQiExpand('${lag.id}')" style="padding: 6px 8px; border: 1px solid var(--gray-300); border-radius: 6px; background: white; cursor: pointer; font-size: 11px; color: var(--gray-500);" title="상세 입력">✎</button>
-            </div>
-          </div>
-          <div id="qiExpand_${lag.id}" style="display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--gray-100);">
-            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-              <input type="number" id="qiVal_${lag.id}" value="1" min="1" style="width: 70px; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 14px; text-align: center;">
-              <span style="font-size: 12px; color: var(--gray-500);">${unit}</span>
-              <input type="text" id="qiMemo_${lag.id}" placeholder="메모 (선택)" style="flex: 1; padding: 8px; border: 1px solid var(--gray-300); border-radius: 6px; font-size: 12px;">
-            </div>
-            <div style="display: flex; gap: 8px;">
-              <button onclick="quickSubmitIndicator('${lag.id}', null, true)" style="flex: 1; padding: 8px; border: none; border-radius: 6px; background: #059669; color: white; cursor: pointer; font-size: 12px; font-weight: 600;">등록</button>
-              <button onclick="toggleQiExpand('${lag.id}')" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 6px; background: white; cursor: pointer; font-size: 12px; color: var(--gray-500);">접기</button>
             </div>
           </div>
         </div>`;
       }).join('');
-
-      showModal(`<div style="padding: 24px; max-width: 500px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-          <div>
-            <div style="font-size: 18px; font-weight: 700; color: var(--gray-900);">📊 지표 등록</div>
-            <div style="font-size: 12px; color: var(--gray-500); margin-top: 2px;">${todayStr} • +1 클릭 또는 ✎ 상세입력</div>
-          </div>
-          <button onclick="closeModal()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--gray-400);">✕</button>
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto;">
-          ${listItems}
-        </div>
-      </div>`);
     }
 
-    function toggleQiExpand(lagId) {
-      const el = document.getElementById('qiExpand_' + lagId);
-      if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    // 지표 선택 → 상세 입력 영역 표시
+    function selectQiIndicator(lagId) {
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+      const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+      const icon = lag.type === 'output' ? '📤' : '📥';
+
+      document.getElementById('qiSelectedLagId').value = lagId;
+      document.getElementById('qiSelectedName').textContent = icon + ' ' + lag.name;
+      document.getElementById('qiSelectedKpi').textContent = (kpi?.name || '') + ' • ' + (lag.unit || '건');
+      document.getElementById('qiDetailUnit').textContent = lag.unit || '건';
+      document.getElementById('qiDetailVal').value = 1;
+      document.getElementById('qiDetailMemo').value = '';
+      qiState.attachments = [];
+      updateQiAttachPreview();
+
+      // 상세 영역 + 하단바 표시
+      document.getElementById('qiDetailSection').style.display = 'block';
+      document.getElementById('qiBottomBar').style.display = 'block';
+
+      // 선택된 행 하이라이트
+      document.querySelectorAll('#qiIndicatorList > div').forEach(el => {
+        el.classList.remove('qi-selected');
+        el.style.borderColor = 'var(--gray-200)';
+        el.style.background = 'white';
+      });
+      const row = document.getElementById('qiRow_' + lagId);
+      if (row) {
+        row.classList.add('qi-selected');
+        row.style.borderColor = '#059669';
+        row.style.background = '#F0FDF4';
+      }
+
+      // 상세 영역으로 스크롤
+      setTimeout(() => {
+        document.getElementById('qiDetailSection')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 100);
     }
 
+    function clearQiSelection() {
+      document.getElementById('qiSelectedLagId').value = '';
+      document.getElementById('qiDetailSection').style.display = 'none';
+      document.getElementById('qiBottomBar').style.display = 'none';
+      document.querySelectorAll('#qiIndicatorList > div').forEach(el => {
+        el.classList.remove('qi-selected');
+        el.style.borderColor = 'var(--gray-200)';
+        el.style.background = 'white';
+      });
+      qiState.attachments = [];
+    }
+
+    // 프로젝트 목록 로드
+    function loadQiProjectOptions() {
+      const select = document.getElementById('qiProjectSelect');
+      if (!select) return;
+
+      const projects = (taskPlanState.tasks || [])
+        .filter(t => t.status !== 'done' && t.status !== 'deleted')
+        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+      let options = '<option value="">프로젝트 미연결</option>';
+      if (projects.length > 0) {
+        projects.forEach(p => {
+          const statusIcon = p.status === 'doing' ? '▶' : p.status === 'waiting' ? '📅' : '⏸';
+          options += `<option value="${p.id}">${statusIcon} ${p.title || p.name || '제목없음'}</option>`;
+        });
+      }
+      select.innerHTML = options;
+    }
+
+    function handleQiProjectChange(value) {
+      qiState.selectedProjectId = value;
+    }
+
+    // 새 프로젝트 생성 토글
+    function toggleQiNewProject() {
+      const section = document.getElementById('qiNewProjectSection');
+      section.style.display = section.style.display === 'none' ? 'block' : 'none';
+      if (section.style.display === 'block') {
+        document.getElementById('qiNewProjectName')?.focus();
+      }
+    }
+
+    // 새 프로젝트 즉석 생성
+    async function createQiNewProject() {
+      const name = document.getElementById('qiNewProjectName')?.value.trim();
+      if (!name) {
+        showToast('프로젝트 이름을 입력하세요', 'error');
+        return;
+      }
+
+      const member = getCurrentMember();
+      const todayIso = new Date().toISOString().split('T')[0];
+
+      try {
+        const projectData = {
+          title: name,
+          description: '',
+          assigneeId: member?.id || '',
+          assignee: member?.name || '',
+          assigneeLoginId: member?.loginId || '',
+          status: 'doing',
+          deadline: '',
+          dueDate: '',
+          scheduledDate: todayIso,
+          assignedDay: null,
+          checklist: [],
+          attachments: [],
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('taskPlans').add(projectData);
+        // 로컬 상태에 추가
+        taskPlanState.tasks.unshift({ ...projectData, id: docRef.id });
+
+        // 셀렉트 옵션에 추가 & 선택
+        loadQiProjectOptions();
+        document.getElementById('qiProjectSelect').value = docRef.id;
+        qiState.selectedProjectId = docRef.id;
+
+        // 새 프로젝트 입력 닫기
+        document.getElementById('qiNewProjectSection').style.display = 'none';
+        document.getElementById('qiNewProjectName').value = '';
+
+        showToast('프로젝트 "' + name + '" 생성 완료');
+      } catch (error) {
+        console.error('프로젝트 생성 오류:', error);
+        showToast('프로젝트 생성 실패', 'error');
+      }
+    }
+
+    // 사진 첨부 처리 (지표 모달용)
+    function handleQiFileSelect(event) {
+      processQiFiles(event.target.files);
+    }
+
+    function handleQiFileDrop(event) {
+      event.preventDefault();
+      const area = document.getElementById('qiAttachArea');
+      if (area) { area.style.borderColor = '#BBF7D0'; area.style.background = 'white'; }
+      processQiFiles(event.dataTransfer.files);
+    }
+
+    function handleQiPaste(event) {
+      const clipboardData = event.clipboardData;
+      if (!clipboardData) return;
+      const filesToProcess = [];
+      for (let item of clipboardData.items) {
+        if (item.type.startsWith('image/') || item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) filesToProcess.push(file);
+        }
+      }
+      if (filesToProcess.length === 0 && clipboardData.files?.length > 0) {
+        for (const file of clipboardData.files) filesToProcess.push(file);
+      }
+      if (filesToProcess.length > 0) processQiFiles(filesToProcess);
+    }
+
+    async function processQiFiles(files) {
+      const uploadingToast = showToast('사진 업로드 중...', 'info', 0);
+      for (let file of files) {
+        if (!file.type.startsWith('image/')) continue;
+        if (file.size > 50 * 1024 * 1024) { alert('파일 크기는 50MB 이하여야 합니다.'); continue; }
+        try {
+          const timestamp = Date.now();
+          const fileName = `어드민/indicatorLogs/${timestamp}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+          const storageRef = firebase.storage().ref();
+          const fileRef = storageRef.child(fileName);
+          await fileRef.put(file);
+          const downloadUrl = await fileRef.getDownloadURL();
+          qiState.attachments.push({ name: file.name, type: file.type, size: file.size, url: downloadUrl, storagePath: fileName });
+        } catch (error) {
+          console.error('파일 업로드 오류:', error);
+          showToast('사진 업로드 실패', 'error');
+        }
+      }
+      if (uploadingToast?.remove) uploadingToast.remove();
+      updateQiAttachPreview();
+      if (qiState.attachments.length > 0) showToast('사진 업로드 완료', 'success');
+    }
+
+    function updateQiAttachPreview() {
+      const container = document.getElementById('qiAttachPreview');
+      if (!container) return;
+      container.innerHTML = qiState.attachments.map((att, idx) => `
+        <div style="position: relative; width: 60px; height: 60px; border-radius: 8px; overflow: hidden; border: 1px solid #BBF7D0;">
+          <img src="${att.url}" style="width: 100%; height: 100%; object-fit: cover;">
+          <button onclick="event.stopPropagation(); qiState.attachments.splice(${idx}, 1); updateQiAttachPreview();" style="position: absolute; top: 1px; right: 1px; width: 18px; height: 18px; border-radius: 50%; background: rgba(0,0,0,0.6); color: white; border: none; cursor: pointer; font-size: 10px; display: flex; align-items: center; justify-content: center;">×</button>
+        </div>
+      `).join('');
+    }
+
+    // +1 빠른 등록 (기존 호환)
     async function quickSubmitIndicator(lagId, fixedValue, useForm) {
       const lag = okrState.laggingIndicators.find(l => l.id === lagId);
       if (!lag) return;
@@ -11487,8 +11812,8 @@
       let value = fixedValue || 1;
       let memo = '';
       if (useForm) {
-        value = Number(document.getElementById('qiVal_' + lagId)?.value) || 1;
-        memo = document.getElementById('qiMemo_' + lagId)?.value.trim() || '';
+        value = Number(document.getElementById('qiDetailVal')?.value) || 1;
+        memo = document.getElementById('qiDetailMemo')?.value.trim() || '';
       }
 
       const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
@@ -11517,24 +11842,93 @@
         okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
         okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === now.toISOString().split('T')[0]);
 
-        // UI 업데이트 - 오늘 합계 갱신
-        const todayLogs = okrState.dailyLogs.filter(l => l.laggingIndicatorId === lagId && l.date === now.toISOString().split('T')[0]);
-        const newTotal = todayLogs.reduce((sum, l) => sum + (Number(l.resultValue) || 0), 0);
+        // UI 깜빡임 효과
         const row = document.getElementById('qiRow_' + lagId);
         if (row) {
-          // 짧은 초록 깜빡임 효과
           row.style.borderColor = '#059669';
           row.style.background = '#F0FDF4';
-          setTimeout(() => { row.style.borderColor = 'var(--gray-200)'; row.style.background = 'white'; }, 800);
+          setTimeout(() => { if (!row.classList.contains('qi-selected')) { row.style.borderColor = 'var(--gray-200)'; row.style.background = 'white'; } }, 800);
         }
 
         showToast(lag.name + ' +' + value + (lag.unit || '건') + ' 등록 완료');
-        // 접기
-        const expandEl = document.getElementById('qiExpand_' + lagId);
-        if (expandEl) expandEl.style.display = 'none';
+        // 목록 새로고침 (합계 갱신)
+        filterQiIndicators();
+      } catch (error) {
+        console.error('지표 등록 오류:', error);
+        alert('등록 중 오류가 발생했습니다.');
+      }
+    }
 
-        // 모달 새로고침 (합계 갱신)
-        openQuickIndicatorModal();
+    // ★ 지표 상세 등록 (메모 + 사진 + 프로젝트 연결)
+    async function submitQuickIndicatorV2() {
+      const lagId = document.getElementById('qiSelectedLagId')?.value;
+      if (!lagId) { showToast('지표를 선택해주세요', 'error'); return; }
+
+      const lag = okrState.laggingIndicators.find(l => l.id === lagId);
+      if (!lag) return;
+
+      const value = Number(document.getElementById('qiDetailVal')?.value) || 1;
+      const memo = document.getElementById('qiDetailMemo')?.value.trim() || '';
+      const projectId = qiState.selectedProjectId || document.getElementById('qiProjectSelect')?.value || '';
+
+      const kpi = okrState.kpis.find(k => k.id === lag.kpiId);
+      const kr = kpi ? okrState.keyResults.find(k => k.id === kpi.keyResultId) : null;
+      const now = new Date();
+
+      const logData = {
+        lagId: lagId,
+        laggingIndicatorId: lagId,
+        krId: kr?.id || '',
+        kpiId: kpi?.id || '',
+        resultValue: value,
+        quantity: value,
+        date: now.toISOString().split('T')[0],
+        registeredTime: formatTime(now),
+        registeredTimestamp: now.getTime(),
+        memberId: state.currentUser?.id || 'anonymous',
+        memberName: state.currentUser?.name || '',
+        memo: memo,
+        attachments: qiState.attachments.length > 0 ? qiState.attachments : [],
+        projectId: projectId,
+        version: lag.version || 'A',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+
+      try {
+        const docRef = await db.collection('okr_dailyLogs').add(logData);
+        okrState.dailyLogs.unshift({ ...logData, id: docRef.id });
+        okrState.todayLogs = okrState.dailyLogs.filter(l => l.date === now.toISOString().split('T')[0]);
+
+        // 프로젝트에 지표 연결 정보 업데이트
+        if (projectId) {
+          try {
+            const projectDoc = await db.collection('taskPlans').doc(projectId).get();
+            if (projectDoc.exists) {
+              const existing = projectDoc.data();
+              // 프로젝트에 연결된 지표 ID가 없으면 추가
+              if (!existing.laggingIndicatorId || existing.laggingIndicatorId !== lagId) {
+                await db.collection('taskPlans').doc(projectId).update({
+                  laggingIndicatorId: lagId,
+                  linkedLagName: lag.name,
+                  linkedLagType: lag.type || 'input',
+                  kpiId: kpi?.id || '',
+                  krId: kr?.id || '',
+                  updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+              }
+            }
+          } catch (e) {
+            console.warn('프로젝트 연결 업데이트 경고:', e);
+          }
+        }
+
+        const projectInfo = projectId ? (' → 프로젝트 연결됨') : '';
+        const photoInfo = qiState.attachments.length > 0 ? (' 📷' + qiState.attachments.length) : '';
+        showToast(lag.name + ' +' + value + (lag.unit || '건') + photoInfo + projectInfo + ' 등록 완료');
+
+        // 초기화 후 목록 갱신
+        clearQiSelection();
+        filterQiIndicators();
       } catch (error) {
         console.error('지표 등록 오류:', error);
         alert('등록 중 오류가 발생했습니다.');
