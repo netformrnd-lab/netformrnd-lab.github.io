@@ -1099,6 +1099,8 @@ let wfFilterPriority = 'all';
 let wfWeekOffset = 0;
 let wfDraggingId = null;
 let returnToWeeklyPlan = false; // 프로젝트에서 돌아오기 플래그
+let weeklyPlanUnsub = null; // onSnapshot 리스너 해제 함수
+let fixedItemsApplied = false; // 고정목표 자동적용 플래그 (주 당 1회)
 
 // ===== Login =====
 function doLogin() {
@@ -1266,8 +1268,11 @@ function renderSidebarProjects() {
 }
 
 // ===== Navigation =====
+function closeQuickProjectPick() { const el = document.getElementById('quickProjectPick'); if (el) el.remove(); }
+
 function goView(view) {
   currentView = view;
+  closeQuickProjectPick(); // 네비게이션 시 잔여 모달 정리
   document.querySelectorAll('.sidebar-item[data-view]').forEach(el => el.classList.toggle('active', el.dataset.view===view));
   document.querySelectorAll('.view-content').forEach(v => v.classList.remove('active'));
 
@@ -2254,8 +2259,11 @@ async function deleteExecLog(logId) {
 let weeklyPlans = [];
 
 function listenWeeklyPlans() {
+  // 기존 리스너 해제 (중복 방지)
+  if (weeklyPlanUnsub) { weeklyPlanUnsub(); weeklyPlanUnsub = null; }
+  fixedItemsApplied = false; // 주간 변경 시 리셋
   const week = getWeekDates(wfWeekOffset);
-  db.collection('kpi_weekly_plans')
+  weeklyPlanUnsub = db.collection('kpi_weekly_plans')
     .where('weekStart','==',week.monday)
     .onSnapshot(snap => {
       weeklyPlans = snap.docs.map(d => ({id:d.id,...d.data()}));
@@ -2263,8 +2271,11 @@ function listenWeeklyPlans() {
       if (myPlan?.focusItems) weeklyFocusItems = myPlan.focusItems;
       else weeklyFocusItems = {};
       if (myPlan?.fixedItems) weeklyFixedItems = myPlan.fixedItems;
-      // Auto-apply fixed items to this week
-      applyFixedItems();
+      // Auto-apply fixed items (주 당 최초 1회만)
+      if (!fixedItemsApplied) {
+        fixedItemsApplied = true;
+        applyFixedItems();
+      }
       updateWeeklyBadge();
       if (currentView==='weeklyPlan') renderWeeklyPlan();
     });
@@ -2545,10 +2556,7 @@ function wfQuickAddAction() {
   document.body.appendChild(overlay);
 }
 
-function closeQuickProjectPick() {
-  const el = document.getElementById('quickProjectPick');
-  if (el) el.remove();
-}
+
 
 // Drag & Drop handlers
 function wfDragStart(e, actionId) {
@@ -2741,7 +2749,10 @@ function saveProject() {
     roadmap, order: projects.length,
     createdAt: TS(), updatedAt: TS()
   };
-  db.collection('kpi_projects').add(data).then(() => { toast('프로젝트 생성 완료','success'); closeProjectModal(); });
+  db.collection('kpi_projects').add(data).then(docRef => {
+    logChange({ documentType:'project', documentId:docRef.id, collectionName:'kpi_projects', action:'create', oldData:null, newData:{title:data.title, category:data.category, krId:data.krId}, displayName:`프로젝트 생성: ${title}`, projectId:docRef.id });
+    toast('프로젝트 생성 완료','success'); closeProjectModal();
+  });
 }
 
 // ===== KPI Auto-tracking =====
