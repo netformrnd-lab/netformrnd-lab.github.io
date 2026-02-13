@@ -11482,13 +11482,20 @@
                 </div>
                 <div id="qiIndicatorSection" style="display: none; padding: 12px 14px; border-top: 1px solid var(--gray-200);">
                   <!-- 검색 + 필터 -->
-                  <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                  <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
                     <input type="text" id="qiSearchInput" placeholder="🔍 지표명 검색..." oninput="filterQiIndicators()"
                            style="flex: 1; padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white;">
                     <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 11px; color: var(--gray-500); white-space: nowrap; user-select: none;">
                       <input type="checkbox" id="qiMyOnly" checked onchange="filterQiIndicators()" style="accent-color: #059669;">
                       내 담당만
                     </label>
+                  </div>
+                  <!-- 메인 KPI 필터 -->
+                  <div style="margin-bottom: 10px;">
+                    <select id="qiKpiFilter" onchange="filterQiIndicators()"
+                            style="width: 100%; padding: 8px 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white; color: var(--gray-700);">
+                      <option value="">전체 KPI</option>
+                    </select>
                   </div>
                   <!-- 지표 목록 -->
                   <div id="qiIndicatorList" style="display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow-y: auto;">
@@ -11601,7 +11608,7 @@
       qiState.selectedLagId = '';
     }
 
-    // 지표 목록 필터링 (검색 + 내 담당만)
+    // 지표 목록 필터링 (검색 + 내 담당만 + KPI 필터)
     function filterQiIndicators() {
       const searchText = (document.getElementById('qiSearchInput')?.value || '').trim().toLowerCase();
       const myOnly = document.getElementById('qiMyOnly')?.checked ?? true;
@@ -11622,6 +11629,29 @@
       }
       const kpiIds = kpis.map(k => k.id);
       let indicators = (okrState.laggingIndicators || []).filter(lag => kpiIds.includes(lag.kpiId));
+
+      // ★ KPI 필터 드롭다운 갱신
+      const kpiFilterEl = document.getElementById('qiKpiFilter');
+      if (kpiFilterEl) {
+        const currentVal = kpiFilterEl.value;
+        let opts = '<option value="">전체 KPI</option>';
+        kpis.forEach(kpi => {
+          const cnt = indicators.filter(l => l.kpiId === kpi.id).length;
+          if (cnt > 0) {
+            opts += `<option value="${kpi.id}">${kpi.name} (${cnt})</option>`;
+          }
+        });
+        kpiFilterEl.innerHTML = opts;
+        if (currentVal && kpis.some(k => k.id === currentVal)) {
+          kpiFilterEl.value = currentVal;
+        }
+      }
+
+      // ★ 선택된 KPI로 지표 필터링
+      const selectedKpiId = kpiFilterEl?.value || '';
+      if (selectedKpiId) {
+        indicators = indicators.filter(lag => lag.kpiId === selectedKpiId);
+      }
 
       if (searchText) {
         indicators = indicators.filter(lag => {
@@ -11812,9 +11842,10 @@
         taskPlanState.tasks.unshift({ ...projectData, id: docRef.id });
 
         // 셀렉트 옵션에 추가 & 선택
-        loadQiProjectOptions();
+        await loadQiProjectOptions();
         document.getElementById('qiProjectSelect').value = docRef.id;
         qiState.selectedProjectId = docRef.id;
+        handleQiProjectChange(docRef.id);
 
         // 새 프로젝트 입력 닫기
         document.getElementById('qiNewProjectSection').style.display = 'none';
