@@ -18314,6 +18314,7 @@
       totalMetrics: [],  // 총 성과지표 (NEW)
       laggingIndicators: [],  // 성과지표(단위별)
       checklistTemplates: [],  // KPI별 체크리스트 템플릿
+      projectTemplates: [],     // 프로젝트 템플릿 (Firestore 동기화)
       subIndicators: [],  // 하위지표 (NEW)
       dailyLogs: [],
       todayLogs: [],
@@ -18421,6 +18422,10 @@
         // KPI별 체크리스트 템플릿
         const clTemplateSnapshot = await db.collection('okr_checklistTemplates').get();
         okrState.checklistTemplates = clTemplateSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // 프로젝트 템플릿 (Firestore)
+        const ptSnapshot = await db.collection('okr_projectTemplates').get();
+        okrState.projectTemplates = ptSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
         // 하위지표 (NEW)
         const subIndicatorsSnapshot = await db.collection('okr_subIndicators').get();
@@ -32483,60 +32488,94 @@
       if (newRow) newRow.querySelector('input[type="text"]')?.focus();
     }
 
-    // 프로젝트 템플릿 불러오기
+    // ============================================
+    // 프로젝트 템플릿 시스템 (Firestore + 팀 공유)
+    // ============================================
+
+    // 기본 제공 템플릿 (삭제/수정 불가)
+    const DEFAULT_PROJECT_TEMPLATES = [
+      { id: '_default_1', name: '공구 진행', steps: ['셀러 컨택', '조건 협의', '상품등록', '컨텐츠 제작', '공구 오픈', '정산 확인'], isDefault: true, isPublic: true },
+      { id: '_default_2', name: '콘텐츠 제작', steps: ['기획', '소스 수집', '디자인/편집', '검수', '업로드'], isDefault: true, isPublic: true },
+      { id: '_default_3', name: '제안/입찰', steps: ['사전조사', '제안서 작성', '내부 검토', '제출', '피드백 반영'], isDefault: true, isPublic: true }
+    ];
+
+    // 프로젝트 템플릿 목록 모달
     function loadProjectTemplate() {
-      const templates = JSON.parse(localStorage.getItem('projectTemplates') || '[]');
+      const currentUserId = state.currentUser?.id || 'admin';
+      const firestoreTemplates = okrState.projectTemplates || [];
 
-      // 기본 제공 템플릿
-      const defaultTemplates = [
-        { name: '공구 진행', steps: ['셀러 컨택', '조건 협의', '상품등록', '컨텐츠 제작', '공구 오픈', '정산 확인'] },
-        { name: '콘텐츠 제작', steps: ['기획', '소스 수집', '디자인/편집', '검수', '업로드'] },
-        { name: '제안/입찰', steps: ['사전조사', '제안서 작성', '내부 검토', '제출', '피드백 반영'] }
-      ];
+      // 내 템플릿: 내가 만든 것
+      const myTemplates = firestoreTemplates.filter(t => t.creatorId === currentUserId);
+      // 팀 공유 템플릿: 다른 사람이 공개한 것
+      const teamTemplates = firestoreTemplates.filter(t => t.isPublic && t.creatorId !== currentUserId);
 
-      const allTemplates = [...defaultTemplates, ...templates];
+      const renderTemplateItem = (t, idx, source) => {
+        const isOwner = t.creatorId === currentUserId;
+        const isDefault = t.isDefault;
+        const publicBadge = t.isPublic && !isDefault ? '<span style="background: #DBEAFE; color: #1D4ED8; font-size: 9px; padding: 1px 5px; border-radius: 4px; margin-left: 4px;">팀 공유</span>' : '';
+        const privateBadge = !t.isPublic && !isDefault ? '<span style="background: #F3F4F6; color: #6B7280; font-size: 9px; padding: 1px 5px; border-radius: 4px; margin-left: 4px;">개인</span>' : '';
+        const creatorInfo = !isOwner && !isDefault ? `<span style="font-size: 10px; color: var(--gray-400); margin-left: 4px;">by ${t.creatorName || '알 수 없음'}</span>` : '';
 
-      const listHtml = allTemplates.map((t, i) => `
-        <div onclick="applyProjectTemplate(${i})" style="padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
-          <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📋 ${t.name}</div>
-          <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">${t.steps.join(' → ')}</div>
-        </div>
-      `).join('');
+        const actionBtns = !isDefault && isOwner ? `
+          <div style="display: flex; gap: 4px; margin-top: 6px;">
+            <button onclick="event.stopPropagation(); editProjectTemplate('${t.id}')" style="background: none; border: 1px solid var(--gray-200); border-radius: 4px; padding: 2px 6px; font-size: 10px; color: var(--gray-500); cursor: pointer;">수정</button>
+            <button onclick="event.stopPropagation(); deleteProjectTemplate('${t.id}')" style="background: none; border: 1px solid #FCA5A5; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #EF4444; cursor: pointer;">삭제</button>
+          </div>
+        ` : '';
 
-      const saveCurrentHtml = `
-        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-100);">
-          <button onclick="saveCurrentAsTemplate()" style="width: 100%; padding: 10px; border: 1px dashed var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 12px; color: var(--gray-500);">💾 현재 체크리스트를 템플릿으로 저장</button>
-        </div>
-      `;
+        return `
+          <div onclick="applyProjectTemplate('${t.id}')" style="padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; cursor: pointer; transition: background 0.15s;" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='white'">
+            <div style="display: flex; align-items: center; flex-wrap: wrap;">
+              <div style="font-size: 13px; font-weight: 600; color: var(--gray-800);">📋 ${t.name}</div>
+              ${publicBadge}${privateBadge}${creatorInfo}
+            </div>
+            <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">${t.steps.join(' → ')}</div>
+            ${actionBtns}
+          </div>
+        `;
+      };
 
-      showOverlayModal(`<div style="padding: 24px; max-width: 420px;">
+      const defaultSection = DEFAULT_PROJECT_TEMPLATES.map(t => renderTemplateItem(t)).join('');
+
+      const mySection = myTemplates.length > 0 ? `
+        <div style="font-size: 11px; font-weight: 600; color: var(--gray-400); margin-top: 12px; margin-bottom: 6px; text-transform: uppercase;">내 템플릿</div>
+        ${myTemplates.map(t => renderTemplateItem(t)).join('')}
+      ` : '';
+
+      const teamSection = teamTemplates.length > 0 ? `
+        <div style="font-size: 11px; font-weight: 600; color: var(--gray-400); margin-top: 12px; margin-bottom: 6px; text-transform: uppercase;">팀 공유 템플릿</div>
+        ${teamTemplates.map(t => renderTemplateItem(t)).join('')}
+      ` : '';
+
+      showOverlayModal(`<div style="padding: 24px; max-width: 460px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <div style="font-size: 16px; font-weight: 700; color: var(--gray-900);">📋 프로젝트 템플릿</div>
           <button onclick="closeOverlayModal()" style="background: none; border: none; font-size: 18px; cursor: pointer; color: var(--gray-400);">✕</button>
         </div>
-        <div style="display: flex; flex-direction: column; gap: 8px; max-height: 350px; overflow-y: auto;">
-          ${listHtml}
+        <div style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto;">
+          <div style="font-size: 11px; font-weight: 600; color: var(--gray-400); margin-bottom: 2px; text-transform: uppercase;">기본 템플릿</div>
+          ${defaultSection}
+          ${mySection}
+          ${teamSection}
         </div>
-        ${saveCurrentHtml}
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--gray-100);">
+          <button onclick="saveCurrentAsTemplate()" style="width: 100%; padding: 10px; border: 1px dashed var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 12px; color: var(--gray-500);">💾 현재 체크리스트를 템플릿으로 저장</button>
+        </div>
       </div>`);
-
-      // 템플릿 목록을 window에 임시 저장
-      window._projectTemplates = allTemplates;
     }
 
-    function applyProjectTemplate(templateIdx) {
-      const templates = window._projectTemplates || [];
-      const template = templates[templateIdx];
+    // 템플릿 적용
+    function applyProjectTemplate(templateId) {
+      const allTemplates = [...DEFAULT_PROJECT_TEMPLATES, ...(okrState.projectTemplates || [])];
+      const template = allTemplates.find(t => t.id === templateId);
       if (!template) return;
 
       const container = document.getElementById('taskPlanChecklist');
       if (!container) return;
 
-      // 기존 항목 지우기
       container.innerHTML = '';
       closeOverlayModal();
 
-      // 템플릿 단계를 체크리스트로 추가
       template.steps.forEach(stepName => {
         addChecklistRow();
         const lastRow = container.lastElementChild;
@@ -32545,9 +32584,11 @@
           if (input) input.value = stepName;
         }
       });
+      showToast(`"${template.name}" 템플릿 적용됨`, 'info');
     }
 
-    function saveCurrentAsTemplate() {
+    // 템플릿 저장 (Firestore)
+    async function saveCurrentAsTemplate() {
       const rows = document.querySelectorAll('#taskPlanChecklist .checklist-row');
       const steps = Array.from(rows).map(row => row.querySelector('input[type="text"]')?.value.trim()).filter(Boolean);
 
@@ -32556,14 +32597,152 @@
         return;
       }
 
-      const name = prompt('템플릿 이름을 입력하세요:');
-      if (!name) return;
-
-      const templates = JSON.parse(localStorage.getItem('projectTemplates') || '[]');
-      templates.push({ name, steps });
-      localStorage.setItem('projectTemplates', JSON.stringify(templates));
+      // 이름 + 공개 여부 입력 모달
       closeOverlayModal();
-      showToast(`"${name}" 템플릿이 저장되었습니다.`);
+      showOverlayModal(`<div style="padding: 24px; max-width: 380px;">
+        <div style="font-size: 16px; font-weight: 700; color: var(--gray-900); margin-bottom: 16px;">💾 템플릿 저장</div>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 12px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 4px;">템플릿 이름</label>
+          <input type="text" id="tplSaveName" placeholder="예: 핸드폰 제안서 제작" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 12px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 6px;">공개 범위</label>
+          <div style="display: flex; gap: 8px;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid var(--primary); border-radius: 8px; cursor: pointer; background: var(--primary-light);">
+              <input type="radio" name="tplVisibility" value="public" checked style="accent-color: var(--primary);"> <span style="font-size: 12px; font-weight: 600;">팀 공유</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid var(--gray-200); border-radius: 8px; cursor: pointer;">
+              <input type="radio" name="tplVisibility" value="private" style="accent-color: var(--primary);"> <span style="font-size: 12px; font-weight: 600;">개인만</span>
+            </label>
+          </div>
+        </div>
+        <div style="margin-bottom: 16px; padding: 10px; background: var(--gray-50); border-radius: 8px;">
+          <div style="font-size: 11px; font-weight: 600; color: var(--gray-500); margin-bottom: 4px;">포함 단계 (${steps.length}개)</div>
+          <div style="font-size: 12px; color: var(--gray-600);">${steps.join(' → ')}</div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button onclick="closeOverlayModal()" style="flex: 1; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 13px;">취소</button>
+          <button onclick="confirmSaveTemplate()" style="flex: 1; padding: 10px; border: none; border-radius: 8px; background: var(--primary); color: white; cursor: pointer; font-size: 13px; font-weight: 600;">저장</button>
+        </div>
+      </div>`);
+
+      // steps를 임시 저장
+      window._pendingTemplateSteps = steps;
+    }
+
+    // 템플릿 저장 확인
+    async function confirmSaveTemplate() {
+      const name = document.getElementById('tplSaveName')?.value.trim();
+      if (!name) { alert('템플릿 이름을 입력해주세요.'); return; }
+
+      const isPublic = document.querySelector('input[name="tplVisibility"]:checked')?.value === 'public';
+      const steps = window._pendingTemplateSteps || [];
+      const currentUserId = state.currentUser?.id || 'admin';
+      const currentUserName = state.currentUser?.name || '관리자';
+
+      try {
+        const templateData = {
+          name,
+          steps,
+          isPublic,
+          creatorId: currentUserId,
+          creatorName: currentUserName,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('okr_projectTemplates').add(templateData);
+        okrState.projectTemplates.push({ ...templateData, id: docRef.id });
+
+        closeOverlayModal();
+        showToast(`"${name}" 템플릿이 저장되었습니다. ${isPublic ? '(팀 공유)' : '(개인)'}`, 'success');
+        window._pendingTemplateSteps = null;
+      } catch (e) {
+        console.error('템플릿 저장 실패:', e);
+        showToast('템플릿 저장에 실패했습니다.', 'error');
+      }
+    }
+
+    // 템플릿 수정
+    async function editProjectTemplate(templateId) {
+      const template = okrState.projectTemplates.find(t => t.id === templateId);
+      if (!template) return;
+
+      closeOverlayModal();
+      showOverlayModal(`<div style="padding: 24px; max-width: 420px;">
+        <div style="font-size: 16px; font-weight: 700; color: var(--gray-900); margin-bottom: 16px;">수정: ${template.name}</div>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 12px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 4px;">템플릿 이름</label>
+          <input type="text" id="tplEditName" value="${template.name}" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 12px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 6px;">공개 범위</label>
+          <div style="display: flex; gap: 8px;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid ${template.isPublic ? 'var(--primary)' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; ${template.isPublic ? 'background: var(--primary-light);' : ''}">
+              <input type="radio" name="tplEditVisibility" value="public" ${template.isPublic ? 'checked' : ''} style="accent-color: var(--primary);"> <span style="font-size: 12px; font-weight: 600;">팀 공유</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; gap: 6px; padding: 10px 12px; border: 2px solid ${!template.isPublic ? 'var(--primary)' : 'var(--gray-200)'}; border-radius: 8px; cursor: pointer; ${!template.isPublic ? 'background: var(--primary-light);' : ''}">
+              <input type="radio" name="tplEditVisibility" value="private" ${!template.isPublic ? 'checked' : ''} style="accent-color: var(--primary);"> <span style="font-size: 12px; font-weight: 600;">개인만</span>
+            </label>
+          </div>
+        </div>
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 12px; font-weight: 600; color: var(--gray-600); display: block; margin-bottom: 4px;">단계 (줄바꿈으로 구분)</label>
+          <textarea id="tplEditSteps" rows="6" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 13px; box-sizing: border-box; resize: vertical; line-height: 1.6;">${template.steps.join('\n')}</textarea>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button onclick="closeOverlayModal(); loadProjectTemplate();" style="flex: 1; padding: 10px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 13px;">취소</button>
+          <button onclick="confirmEditTemplate('${templateId}')" style="flex: 1; padding: 10px; border: none; border-radius: 8px; background: var(--primary); color: white; cursor: pointer; font-size: 13px; font-weight: 600;">저장</button>
+        </div>
+      </div>`);
+    }
+
+    // 템플릿 수정 확인
+    async function confirmEditTemplate(templateId) {
+      const name = document.getElementById('tplEditName')?.value.trim();
+      const stepsText = document.getElementById('tplEditSteps')?.value || '';
+      const steps = stepsText.split('\n').map(s => s.trim()).filter(Boolean);
+      const isPublic = document.querySelector('input[name="tplEditVisibility"]:checked')?.value === 'public';
+
+      if (!name) { alert('템플릿 이름을 입력해주세요.'); return; }
+      if (steps.length === 0) { alert('단계를 1개 이상 입력해주세요.'); return; }
+
+      try {
+        await db.collection('okr_projectTemplates').doc(templateId).update({
+          name, steps, isPublic,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        const idx = okrState.projectTemplates.findIndex(t => t.id === templateId);
+        if (idx >= 0) {
+          okrState.projectTemplates[idx] = { ...okrState.projectTemplates[idx], name, steps, isPublic };
+        }
+
+        closeOverlayModal();
+        showToast(`"${name}" 템플릿이 수정되었습니다.`, 'success');
+        loadProjectTemplate();
+      } catch (e) {
+        console.error('템플릿 수정 실패:', e);
+        showToast('템플릿 수정에 실패했습니다.', 'error');
+      }
+    }
+
+    // 템플릿 삭제
+    async function deleteProjectTemplate(templateId) {
+      const template = okrState.projectTemplates.find(t => t.id === templateId);
+      if (!template) return;
+      if (!confirm(`"${template.name}" 템플릿을 삭제하시겠습니까?`)) return;
+
+      try {
+        await db.collection('okr_projectTemplates').doc(templateId).delete();
+        okrState.projectTemplates = okrState.projectTemplates.filter(t => t.id !== templateId);
+        closeOverlayModal();
+        showToast(`"${template.name}" 템플릿이 삭제되었습니다.`);
+        loadProjectTemplate();
+      } catch (e) {
+        console.error('템플릿 삭제 실패:', e);
+        showToast('템플릿 삭제에 실패했습니다.', 'error');
+      }
     }
 
     // 업무 등록 모달 닫기
