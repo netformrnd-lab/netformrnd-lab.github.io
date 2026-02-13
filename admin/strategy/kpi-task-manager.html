@@ -1350,6 +1350,8 @@ function applyFilters() {
 // ===== Dashboard =====
 let calendarMonth = new Date();
 
+function localDateStr(d) { const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dd}`; }
+
 function getWeekDates(offset) {
   const now = new Date();
   now.setDate(now.getDate() + (offset||0)*7);
@@ -1360,14 +1362,14 @@ function getWeekDates(offset) {
   for (let i=0;i<5;i++) {
     const d = new Date(mon);
     d.setDate(mon.getDate()+i);
-    dates.push(d.toISOString().split('T')[0]);
+    dates.push(localDateStr(d));
   }
   return { monday:dates[0], friday:dates[4], dates };
 }
 
 function renderDashboard() {
   const week = getWeekDates(0);
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = localDateStr(new Date());
   const dayLabels = ['월','화','수','목','금'];
   const myActions = actions.filter(a => a.assigneeId===currentUser?.id);
 
@@ -1511,7 +1513,7 @@ function renderCalendar() {
   const firstDay = new Date(y,m,1).getDay();
   const daysInMonth = new Date(y,m+1,0).getDate();
   const startOffset = firstDay===0?6:firstDay-1;
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = localDateStr(new Date());
 
   // Build action map by date
   const actionsByDate = {};
@@ -2211,7 +2213,7 @@ function addExecLog() {
   if (!editingActionId) return toast('먼저 행동지표를 저장하세요','error');
   const a = actions.find(x => x.id === editingActionId);
   if (!a) return;
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStr(new Date());
   const value = parseInt(document.getElementById('aKpiVal').value)||1;
   const lag = laggingIndicators.find(l => l.id === a.lagId);
 
@@ -2287,6 +2289,10 @@ function loadFixedGoals() {
   db.collection('kpi_weekly_fixed').doc(currentUser?.id||'_none').get().then(doc => {
     if (doc.exists) weeklyFixedItems = doc.data().items || [];
     else weeklyFixedItems = [];
+    // 삭제된 액션의 고정목표 자동 정리
+    const before = weeklyFixedItems.length;
+    weeklyFixedItems = weeklyFixedItems.filter(fi => actions.some(a => a.id === fi.actionId));
+    if (weeklyFixedItems.length < before) saveFixedGoals();
   }).catch(() => {});
 }
 
@@ -2297,18 +2303,18 @@ function applyFixedItems() {
   weeklyFixedItems.forEach(fi => {
     const a = actions.find(x => x.id === fi.actionId);
     if (!a || a.status === 'done') return;
-    // Check if already in week
     const inWeek = Object.values(weeklyFocusItems).some(arr => arr.includes(fi.actionId));
     if (!inWeek) {
-      // Add to preferred day or distribute
       const dayIdx = fi.preferDay != null ? fi.preferDay : 0;
       const date = week.dates[Math.min(dayIdx, 4)];
       if (!weeklyFocusItems[date]) weeklyFocusItems[date] = [];
-      weeklyFocusItems[date].push(fi.actionId);
-      changed = true;
+      if (!weeklyFocusItems[date].includes(fi.actionId)) {
+        weeklyFocusItems[date].push(fi.actionId);
+        changed = true;
+      }
     }
   });
-  if (changed) saveWeeklyFocus(true);
+  if (changed) saveWeeklyFocus();
 }
 
 function updateWeeklyBadge() {
@@ -2344,8 +2350,17 @@ function isFixedItem(actionId) {
 function renderWeeklyPlan() {
   const week = getWeekDates(wfWeekOffset);
   const scroll = document.getElementById('weeklyPlanScroll');
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = localDateStr(new Date());
   const dayLabels = ['월','화','수','목','금'];
+  // 삭제된 액션 고아 ID 정리
+  let orphanCleaned = false;
+  Object.keys(weeklyFocusItems).forEach(d => {
+    const before = weeklyFocusItems[d].length;
+    weeklyFocusItems[d] = weeklyFocusItems[d].filter(id => actions.some(a => a.id === id));
+    if (weeklyFocusItems[d].length < before) orphanCleaned = true;
+    if (weeklyFocusItems[d].length === 0) delete weeklyFocusItems[d];
+  });
+  if (orphanCleaned) saveWeeklyFocus();
   const pickerList = getWeeklyPickerActions();
 
   const allFocusedIds = Object.values(weeklyFocusItems).reduce((s,arr) => [...s,...arr], []);
@@ -2513,6 +2528,7 @@ function saveFixedGoals() {
 // 빠른 추가 여정: 프로젝트 선택 → 행동지표 추가 → 주간플래너 복귀
 function wfQuickAddAction() {
   if (projects.length === 0) {
+    returnToWeeklyPlan = true;
     openActionModal();
     return;
   }
@@ -2600,7 +2616,7 @@ function wfToggleSelect(actionId) {
       if (weeklyFocusItems[d].length === 0) delete weeklyFocusItems[d];
     });
   } else {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = localDateStr(new Date());
     const week = getWeekDates(wfWeekOffset);
     let targetDate = week.dates.includes(todayStr) ? todayStr : week.dates[0];
     let minCount = Infinity;
@@ -2624,7 +2640,7 @@ function wfRemoveFromDay(actionId, date) {
   renderWeeklyPlan();
 }
 
-function saveWeeklyFocus(silent) {
+function saveWeeklyFocus() {
   const week = getWeekDates(wfWeekOffset);
   const existing = weeklyPlans.find(p => p.userId===currentUser?.id);
   const allIds = Object.values(weeklyFocusItems).reduce((s,arr) => [...s,...arr], []);
@@ -2764,7 +2780,7 @@ function incKPI(task) {
     type:'kpi_auto', lagId:task.lagId, lagName:task.lagName||'',
     krId:task.krId, taskId:task.id, taskTitle:task.title,
     value:val, memberId:currentUser?.id, memberName:currentUser?.name,
-    date:new Date().toISOString().split('T')[0], createdAt:TS()
+    date:localDateStr(new Date()), createdAt:TS()
   });
 }
 function decKPI(task) {
