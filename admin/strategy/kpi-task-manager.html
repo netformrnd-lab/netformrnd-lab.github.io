@@ -909,7 +909,7 @@
   </div>
 </div>
 
-<!-- Lagging Indicator Edit Modal -->
+<!-- Lagging Indicator Edit/Create Modal -->
 <div class="modal-overlay" id="lagModal">
   <div class="modal" style="width:460px">
     <div class="modal-header">
@@ -923,24 +923,40 @@
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">단위</label>
-          <input type="text" class="form-input" id="lagUnit" placeholder="건, 원, %">
+          <label class="form-label">유형</label>
+          <select class="form-input" id="lagType">
+            <option value="input">📥 Input (활동지표)</option>
+            <option value="output">📤 Output (성과지표)</option>
+          </select>
         </div>
         <div class="form-group">
-          <label class="form-label">목표값</label>
-          <input type="number" class="form-input" id="lagTarget" placeholder="100">
+          <label class="form-label">단위</label>
+          <select class="form-input" id="lagUnit">
+            <option value="건">건</option><option value="원">원</option><option value="명">명</option>
+            <option value="곳">곳</option><option value="%">%</option><option value="개">개</option><option value="회">회</option>
+          </select>
         </div>
       </div>
       <div class="form-row">
         <div class="form-group">
+          <label class="form-label">목표값</label>
+          <input type="number" class="form-input" id="lagTarget" placeholder="100">
+        </div>
+        <div class="form-group">
           <label class="form-label">현재값</label>
           <input type="number" class="form-input" id="lagCurrent" placeholder="0">
         </div>
+      </div>
+      <div class="form-row">
         <div class="form-group">
           <label class="form-label">기준기간</label>
           <select class="form-input" id="lagPeriod">
             <option value="monthly">월간</option><option value="quarterly">분기</option><option value="yearly">연간</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">설명 (선택)</label>
+          <input type="text" class="form-input" id="lagDescription" placeholder="지표 설명">
         </div>
       </div>
       <div style="padding:6px 0"><span class="sync-badge">전략센터 동기화</span> <span style="font-size:11px;color:var(--gray-500)">okr_laggingIndicators에 실시간 반영됩니다</span></div>
@@ -1641,6 +1657,7 @@ function renderProjectDetail() {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <div style="font-size:13px;font-weight:700">&#128200; 성과지표 (후행지표)</div>
         <span class="sync-badge">전략센터 동기화</span>
+        <button class="btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="openAddLagModal('${p.id}')">+ 성과지표 추가</button>
       </div>
       ${relLags.map(l => {
         const pct = l.targetValue ? Math.round((l.currentValue||0)/l.targetValue*100) : 0;
@@ -3009,7 +3026,7 @@ function deletePhase() {
   }
 }
 
-// ===== Lagging Indicator Edit (synced with 전략센터) =====
+// ===== Lagging Indicator Edit/Create (synced with 전략센터) =====
 function openLagModal(lagId, projId) {
   editingLagId = lagId;
   editingLagProjectId = projId||null;
@@ -3017,11 +3034,28 @@ function openLagModal(lagId, projId) {
   if (!l) return;
   document.getElementById('lagModalTitle').textContent = '성과지표 수정';
   document.getElementById('lagName').value = l.name||l.title||'';
+  document.getElementById('lagType').value = l.type||'input';
   document.getElementById('lagUnit').value = l.unit||'건';
   document.getElementById('lagTarget').value = l.targetValue||'';
   document.getElementById('lagCurrent').value = l.currentValue||0;
   document.getElementById('lagPeriod').value = l.period||'monthly';
+  document.getElementById('lagDescription').value = l.description||'';
   document.getElementById('lagDeleteBtn').style.display = 'block';
+  document.getElementById('lagModal').classList.add('show');
+}
+
+function openAddLagModal(projId) {
+  editingLagId = null;
+  editingLagProjectId = projId||null;
+  document.getElementById('lagModalTitle').textContent = '성과지표 추가';
+  document.getElementById('lagName').value = '';
+  document.getElementById('lagType').value = 'input';
+  document.getElementById('lagUnit').value = '건';
+  document.getElementById('lagTarget').value = '';
+  document.getElementById('lagCurrent').value = 0;
+  document.getElementById('lagPeriod').value = 'monthly';
+  document.getElementById('lagDescription').value = '';
+  document.getElementById('lagDeleteBtn').style.display = 'none';
   document.getElementById('lagModal').classList.add('show');
 }
 
@@ -3035,36 +3069,60 @@ async function saveLagIndicator() {
   const name = document.getElementById('lagName').value.trim();
   if (!name) return toast('성과지표명을 입력하세요','error');
 
-  const l = laggingIndicators.find(x => x.id === editingLagId);
-  if (!l) return;
+  const type = document.getElementById('lagType').value||'input';
+  const unit = document.getElementById('lagUnit').value||'건';
+  const targetValue = parseFloat(document.getElementById('lagTarget').value)||0;
+  const currentValue = parseFloat(document.getElementById('lagCurrent').value)||0;
+  const period = document.getElementById('lagPeriod').value||'monthly';
+  const description = document.getElementById('lagDescription').value.trim()||'';
 
-  const newData = {
-    name,
-    unit: document.getElementById('lagUnit').value.trim()||'건',
-    targetValue: parseFloat(document.getElementById('lagTarget').value)||0,
-    currentValue: parseFloat(document.getElementById('lagCurrent').value)||0,
-    period: document.getElementById('lagPeriod').value||'monthly',
-    updatedAt: TS()
-  };
+  if (editingLagId) {
+    // === UPDATE existing indicator ===
+    const l = laggingIndicators.find(x => x.id === editingLagId);
+    if (!l) return;
 
-  const changes = diffFields(l, newData, ['name','unit','targetValue','currentValue','period']);
+    const newData = { name, type, unit, targetValue, currentValue, period, description, updatedAt: TS() };
+    const changes = diffFields(l, newData, ['name','type','unit','targetValue','currentValue','period','description']);
 
-  // Update in okr_laggingIndicators (전략센터 동기화)
-  await db.collection('okr_laggingIndicators').doc(editingLagId).update(newData);
+    await db.collection('okr_laggingIndicators').doc(editingLagId).update(newData);
 
-  // Also update local cache
-  const idx = laggingIndicators.findIndex(x => x.id === editingLagId);
-  if (idx >= 0) Object.assign(laggingIndicators[idx], newData);
+    const idx = laggingIndicators.findIndex(x => x.id === editingLagId);
+    if (idx >= 0) Object.assign(laggingIndicators[idx], newData);
 
-  await logChange({
-    documentType:'lagging_indicator', documentId:editingLagId, collectionName:'okr_laggingIndicators',
-    action:'update', changes,
-    oldData:{name:l.name, unit:l.unit, targetValue:l.targetValue, currentValue:l.currentValue, period:l.period},
-    newData:{name:newData.name, unit:newData.unit, targetValue:newData.targetValue, currentValue:newData.currentValue, period:newData.period},
-    displayName:`성과지표 수정: ${name}`, projectId:editingLagProjectId
-  });
+    await logChange({
+      documentType:'lagging_indicator', documentId:editingLagId, collectionName:'okr_laggingIndicators',
+      action:'update', changes,
+      oldData:{name:l.name, type:l.type, unit:l.unit, targetValue:l.targetValue, currentValue:l.currentValue, period:l.period, description:l.description},
+      newData:{name, type, unit, targetValue, currentValue, period, description},
+      displayName:`성과지표 수정: ${name}`, projectId:editingLagProjectId
+    });
+    toast('성과지표 수정 완료 (전략센터 동기화됨)','success');
+  } else {
+    // === CREATE new indicator ===
+    const p = projects.find(x => x.id === editingLagProjectId);
+    if (!p) return toast('프로젝트를 찾을 수 없습니다','error');
+    if (!p.kpiId) return toast('프로젝트에 서브KPI가 연결되지 않았습니다. 프로젝트 설정에서 서브KPI를 먼저 지정하세요.','error');
 
-  toast('성과지표 수정 완료 (전략센터 동기화됨)','success');
+    const newData = {
+      name, type, unit, targetValue, currentValue, period, description,
+      kpiId: p.kpiId, krId: p.krId||null,
+      version: '', isActive: true, valuePerUnit: 0,
+      totalValue: 0, logCount: 0,
+      createdAt: TS(), updatedAt: TS()
+    };
+
+    const ref = await db.collection('okr_laggingIndicators').add(newData);
+    newData.id = ref.id;
+    laggingIndicators.push(newData);
+
+    await logChange({
+      documentType:'lagging_indicator', documentId:ref.id, collectionName:'okr_laggingIndicators',
+      action:'create', changes:{name:{newValue:name}, type:{newValue:type}, unit:{newValue:unit}, targetValue:{newValue:targetValue}},
+      oldData:null, newData:{name, type, unit, targetValue, currentValue, period, description, kpiId:p.kpiId, krId:p.krId},
+      displayName:`성과지표 추가: ${name}`, projectId:editingLagProjectId
+    });
+    toast('성과지표 추가 완료 (전략센터 동기화됨)','success');
+  }
   closeLagModal();
   renderCurrentView();
 }

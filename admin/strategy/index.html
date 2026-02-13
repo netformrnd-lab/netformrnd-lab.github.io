@@ -3481,29 +3481,40 @@
         const totalCount = logs.length;
         const createCount = logs.filter(l => l.action === 'create').length;
         const updateCount = logs.filter(l => l.action === 'update').length;
-        const deleteCount = logs.filter(l => l.action === 'delete').length;
+        const deleteCount = logs.filter(l => l.action === 'delete' || l.action === 'soft_delete').length;
+        const revertCount = logs.filter(l => l.action === 'revert').length;
 
         // 필터 적용
         if (changeLogFilter !== 'all') {
-          logs = logs.filter(l => l.action === changeLogFilter);
+          if (changeLogFilter === 'delete') {
+            logs = logs.filter(l => l.action === 'delete' || l.action === 'soft_delete');
+          } else {
+            logs = logs.filter(l => l.action === changeLogFilter);
+          }
         }
 
         const getActionLabel = (action) => {
           switch (action) {
-            case 'create': return { text: '추가', color: 'var(--success)', bg: 'var(--success-light)' };
-            case 'update': return { text: '수정', color: 'var(--primary)', bg: 'var(--primary-light)' };
-            case 'delete': return { text: '삭제', color: 'var(--danger)', bg: 'var(--danger-light)' };
+            case 'create': return { text: '추가', color: 'var(--success)', bg: 'var(--success-light, #D1FAE5)' };
+            case 'update': return { text: '수정', color: 'var(--primary)', bg: 'var(--primary-light, #DBEAFE)' };
+            case 'delete': case 'soft_delete': return { text: '삭제', color: 'var(--danger)', bg: 'var(--danger-light, #FEE2E2)' };
+            case 'revert': return { text: '복원', color: '#7C3AED', bg: '#EDE9FE' };
+            case 'bulk_update': return { text: '일괄수정', color: 'var(--primary)', bg: 'var(--primary-light, #DBEAFE)' };
             default: return { text: action, color: 'var(--gray-600)', bg: 'var(--gray-100)' };
           }
         };
 
         const getEntityLabel = (type) => {
           switch (type) {
-            case 'laggingIndicator': return '지표';
-            case 'kpi': return 'KPI';
-            case 'keyResult': return '메인 KPI';
-            case 'dailyLog': return '업무 일지';
-            default: return type;
+            case 'laggingIndicator': case 'lagging_indicator': return '지표';
+            case 'kpi': return '서브KPI';
+            case 'keyResult': return '메인KPI';
+            case 'objective': return '목표';
+            case 'dailyLog': return '업무일지';
+            case 'action': return '행동지표';
+            case 'project': return '프로젝트';
+            case 'roadmap_phase': return '로드맵';
+            default: return type || '';
           }
         };
 
@@ -3531,6 +3542,7 @@
               ${filterBtn('create', '추가', createCount, 'var(--success)')}
               ${filterBtn('update', '수정', updateCount, 'var(--primary)')}
               ${filterBtn('delete', '삭제', deleteCount, 'var(--danger)')}
+              ${revertCount > 0 ? filterBtn('revert', '복원', revertCount, '#7C3AED') : ''}
             </div>
 
             <!-- 이력 목록 -->
@@ -3543,38 +3555,69 @@
               <div style="display: flex; flex-direction: column; gap: 12px; max-height: 600px; overflow-y: auto;">
                 ${logs.map(log => {
                   const action = getActionLabel(log.action);
-                  const entity = getEntityLabel(log.entityType);
+                  const entity = getEntityLabel(log.entityType || log.documentType);
                   let detail = '';
                   let changeDetail = '';
 
-                  if (log.data?.changes) {
+                  // 새로운 형식 (displayName 존재)
+                  if (log.displayName) {
+                    detail = log.displayName;
+                  } else if (log.data?.changes) {
                     const changes = log.data.changes;
                     if (changes.name) {
                       detail = `"${changes.name.from}" → "${changes.name.to}"`;
                     }
-                    // 수정 세부내역 표시
                     const changeItems = [];
                     if (changes.memberName) changeItems.push(`등록자: ${changes.memberName.from} → ${changes.memberName.to}`);
                     if (changes.date) changeItems.push(`날짜: ${changes.date.from} → ${changes.date.to}`);
                     if (changes.resultValue) changeItems.push(`수량: ${changes.resultValue.from} → ${changes.resultValue.to}`);
                     if (changes.memo) changeItems.push(`메모 변경`);
-                    if (changeItems.length > 0) {
-                      changeDetail = changeItems.join(' / ');
-                    }
+                    if (changeItems.length > 0) changeDetail = changeItems.join(' / ');
                   } else if (log.data?.name) {
                     detail = `"${log.data.name}"`;
                   }
+
+                  // 새 형식의 변경 내역
+                  if (log.oldData && log.newData && log.action === 'update') {
+                    const items = [];
+                    const old = log.oldData;
+                    const nw = log.newData;
+                    if (old.name !== nw.name && nw.name) items.push(`이름: ${old.name || '-'} → ${nw.name}`);
+                    if (old.targetValue !== nw.targetValue && nw.targetValue !== undefined) items.push(`목표: ${old.targetValue || 0} → ${nw.targetValue}`);
+                    if (old.unit !== nw.unit && nw.unit) items.push(`단위: ${old.unit || '-'} → ${nw.unit}`);
+                    if (items.length > 0) changeDetail = items.join(' / ');
+                  }
+
+                  // kpi-task-manager 변경 내역 (changes 객체)
+                  if (log.changes && typeof log.changes === 'object' && !log.data?.changes) {
+                    const items = [];
+                    const fieldLabels = {title:'제목',name:'이름',status:'상태',priority:'우선순위',assigneeId:'담당자',deadline:'마감일',currentValue:'현재값',targetValue:'목표값',unit:'단위',period:'기간'};
+                    Object.entries(log.changes).forEach(([k, v]) => {
+                      if (v && (v.oldValue !== undefined || v.newValue !== undefined)) {
+                        const label = fieldLabels[k] || k;
+                        items.push(`${label}: ${v.oldValue ?? '-'} → ${v.newValue ?? '-'}`);
+                      }
+                    });
+                    if (items.length > 0) changeDetail = items.join(' / ');
+                  }
+
+                  // 복원 가능 여부 (oldData 존재 + revert 아닌 경우)
+                  const canRevert = log.action !== 'revert' && log.oldData && log.documentId;
+                  const sourceLabel = log.source === 'kpi-task-manager' ? '<span style="background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-left:4px">KPI업무관리</span>' : '';
 
                   return `
                     <div style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: var(--gray-50); border-radius: 10px; border-left: 3px solid ${action.color};">
                       <span style="background: ${action.bg}; color: ${action.color}; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap;">${action.text}</span>
                       <div style="flex: 1;">
                         <div style="font-size: 14px; font-weight: 600; color: var(--gray-800); margin-bottom: 4px;">
-                          ${entity} ${detail}
+                          ${entity} ${detail} ${sourceLabel}
                         </div>
                         ${changeDetail ? `<div style="font-size: 12px; color: var(--primary); margin-bottom: 4px;">📝 ${changeDetail}</div>` : ''}
-                        <div style="font-size: 12px; color: var(--gray-500);">
-                          ${log.userName || '사용자'} · ${formatTimestamp(log.timestamp)}
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                          <div style="font-size: 12px; color: var(--gray-500);">
+                            ${log.userName || '사용자'} · ${formatTimestamp(log.timestamp)}
+                          </div>
+                          ${canRevert ? `<button onclick="revertGoalChange('${log.id}')" style="padding: 4px 10px; background: #EDE9FE; color: #7C3AED; border: 1px solid #DDD6FE; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;">↩ 되돌리기</button>` : ''}
                         </div>
                       </div>
                     </div>
@@ -3593,6 +3636,70 @@
     function setChangeLogFilter(filter) {
       changeLogFilter = filter;
       renderChangeLogs();
+    }
+
+    // 목표설정 변경 되돌리기
+    async function revertGoalChange(logId) {
+      try {
+        const doc = await db.collection('okr_changeLogs').doc(logId).get();
+        if (!doc.exists) return showToast('이력을 찾을 수 없습니다', 'error');
+        const log = { id: doc.id, ...doc.data() };
+
+        const entityLabel = {
+          'objective':'목표', 'keyResult':'메인KPI', 'kpi':'서브KPI',
+          'laggingIndicator':'지표', 'lagging_indicator':'지표',
+          'action':'행동지표', 'roadmap_phase':'로드맵', 'project':'프로젝트'
+        }[log.entityType || log.documentType] || '항목';
+
+        const actionLabel = log.action === 'delete' ? '복원' : '되돌리기';
+        if (!confirm(`${entityLabel} "${log.displayName || log.data?.name || ''}" ${actionLabel}를 진행하시겠습니까?`)) return;
+
+        const collection = log.collectionName || {
+          'objective':'okr_objective', 'keyResult':'okr_keyResults', 'kpi':'okr_kpis',
+          'laggingIndicator':'okr_laggingIndicators', 'lagging_indicator':'okr_laggingIndicators',
+          'action':'kpi_tasks', 'project':'kpi_projects'
+        }[log.entityType || log.documentType];
+
+        if (!collection || !log.documentId) {
+          return showToast('복원에 필요한 정보가 부족합니다', 'error');
+        }
+
+        if (log.action === 'update' && log.oldData) {
+          // 수정 되돌리기 → oldData로 복원
+          const restoreData = { ...log.oldData, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+          delete restoreData.id;
+          await db.collection(collection).doc(log.documentId).update(restoreData);
+        } else if ((log.action === 'delete' || log.action === 'soft_delete') && log.oldData) {
+          // 삭제 복원 → oldData로 재생성
+          const restoreData = { ...log.oldData, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+          delete restoreData.id;
+          await db.collection(collection).doc(log.documentId).set(restoreData);
+        } else if (log.action === 'create' && log.documentId) {
+          // 생성 취소 → 삭제
+          await db.collection(collection).doc(log.documentId).delete();
+        } else {
+          return showToast('이 항목은 되돌릴 수 없습니다', 'error');
+        }
+
+        // 복원 이력 기록
+        await saveChangeLog(log.entityType || log.documentType, 'revert', { name: log.displayName || log.data?.name || '' }, {
+          documentId: log.documentId, collectionName: collection,
+          oldData: log.newData, newData: log.oldData,
+          displayName: `되돌림: ${log.displayName || log.data?.name || ''}`
+        });
+
+        // 데이터 새로고침
+        await loadOkrData();
+        renderOkrDashboard();
+        renderOkrSettings();
+        renderOkrRecord();
+        renderPersonalGrowthboard();
+        showToast(`${actionLabel} 완료!`, 'success');
+        renderChangeLogs();
+      } catch (e) {
+        console.error('되돌리기 실패:', e);
+        showToast('되돌리기 실패: ' + e.message, 'error');
+      }
     }
 
     // OKR 기간 전환
@@ -24793,17 +24900,25 @@
       }
     }
 
-    // 변경 이력 저장
-    async function saveChangeLog(entityType, action, data) {
+    // 변경 이력 저장 (복원 지원 확장)
+    async function saveChangeLog(entityType, action, data, opts = {}) {
       try {
-        await db.collection('okr_changeLogs').add({
-          entityType, // 'laggingIndicator', 'kpi', 'keyResult', 'dailyLog'
-          action, // 'create', 'update', 'delete'
+        const entry = {
+          entityType, // 'laggingIndicator', 'kpi', 'keyResult', 'dailyLog', 'objective'
+          action, // 'create', 'update', 'delete', 'revert'
           data,
-          userId: state.currentUser?.uid || 'anonymous',
+          userId: state.currentUser?.uid || state.currentUser?.id || 'anonymous',
           userName: state.currentUser?.name || '사용자',
-          timestamp: firebase.firestore.FieldValue.serverTimestamp()
-        });
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          source: 'strategy-center'
+        };
+        // 복원용 데이터 추가
+        if (opts.documentId) entry.documentId = opts.documentId;
+        if (opts.collectionName) entry.collectionName = opts.collectionName;
+        if (opts.oldData) entry.oldData = opts.oldData;
+        if (opts.newData) entry.newData = opts.newData;
+        if (opts.displayName) entry.displayName = opts.displayName;
+        await db.collection('okr_changeLogs').add(entry);
       } catch (e) {
         console.error('변경 이력 저장 오류:', e);
       }
@@ -27636,12 +27751,20 @@
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       try {
-        if (okrState.objective) {
+        const isUpdate = !!okrState.objective;
+        const oldData = isUpdate ? { name: okrState.objective.name, startDate: okrState.objective.startDate, endDate: okrState.objective.endDate } : null;
+        if (isUpdate) {
           await db.collection('okr_objective').doc(okrState.objective.id).update(data);
         } else {
           data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
           await db.collection('okr_objective').add(data);
         }
+        await saveChangeLog('objective', isUpdate ? 'update' : 'create', { name }, {
+          documentId: okrState.objective?.id || null,
+          collectionName: 'okr_objective',
+          oldData, newData: { name: data.name, startDate: data.startDate, endDate: data.endDate },
+          displayName: `목표 ${isUpdate ? '수정' : '추가'}: ${name}`
+        });
         await loadOkrData();
         renderOkrDashboard();
         renderOkrSettings();
@@ -27692,13 +27815,24 @@
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       };
       try {
-        if (krId) {
+        const isUpdate = !!krId;
+        const existingKR = isUpdate ? okrState.keyResults.find(k => k.id === krId) : null;
+        const oldData = existingKR ? { name: existingKR.name, targetValue: existingKR.targetValue, unit: existingKR.unit } : null;
+        let savedId = krId;
+        if (isUpdate) {
           await db.collection('okr_keyResults').doc(krId).update(data);
         } else {
           data.order = okrState.keyResults.length + 1;
           data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-          await db.collection('okr_keyResults').add(data);
+          const ref = await db.collection('okr_keyResults').add(data);
+          savedId = ref.id;
         }
+        await saveChangeLog('keyResult', isUpdate ? 'update' : 'create', { name }, {
+          documentId: savedId,
+          collectionName: 'okr_keyResults',
+          oldData, newData: { name: data.name, targetValue: data.targetValue, unit: data.unit },
+          displayName: `메인KPI ${isUpdate ? '수정' : '추가'}: ${name}`
+        });
         await loadOkrData();
         renderOkrDashboard();
         renderOkrSettings();
@@ -27725,6 +27859,15 @@
         itemsToDelete.push({ collection: 'okr_keyResults', id: krId, data: kr, displayName: kr?.name });
 
         await softDeleteBatch(itemsToDelete);
+
+        // 변경이력 기록 (복원 지원)
+        await saveChangeLog('keyResult', 'delete', { name: kr?.name }, {
+          documentId: krId, collectionName: 'okr_keyResults',
+          oldData: { name: kr?.name, targetValue: kr?.targetValue, unit: kr?.unit, objectiveId: kr?.objectiveId, order: kr?.order },
+          newData: null,
+          displayName: `메인KPI 삭제: ${kr?.name}`
+        });
+
         await loadOkrData();
         renderOkrDashboard();
         renderOkrSettings();
@@ -28000,6 +28143,29 @@
         await batch.commit();
         console.log('✅ KPI 및 Metrics 동기화 저장 완료 (ID 유지됨)');
 
+        // 4-1. 변경이력 기록 (복원 지원)
+        const existingKpi = kpiId ? okrState.kpis.find(k => k.id === kpiId) : null;
+        const oldKpiData = existingKpi ? { name: existingKpi.name, targetValue: existingKpi.targetValue, unit: existingKpi.unit, mainAssignee: existingKpi.mainAssignee, mainAssigneeName: existingKpi.mainAssigneeName, subAssignees: existingKpi.subAssignees, subAssigneeNames: existingKpi.subAssigneeNames } : null;
+        await saveChangeLog('kpi', kpiId ? 'update' : 'create', { name }, {
+          documentId: savedKpiId,
+          collectionName: 'okr_kpis',
+          oldData: oldKpiData,
+          newData: { name: data.name, targetValue: data.targetValue, unit: data.unit, mainAssignee, mainAssigneeName, subAssignees, subAssigneeNames },
+          displayName: `서브KPI ${kpiId ? '수정' : '추가'}: ${name}`
+        });
+        // 삭제된 지표 변경이력
+        for (const lagId of deletedLagIds) {
+          const lag = existingLags.find(l => l.id === lagId);
+          if (lag) {
+            await saveChangeLog('laggingIndicator', 'delete', { name: lag.name }, {
+              documentId: lagId, collectionName: 'okr_laggingIndicators',
+              oldData: { name: lag.name, type: lag.type, unit: lag.unit, targetValue: lag.targetValue, currentValue: lag.currentValue, kpiId: lag.kpiId, krId: lag.krId },
+              newData: null,
+              displayName: `지표 삭제: ${lag.name}`
+            });
+          }
+        }
+
         // 필터 상태 확인 - 팀원 필터가 설정되어 있고 수정된 KPI가 필터에서 제외될 경우
         const currentMemberFilter = okrState.kpiFilter.memberId;
         if (currentMemberFilter !== 'all') {
@@ -28045,6 +28211,14 @@
         // 소프트 삭제 배치 실행
         await softDeleteBatch(itemsToDelete);
         console.log('✅ KPI 및 연관 Metrics 휴지통 이동 완료');
+
+        // 변경이력 기록 (복원 지원)
+        await saveChangeLog('kpi', 'delete', { name: kpi?.name }, {
+          documentId: kpiId, collectionName: 'okr_kpis',
+          oldData: { name: kpi?.name, targetValue: kpi?.targetValue, unit: kpi?.unit, keyResultId: kpi?.keyResultId, mainAssignee: kpi?.mainAssignee, mainAssigneeName: kpi?.mainAssigneeName, subAssignees: kpi?.subAssignees, subAssigneeNames: kpi?.subAssigneeNames, order: kpi?.order },
+          newData: null,
+          displayName: `서브KPI 삭제: ${kpi?.name}`
+        });
 
         await loadOkrData();
         renderOkrDashboard();
