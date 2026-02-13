@@ -3461,6 +3461,9 @@
     // 변경이력 상태
     let changeLogFilter = 'all'; // all, create, update, delete
 
+    // HTML 이스케이프 (XSS 방지)
+    function escLog(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
     // 변경이력 렌더링
     async function renderChangeLogs() {
       const container = document.getElementById('changeLogsContent');
@@ -3561,20 +3564,20 @@
 
                   // 새로운 형식 (displayName 존재)
                   if (log.displayName) {
-                    detail = log.displayName;
+                    detail = escLog(log.displayName);
                   } else if (log.data?.changes) {
                     const changes = log.data.changes;
                     if (changes.name) {
-                      detail = `"${changes.name.from}" → "${changes.name.to}"`;
+                      detail = `"${escLog(changes.name.from)}" → "${escLog(changes.name.to)}"`;
                     }
                     const changeItems = [];
-                    if (changes.memberName) changeItems.push(`등록자: ${changes.memberName.from} → ${changes.memberName.to}`);
-                    if (changes.date) changeItems.push(`날짜: ${changes.date.from} → ${changes.date.to}`);
-                    if (changes.resultValue) changeItems.push(`수량: ${changes.resultValue.from} → ${changes.resultValue.to}`);
+                    if (changes.memberName) changeItems.push(`등록자: ${escLog(changes.memberName.from)} → ${escLog(changes.memberName.to)}`);
+                    if (changes.date) changeItems.push(`날짜: ${escLog(changes.date.from)} → ${escLog(changes.date.to)}`);
+                    if (changes.resultValue) changeItems.push(`수량: ${escLog(changes.resultValue.from)} → ${escLog(changes.resultValue.to)}`);
                     if (changes.memo) changeItems.push(`메모 변경`);
                     if (changeItems.length > 0) changeDetail = changeItems.join(' / ');
                   } else if (log.data?.name) {
-                    detail = `"${log.data.name}"`;
+                    detail = `"${escLog(log.data.name)}"`;
                   }
 
                   // 새 형식의 변경 내역
@@ -3582,9 +3585,13 @@
                     const items = [];
                     const old = log.oldData;
                     const nw = log.newData;
-                    if (old.name !== nw.name && nw.name) items.push(`이름: ${old.name || '-'} → ${nw.name}`);
+                    if (old.name !== nw.name && nw.name) items.push(`이름: ${escLog(old.name) || '-'} → ${escLog(nw.name)}`);
                     if (old.targetValue !== nw.targetValue && nw.targetValue !== undefined) items.push(`목표: ${old.targetValue || 0} → ${nw.targetValue}`);
-                    if (old.unit !== nw.unit && nw.unit) items.push(`단위: ${old.unit || '-'} → ${nw.unit}`);
+                    if (old.unit !== nw.unit && nw.unit) items.push(`단위: ${escLog(old.unit) || '-'} → ${escLog(nw.unit)}`);
+                    if (old.startDate !== nw.startDate && nw.startDate) items.push(`시작: ${escLog(old.startDate) || '-'} → ${escLog(nw.startDate)}`);
+                    if (old.endDate !== nw.endDate && nw.endDate) items.push(`종료: ${escLog(old.endDate) || '-'} → ${escLog(nw.endDate)}`);
+                    if (old.mainAssigneeName !== nw.mainAssigneeName && nw.mainAssigneeName) items.push(`담당: ${escLog(old.mainAssigneeName) || '-'} → ${escLog(nw.mainAssigneeName)}`);
+                    if (JSON.stringify(old.subAssigneeNames||[]) !== JSON.stringify(nw.subAssigneeNames||[]) && nw.subAssigneeNames) items.push(`부담당: ${(old.subAssigneeNames||[]).join(',') || '-'} → ${(nw.subAssigneeNames||[]).join(',')}`);
                     if (items.length > 0) changeDetail = items.join(' / ');
                   }
 
@@ -3595,14 +3602,14 @@
                     Object.entries(log.changes).forEach(([k, v]) => {
                       if (v && (v.oldValue !== undefined || v.newValue !== undefined)) {
                         const label = fieldLabels[k] || k;
-                        items.push(`${label}: ${v.oldValue ?? '-'} → ${v.newValue ?? '-'}`);
+                        items.push(`${escLog(label)}: ${escLog(v.oldValue ?? '-')} → ${escLog(v.newValue ?? '-')}`);
                       }
                     });
                     if (items.length > 0) changeDetail = items.join(' / ');
                   }
 
                   // 복원 가능 여부 (oldData 존재 + revert 아닌 경우)
-                  const canRevert = log.action !== 'revert' && log.oldData && log.documentId;
+                  const canRevert = log.action !== 'revert' && log.documentId && (log.oldData || log.action === 'create');
                   const sourceLabel = log.source === 'kpi-task-manager' ? '<span style="background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;margin-left:4px">KPI업무관리</span>' : '';
 
                   return `
@@ -3615,7 +3622,7 @@
                         ${changeDetail ? `<div style="font-size: 12px; color: var(--primary); margin-bottom: 4px;">📝 ${changeDetail}</div>` : ''}
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                           <div style="font-size: 12px; color: var(--gray-500);">
-                            ${log.userName || '사용자'} · ${formatTimestamp(log.timestamp)}
+                            ${escLog(log.userName) || '사용자'} · ${formatTimestamp(log.timestamp)}
                           </div>
                           ${canRevert ? `<button onclick="revertGoalChange('${log.id}')" style="padding: 4px 10px; background: #EDE9FE; color: #7C3AED; border: 1px solid #DDD6FE; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;">↩ 되돌리기</button>` : ''}
                         </div>
@@ -3639,6 +3646,27 @@
     }
 
     // 목표설정 변경 되돌리기
+    function stripTimestamps(obj) {
+      if (!obj || typeof obj !== 'object') return obj;
+      if (Array.isArray(obj)) {
+        return obj.map(item => (item && typeof item === 'object') ? stripTimestamps(item) : item);
+      }
+      const result = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (v && typeof v === 'object' && typeof v.toDate === 'function') {
+          result[k] = v.toDate().toISOString();
+        } else if (v && typeof v === 'object' && v._methodName) {
+          // FieldValue sentinel (serverTimestamp 등) → 제거
+          continue;
+        } else if (v && typeof v === 'object') {
+          result[k] = stripTimestamps(v);
+        } else {
+          result[k] = v;
+        }
+      }
+      return result;
+    }
+
     async function revertGoalChange(logId) {
       try {
         const doc = await db.collection('okr_changeLogs').doc(logId).get();
@@ -3665,13 +3693,13 @@
         }
 
         if (log.action === 'update' && log.oldData) {
-          // 수정 되돌리기 → oldData로 복원
-          const restoreData = { ...log.oldData, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+          // 수정 되돌리기 → oldData로 복원 (Timestamp 객체 변환)
+          const restoreData = { ...stripTimestamps(log.oldData), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
           delete restoreData.id;
           await db.collection(collection).doc(log.documentId).update(restoreData);
         } else if ((log.action === 'delete' || log.action === 'soft_delete') && log.oldData) {
-          // 삭제 복원 → oldData로 재생성
-          const restoreData = { ...log.oldData, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+          // 삭제 복원 → oldData로 재생성 (Timestamp 객체 변환)
+          const restoreData = { ...stripTimestamps(log.oldData), updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
           delete restoreData.id;
           await db.collection(collection).doc(log.documentId).set(restoreData);
         } else if (log.action === 'create' && log.documentId) {
@@ -27757,10 +27785,11 @@
           await db.collection('okr_objective').doc(okrState.objective.id).update(data);
         } else {
           data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-          await db.collection('okr_objective').add(data);
+          const docRef = await db.collection('okr_objective').add(data);
+          data._newId = docRef.id;
         }
         await saveChangeLog('objective', isUpdate ? 'update' : 'create', { name }, {
-          documentId: okrState.objective?.id || null,
+          documentId: okrState.objective?.id || data._newId || null,
           collectionName: 'okr_objective',
           oldData, newData: { name: data.name, startDate: data.startDate, endDate: data.endDate },
           displayName: `목표 ${isUpdate ? '수정' : '추가'}: ${name}`
