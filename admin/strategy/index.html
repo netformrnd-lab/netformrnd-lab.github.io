@@ -11491,10 +11491,17 @@
                     </label>
                   </div>
                   <!-- 메인 KPI 필터 -->
-                  <div style="margin-bottom: 10px;">
-                    <select id="qiKpiFilter" onchange="filterQiIndicators()"
+                  <div style="margin-bottom: 6px;">
+                    <select id="qiMainKpiFilter" onchange="onQiMainKpiChange()"
                             style="width: 100%; padding: 8px 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white; color: var(--gray-700);">
-                      <option value="">전체 KPI</option>
+                      <option value="">전체 메인 KPI</option>
+                    </select>
+                  </div>
+                  <!-- 서브 KPI 필터 -->
+                  <div style="margin-bottom: 10px;">
+                    <select id="qiSubKpiFilter" onchange="filterQiIndicators()"
+                            style="width: 100%; padding: 8px 10px; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 12px; background: white; color: var(--gray-700);">
+                      <option value="">전체 서브 KPI</option>
                     </select>
                   </div>
                   <!-- 지표 목록 -->
@@ -11608,7 +11615,45 @@
       qiState.selectedLagId = '';
     }
 
-    // 지표 목록 필터링 (검색 + 내 담당만 + KPI 필터)
+    // ★ 메인 KPI 변경 → 서브 KPI 드롭다운 갱신 + 지표 필터링
+    function onQiMainKpiChange() {
+      const mainKpiFilterEl = document.getElementById('qiMainKpiFilter');
+      const subKpiFilterEl = document.getElementById('qiSubKpiFilter');
+      if (!subKpiFilterEl) return;
+
+      const selectedKrId = mainKpiFilterEl?.value || '';
+      const myOnly = document.getElementById('qiMyOnly')?.checked ?? true;
+      const member = getCurrentMember();
+      const currentMemberId = member?.id || '';
+
+      let kpis = okrState.kpis || [];
+      if (myOnly) {
+        kpis = kpis.filter(kpi =>
+          kpi.mainAssignee === currentMemberId ||
+          kpi.mainAssignee === member?.loginId ||
+          kpi.mainAssigneeName === member?.name ||
+          (kpi.subAssignees || []).includes(currentMemberId) ||
+          (kpi.subAssignees || []).includes(member?.loginId) ||
+          (kpi.subAssigneeNames || []).includes(member?.name)
+        );
+      }
+
+      // 선택된 메인 KPI에 해당하는 서브 KPI만 표시
+      let filteredKpis = selectedKrId ? kpis.filter(k => k.keyResultId === selectedKrId) : kpis;
+      const kpiIds = filteredKpis.map(k => k.id);
+      const indicators = (okrState.laggingIndicators || []).filter(lag => kpiIds.includes(lag.kpiId));
+
+      let opts = '<option value="">전체 서브 KPI</option>';
+      filteredKpis.forEach(kpi => {
+        const cnt = indicators.filter(l => l.kpiId === kpi.id).length;
+        opts += `<option value="${kpi.id}">${kpi.name} (${cnt})</option>`;
+      });
+      subKpiFilterEl.innerHTML = opts;
+
+      filterQiIndicators();
+    }
+
+    // 지표 목록 필터링 (검색 + 내 담당만 + 메인KPI/서브KPI 필터)
     function filterQiIndicators() {
       const searchText = (document.getElementById('qiSearchInput')?.value || '').trim().toLowerCase();
       const myOnly = document.getElementById('qiMyOnly')?.checked ?? true;
@@ -11627,35 +11672,64 @@
           (kpi.subAssigneeNames || []).includes(member?.name)
         );
       }
-      const kpiIds = kpis.map(k => k.id);
-      let indicators = (okrState.laggingIndicators || []).filter(lag => kpiIds.includes(lag.kpiId));
 
-      // ★ KPI 필터 드롭다운 갱신
-      const kpiFilterEl = document.getElementById('qiKpiFilter');
-      if (kpiFilterEl) {
-        const currentVal = kpiFilterEl.value;
-        let opts = '<option value="">전체 KPI</option>';
-        kpis.forEach(kpi => {
-          const cnt = indicators.filter(l => l.kpiId === kpi.id).length;
-          if (cnt > 0) {
-            opts += `<option value="${kpi.id}">${kpi.name} (${cnt})</option>`;
+      // ★ 메인 KPI 필터 드롭다운 갱신
+      const mainKpiFilterEl = document.getElementById('qiMainKpiFilter');
+      if (mainKpiFilterEl) {
+        const currentVal = mainKpiFilterEl.value;
+        const keyResults = okrState.keyResults || [];
+        // 내 담당 KPI의 keyResultId 목록
+        const myKrIds = [...new Set(kpis.map(k => k.keyResultId).filter(Boolean))];
+        let krOpts = '<option value="">전체 메인 KPI</option>';
+        keyResults.forEach(kr => {
+          if (myKrIds.includes(kr.id) || !myOnly) {
+            const subCount = kpis.filter(k => k.keyResultId === kr.id).length;
+            if (subCount > 0) {
+              krOpts += `<option value="${kr.id}">${kr.name} (${subCount})</option>`;
+            }
           }
         });
-        kpiFilterEl.innerHTML = opts;
-        if (currentVal && kpis.some(k => k.id === currentVal)) {
-          kpiFilterEl.value = currentVal;
+        mainKpiFilterEl.innerHTML = krOpts;
+        if (currentVal && keyResults.some(k => k.id === currentVal)) {
+          mainKpiFilterEl.value = currentVal;
         }
       }
 
-      // ★ 선택된 KPI로 지표 필터링
-      const selectedKpiId = kpiFilterEl?.value || '';
-      if (selectedKpiId) {
-        indicators = indicators.filter(lag => lag.kpiId === selectedKpiId);
+      // ★ 메인 KPI 선택에 따라 서브 KPI 필터링
+      const selectedKrId = mainKpiFilterEl?.value || '';
+      if (selectedKrId) {
+        kpis = kpis.filter(k => k.keyResultId === selectedKrId);
+      }
+
+      // ★ 서브 KPI 필터 드롭다운 갱신
+      const subKpiFilterEl = document.getElementById('qiSubKpiFilter');
+      if (subKpiFilterEl) {
+        const currentVal = subKpiFilterEl.value;
+        const kpiIds = kpis.map(k => k.id);
+        const allIndicators = (okrState.laggingIndicators || []).filter(lag => kpiIds.includes(lag.kpiId));
+        let subOpts = '<option value="">전체 서브 KPI</option>';
+        kpis.forEach(kpi => {
+          const cnt = allIndicators.filter(l => l.kpiId === kpi.id).length;
+          subOpts += `<option value="${kpi.id}">${kpi.name} (${cnt})</option>`;
+        });
+        subKpiFilterEl.innerHTML = subOpts;
+        if (currentVal && kpis.some(k => k.id === currentVal)) {
+          subKpiFilterEl.value = currentVal;
+        }
+      }
+
+      const kpiIds = kpis.map(k => k.id);
+      let indicators = (okrState.laggingIndicators || []).filter(lag => kpiIds.includes(lag.kpiId));
+
+      // ★ 선택된 서브 KPI로 지표 필터링
+      const selectedSubKpiId = subKpiFilterEl?.value || '';
+      if (selectedSubKpiId) {
+        indicators = indicators.filter(lag => lag.kpiId === selectedSubKpiId);
       }
 
       if (searchText) {
         indicators = indicators.filter(lag => {
-          const kpi = kpis.find(k => k.id === lag.kpiId);
+          const kpi = (okrState.kpis || []).find(k => k.id === lag.kpiId);
           return lag.name.toLowerCase().includes(searchText) ||
                  (kpi?.name || '').toLowerCase().includes(searchText);
         });
@@ -11664,17 +11738,51 @@
       const container = document.getElementById('qiIndicatorList');
       if (!container) return;
 
+      // ★ 지표가 없는 경우: 등록 안내 + 인라인 등록 폼 표시
       if (indicators.length === 0) {
-        container.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--gray-400);">
+        const canRegister = selectedSubKpiId; // 서브 KPI 선택된 경우만 등록 가능
+        const selectedKpi = (okrState.kpis || []).find(k => k.id === selectedSubKpiId);
+        const selectedKr = selectedKrId ? (okrState.keyResults || []).find(k => k.id === selectedKrId) : null;
+
+        container.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--gray-400);">
           <div style="font-size: 24px; margin-bottom: 8px;">📭</div>
-          <div style="font-size: 13px;">${searchText ? '검색 결과가 없습니다' : myOnly ? '담당 지표가 없습니다' : '등록된 지표가 없습니다'}</div>
-          ${myOnly ? '<div style="font-size: 11px; margin-top: 4px;">\'내 담당만\' 해제하면 전체 지표를 볼 수 있습니다</div>' : ''}
+          <div style="font-size: 13px; margin-bottom: 4px;">${searchText ? '검색 결과가 없습니다' : myOnly ? '담당 지표가 없습니다' : '등록된 지표가 없습니다'}</div>
+          ${myOnly && !canRegister ? '<div style="font-size: 11px; margin-top: 4px;">\'내 담당만\' 해제하면 전체 지표를 볼 수 있습니다</div>' : ''}
+          ${canRegister ? `
+            <div style="margin-top: 12px; text-align: left;">
+              <div id="qiNewIndicatorForm" style="padding: 12px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 10px;">
+                <div style="font-size: 12px; font-weight: 700; color: #92400E; margin-bottom: 8px;">
+                  "${selectedKpi?.name || ''}" 에 새 지표 등록
+                </div>
+                <input type="text" id="qiNewLagName" placeholder="지표 이름 입력..."
+                       style="width: 100%; padding: 8px 10px; border: 1px solid #FDE68A; border-radius: 6px; font-size: 12px; box-sizing: border-box; margin-bottom: 8px;">
+                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                  <label style="flex: 1; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border: 1.5px solid #FDE68A; border-radius: 6px; cursor: pointer; font-size: 11px; background: white;">
+                    <input type="radio" name="qiNewLagType" value="input" checked style="accent-color: #D97706;"> 📥 활동형
+                  </label>
+                  <label style="flex: 1; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border: 1.5px solid #FDE68A; border-radius: 6px; cursor: pointer; font-size: 11px; background: white;">
+                    <input type="radio" name="qiNewLagType" value="output" style="accent-color: #D97706;"> 📤 성과형
+                  </label>
+                </div>
+                <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+                  <input type="text" id="qiNewLagUnit" placeholder="단위 (예: 건, 원, 명)" value="${selectedKpi?.unit || '건'}"
+                         style="flex: 1; padding: 8px 10px; border: 1px solid #FDE68A; border-radius: 6px; font-size: 12px; box-sizing: border-box;">
+                  <input type="number" id="qiNewLagValuePerUnit" placeholder="건당 값" value="0"
+                         style="width: 80px; padding: 8px 10px; border: 1px solid #FDE68A; border-radius: 6px; font-size: 12px; text-align: center;">
+                </div>
+                <div style="display: flex; gap: 6px; justify-content: flex-end;">
+                  <button onclick="registerQiNewIndicator('${selectedKrId}', '${selectedSubKpiId}')"
+                          style="padding: 7px 16px; border: none; border-radius: 6px; background: #D97706; color: white; cursor: pointer; font-size: 12px; font-weight: 700;">등록</button>
+                </div>
+              </div>
+            </div>
+          ` : (!selectedSubKpiId && !searchText ? '<div style="font-size: 11px; margin-top: 4px; color: #D97706;">서브 KPI를 선택하면 새 지표를 등록할 수 있습니다</div>' : '')}
         </div>`;
         return;
       }
 
       container.innerHTML = indicators.map(lag => {
-        const kpi = kpis.find(k => k.id === lag.kpiId);
+        const kpi = (okrState.kpis || []).find(k => k.id === lag.kpiId);
         const isOutput = lag.type === 'output';
         const todayLogs = (okrState.dailyLogs || []).filter(l => l.laggingIndicatorId === lag.id && l.date === todayIso);
         const todayTotal = todayLogs.reduce((sum, l) => sum + (Number(l.resultValue) || 0), 0);
@@ -11697,6 +11805,110 @@
           </div>
         </div>`;
       }).join('');
+
+      // ★ 지표 목록 아래에 "새 지표 등록" 버튼 추가 (서브 KPI 선택 시)
+      if (selectedSubKpiId) {
+        const selectedKpi = (okrState.kpis || []).find(k => k.id === selectedSubKpiId);
+        container.insertAdjacentHTML('beforeend', `
+          <div onclick="showQiInlineRegister('${selectedKrId}', '${selectedSubKpiId}')" style="padding: 10px 12px; background: #FFFBEB; border: 1px dashed #FDE68A; border-radius: 10px; cursor: pointer; text-align: center; transition: all 0.15s;" onmouseover="this.style.borderColor='#D97706'; this.style.background='#FEF3C7'" onmouseout="this.style.borderColor='#FDE68A'; this.style.background='#FFFBEB'">
+            <span style="font-size: 12px; color: #D97706; font-weight: 600;">+ 새 지표 등록</span>
+          </div>
+          <div id="qiInlineRegisterArea"></div>
+        `);
+      }
+    }
+
+    // ★ 서브 KPI 선택 상태에서 인라인 지표 등록 폼 표시
+    function showQiInlineRegister(krId, kpiId) {
+      const area = document.getElementById('qiInlineRegisterArea');
+      if (!area) return;
+      const selectedKpi = (okrState.kpis || []).find(k => k.id === kpiId);
+
+      // 이미 열려있으면 닫기
+      if (area.innerHTML.trim()) { area.innerHTML = ''; return; }
+
+      area.innerHTML = `
+        <div style="margin-top: 8px; padding: 12px; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 10px;">
+          <div style="font-size: 12px; font-weight: 700; color: #92400E; margin-bottom: 8px;">
+            "${selectedKpi?.name || ''}" 에 새 지표 등록
+          </div>
+          <input type="text" id="qiNewLagName" placeholder="지표 이름 입력..."
+                 style="width: 100%; padding: 8px 10px; border: 1px solid #FDE68A; border-radius: 6px; font-size: 12px; box-sizing: border-box; margin-bottom: 8px;">
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <label style="flex: 1; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border: 1.5px solid #FDE68A; border-radius: 6px; cursor: pointer; font-size: 11px; background: white;">
+              <input type="radio" name="qiNewLagType" value="input" checked style="accent-color: #D97706;"> 📥 활동형
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; gap: 4px; padding: 6px 8px; border: 1.5px solid #FDE68A; border-radius: 6px; cursor: pointer; font-size: 11px; background: white;">
+              <input type="radio" name="qiNewLagType" value="output" style="accent-color: #D97706;"> 📤 성과형
+            </label>
+          </div>
+          <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+            <input type="text" id="qiNewLagUnit" placeholder="단위 (예: 건, 원, 명)" value="${selectedKpi?.unit || '건'}"
+                   style="flex: 1; padding: 8px 10px; border: 1px solid #FDE68A; border-radius: 6px; font-size: 12px; box-sizing: border-box;">
+            <input type="number" id="qiNewLagValuePerUnit" placeholder="건당 값" value="0"
+                   style="width: 80px; padding: 8px 10px; border: 1px solid #FDE68A; border-radius: 6px; font-size: 12px; text-align: center;">
+          </div>
+          <div style="display: flex; gap: 6px; justify-content: flex-end;">
+            <button onclick="document.getElementById('qiInlineRegisterArea').innerHTML=''"
+                    style="padding: 7px 12px; border: 1px solid var(--gray-300); border-radius: 6px; background: white; cursor: pointer; font-size: 12px; color: var(--gray-500);">취소</button>
+            <button onclick="registerQiNewIndicator('${krId}', '${kpiId}')"
+                    style="padding: 7px 16px; border: none; border-radius: 6px; background: #D97706; color: white; cursor: pointer; font-size: 12px; font-weight: 700;">등록</button>
+          </div>
+        </div>
+      `;
+      setTimeout(() => document.getElementById('qiNewLagName')?.focus(), 100);
+    }
+
+    // ★ 인라인에서 새 지표 등록 (Firestore 저장)
+    async function registerQiNewIndicator(krId, kpiId) {
+      const name = document.getElementById('qiNewLagName')?.value?.trim();
+      if (!name) {
+        showToast('지표 이름을 입력해주세요', 'error');
+        return;
+      }
+
+      const typeRadio = document.querySelector('input[name="qiNewLagType"]:checked');
+      const lagType = typeRadio?.value || 'input';
+      const lagUnit = document.getElementById('qiNewLagUnit')?.value || '건';
+      const valuePerUnit = parseInt(document.getElementById('qiNewLagValuePerUnit')?.value) || 0;
+
+      try {
+        const newLag = {
+          kpiId,
+          krId,
+          name,
+          description: '',
+          version: 'A',
+          target: 10,
+          type: lagType,
+          valuePerUnit: lagType === 'output' ? valuePerUnit : 0,
+          unit: lagType === 'output' ? lagUnit : (lagUnit || '건'),
+          linkedToSettlement: '',
+          totalValue: 0,
+          logCount: 0,
+          isActive: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        const docRef = await db.collection('okr_laggingIndicators').add(newLag);
+        const lagWithId = { ...newLag, id: docRef.id };
+
+        // 로컬 상태 업데이트
+        okrState.laggingIndicators.push(lagWithId);
+
+        showToast(`"${name}" 지표가 등록되었습니다`, 'success');
+
+        // 인라인 폼 닫기 & 목록 갱신
+        const inlineArea = document.getElementById('qiInlineRegisterArea');
+        if (inlineArea) inlineArea.innerHTML = '';
+        filterQiIndicators();
+
+        // 새로 등록된 지표 자동 선택
+        setTimeout(() => selectQiIndicator(docRef.id), 200);
+      } catch (e) {
+        console.error('지표 등록 오류:', e);
+        showToast('지표 등록에 실패했습니다', 'error');
+      }
     }
 
     // 지표 선택 → 수치 입력 영역 표시 + 배지 업데이트
@@ -30397,16 +30609,16 @@
         return calToday >= warningDate;
       });
 
-      // 주차별로 간트 바 HTML 생성 (overlay용 - grid-column만 사용)
+      // 주차별로 간트 바 HTML 생성 (overlay용 - grid-column + grid-row 명시)
       function renderWeekGanttBars(weekStartDay, weekEndDay) {
-        const barsHtml = [];
-        let rowIdx = 0;
-        multiDayDoingTasks.forEach((task, taskIdx) => {
+        const weekStartDate = new Date(year, month, weekStartDay);
+        const weekEndDate = new Date(year, month, weekEndDay);
+
+        // 1단계: 이번 주에 해당하는 바 수집
+        const bars = [];
+        multiDayDoingTasks.forEach((task) => {
           const gStart = new Date(task._ganttStart + 'T00:00:00');
           const gEnd = new Date(task._ganttEnd + 'T00:00:00');
-
-          const weekStartDate = new Date(year, month, weekStartDay);
-          const weekEndDate = new Date(year, month, weekEndDay);
 
           if (gStart > weekEndDate || gEnd < weekStartDate) return;
 
@@ -30430,16 +30642,39 @@
           else if (isStart) borderRadius = '4px 0 0 4px';
           else if (isEnd) borderRadius = '0 4px 4px 0';
 
-          rowIdx++;
-          barsHtml.push(`
-            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barBg}; border: ${barBorder}; border-radius: ${borderRadius}; padding: 1px 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 18px; transition: all 0.15s; white-space: nowrap; overflow: hidden; pointer-events: auto;"
-                 onmouseover="this.style.opacity='0.75'" onmouseout="this.style.opacity='1'">
-              <span style="font-size: 9px; color: ${barText}; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">${task._isDone ? '✓' : '●'} ${task.title || '제목 없음'}</span>
-              <span style="font-size: 8px; color: ${barText}; opacity: 0.6; flex-shrink: 0;">~${task._daySpan}일째</span>
-            </div>
-          `);
+          bars.push({ task, startCol, endCol, barBg, barText, barBorder, borderRadius });
         });
-        return { html: barsHtml.join(''), rowCount: rowIdx };
+
+        // 2단계: 행 배정 (겹치는 열 구간은 다른 행에 배치)
+        const rows = []; // 각 행의 점유 열 구간 목록 [[startCol, endCol], ...]
+        bars.forEach(bar => {
+          let assignedRow = -1;
+          for (let r = 0; r < rows.length; r++) {
+            const canFit = rows[r].every(range => bar.endCol < range[0] || bar.startCol > range[1]);
+            if (canFit) {
+              rows[r].push([bar.startCol, bar.endCol]);
+              assignedRow = r;
+              break;
+            }
+          }
+          if (assignedRow === -1) {
+            rows.push([[bar.startCol, bar.endCol]]);
+            assignedRow = rows.length - 1;
+          }
+          bar.row = assignedRow + 1; // CSS grid-row는 1부터 시작
+        });
+
+        // 3단계: HTML 생성 (grid-row 명시)
+        const barsHtml = bars.map(bar => {
+          const task = bar.task;
+          return `<div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${bar.startCol + 1} / ${bar.endCol + 2}; grid-row: ${bar.row}; background: ${bar.barBg}; border: ${bar.barBorder}; border-radius: ${bar.borderRadius}; padding: 1px 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 18px; transition: all 0.15s; white-space: nowrap; overflow: hidden; pointer-events: auto;"
+                 onmouseover="this.style.opacity='0.75'" onmouseout="this.style.opacity='1'">
+              <span style="font-size: 9px; color: ${bar.barText}; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">${task._isDone ? '✓' : '●'} ${task.title || '제목 없음'}</span>
+              <span style="font-size: 8px; color: ${bar.barText}; opacity: 0.6; flex-shrink: 0;">~${task._daySpan}일째</span>
+            </div>`;
+        });
+
+        return { html: barsHtml.join(''), rowCount: rows.length };
       }
 
       // 주차 계산
