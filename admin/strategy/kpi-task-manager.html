@@ -578,6 +578,18 @@
       <button class="btn-secondary btn-sm" onclick="dismissSeed()">나중에</button>
     </div>
   </div>
+  <!-- Migration Banner -->
+  <div class="seed-banner" id="migrationBanner" style="display:none;background:linear-gradient(135deg,#FEF3C7,#FFF7ED);border-bottom:2px solid var(--warning)">
+    <div class="msg" style="flex:1">
+      <strong style="color:var(--warning)">&#128260; 전략센터 업무 데이터 마이그레이션</strong>
+      <small>기존 전략센터의 업무(taskPlans), 주간계획(weeklyPlans), 주간목표(weeklyGoalConfigs)를 KPI업무관리로 가져옵니다</small>
+      <div id="migrationStatus" style="margin-top:4px;font-size:11px;color:var(--gray-600)"></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn-primary" onclick="runMigration()" id="migrationBtn">&#128260; 데이터 가져오기</button>
+      <button class="btn-secondary btn-sm" onclick="document.getElementById('migrationBanner').style.display='none'">닫기</button>
+    </div>
+  </div>
 
   <!-- Top Bar -->
   <div class="topbar">
@@ -1031,6 +1043,7 @@ function initApp() {
     listenActions();
     listenChangeLogs();
     listenWeeklyPlans();
+    checkMigration();
   });
 }
 
@@ -2356,6 +2369,158 @@ function dDrop(e,newStatus){
     if(newStatus==='done'&&a.lagId) toast('완료! KPI 반영됨','success');
   });
   dragId=null;
+}
+
+// ===== Migration from Strategy Center =====
+async function checkMigration() {
+  // 기존 taskPlans 존재 여부 확인
+  const snap = await db.collection('taskPlans').limit(1).get();
+  if (!snap.empty) {
+    document.getElementById('migrationBanner').style.display = 'flex';
+    const countSnap = await db.collection('taskPlans').get();
+    document.getElementById('migrationStatus').textContent = `기존 업무 ${countSnap.size}건 발견됨`;
+  }
+}
+
+async function runMigration() {
+  if (!confirm('전략센터의 기존 업무 데이터를 KPI업무관리로 가져옵니다.\n\n이미 등록된 행동지표와 중복되지 않도록 제목으로 확인합니다.\n진행하시겠습니까?')) return;
+
+  const btn = document.getElementById('migrationBtn');
+  btn.disabled = true;
+  btn.textContent = '마이그레이션 중...';
+  const statusEl = document.getElementById('migrationStatus');
+
+  try {
+    // 1) taskPlans → kpi_tasks
+    statusEl.textContent = '업무 데이터 읽는 중...';
+    const taskSnap = await db.collection('taskPlans').get();
+    const existingTitles = new Set(actions.map(a => a.title));
+    const statusMap = {doing:'doing', waiting:'pending', stopped:'hold', done:'done', completed:'done'};
+
+    let taskCount = 0, skipCount = 0;
+    const taskBatch = db.batch();
+
+    taskSnap.docs.forEach(doc => {
+      const t = doc.data();
+      if (existingTitles.has(t.title)) { skipCount++; return; }
+
+      const p = projects.find(x => x.kpiId === t.kpiId) || projects.find(x => x.krId === t.krId);
+      const ref = db.collection('kpi_tasks').doc();
+      taskBatch.set(ref, {
+        title: t.title || '(제목 없음)',
+        description: t.description || '',
+        status: statusMap[t.status] || 'pending',
+        priority: 'medium',
+        assigneeId: t.assigneeId || null,
+        assignee: t.assignee || null,
+        projectId: p?.id || null,
+        projectName: p?.title || null,
+        phaseId: null,
+        krId: t.krId || p?.krId || null,
+        kpiId: t.kpiId || p?.kpiId || null,
+        lagId: t.laggingIndicatorId || null,
+        lagName: t.linkedLagName || null,
+        kpiValue: 1,
+        deadline: t.deadline || t.dueDate || null,
+        weekDay: null,
+        recurringType: t.isWeeklyRecurring ? 'weekly' : null,
+        type: 'normal',
+        tags: [],
+        migratedFrom: 'taskPlans',
+        migratedId: doc.id,
+        createdAt: t.createdAt || TS(),
+        updatedAt: TS(),
+        createdBy: t.assigneeId || null,
+        createdByName: t.assignee || null
+      });
+      taskCount++;
+    });
+
+    if (taskCount > 0) {
+      statusEl.textContent = `업무 ${taskCount}건 저장 중... (${skipCount}건 중복 건너뜀)`;
+      await taskBatch.commit();
+    }
+
+    // 2) okr_weeklyPlans → kpi_weekly_plans
+    statusEl.textContent = '주간계획 읽는 중...';
+    const wpSnap = await db.collection('okr_weeklyPlans').get();
+    const existingWP = await db.collection('kpi_weekly_plans').get();
+    const existingWPKeys = new Set(existingWP.docs.map(d => `${d.data().userId}_${d.data().weekStart}`));
+
+    let wpCount = 0;
+    const wpBatch = db.batch();
+    wpSnap.docs.forEach(doc => {
+      const wp = doc.data();
+      const key = `${wp.memberId}_${wp.weekStart}`;
+      if (existingWPKeys.has(key)) return;
+
+      const ref = db.collection('kpi_weekly_plans').doc();
+      wpBatch.set(ref, {
+        userId: wp.memberId,
+        userName: wp.memberName,
+        weekStart: wp.weekStart,
+        goals: wp.plan || '',
+        submittedAt: wp.submittedAt || null,
+        migratedFrom: 'okr_weeklyPlans',
+        createdAt: wp.createdAt || TS(),
+        updatedAt: TS()
+      });
+      wpCount++;
+    });
+
+    if (wpCount > 0) {
+      statusEl.textContent = `주간계획 ${wpCount}건 저장 중...`;
+      await wpBatch.commit();
+    }
+
+    // 3) 결과 보고
+    const msg = `마이그레이션 완료!\n\n` +
+      `업무(행동지표): ${taskCount}건 가져옴 / ${skipCount}건 중복 건너뜀\n` +
+      `주간계획: ${wpCount}건 가져옴`;
+    statusEl.innerHTML = `<span style="color:var(--success);font-weight:600">&#10003; ${msg.replace(/\n/g,'<br>')}</span>`;
+    toast(msg, 'success');
+    btn.textContent = '완료!';
+
+    // 부족한 데이터 확인
+    checkMissingData();
+
+  } catch(e) {
+    console.error('Migration error:', e);
+    statusEl.textContent = '오류: ' + e.message;
+    toast('마이그레이션 오류: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = '&#128260; 다시 시도';
+  }
+}
+
+function checkMissingData() {
+  // 프로젝트에 연결 안 된 행동지표 확인
+  const unlinked = actions.filter(a => !a.projectId);
+  const noDeadline = actions.filter(a => !a.deadline && a.status !== 'done');
+  const noAssignee = actions.filter(a => !a.assigneeId);
+  const noLag = actions.filter(a => a.projectId && !a.lagId);
+
+  if (unlinked.length + noDeadline.length + noAssignee.length + noLag.length === 0) return;
+
+  // 전략센터에 알림 기록
+  const alerts = [];
+  if (unlinked.length > 0) alerts.push(`프로젝트 미연결 행동지표 ${unlinked.length}건`);
+  if (noDeadline.length > 0) alerts.push(`마감일 미설정 ${noDeadline.length}건`);
+  if (noAssignee.length > 0) alerts.push(`담당자 미배정 ${noAssignee.length}건`);
+  if (noLag.length > 0) alerts.push(`성과지표 미연동 ${noLag.length}건`);
+
+  // Save alert to Firestore for strategy center to display
+  db.collection('kpi_migration_alerts').doc('latest').set({
+    alerts,
+    unlinkedCount: unlinked.length,
+    noDeadlineCount: noDeadline.length,
+    noAssigneeCount: noAssignee.length,
+    noLagCount: noLag.length,
+    totalActions: actions.length,
+    totalProjects: projects.length,
+    checkedAt: TS(),
+    checkedBy: currentUser?.name || ''
+  });
 }
 
 // ===== Seed Projects =====

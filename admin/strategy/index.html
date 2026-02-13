@@ -1735,6 +1735,29 @@
         <div id="quarterlyGoalDashboard" style="display: none;">
         </div>
 
+        <!-- KPI 업무관리 전환 알림 -->
+        <div id="kpiMigrationAlert" style="display:none; margin-bottom: 16px; padding: 16px 20px; background: linear-gradient(135deg, #FEF3C7, #FFF7ED); border: 2px solid #F59E0B; border-radius: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+            <div style="flex: 1;">
+              <div style="font-size: 14px; font-weight: 700; color: #92400E; display: flex; align-items: center; gap: 6px;">
+                🔄 KPI 업무관리 전환 준비
+              </div>
+              <div style="font-size: 12px; color: #78350F; margin-top: 6px;">
+                기존 업무관리 → 신규 KPI업무관리로 전환 예정입니다. 아래 항목을 확인해주세요.
+              </div>
+              <div id="kpiMigrationAlertDetails" style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px; font-size: 12px;"></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;">
+              <a href="/admin/strategy/kpi-task-manager.html" style="background: #F59E0B; color: white; border: none; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; text-align: center;">
+                📋 KPI 업무관리 이동
+              </a>
+              <button onclick="document.getElementById('kpiMigrationAlert').style.display='none'" style="background: white; color: #92400E; border: 1px solid #FDE68A; padding: 6px 12px; border-radius: 8px; font-size: 11px; cursor: pointer;">
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- 주간 목표 섹션 (개편) -->
         <div id="weeklyGoalSection" class="card" style="margin-bottom: 16px; padding: 20px; background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 100%); border: 2px solid var(--primary);">
           <!-- 헤더: 타이틀 + 버전 + 버튼 -->
@@ -20802,6 +20825,7 @@
                             ${hasMetrics ? `<span id="kpi-expand-icon-${kpi.id}" style="font-size: 12px; color: var(--gray-400); transition: transform 0.2s;">▶</span>` : ''}
                             <div>
                               <div><span style="color: ${statusColor}; font-size: 10px;">●</span> ${kpi.name}</div>
+                              ${renderKpiCategoryTags(kpi.id)}
                               ${kpi.mainAssigneeName || (kpi.subAssigneeNames && kpi.subAssigneeNames.length > 0) ? `
                                 <div style="font-size: 11px; color: var(--gray-500); margin-top: 4px;">
                                   ${kpi.mainAssigneeName ? `⭐ ${kpi.mainAssigneeName}` : ''}
@@ -22335,7 +22359,7 @@
                   return `
                   <div style="margin-left: 16px; margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border: ${personalTarget ? '2px solid var(--primary)20' : '1px solid var(--gray-100)'};">
                     <div style="font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-                      <span>● ${kpd.kpi.name}</span>
+                      <span>● ${kpd.kpi.name} ${(() => { const cats = kpiProjectCategories[kpd.kpi.id]; return cats && cats.length > 0 ? cats.map(c => `<span style="display: inline-block; padding: 1px 6px; background: #EDE9FE; color: #7C3AED; border-radius: 8px; font-size: 9px; font-weight: 600; margin-left: 4px;">${c}</span>`).join('') : ''; })()}</span>
                       <div style="display: flex; align-items: center; gap: 8px;">
                         <span style="color: ${okrColors[krd.krIdx]};">${kpd.count}건</span>
                         <button onclick="openPersonalTargetModal('${kpd.kpi.id}', '${memberId}')" style="padding: 4px 8px; border: 1px solid var(--primary); border-radius: 6px; background: white; color: var(--primary); font-size: 10px; cursor: pointer; font-weight: 600;" onmouseover="this.style.background='var(--primary)'; this.style.color='white'" onmouseout="this.style.background='white'; this.style.color='var(--primary)'" title="내 목표 설정">
@@ -27018,6 +27042,7 @@
                             ${resultCount > 0 ? `<span style="color: var(--success);">(💰성과 ${resultCount})</span>` : ''}
                             ${activityCount > 0 ? `<span style="color: var(--gray-500);">(📋활동 ${activityCount})</span>` : ''}
                           </div>
+                          ${renderKpiCategoryTags(kpi.id)}
                         </div>
                         ${isAdmin ? `<button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="openOkrKPIModal('${kr.id}', '${kpi.id}')">편집</button>` : ''}
                       </div>
@@ -35438,6 +35463,67 @@
       }
     }
 
+    // KPI 프로젝트 카테고리 데이터 (서브KPI별 카테고리 태그용)
+    let kpiProjectCategories = {}; // { kpiId: ['영업', '마케팅', ...] }
+
+    // KPI 업무관리 전환 알림 로드
+    async function loadKpiMigrationAlert() {
+      try {
+        // 1) kpi_projects 로드 (서브KPI 카테고리 태그용)
+        const projSnap = await db.collection('kpi_projects').get();
+        const projects = projSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        kpiProjectCategories = {};
+        projects.forEach(p => {
+          if (p.kpiId && p.category) {
+            if (!kpiProjectCategories[p.kpiId]) kpiProjectCategories[p.kpiId] = [];
+            if (!kpiProjectCategories[p.kpiId].includes(p.category)) {
+              kpiProjectCategories[p.kpiId].push(p.category);
+            }
+          }
+        });
+
+        // 카테고리 로드 후 렌더 갱신
+        if (Object.keys(kpiProjectCategories).length > 0) {
+          renderOkrSettings();
+          renderGrowthboard();
+          renderPersonalGrowthboard();
+        }
+
+        // 2) 마이그레이션 알림 로드
+        const alertDoc = await db.collection('kpi_migration_alerts').doc('latest').get();
+        if (!alertDoc.exists) return;
+
+        const alert = alertDoc.data();
+        const el = document.getElementById('kpiMigrationAlert');
+        const detailsEl = document.getElementById('kpiMigrationAlertDetails');
+        if (!el || !detailsEl) return;
+
+        const issues = [];
+        if (alert.unlinkedActions > 0) issues.push(`⚠️ 프로젝트 미연결 업무: ${alert.unlinkedActions}건`);
+        if (alert.noDeadline > 0) issues.push(`📅 마감일 미설정: ${alert.noDeadline}건`);
+        if (alert.noAssignee > 0) issues.push(`👤 담당자 미지정: ${alert.noAssignee}건`);
+        if (alert.noLagIndicator > 0) issues.push(`📊 성과지표 미연결: ${alert.noLagIndicator}건`);
+
+        if (issues.length > 0) {
+          detailsEl.innerHTML = issues.map(i =>
+            `<div style="color: #92400E; padding: 2px 0;">${i}</div>`
+          ).join('');
+          el.style.display = 'block';
+        }
+      } catch (e) {
+        console.error('KPI 마이그레이션 알림 로드 실패:', e);
+      }
+    }
+
+    // 서브KPI 카테고리 태그 HTML 생성 헬퍼
+    function renderKpiCategoryTags(kpiId) {
+      const cats = kpiProjectCategories[kpiId];
+      if (!cats || cats.length === 0) return '';
+      return `<div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+        ${cats.map(c => `<span style="display: inline-block; padding: 2px 8px; background: #EDE9FE; color: #7C3AED; border-radius: 10px; font-size: 10px; font-weight: 600;">${c}</span>`).join('')}
+      </div>`;
+    }
+
     // 초기화
     document.addEventListener('DOMContentLoaded', () => {
       loadAdminPassword();
@@ -35457,6 +35543,11 @@
       setTimeout(() => {
         updateChatbotBadge();
       }, 2000);
+
+      // KPI 업무관리 전환 알림 로드
+      setTimeout(() => {
+        loadKpiMigrationAlert();
+      }, 1500);
     });
   </script>
 
