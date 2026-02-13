@@ -1092,11 +1092,13 @@ let editingLagId = null;
 let editingLagProjectId = null;
 // Weekly Focus Planner state
 let weeklyFocusItems = {}; // { 'YYYY-MM-DD': ['actionId1','actionId2',...] }
+let weeklyFixedItems = []; // 매주 고정 목표 actionId[]
 let wfSearchTerm = '';
 let wfFilterProject = 'all';
 let wfFilterPriority = 'all';
 let wfWeekOffset = 0;
 let wfDraggingId = null;
+let returnToWeeklyPlan = false; // 프로젝트에서 돌아오기 플래그
 
 // ===== Login =====
 function doLogin() {
@@ -1200,14 +1202,67 @@ function updateProjectSelects() {
 
 function renderSidebarProjects() {
   const c = document.getElementById('sidebarProjectList');
-  const colors = ['#8B5CF6','#06B6D4','#10B981','#F59E0B','#F97316','#EF4444','#EC4899','#3182f6'];
-  c.innerHTML = projects.map((p,i) => {
-    const cnt = actions.filter(a => a.projectId===p.id).length;
-    return `<div class="sidebar-item" onclick="goProjectDetail('${p.id}')" style="font-size:12px;padding:7px 10px">
-      <span style="color:${colors[i%8]}">&#9679;</span> ${esc(p.title)}
-      <span class="badge">${cnt}</span>
-    </div>`;
-  }).join('');
+  if (projects.length === 0) { c.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:var(--gray-400)">프로젝트 없음</div>'; return; }
+
+  // Build hierarchy: 메인KPI → 카테고리 → 프로젝트
+  const krColors = ['#3182f6','#8B5CF6','#06B6D4','#10B981','#F59E0B','#F97316','#EF4444','#EC4899'];
+  const grouped = {};
+  const noKR = [];
+  projects.forEach(p => {
+    if (!p.krId) { noKR.push(p); return; }
+    if (!grouped[p.krId]) grouped[p.krId] = {};
+    const cat = p.category || '기타';
+    if (!grouped[p.krId][cat]) grouped[p.krId][cat] = [];
+    grouped[p.krId][cat].push(p);
+  });
+
+  let html = '';
+  let ki = 0;
+  Object.keys(grouped).forEach(krId => {
+    const kr = keyResults.find(k => k.id === krId);
+    const krName = kr ? (kr.name||kr.title) : '미분류';
+    const color = krColors[ki % krColors.length];
+    const cats = grouped[krId];
+    const krProjCount = Object.values(cats).reduce((s,arr) => s + arr.length, 0);
+    ki++;
+
+    html += `<div style="margin-bottom:2px">
+      <div style="font-size:10px;font-weight:700;color:${color};padding:6px 10px 2px;text-transform:uppercase;letter-spacing:.3px;display:flex;align-items:center;gap:4px">
+        <span style="font-size:12px">&#128200;</span> ${esc(krName)} <span style="font-size:9px;color:var(--gray-400);font-weight:400">${krProjCount}</span>
+      </div>`;
+
+    Object.keys(cats).sort().forEach(catName => {
+      const catProjs = cats[catName];
+      if (Object.keys(cats).length > 1 || catName !== '기타') {
+        html += `<div style="font-size:9px;font-weight:600;color:var(--gray-500);padding:3px 10px 1px 20px">${esc(catName)}</div>`;
+      }
+      catProjs.forEach(p => {
+        const cnt = actions.filter(a => a.projectId===p.id).length;
+        const done = actions.filter(a => a.projectId===p.id && a.status==='done').length;
+        const active = detailProjectId === p.id;
+        html += `<div class="sidebar-item ${active?'active':''}" onclick="goProjectDetail('${p.id}')" style="font-size:11px;padding:5px 10px 5px 24px">
+          <span style="color:${color};font-size:8px">&#9632;</span> ${esc(p.title)}
+          <span class="badge" style="font-size:9px">${done}/${cnt}</span>
+        </div>`;
+      });
+    });
+    html += '</div>';
+  });
+
+  // 미분류 프로젝트
+  if (noKR.length > 0) {
+    html += '<div style="font-size:10px;font-weight:700;color:var(--gray-500);padding:6px 10px 2px">&#128194; 미분류</div>';
+    noKR.forEach(p => {
+      const cnt = actions.filter(a => a.projectId===p.id).length;
+      const active = detailProjectId === p.id;
+      html += `<div class="sidebar-item ${active?'active':''}" onclick="goProjectDetail('${p.id}')" style="font-size:11px;padding:5px 10px 5px 24px">
+        <span style="color:var(--gray-400);font-size:8px">&#9632;</span> ${esc(p.title)}
+        <span class="badge" style="font-size:9px">${cnt}</span>
+      </div>`;
+    });
+  }
+
+  c.innerHTML = html;
 }
 
 // ===== Navigation =====
@@ -1240,6 +1295,16 @@ function goProjectDetail(projId) {
   document.getElementById('topbarTitle').textContent = p ? p.title : '프로젝트';
   document.getElementById('topbarCount').textContent = '';
   renderProjectDetail();
+  renderSidebarProjects(); // Update active state
+}
+
+function goBackFromDetail() {
+  if (returnToWeeklyPlan) {
+    returnToWeeklyPlan = false;
+    goView('weeklyPlan');
+  } else {
+    goView('projects');
+  }
 }
 
 function switchSubView(sv) {
@@ -1334,7 +1399,7 @@ function renderDashboard() {
           </div>
         </div>
         <div class="weekly-actions">
-          <button class="btn-secondary btn-sm" onclick="openWeeklyPlanModal()">&#128203; 주간계획 제출</button>
+          <button class="btn-secondary btn-sm" onclick="goView('weeklyPlan')">&#127919; 이번주 배치</button>
           <button class="btn-primary btn-sm" onclick="openActionModal()">+ 행동지표</button>
         </div>
       </div>
@@ -1681,11 +1746,12 @@ function renderProjectDetail() {
 
   let html = `
     <div class="project-detail-header">
-      <button class="back-btn" onclick="goView('projects')">&#8249;</button>
+      <button class="back-btn" onclick="goBackFromDetail()">&#8249;</button>
       <div style="flex:1">
         <div style="font-size:18px;font-weight:700">${p.category?`<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--orange-light);color:var(--orange);font-weight:600;margin-right:6px">${esc(p.category)}</span>`:''}${esc(p.title)}</div>
         <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${mainKpi?esc(mainKpi.name||mainKpi.title):''}${subKpi?' &#8250; '+esc(subKpi.name||subKpi.title):''} ${m?' · '+esc(m.name):''} · 행동지표 ${pa.length}개 · 완료 ${pp}%</div>
       </div>
+      ${returnToWeeklyPlan ? '<span style="font-size:11px;background:#EDE9FE;color:#7C3AED;padding:3px 10px;border-radius:6px;font-weight:600;white-space:nowrap">&#127919; 주간배치에서 이동</span>' : ''}
       <button class="btn-primary btn-sm" onclick="openActionModalForProject('${p.id}')">+ 행동지표</button>
       <button class="btn-outline-primary btn-sm" onclick="openBatchModalForProject('${p.id}')">일괄등록</button>
     </div>
@@ -2193,13 +2259,45 @@ function listenWeeklyPlans() {
     .where('weekStart','==',week.monday)
     .onSnapshot(snap => {
       weeklyPlans = snap.docs.map(d => ({id:d.id,...d.data()}));
-      // Load my weekly focus
       const myPlan = weeklyPlans.find(p => p.userId===currentUser?.id);
       if (myPlan?.focusItems) weeklyFocusItems = myPlan.focusItems;
       else weeklyFocusItems = {};
+      if (myPlan?.fixedItems) weeklyFixedItems = myPlan.fixedItems;
+      // Auto-apply fixed items to this week
+      applyFixedItems();
       updateWeeklyBadge();
       if (currentView==='weeklyPlan') renderWeeklyPlan();
     });
+  // Also load fixed goals from user's persistent doc
+  loadFixedGoals();
+}
+
+function loadFixedGoals() {
+  db.collection('kpi_weekly_fixed').doc(currentUser?.id||'_none').get().then(doc => {
+    if (doc.exists) weeklyFixedItems = doc.data().items || [];
+    else weeklyFixedItems = [];
+  }).catch(() => {});
+}
+
+function applyFixedItems() {
+  if (weeklyFixedItems.length === 0) return;
+  const week = getWeekDates(wfWeekOffset);
+  let changed = false;
+  weeklyFixedItems.forEach(fi => {
+    const a = actions.find(x => x.id === fi.actionId);
+    if (!a || a.status === 'done') return;
+    // Check if already in week
+    const inWeek = Object.values(weeklyFocusItems).some(arr => arr.includes(fi.actionId));
+    if (!inWeek) {
+      // Add to preferred day or distribute
+      const dayIdx = fi.preferDay != null ? fi.preferDay : 0;
+      const date = week.dates[Math.min(dayIdx, 4)];
+      if (!weeklyFocusItems[date]) weeklyFocusItems[date] = [];
+      weeklyFocusItems[date].push(fi.actionId);
+      changed = true;
+    }
+  });
+  if (changed) saveWeeklyFocus(true);
 }
 
 function updateWeeklyBadge() {
@@ -2209,22 +2307,13 @@ function updateWeeklyBadge() {
 
 function getWeeklyPickerActions() {
   let list = actions.filter(a => a.status !== 'done');
-  // Only my tasks or unassigned
   list = list.filter(a => !a.assigneeId || a.assigneeId === currentUser?.id);
-  // Search
   if (wfSearchTerm) {
     const q = wfSearchTerm.toLowerCase();
     list = list.filter(a => (a.title||'').toLowerCase().includes(q) || (a.projectName||'').toLowerCase().includes(q));
   }
-  // Project filter
-  if (wfFilterProject !== 'all') {
-    list = list.filter(a => a.projectId === wfFilterProject);
-  }
-  // Priority filter
-  if (wfFilterPriority !== 'all') {
-    list = list.filter(a => a.priority === wfFilterPriority);
-  }
-  // Sort: high priority first, then by deadline
+  if (wfFilterProject !== 'all') list = list.filter(a => a.projectId === wfFilterProject);
+  if (wfFilterPriority !== 'all') list = list.filter(a => a.priority === wfFilterPriority);
   list.sort((a,b) => {
     const po = {high:0,medium:1,low:2};
     if ((po[a.priority]||1) !== (po[b.priority]||1)) return (po[a.priority]||1)-(po[b.priority]||1);
@@ -2237,6 +2326,10 @@ function isActionInWeek(actionId) {
   return Object.values(weeklyFocusItems).some(arr => arr.includes(actionId));
 }
 
+function isFixedItem(actionId) {
+  return weeklyFixedItems.some(fi => fi.actionId === actionId);
+}
+
 function renderWeeklyPlan() {
   const week = getWeekDates(wfWeekOffset);
   const scroll = document.getElementById('weeklyPlanScroll');
@@ -2244,22 +2337,31 @@ function renderWeeklyPlan() {
   const dayLabels = ['월','화','수','목','금'];
   const pickerList = getWeeklyPickerActions();
 
-  // Get all focused action IDs
   const allFocusedIds = Object.values(weeklyFocusItems).reduce((s,arr) => [...s,...arr], []);
   const focusedDone = allFocusedIds.filter(id => {const a=actions.find(x=>x.id===id);return a?.status==='done'}).length;
   const focusedTotal = allFocusedIds.length;
   const focusPct = focusedTotal > 0 ? Math.round(focusedDone/focusedTotal*100) : 0;
 
-  // Project options for filter
   const myProjects = [...new Set(actions.filter(a => a.assigneeId===currentUser?.id && a.projectId).map(a => a.projectId))];
   const projOptions = myProjects.map(pid => {
     const p = projects.find(x => x.id===pid);
     return p ? `<option value="${pid}" ${wfFilterProject===pid?'selected':''}>${esc(p.title)}</option>` : '';
   }).join('');
 
+  // 고정 목표 HTML
+  const fixedHtml = weeklyFixedItems.length > 0 ? weeklyFixedItems.map(fi => {
+    const a = actions.find(x => x.id===fi.actionId);
+    if (!a) return '';
+    const proj = projects.find(x => x.id===a.projectId);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--gray-50);border-radius:6px;font-size:12px;border-left:3px solid #7C3AED">
+      <span style="color:#7C3AED;font-size:14px">&#128204;</span>
+      <span style="flex:1">${esc(a.title)} <span style="color:var(--gray-400);font-size:10px">${proj?esc(proj.title):''} · ${dayLabels[fi.preferDay||0]}요일 고정</span></span>
+      <button onclick="removeFixedItem('${a.id}')" style="border:none;background:none;color:var(--gray-400);cursor:pointer;font-size:14px">&times;</button>
+    </div>`;
+  }).filter(Boolean).join('') : '<div style="font-size:12px;color:var(--gray-400);padding:6px">아직 고정 목표가 없습니다. 요일 카드에서 &#128204; 버튼으로 고정하세요</div>';
+
   let html = `
     <div class="wf-container">
-      <!-- Summary -->
       <div class="wf-summary">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
           <div>
@@ -2278,14 +2380,19 @@ function renderWeeklyPlan() {
           <div class="wf-stat"><div class="stat-val" style="color:${focusPct>=100?'var(--success)':focusPct>=50?'var(--primary)':'var(--gray-600)'}">${focusPct}%</div><div class="stat-label">달성률</div></div>
           <div class="wf-stat"><div class="stat-val" style="color:var(--danger)">${allFocusedIds.filter(id => {const a=actions.find(x=>x.id===id);return a?.status!=='done'&&a?.deadline&&a.deadline<todayStr}).length}</div><div class="stat-label">마감초과</div></div>
         </div>
+
+        <!-- 고정 목표 -->
+        <details style="margin-top:10px" ${weeklyFixedItems.length>0?'open':''}>
+          <summary style="font-size:12px;font-weight:700;color:#7C3AED;cursor:pointer">&#128204; 매주 고정 목표 <span style="font-weight:400;color:var(--gray-500)">${weeklyFixedItems.length}개 · 매주 자동 배치됨</span></summary>
+          <div style="display:flex;flex-direction:column;gap:4px;margin-top:8px">${fixedHtml}</div>
+        </details>
       </div>
 
       <div class="wf-top">
-        <!-- Left: Action Picker -->
         <div class="wf-picker">
           <div class="wf-picker-header">
-            <h4>&#128269; 행동지표 검색</h4>
-            <input type="text" class="wf-search" placeholder="행동지표 또는 프로젝트 이름 검색..." value="${esc(wfSearchTerm)}" oninput="wfSearchTerm=this.value;renderWeeklyPlan()">
+            <h4>&#128269; 행동지표 선택</h4>
+            <input type="text" class="wf-search" placeholder="행동지표 또는 프로젝트 검색..." value="${esc(wfSearchTerm)}" oninput="wfSearchTerm=this.value;renderWeeklyPlan()">
             <div class="wf-filters">
               <select class="wf-filter-btn" style="padding:4px 8px" onchange="wfFilterProject=this.value;renderWeeklyPlan()">
                 <option value="all">전체 프로젝트</option>
@@ -2298,23 +2405,30 @@ function renderWeeklyPlan() {
             </div>
           </div>
           <div class="wf-pick-list">
-            ${pickerList.length === 0 ? '<div style="padding:20px;text-align:center;color:var(--gray-400);font-size:12px">검색 결과 없음</div>' :
+            ${pickerList.length === 0 ? `<div style="padding:24px;text-align:center">
+              <div style="font-size:12px;color:var(--gray-400);margin-bottom:12px">검색 결과 없음</div>
+              <div style="font-size:11px;color:var(--gray-500);margin-bottom:8px">필요한 행동지표가 없나요?</div>
+              <button class="btn-primary btn-sm" onclick="wfQuickAddAction()" style="font-size:11px">+ 행동지표 추가하러 가기</button>
+            </div>` :
               pickerList.map(a => {
                 const inWeek = isActionInWeek(a.id);
+                const fixed = isFixedItem(a.id);
                 const proj = projects.find(x => x.id===a.projectId);
                 return `<div class="wf-pick-item ${inWeek?'selected':''}" draggable="true" ondragstart="wfDragStart(event,'${a.id}')" onclick="wfToggleSelect('${a.id}')">
                   <div class="pick-check">${inWeek?'&#10003;':''}</div>
                   <div style="flex:1;min-width:0">
-                    <div class="pick-title">${esc(a.title)}</div>
+                    <div class="pick-title">${fixed?'<span style="color:#7C3AED" title="매주 고정">&#128204;</span> ':''}${esc(a.title)}</div>
                     <div class="pick-proj">${proj?esc(proj.title):'미분류'}${a.deadline?' · '+fmtDate(a.deadline):''}</div>
                   </div>
                   <span class="pick-priority ${a.priority||'medium'}">${a.priority==='high'?'긴급':a.priority==='low'?'낮음':'보통'}</span>
                 </div>`;
               }).join('')}
+            ${pickerList.length > 0 ? `<div style="padding:8px;text-align:center;border-top:1px solid var(--gray-200);margin-top:4px">
+              <button onclick="wfQuickAddAction()" style="border:none;background:none;color:var(--primary);font-size:11px;cursor:pointer;font-weight:600;font-family:inherit">+ 행동지표 추가하러 가기</button>
+            </div>` : ''}
           </div>
         </div>
 
-        <!-- Right: Day Grid -->
         <div class="wf-board">
           <div class="wf-day-grid">
             ${week.dates.map((date,i) => {
@@ -2332,12 +2446,14 @@ function renderWeeklyPlan() {
                     if (!a) return '';
                     const proj = projects.find(x => x.id===a.projectId);
                     const isDone = a.status==='done';
+                    const fixed = isFixedItem(a.id);
                     return `<div class="wf-day-card ${isDone?'done':''}" draggable="true" ondragstart="wfDragStart(event,'${a.id}')">
                       <span class="card-remove" onclick="event.stopPropagation();wfRemoveFromDay('${a.id}','${date}')">&times;</span>
-                      <div class="card-title" style="${isDone?'text-decoration:line-through;opacity:.6':''}">${esc(a.title)}</div>
+                      <div class="card-title" style="${isDone?'text-decoration:line-through;opacity:.6':''}">${fixed?'<span style="color:#7C3AED;font-size:10px">&#128204;</span> ':''}${esc(a.title)}</div>
                       <div class="card-meta">
                         ${proj?esc(proj.title):''}
-                        ${!isDone?` · <a href="#" onclick="event.stopPropagation();event.preventDefault();toggleActionDone('${a.id}',true)" style="color:var(--success);text-decoration:none;font-weight:600">완료</a>`:'<span style="color:var(--success)">&#10003; 완료</span>'}
+                        ${!isDone?` · <a href="#" onclick="event.stopPropagation();event.preventDefault();toggleActionDone('${a.id}',true)" style="color:var(--success);text-decoration:none;font-weight:600">완료</a>`:'<span style="color:var(--success)">&#10003;</span>'}
+                        <span onclick="event.stopPropagation();toggleFixedItem('${a.id}',${i})" style="cursor:pointer;margin-left:2px" title="${fixed?'고정 해제':'매주 고정'}">${fixed?'<span style="color:#7C3AED">&#128204;</span>':'<span style="color:var(--gray-300)">&#128204;</span>'}</span>
                       </div>
                     </div>`;
                   }).join('')}
@@ -2352,6 +2468,86 @@ function renderWeeklyPlan() {
   `;
 
   scroll.innerHTML = html;
+}
+
+// 고정 목표 토글
+function toggleFixedItem(actionId, dayIdx) {
+  const idx = weeklyFixedItems.findIndex(fi => fi.actionId === actionId);
+  if (idx >= 0) {
+    weeklyFixedItems.splice(idx, 1);
+    toast('고정 목표 해제');
+  } else {
+    weeklyFixedItems.push({ actionId, preferDay: dayIdx });
+    toast('매주 고정 목표 설정! 매주 자동 배치됩니다','success');
+  }
+  saveFixedGoals();
+  renderWeeklyPlan();
+}
+
+function removeFixedItem(actionId) {
+  weeklyFixedItems = weeklyFixedItems.filter(fi => fi.actionId !== actionId);
+  saveFixedGoals();
+  renderWeeklyPlan();
+}
+
+function saveFixedGoals() {
+  db.collection('kpi_weekly_fixed').doc(currentUser?.id).set({
+    items: weeklyFixedItems,
+    userId: currentUser?.id,
+    userName: currentUser?.name,
+    updatedAt: TS()
+  });
+}
+
+// 빠른 추가 여정: 프로젝트 선택 → 행동지표 추가 → 주간플래너 복귀
+function wfQuickAddAction() {
+  if (projects.length === 0) {
+    openActionModal();
+    return;
+  }
+  // 프로젝트 선택 프롬프트 (필터된 프로젝트 우선)
+  const targetProjects = wfFilterProject !== 'all'
+    ? projects.filter(p => p.id === wfFilterProject)
+    : projects.filter(p => {
+        const m = p.assigneeId;
+        return !m || m === currentUser?.id;
+      });
+
+  if (targetProjects.length === 1) {
+    returnToWeeklyPlan = true;
+    goProjectDetail(targetProjects[0].id);
+    toast('행동지표를 추가하고 ← 버튼으로 돌아오세요','success');
+    return;
+  }
+
+  // 여러 프로젝트일 때 선택 모달
+  let pickHtml = '<div style="padding:16px"><div style="font-size:15px;font-weight:700;margin-bottom:12px">&#128194; 어떤 프로젝트에 추가하시겠습니까?</div>';
+  pickHtml += '<div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto">';
+  targetProjects.forEach(p => {
+    const cnt = actions.filter(a => a.projectId===p.id).length;
+    const kr = keyResults.find(k => k.id===p.krId);
+    pickHtml += `<div onclick="returnToWeeklyPlan=true;closeQuickProjectPick();goProjectDetail('${p.id}');toast('행동지표를 추가하고 ← 버튼으로 돌아오세요','success')" style="padding:10px 14px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--gray-200)'">
+      <div>
+        <div style="font-weight:600">${esc(p.title)}</div>
+        <div style="font-size:11px;color:var(--gray-500)">${kr?esc(kr.name):'미분류'} · 행동지표 ${cnt}개</div>
+      </div>
+      <span style="color:var(--primary);font-size:18px">&#8250;</span>
+    </div>`;
+  });
+  pickHtml += '</div>';
+  pickHtml += '<div style="margin-top:12px;text-align:center"><button class="btn-secondary btn-sm" onclick="closeQuickProjectPick()">취소</button></div>';
+  pickHtml += '</div>';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'quickProjectPick';
+  overlay.className = 'modal-overlay show';
+  overlay.innerHTML = `<div class="modal" style="width:420px">${pickHtml}</div>`;
+  document.body.appendChild(overlay);
+}
+
+function closeQuickProjectPick() {
+  const el = document.getElementById('quickProjectPick');
+  if (el) el.remove();
 }
 
 // Drag & Drop handlers
@@ -2376,17 +2572,13 @@ function wfDrop(e, date) {
   const actionId = e.dataTransfer.getData('text/plain') || wfDraggingId;
   if (!actionId) return;
 
-  // Remove from any other day first
   Object.keys(weeklyFocusItems).forEach(d => {
     weeklyFocusItems[d] = (weeklyFocusItems[d]||[]).filter(id => id !== actionId);
     if (weeklyFocusItems[d].length === 0) delete weeklyFocusItems[d];
   });
 
-  // Add to target day
   if (!weeklyFocusItems[date]) weeklyFocusItems[date] = [];
-  if (!weeklyFocusItems[date].includes(actionId)) {
-    weeklyFocusItems[date].push(actionId);
-  }
+  if (!weeklyFocusItems[date].includes(actionId)) weeklyFocusItems[date].push(actionId);
 
   wfDraggingId = null;
   saveWeeklyFocus();
@@ -2395,17 +2587,14 @@ function wfDrop(e, date) {
 
 function wfToggleSelect(actionId) {
   if (isActionInWeek(actionId)) {
-    // Remove from all days
     Object.keys(weeklyFocusItems).forEach(d => {
       weeklyFocusItems[d] = (weeklyFocusItems[d]||[]).filter(id => id !== actionId);
       if (weeklyFocusItems[d].length === 0) delete weeklyFocusItems[d];
     });
   } else {
-    // Auto-assign to today or first available day
     const todayStr = new Date().toISOString().split('T')[0];
     const week = getWeekDates(wfWeekOffset);
     let targetDate = week.dates.includes(todayStr) ? todayStr : week.dates[0];
-    // Find lightest day
     let minCount = Infinity;
     week.dates.forEach(d => {
       const cnt = (weeklyFocusItems[d]||[]).length;
@@ -2427,7 +2616,7 @@ function wfRemoveFromDay(actionId, date) {
   renderWeeklyPlan();
 }
 
-function saveWeeklyFocus() {
+function saveWeeklyFocus(silent) {
   const week = getWeekDates(wfWeekOffset);
   const existing = weeklyPlans.find(p => p.userId===currentUser?.id);
   const allIds = Object.values(weeklyFocusItems).reduce((s,arr) => [...s,...arr], []);
@@ -2437,6 +2626,7 @@ function saveWeeklyFocus() {
     weekStart: week.monday,
     weekEnd: week.friday,
     focusItems: weeklyFocusItems,
+    fixedItems: weeklyFixedItems,
     focusCount: allIds.length,
     submittedAt: TS(),
     updatedAt: TS()
