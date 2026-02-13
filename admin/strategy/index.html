@@ -30586,16 +30586,16 @@
         return calToday >= warningDate;
       });
 
-      // 주차별로 간트 바 HTML 생성 (overlay용 - grid-column만 사용)
+      // 주차별로 간트 바 HTML 생성 (overlay용 - grid-column + grid-row 명시)
       function renderWeekGanttBars(weekStartDay, weekEndDay) {
-        const barsHtml = [];
-        let rowIdx = 0;
-        multiDayDoingTasks.forEach((task, taskIdx) => {
+        const weekStartDate = new Date(year, month, weekStartDay);
+        const weekEndDate = new Date(year, month, weekEndDay);
+
+        // 1단계: 이번 주에 해당하는 바 수집
+        const bars = [];
+        multiDayDoingTasks.forEach((task) => {
           const gStart = new Date(task._ganttStart + 'T00:00:00');
           const gEnd = new Date(task._ganttEnd + 'T00:00:00');
-
-          const weekStartDate = new Date(year, month, weekStartDay);
-          const weekEndDate = new Date(year, month, weekEndDay);
 
           if (gStart > weekEndDate || gEnd < weekStartDate) return;
 
@@ -30619,16 +30619,39 @@
           else if (isStart) borderRadius = '4px 0 0 4px';
           else if (isEnd) borderRadius = '0 4px 4px 0';
 
-          rowIdx++;
-          barsHtml.push(`
-            <div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${startCol + 1} / ${endCol + 2}; background: ${barBg}; border: ${barBorder}; border-radius: ${borderRadius}; padding: 1px 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 18px; transition: all 0.15s; white-space: nowrap; overflow: hidden; pointer-events: auto;"
-                 onmouseover="this.style.opacity='0.75'" onmouseout="this.style.opacity='1'">
-              <span style="font-size: 9px; color: ${barText}; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">${task._isDone ? '✓' : '●'} ${task.title || '제목 없음'}</span>
-              <span style="font-size: 8px; color: ${barText}; opacity: 0.6; flex-shrink: 0;">~${task._daySpan}일째</span>
-            </div>
-          `);
+          bars.push({ task, startCol, endCol, barBg, barText, barBorder, borderRadius });
         });
-        return { html: barsHtml.join(''), rowCount: rowIdx };
+
+        // 2단계: 행 배정 (겹치는 열 구간은 다른 행에 배치)
+        const rows = []; // 각 행의 점유 열 구간 목록 [[startCol, endCol], ...]
+        bars.forEach(bar => {
+          let assignedRow = -1;
+          for (let r = 0; r < rows.length; r++) {
+            const canFit = rows[r].every(range => bar.endCol < range[0] || bar.startCol > range[1]);
+            if (canFit) {
+              rows[r].push([bar.startCol, bar.endCol]);
+              assignedRow = r;
+              break;
+            }
+          }
+          if (assignedRow === -1) {
+            rows.push([[bar.startCol, bar.endCol]]);
+            assignedRow = rows.length - 1;
+          }
+          bar.row = assignedRow + 1; // CSS grid-row는 1부터 시작
+        });
+
+        // 3단계: HTML 생성 (grid-row 명시)
+        const barsHtml = bars.map(bar => {
+          const task = bar.task;
+          return `<div onclick="openScheduledTaskDetail('${task.id}')" style="grid-column: ${bar.startCol + 1} / ${bar.endCol + 2}; grid-row: ${bar.row}; background: ${bar.barBg}; border: ${bar.barBorder}; border-radius: ${bar.borderRadius}; padding: 1px 6px; cursor: pointer; display: flex; align-items: center; gap: 4px; height: 18px; transition: all 0.15s; white-space: nowrap; overflow: hidden; pointer-events: auto;"
+                 onmouseover="this.style.opacity='0.75'" onmouseout="this.style.opacity='1'">
+              <span style="font-size: 9px; color: ${bar.barText}; font-weight: 600; overflow: hidden; text-overflow: ellipsis;">${task._isDone ? '✓' : '●'} ${task.title || '제목 없음'}</span>
+              <span style="font-size: 8px; color: ${bar.barText}; opacity: 0.6; flex-shrink: 0;">~${task._daySpan}일째</span>
+            </div>`;
+        });
+
+        return { html: barsHtml.join(''), rowCount: rows.length };
       }
 
       // 주차 계산
