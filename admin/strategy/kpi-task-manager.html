@@ -548,7 +548,7 @@
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-logo">
     <div class="icon">&#9776;</div>
-    <div><div class="title">KPI 업무관리</div><div class="subtitle">Projects & Actions</div></div>
+    <div><div class="title">KPI 업무관리</div><div class="subtitle">메인KPI · 서브KPI · 프로젝트</div></div>
   </div>
   <div class="sidebar-section">
     <div class="sidebar-section-title">메뉴</div>
@@ -841,8 +841,18 @@
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">연동 KR</label>
-          <select class="form-input" id="pKR"><option value="">선택</option></select>
+          <label class="form-label">메인KPI</label>
+          <select class="form-input" id="pKR" onchange="onMainKPIChange()"><option value="">선택</option></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">서브KPI</label>
+          <select class="form-input" id="pKPI"><option value="">선택</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">카테고리 <span style="font-weight:400;color:var(--gray-400)">(같은 서브KPI 내 구분용)</span></label>
+          <input type="text" class="form-input" id="pCategory" placeholder="예: 영업, 마케팅, 교육, 운영">
         </div>
         <div class="form-group">
           <label class="form-label">담당자</label>
@@ -1044,6 +1054,15 @@ async function loadKPIData() {
 
   const pKR = document.getElementById('pKR');
   keyResults.forEach(kr => pKR.add(new Option(kr.name||kr.title, kr.id)));
+}
+
+function onMainKPIChange() {
+  const krId = document.getElementById('pKR').value;
+  const sel = document.getElementById('pKPI');
+  sel.innerHTML = '<option value="">선택</option>';
+  if (!krId) return;
+  const relKpis = kpis.filter(k => k.keyResultId===krId || k.krId===krId);
+  relKpis.forEach(k => sel.add(new Option(k.name||k.title, k.id)));
 }
 
 // ===== Listen Projects =====
@@ -1471,7 +1490,22 @@ function renderProjects() {
             <span class="kpi-sub-pct">${kpiDone}/${kpiActions.length} (${kpiPct}%)</span>
           </div>`;
         }
-        html += `<div class="project-grid">${kpiProjects.map(p => renderProjectCard(p)).join('')}</div>`;
+        // 카테고리별 그룹핑
+        const cats = {};
+        kpiProjects.forEach(p => {
+          const cat = p.category || '';
+          if (!cats[cat]) cats[cat] = [];
+          cats[cat].push(p);
+        });
+        const catKeys = Object.keys(cats).sort((a,b) => (a||'zzz').localeCompare(b||'zzz'));
+        if (catKeys.length > 1 || (catKeys.length===1 && catKeys[0]!=='')) {
+          catKeys.forEach(cat => {
+            if (cat) html += `<div style="font-size:11px;font-weight:600;color:var(--orange);padding:4px 10px;margin:6px 0 4px;display:flex;align-items:center;gap:4px"><span style="background:var(--orange-light);padding:1px 8px;border-radius:4px">${esc(cat)}</span> <span style="color:var(--gray-400)">${cats[cat].length}개</span></div>`;
+            html += `<div class="project-grid">${cats[cat].map(p => renderProjectCard(p)).join('')}</div>`;
+          });
+        } else {
+          html += `<div class="project-grid">${kpiProjects.map(p => renderProjectCard(p)).join('')}</div>`;
+        }
         html += `</div>`;
       });
     }
@@ -1509,8 +1543,10 @@ function renderProjectCard(p) {
   const m = teamMembers.find(x => x.id===p.assigneeId);
   return `<div class="project-card" onclick="goProjectDetail('${p.id}')">
     <div class="project-card-header">
-      <div><div class="project-card-title">${esc(p.title)}</div>
-      <div class="project-card-kr">${kpi ? esc(kpi.name||kpi.title) : (kr ? esc(kr.name||kr.title) : '')}</div></div>
+      <div>
+        <div class="project-card-title">${p.category?`<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:4px;background:var(--orange-light);color:var(--orange);font-weight:600;margin-right:4px">${esc(p.category)}</span>`:''}${esc(p.title)}</div>
+        <div class="project-card-kr">${kpi ? esc(kpi.name||kpi.title) : ''}</div>
+      </div>
       <span class="task-tag kpi">${pp}%</span>
     </div>
     <div class="project-card-stats">
@@ -1545,7 +1581,8 @@ function renderProjectDetail() {
   if (!p) return;
   const phases = p.roadmap || [];
   const pa = actions.filter(a => a.projectId===p.id);
-  const kr = keyResults.find(x => x.id===p.krId);
+  const mainKpi = keyResults.find(x => x.id===p.krId);
+  const subKpi = kpis.find(x => x.id===p.kpiId);
   const m = teamMembers.find(x => x.id===p.assigneeId);
   const pd = pa.filter(a => a.status==='done').length;
   const pp = pa.length>0 ? Math.round(pd/pa.length*100) : 0;
@@ -1554,8 +1591,8 @@ function renderProjectDetail() {
     <div class="project-detail-header">
       <button class="back-btn" onclick="goView('projects')">&#8249;</button>
       <div style="flex:1">
-        <div style="font-size:18px;font-weight:700">${esc(p.title)}</div>
-        <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${kr?esc(kr.name||kr.title):''} ${m?' · '+esc(m.name):''} · 행동지표 ${pa.length}개 · 완료 ${pp}%</div>
+        <div style="font-size:18px;font-weight:700">${p.category?`<span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--orange-light);color:var(--orange);font-weight:600;margin-right:6px">${esc(p.category)}</span>`:''}${esc(p.title)}</div>
+        <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${mainKpi?esc(mainKpi.name||mainKpi.title):''}${subKpi?' &#8250; '+esc(subKpi.name||subKpi.title):''} ${m?' · '+esc(m.name):''} · 행동지표 ${pa.length}개 · 완료 ${pp}%</div>
       </div>
       <button class="btn-primary btn-sm" onclick="openActionModalForProject('${p.id}')">+ 행동지표</button>
       <button class="btn-outline-primary btn-sm" onclick="openBatchModalForProject('${p.id}')">일괄등록</button>
@@ -2251,6 +2288,8 @@ function openProjectModal() {
   document.getElementById('pTitle').value = '';
   document.getElementById('pDesc').value = '';
   document.getElementById('pKR').value = '';
+  document.getElementById('pKPI').innerHTML = '<option value="">선택</option>';
+  document.getElementById('pCategory').value = '';
   document.getElementById('pAssignee').value = '';
   document.getElementById('pRoadmap').value = '1단계: 기획/준비\n2단계: 실행/구축\n3단계: 확대/성장\n4단계: 최적화/관리';
   document.getElementById('projectModal').classList.add('show');
@@ -2273,6 +2312,8 @@ function saveProject() {
   const data = {
     title, description: document.getElementById('pDesc').value.trim(),
     krId: document.getElementById('pKR').value||null,
+    kpiId: document.getElementById('pKPI').value||null,
+    category: document.getElementById('pCategory').value.trim()||null,
     assigneeId, assigneeName: m?.name||null,
     roadmap, order: projects.length,
     createdAt: TS(), updatedAt: TS()
