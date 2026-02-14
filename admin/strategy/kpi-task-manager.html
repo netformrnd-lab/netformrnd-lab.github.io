@@ -308,6 +308,18 @@
     .cal-task-dot.doing { background:var(--primary-light); color:var(--primary); }
     .cal-task-dot.done { background:var(--success-light); color:var(--success); }
 
+    /* ===== Gantt Bars on Calendar ===== */
+    .cal-gantt-bar { position:relative; font-size:8px; padding:2px 4px; border-radius:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:1px; cursor:pointer; line-height:1.3; }
+    .cal-gantt-bar.bar-start { border-radius:3px 0 0 3px; margin-right:-1px; }
+    .cal-gantt-bar.bar-mid { border-radius:0; margin-left:-1px; margin-right:-1px; }
+    .cal-gantt-bar.bar-end { border-radius:0 3px 3px 0; margin-left:-1px; }
+    .cal-gantt-bar.bar-single { border-radius:3px; }
+    .cal-gantt-bar.doing { background:linear-gradient(90deg,#DBEAFE,#BFDBFE); color:var(--primary-dark); font-weight:600; border:1px solid rgba(59,130,246,0.3); border-left-width:2px; }
+    .cal-gantt-bar.done { background:linear-gradient(90deg,#D1FAE5,#A7F3D0); color:#065F46; font-weight:500; border:1px solid rgba(16,185,129,0.3); }
+    .cal-gantt-bar.hold { background:linear-gradient(90deg,#FEF3C7,#FDE68A); color:#92400E; font-weight:500; border:1px solid rgba(245,158,11,0.3); }
+    .cal-gantt-bar .gantt-days { font-size:7px; opacity:0.7; margin-left:2px; }
+    .cal-cell { position:relative; }
+
     /* ===== Weekly Plan ===== */
     .wp-section { background:white; border:1px solid var(--gray-200); border-radius:var(--card-radius); padding:16px; margin-bottom:16px; }
     .wp-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px; }
@@ -1796,10 +1808,14 @@ function renderDashboard() {
 function dayTaskCard(a) {
   const isDone = a.status==='done';
   const p = projects.find(x => x.id===a.projectId);
-  return `<div class="day-task ${isDone?'done':''}" draggable="true" ondragstart="dayDragStart(event,'${a.id}')" title="${esc(a.title)}">
+  const elapsed = getElapsedDays(a);
+  const dayBadge = elapsed && a.status==='doing' ? `<span style="font-size:8px;color:var(--primary);font-weight:700">${elapsed}d</span>` :
+                   elapsed && isDone ? `<span style="font-size:8px;color:var(--success);font-weight:700">${elapsed}d</span>` : '';
+  return `<div class="day-task ${isDone?'done':''}" draggable="true" ondragstart="dayDragStart(event,'${a.id}')" title="${esc(a.title)}${elapsed?' ('+elapsed+'일)':''}">
     <div style="display:flex;align-items:center;gap:4px">
       <div class="dt-check ${isDone?'done':''}" onclick="event.stopPropagation();toggleActionDone('${a.id}',${!isDone})">${isDone?'&#10003;':''}</div>
       <div class="dt-title" onclick="openEditAction('${a.id}')">${esc(a.title)}</div>
+      ${dayBadge}
     </div>
     <div class="dt-meta">
       ${p?`<span>${esc(p.title)}</span>`:''}
@@ -1833,12 +1849,40 @@ function renderCalendar() {
   const startOffset = firstDay===0?6:firstDay-1;
   const todayStr = localDateStr(new Date());
 
-  // Build action map by date
-  const actionsByDate = {};
+  // 간트바용: 각 날짜에 표시할 바 정보 계산
+  const ganttByDate = {}; // { '2026-02-14': [{action, barType:'start'|'mid'|'end'|'single', dayNum, totalDays}] }
+  const dotByDate = {};   // 마감일 기준 (간트바 없는 업무)
+
   actions.forEach(a => {
-    if (a.deadline) {
-      if (!actionsByDate[a.deadline]) actionsByDate[a.deadline] = [];
-      actionsByDate[a.deadline].push(a);
+    const startDate = a.startedAt; // 진행 시작일 (YYYY-MM-DD)
+    const endDate = a.actualCompletionDate || (a.status==='done' ? (a.startedAt||a.deadline) : null);
+    const isActive = a.status==='doing' || a.status==='hold';
+    const isDone = a.status==='done';
+
+    if (startDate && (isActive || isDone)) {
+      // 간트바 표시: startedAt ~ actualCompletionDate(완료) 또는 오늘(진행중)
+      const barEnd = isDone ? (endDate || startDate) : todayStr;
+      const s = new Date(startDate);
+      const e = new Date(barEnd);
+      const totalDays = Math.max(1, Math.floor((e-s)/(1000*60*60*24))+1);
+      let dayNum = 0;
+
+      for (let dt = new Date(s); dt <= e; dt.setDate(dt.getDate()+1)) {
+        const ds = localDateStr(dt);
+        dayNum++;
+        if (!ganttByDate[ds]) ganttByDate[ds] = [];
+        let barType = 'single';
+        if (totalDays > 1) {
+          if (dayNum === 1) barType = 'start';
+          else if (dayNum === totalDays) barType = 'end';
+          else barType = 'mid';
+        }
+        ganttByDate[ds].push({ action: a, barType, dayNum, totalDays });
+      }
+    } else if (a.deadline) {
+      // 간트바 없는 업무: 마감일에 dot 표시
+      if (!dotByDate[a.deadline]) dotByDate[a.deadline] = [];
+      dotByDate[a.deadline].push(a);
     }
   });
 
@@ -1849,7 +1893,6 @@ function renderCalendar() {
   const prevMonth = new Date(y,m,0).getDate();
   for (let i=startOffset-1;i>=0;i--) {
     const day = prevMonth-i;
-    const ds = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     html += `<div class="cal-cell other-month"><div class="cal-date">${day}</div></div>`;
   }
 
@@ -1857,10 +1900,28 @@ function renderCalendar() {
   for (let d=1;d<=daysInMonth;d++) {
     const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const isToday = ds===todayStr;
-    const dayActions = actionsByDate[ds]||[];
+    const ganttBars = ganttByDate[ds]||[];
+    const dotActions = dotByDate[ds]||[];
+
+    let tasksHtml = '';
+    // 간트바 렌더링
+    ganttBars.slice(0,4).forEach(g => {
+      const a = g.action;
+      const label = g.barType==='start' ? `${esc(a.title)} <span class="gantt-days">${g.totalDays}일${a.status==='doing'?'째':''}</span>` :
+                    g.barType==='end' ? `${g.totalDays}일 ${a.status==='done'?'완료':''}` :
+                    g.barType==='mid' ? '' : `${esc(a.title)} <span class="gantt-days">1일</span>`;
+      tasksHtml += `<div class="cal-gantt-bar bar-${g.barType} ${a.status}" onclick="event.stopPropagation();openEditAction('${a.id}')" title="${esc(a.title)} (${g.dayNum}/${g.totalDays}일)">${label}</div>`;
+    });
+    // dot 표시 (간트바 없는 업무)
+    dotActions.slice(0,Math.max(0,4-ganttBars.length)).forEach(a => {
+      tasksHtml += `<div class="cal-task-dot ${a.status}" onclick="event.stopPropagation();openEditAction('${a.id}')">${esc(a.title)}</div>`;
+    });
+    const overflow = ganttBars.length + dotActions.length - 4;
+    if (overflow > 0) tasksHtml += `<div style="font-size:8px;color:var(--gray-400)">+${overflow}</div>`;
+
     html += `<div class="cal-cell ${isToday?'today':''}" onclick="calDateClick('${ds}')">
       <div class="cal-date">${d}</div>
-      <div class="cal-tasks">${dayActions.slice(0,3).map(a => `<div class="cal-task-dot ${a.status}">${esc(a.title)}</div>`).join('')}${dayActions.length>3?`<div style="font-size:8px;color:var(--gray-400)">+${dayActions.length-3}</div>`:''}</div>
+      <div class="cal-tasks">${tasksHtml}</div>
     </div>`;
   }
 
@@ -1883,19 +1944,33 @@ function calDateClick(date) {
   }
 }
 
+function getElapsedDays(a) {
+  if (!a.startedAt) return null;
+  const start = new Date(a.startedAt);
+  const end = a.actualCompletionDate ? new Date(a.actualCompletionDate) : new Date();
+  return Math.max(1, Math.floor((end - start) / (1000*60*60*24)) + 1);
+}
+
 function actionListItem(a) {
   const p = projects.find(x => x.id===a.projectId);
   const m = teamMembers.find(x => x.id===a.assigneeId);
   const isDone = a.status==='done';
+  const elapsed = getElapsedDays(a);
+  const elapsedBadge = elapsed ? (isDone
+    ? `<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:#D1FAE5;color:#065F46;font-weight:600">${elapsed}일 소요</span>`
+    : a.status==='doing'
+      ? `<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:#DBEAFE;color:#1E40AF;font-weight:600">${elapsed}일째 진행중</span>`
+      : '') : '';
   const colors = {pending:'var(--gray-100);color:var(--gray-600)',doing:'var(--primary-light);color:var(--primary)',done:'var(--success-light);color:var(--success)',hold:'var(--warning-light);color:var(--warning)'};
   return `<div class="recent-item">
     <div class="check-circle ${isDone?'done':''}" onclick="event.stopPropagation();toggleActionDone('${a.id}',${!isDone})">${isDone?'&#10003;':''}</div>
     <div class="info" onclick="openEditAction('${a.id}')">
-      <div class="title ${isDone?'done-text':''}">${esc(a.title||'')} ${a.recurringType?'<span class="recurring-badge">&#128260; 반복</span>':''} ${a.type==='experiment'?'<span class="experiment-badge">&#128300; 실험</span>':''}</div>
+      <div class="title ${isDone?'done-text':''}">${esc(a.title||'')} ${elapsedBadge} ${a.recurringType?'<span class="recurring-badge">&#128260; 반복</span>':''} ${a.type==='experiment'?'<span class="experiment-badge">&#128300; 실험</span>':''}</div>
       <div class="meta">
         ${p?`<span>${esc(p.title)}</span>`:''}
         ${m?`<span>${esc(m.name)}</span>`:''}
         ${a.deadline?`<span>${fmtDate(a.deadline)}</span>`:''}
+        ${a.startedAt?`<span>시작:${fmtDate(a.startedAt)}</span>`:''}
       </div>
     </div>
     ${p?`<span class="proj-badge" style="background:var(--purple-light);color:var(--purple)">${esc(p.title)}</span>`:''}
@@ -2191,15 +2266,20 @@ function renderActionsBoard(container) {
 function boardCard(a) {
   const p = projects.find(x => x.id===a.projectId);
   const m = teamMembers.find(x => x.id===a.assigneeId);
+  const elapsed = getElapsedDays(a);
+  const elBadge = elapsed && a.status==='doing' ? `<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:#DBEAFE;color:#1E40AF;font-weight:600">${elapsed}일째</span>` :
+                  elapsed && a.status==='done' ? `<span style="font-size:9px;padding:1px 6px;border-radius:10px;background:#D1FAE5;color:#065F46;font-weight:600">${elapsed}일</span>` : '';
   return `<div class="task-card" draggable="true" ondragstart="dStart(event,'${a.id}')" ondragend="dEnd(event)" onclick="openEditAction('${a.id}')">
-    <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">
+    <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap;align-items:center">
       ${p?'<span class="task-tag kpi">'+esc(p.title)+'</span>':''}
       ${a.priority==='high'?'<span class="task-tag" style="background:var(--danger-light);color:var(--danger)">긴급</span>':''}
+      ${elBadge}
     </div>
     <div class="task-card-title">${esc(a.title||'')}</div>
     <div class="task-card-meta">
       ${m?'<span>'+esc(m.name)+'</span>':'<span style="color:var(--gray-400)">미배정</span>'}
       ${a.deadline?'<span>'+fmtDate(a.deadline)+'</span>':''}
+      ${a.startedAt?'<span>시작:'+fmtDate(a.startedAt)+'</span>':''}
     </div>
   </div>`;
 }
@@ -2208,14 +2288,17 @@ function renderActionsTable(container) {
   const labels = {pending:'대기',doing:'진행중',done:'완료',hold:'보류'};
   const priLabels = {high:'긴급',medium:'보통',low:'낮음'};
   container.innerHTML = `<div class="table-container"><table class="task-table">
-    <thead><tr><th>행동지표</th><th>프로젝트</th><th>상태</th><th>우선순위</th><th>담당자</th><th>마감일</th></tr></thead>
+    <thead><tr><th>행동지표</th><th>프로젝트</th><th>상태</th><th>소요일</th><th>우선순위</th><th>담당자</th><th>마감일</th></tr></thead>
     <tbody>${filteredActions.map(a => {
       const p = projects.find(x => x.id===a.projectId);
       const m = teamMembers.find(x => x.id===a.assigneeId);
+      const elapsed = getElapsedDays(a);
+      const elText = elapsed ? (a.status==='doing' ? elapsed+'일째' : a.status==='done' ? elapsed+'일' : '') : '-';
       return `<tr style="cursor:pointer" onclick="openEditAction('${a.id}')">
         <td><strong>${esc(a.title||'')}</strong></td>
         <td>${p?'<span class="task-tag kpi">'+esc(p.title)+'</span>':'-'}</td>
         <td><span class="table-status ${a.status}">${labels[a.status]||a.status}</span></td>
+        <td style="text-align:center;font-size:11px;font-weight:600;${a.status==='doing'?'color:var(--primary)':a.status==='done'?'color:var(--success)':''}">${elText}</td>
         <td>${priLabels[a.priority]||''}</td>
         <td>${m?esc(m.name):'-'}</td>
         <td>${a.deadline?fmtDate(a.deadline):'-'}</td>
@@ -2421,12 +2504,20 @@ function saveAction() {
 
   if (editingActionId) {
     const old = actions.find(x => x.id===editingActionId);
+    // 진행중 시작 시 startedAt 자동 기록
+    if (old && old.status!=='doing' && status==='doing' && !old.startedAt) {
+      data.startedAt = localDateStr(new Date());
+    }
+    // 완료 시 completedAt + actualCompletionDate 기록, startedAt도 보장
     if (old && old.status!=='done' && status==='done') {
       data.completedAt = TS();
+      data.actualCompletionDate = localDateStr(new Date());
+      if (!old.startedAt && !data.startedAt) data.startedAt = localDateStr(new Date());
       if (data.lagId) incKPI({...old,...data,id:editingActionId});
     }
     if (old && old.status==='done' && status!=='done') {
       data.completedAt = firebase.firestore.FieldValue.delete();
+      data.actualCompletionDate = firebase.firestore.FieldValue.delete();
       if (old.lagId) decKPI(old);
     }
     const changes = old ? diffFields(old, data, ['title','description','status','priority','assigneeId','deadline','phaseId','lagId','kpiValue','projectId']) : {};
@@ -2451,6 +2542,9 @@ function saveAction() {
     data.createdAt = TS();
     data.createdBy = currentUser?.id||null;
     data.createdByName = currentUser?.name||null;
+    // 신규 등록 시 진행중이면 startedAt 자동 설정
+    if (status === 'doing') data.startedAt = localDateStr(new Date());
+    if (status === 'done') { data.startedAt = localDateStr(new Date()); data.actualCompletionDate = localDateStr(new Date()); data.completedAt = TS(); }
     db.collection('kpi_tasks').add(data).then((ref) => {
       logChange({
         documentType:'action', documentId:ref.id, collectionName:'kpi_tasks',
@@ -2507,9 +2601,12 @@ function toggleActionDone(id, done) {
   const upd = { status: done?'done':'pending', updatedAt: TS() };
   if (done) {
     upd.completedAt = TS();
+    upd.actualCompletionDate = localDateStr(new Date());
+    if (!a.startedAt) upd.startedAt = localDateStr(new Date());
     if (a.lagId) incKPI(a);
   } else {
     upd.completedAt = firebase.firestore.FieldValue.delete();
+    upd.actualCompletionDate = firebase.firestore.FieldValue.delete();
     if (a.lagId) decKPI(a);
   }
   db.collection('kpi_tasks').doc(id).update(upd).then(() => {
@@ -2840,9 +2937,11 @@ function renderWeeklyPlan() {
                     const proj = projects.find(x => x.id===a.projectId);
                     const isDone = a.status==='done';
                     const fixed = isFixedItem(a.id);
+                    const wfElapsed = getElapsedDays(a);
+                    const wfElBadge = wfElapsed && a.status==='doing' ? `<span style="font-size:9px;padding:0 4px;border-radius:8px;background:#DBEAFE;color:#1E40AF;font-weight:600">${wfElapsed}d</span>` : wfElapsed && isDone ? `<span style="font-size:9px;padding:0 4px;border-radius:8px;background:#D1FAE5;color:#065F46;font-weight:600">${wfElapsed}d</span>` : '';
                     return `<div class="wf-day-card ${isDone?'done':''}" draggable="true" ondragstart="wfDragStart(event,'${a.id}')">
                       <span class="card-remove" onclick="event.stopPropagation();wfRemoveFromDay('${a.id}','${date}')">&times;</span>
-                      <div class="card-title" style="${isDone?'text-decoration:line-through;opacity:.6':''}">${fixed?'<span style="color:#7C3AED;font-size:10px">&#128204;</span> ':''}${esc(a.title)}</div>
+                      <div class="card-title" style="${isDone?'text-decoration:line-through;opacity:.6':''}">${fixed?'<span style="color:#7C3AED;font-size:10px">&#128204;</span> ':''}${esc(a.title)} ${wfElBadge}</div>
                       <div class="card-meta">
                         ${proj?esc(proj.title):''}
                         ${!isDone?` · <a href="#" onclick="event.stopPropagation();event.preventDefault();toggleActionDone('${a.id}',true)" style="color:var(--success);text-decoration:none;font-weight:600">완료</a>`:'<span style="color:var(--success)">&#10003;</span>'}
@@ -3176,8 +3275,9 @@ function dDrop(e,newStatus){
   const a=actions.find(x=>x.id===dragId);
   if(!a||a.status===newStatus)return;
   const upd={status:newStatus,updatedAt:TS()};
-  if(newStatus==='done'&&a.status!=='done'){upd.completedAt=TS();if(a.lagId)incKPI(a);}
-  if(a.status==='done'&&newStatus!=='done'){upd.completedAt=firebase.firestore.FieldValue.delete();if(a.lagId)decKPI(a);}
+  if(newStatus==='doing'&&a.status!=='doing'&&!a.startedAt){upd.startedAt=localDateStr(new Date());}
+  if(newStatus==='done'&&a.status!=='done'){upd.completedAt=TS();upd.actualCompletionDate=localDateStr(new Date());if(!a.startedAt&&!upd.startedAt)upd.startedAt=localDateStr(new Date());if(a.lagId)incKPI(a);}
+  if(a.status==='done'&&newStatus!=='done'){upd.completedAt=firebase.firestore.FieldValue.delete();upd.actualCompletionDate=firebase.firestore.FieldValue.delete();if(a.lagId)decKPI(a);}
   db.collection('kpi_tasks').doc(dragId).update(upd).then(()=>{
     if(newStatus==='done'&&a.lagId) toast('완료! KPI 반영됨','success');
   }).catch(err=>{
