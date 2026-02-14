@@ -466,6 +466,25 @@
     .wj-empty { text-align:center; padding:40px 20px; color:var(--gray-400); font-size:13px; }
     .wj-fab { position:fixed; bottom:24px; right:24px; width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg,#059669,#10B981); color:white; border:none; font-size:24px; box-shadow:0 4px 16px rgba(5,150,105,0.4); cursor:pointer; z-index:48; display:flex; align-items:center; justify-content:center; transition:transform .2s; }
     .wj-fab:hover { transform:scale(1.1); }
+    .wj-attach-row { display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap; }
+    .wj-attach-btn { padding:6px 12px; border:1px dashed var(--gray-300); border-radius:8px; background:white; cursor:pointer; font-size:12px; color:var(--gray-600); font-family:inherit; display:flex; align-items:center; gap:4px; }
+    .wj-attach-btn:hover { border-color:var(--primary); color:var(--primary); background:var(--primary-light); }
+    .wj-paste-hint { font-size:11px; color:var(--gray-400); }
+    .wj-preview-images { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .wj-preview-img { position:relative; width:80px; height:80px; border-radius:8px; overflow:hidden; border:1px solid var(--gray-200); }
+    .wj-preview-img img { width:100%; height:100%; object-fit:cover; }
+    .wj-preview-img .remove { position:absolute; top:2px; right:2px; width:18px; height:18px; border-radius:50%; background:rgba(0,0,0,0.6); color:white; border:none; font-size:12px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; }
+    .wj-log-images { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap; }
+    .wj-log-img { width:64px; height:64px; border-radius:6px; overflow:hidden; border:1px solid var(--gray-200); cursor:pointer; transition:transform .15s; }
+    .wj-log-img:hover { transform:scale(1.05); }
+    .wj-log-img img { width:100%; height:100%; object-fit:cover; }
+    .wj-lightbox { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:99999; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+    .wj-lightbox img { max-width:90vw; max-height:90vh; border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
+    .wj-lightbox-close { position:absolute; top:16px; right:20px; color:white; font-size:28px; cursor:pointer; background:none; border:none; }
+    .wj-unlinked-banner { margin:6px 0; padding:8px 12px; background:#FFF7ED; border:1px solid #FDBA74; border-radius:8px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .wj-unlinked-banner .msg { font-size:11px; color:#9A3412; display:flex; align-items:center; gap:4px; }
+    .wj-unlinked-banner .link-btn { padding:4px 10px; border:none; border-radius:6px; background:#F97316; color:white; font-size:11px; font-weight:600; cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .wj-unlinked-banner .link-btn:hover { background:#EA580C; }
     @media (max-width:768px) {
       .wj-input-row { flex-direction:column; }
       .wj-controls { min-width:100%; flex-direction:row; flex-wrap:wrap; }
@@ -1311,6 +1330,7 @@
 <!-- Firebase -->
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
 
 <script>
 // ===== Debug Console =====
@@ -1369,6 +1389,7 @@ try {
   _dlog('Firebase 초기화 실패: ' + e.message, 'error');
 }
 const db = firebase.firestore();
+const storage = firebase.storage();
 const TS = firebase.firestore.FieldValue.serverTimestamp;
 const INC = firebase.firestore.FieldValue.increment;
 
@@ -3323,33 +3344,39 @@ function decKPI(task) {
 let wjDate = localDateStr(new Date()); // 현재 보고 있는 날짜
 let wjLogs = []; // 오늘의 로그
 
+let wjPendingImages = []; // {file, previewUrl}
+
 function renderWorkJournal() {
   const scroll = document.getElementById('workJournalScroll');
   if (!scroll) return;
+  wjPendingImages = [];
 
-  // KR → KPI → 지표 그룹핑 옵션 생성
   const lagOptions = laggingIndicators.filter(l => l.isActive !== false).map(l => {
     const kr = keyResults.find(k => k.id === l.krId);
     const kpi = kpis.find(k => k.id === l.kpiId);
-    const prefix = kr ? (kr.name || kr.title || '') : '';
-    const kpiName = kpi ? (kpi.name || kpi.title || '') : '';
-    const label = [prefix, kpiName, l.name].filter(Boolean).join(' > ');
+    const label = [kr?.name||kr?.title, kpi?.name||kpi?.title, l.name].filter(Boolean).join(' > ');
     const pct = l.targetValue ? Math.round((l.currentValue||0)/l.targetValue*100) : 0;
     return `<option value="${l.id}" data-unit="${l.unit||'건'}" data-target="${l.targetValue||0}" data-current="${l.currentValue||0}">${label} (${l.currentValue||0}/${l.targetValue||0}${l.unit||'건'} ${pct}%)</option>`;
   }).join('');
 
   const projOptions = projects.map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
-
   const dateObj = new Date(wjDate);
   const isToday = wjDate === localDateStr(new Date());
   const dateLabel = dateObj.toLocaleDateString('ko-KR', {year:'numeric',month:'long',day:'numeric',weekday:'short'});
 
   scroll.innerHTML = `
-    <!-- 퀵 입력 영역 -->
     <div class="wj-quick">
       <div class="wj-quick-title">&#9997;&#65039; ${isToday ? '오늘 뭐 했지?' : dateLabel + ' 기록'}</div>
       <div class="wj-input-row">
-        <textarea class="wj-text" id="wjText" placeholder="한 일을 자유롭게 적어주세요.&#10;예) 광고주 A사 제안서 초안 완성, 미팅 자료 정리..." onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))saveWorkJournal()"></textarea>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+          <textarea class="wj-text" id="wjText" placeholder="한 일을 자유롭게 적어주세요.&#10;예) 광고주 A사 제안서 초안 완성, 미팅 자료 정리...&#10;&#10;Ctrl+V로 스크린샷 붙여넣기 가능!" onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))saveWorkJournal()" onpaste="wjHandlePaste(event)"></textarea>
+          <div class="wj-attach-row">
+            <button class="wj-attach-btn" onclick="document.getElementById('wjFileInput').click()">&#128247; 사진 첨부</button>
+            <span class="wj-paste-hint">Ctrl+V 붙여넣기 OK</span>
+            <input type="file" id="wjFileInput" multiple accept="image/*" style="display:none" onchange="wjHandleFileSelect(event)">
+          </div>
+          <div class="wj-preview-images" id="wjImagePreview"></div>
+        </div>
         <div class="wj-controls">
           <select class="wj-select" id="wjLag" onchange="onWjLagChange()">
             <option value="">지표 선택 (선택)</option>
@@ -3369,7 +3396,6 @@ function renderWorkJournal() {
       <div class="wj-indicator-preview" id="wjPreview"></div>
     </div>
 
-    <!-- 타임라인 -->
     <div class="wj-timeline">
       <div class="wj-timeline-header">
         <h3>&#128203; 활동 기록</h3>
@@ -3418,12 +3444,80 @@ function onWjLagChange() {
   }
 }
 
+// 이미지 파일 선택
+function wjHandleFileSelect(e) {
+  const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+  files.forEach(f => {
+    const url = URL.createObjectURL(f);
+    wjPendingImages.push({file:f, previewUrl:url});
+  });
+  wjRenderImagePreviews();
+  e.target.value = '';
+}
+
+// 클립보드 붙여넣기 (Ctrl+V 스크린샷)
+function wjHandlePaste(e) {
+  const items = Array.from(e.clipboardData?.items || []);
+  const imageItems = items.filter(i => i.type.startsWith('image/'));
+  if (imageItems.length === 0) return;
+  e.preventDefault();
+  imageItems.forEach(item => {
+    const file = item.getAsFile();
+    if (file) {
+      const url = URL.createObjectURL(file);
+      wjPendingImages.push({file, previewUrl:url});
+    }
+  });
+  wjRenderImagePreviews();
+  toast(`이미지 ${imageItems.length}장 붙여넣기 완료`);
+}
+
+function wjRenderImagePreviews() {
+  const container = document.getElementById('wjImagePreview');
+  if (!container) return;
+  container.innerHTML = wjPendingImages.map((img, i) =>
+    `<div class="wj-preview-img">
+      <img src="${img.previewUrl}" alt="첨부 ${i+1}">
+      <button class="remove" onclick="wjRemoveImage(${i})">&times;</button>
+    </div>`
+  ).join('');
+}
+
+function wjRemoveImage(index) {
+  URL.revokeObjectURL(wjPendingImages[index].previewUrl);
+  wjPendingImages.splice(index, 1);
+  wjRenderImagePreviews();
+}
+
+async function wjUploadImages(journalId) {
+  if (wjPendingImages.length === 0) return [];
+  const urls = [];
+  for (let i = 0; i < wjPendingImages.length; i++) {
+    const file = wjPendingImages[i].file;
+    const ext = file.name?.split('.').pop() || 'png';
+    const path = `work_journal/${currentUser?.id || 'anon'}/${journalId}_${i}.${ext}`;
+    const ref = storage.ref(path);
+    await ref.put(file);
+    const url = await ref.getDownloadURL();
+    urls.push(url);
+  }
+  return urls;
+}
+
+// 라이트박스
+function wjOpenLightbox(url) {
+  const lb = document.createElement('div');
+  lb.className = 'wj-lightbox';
+  lb.onclick = () => lb.remove();
+  lb.innerHTML = `<button class="wj-lightbox-close">&times;</button><img src="${url}" onclick="event.stopPropagation()">`;
+  document.body.appendChild(lb);
+}
+
 async function loadWorkJournalLogs() {
   const timeline = document.getElementById('wjTimeline');
   if (!timeline) return;
 
   try {
-    // 해당 날짜의 로그 조회 (현재 사용자)
     const snap = await db.collection('kpi_work_journal')
       .where('userId', '==', currentUser?.id || '')
       .where('date', '==', wjDate)
@@ -3432,58 +3526,138 @@ async function loadWorkJournalLogs() {
 
     wjLogs = snap.docs.map(d => ({id:d.id,...d.data()}));
 
-    // 배지 업데이트 (오늘 건수)
     if (wjDate === localDateStr(new Date())) {
       const badge = document.getElementById('badgeJournal');
       if (badge) { badge.textContent = wjLogs.length; badge.style.display = wjLogs.length > 0 ? '' : 'none'; }
     }
+
+    // 미연결 건수 알림
+    const unlinkedCount = wjLogs.filter(l => !l.lagId).length;
 
     if (wjLogs.length === 0) {
       timeline.innerHTML = '<div class="wj-empty">&#128173; 아직 기록이 없습니다. 위에서 한 일을 적어보세요!</div>';
       return;
     }
 
-    timeline.innerHTML = wjLogs.map(log => {
+    let html = '';
+    // 미연결 알림 배너
+    if (unlinkedCount > 0) {
+      html += `<div class="wj-unlinked-banner">
+        <div class="msg">&#128276; KPI 미연결 기록 <strong>${unlinkedCount}건</strong> — 지표를 연결하면 성과에 반영됩니다</div>
+        <button class="link-btn" onclick="wjScrollToFirstUnlinked()">연결하러 가기</button>
+      </div>`;
+    }
+
+    html += wjLogs.map(log => {
       const hasKpi = !!log.lagId;
       const time = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) : '';
       const lag = laggingIndicators.find(l => l.id === log.lagId);
       const proj = projects.find(p => p.id === log.projectId);
-      return `<div class="wj-log-item">
+      const images = log.images || [];
+
+      // 미연결 건: 지표 연결 드롭다운
+      const unlinkedHtml = !hasKpi ? `<div class="wj-unlinked-banner" style="margin:4px 0" data-unlinked="true">
+        <select class="wj-select" id="wjLink_${log.id}" style="flex:1;font-size:11px;padding:4px 8px" onchange="wjLinkIndicator('${log.id}',this.value)">
+          <option value="">&#127919; 지표 연결하기...</option>
+          ${laggingIndicators.filter(l=>l.isActive!==false).map(l => {
+            const lbl = [keyResults.find(k=>k.id===l.krId)?.name, kpis.find(k=>k.id===l.kpiId)?.name, l.name].filter(Boolean).join(' > ');
+            return '<option value="'+l.id+'">'+esc(lbl)+'</option>';
+          }).join('')}
+        </select>
+      </div>` : '';
+
+      return `<div class="wj-log-item" ${!hasKpi?'data-unlinked="1"':''}>
         <div class="wj-log-time">${time}</div>
         <div class="wj-log-dot ${hasKpi?'kpi':'plain'}"></div>
         <div class="wj-log-body">
           <div class="wj-log-text">${esc(log.text || '')}</div>
+          ${images.length > 0 ? `<div class="wj-log-images">${images.map(url => `<div class="wj-log-img" onclick="wjOpenLightbox('${url}')"><img src="${url}" loading="lazy"></div>`).join('')}</div>` : ''}
           <div class="wj-log-meta">
-            ${hasKpi ? `<span class="wj-log-tag kpi">&#127919; ${esc(log.lagName || lag?.name || '')} +${log.value||1}${log.unit||'건'}</span>` : '<span class="wj-log-tag" style="background:var(--gray-100);color:var(--gray-500)">KPI 미연결</span>'}
+            ${hasKpi ? `<span class="wj-log-tag kpi">&#127919; ${esc(log.lagName || lag?.name || '')} +${log.value||1}${log.unit||'건'}</span>` : ''}
             ${proj ? `<span class="wj-log-tag proj">${esc(proj.title)}</span>` : ''}
             <button class="wj-log-delete" onclick="deleteWorkJournal('${log.id}',${hasKpi?'true':'false'},'${log.lagId||''}',${log.value||1})" title="삭제">&times;</button>
           </div>
+          ${unlinkedHtml}
         </div>
       </div>`;
     }).join('');
+
+    timeline.innerHTML = html;
   } catch(err) {
     console.error('업무일지 로드 실패:', err);
     timeline.innerHTML = '<div class="wj-empty" style="color:var(--danger)">로드 실패. 새로고침 해보세요.</div>';
   }
 }
 
+// 미연결 기록에서 바로 지표 연결
+async function wjLinkIndicator(logId, lagId) {
+  if (!lagId) return;
+  const lag = laggingIndicators.find(l => l.id === lagId);
+  if (!lag) return;
+  const log = wjLogs.find(l => l.id === logId);
+  const value = log?.value || 1;
+
+  try {
+    // 1) 업무일지 문서에 지표 연결
+    await db.collection('kpi_work_journal').doc(logId).update({
+      lagId,
+      lagName: lag.name || '',
+      value: value || 1,
+      unit: lag.unit || '건',
+      updatedAt: TS()
+    });
+
+    // 2) KPI 반영
+    await db.collection('okr_laggingIndicators').doc(lagId).update({
+      currentValue: INC(value || 1),
+      updatedAt: TS()
+    });
+
+    // 3) dailyLog 기록
+    await db.collection('okr_dailyLogs').add({
+      type: 'work_journal_linked',
+      lagId,
+      lagName: lag.name || '',
+      krId: lag.krId || null,
+      taskId: logId,
+      taskTitle: (log?.text || '').substring(0, 50),
+      value: value || 1,
+      memberId: currentUser?.id,
+      memberName: currentUser?.name,
+      date: log?.date || wjDate,
+      createdAt: TS()
+    });
+
+    toast(`${lag.name} 연결 + KPI +${value||1}${lag.unit||'건'} 반영!`, 'success');
+    loadWorkJournalLogs();
+  } catch(err) {
+    console.error('지표 연결 실패:', err);
+    toast('연결 실패','error');
+  }
+}
+
+function wjScrollToFirstUnlinked() {
+  const el = document.querySelector('.wj-log-item[data-unlinked="1"]');
+  if (el) { el.scrollIntoView({behavior:'smooth',block:'center'}); el.style.background = '#FFF7ED'; setTimeout(()=>el.style.background='',2000); }
+}
+
 async function saveWorkJournal() {
   const text = document.getElementById('wjText')?.value.trim();
-  if (!text) return toast('한 일을 입력해주세요','error');
+  if (!text && wjPendingImages.length === 0) return toast('한 일을 입력하거나 사진을 첨부해주세요','error');
 
   const lagId = document.getElementById('wjLag')?.value || null;
   const projectId = document.getElementById('wjProject')?.value || null;
   const value = parseInt(document.getElementById('wjValue')?.value) || 1;
 
   const btn = document.querySelector('.wj-btn-submit');
-  if (btn) { btn.disabled = true; btn.textContent = '저장중...'; }
+  if (btn) { btn.disabled = true; btn.textContent = wjPendingImages.length > 0 ? '사진 업로드중...' : '저장중...'; }
 
   try {
     const lag = lagId ? laggingIndicators.find(l => l.id === lagId) : null;
     const proj = projectId ? projects.find(p => p.id === projectId) : null;
 
     const logData = {
-      text,
+      text: text || '',
       lagId: lagId || null,
       lagName: lag?.name || null,
       projectId: projectId || null,
@@ -3493,42 +3667,58 @@ async function saveWorkJournal() {
       userId: currentUser?.id || null,
       userName: currentUser?.name || null,
       date: wjDate,
+      images: [],
       createdAt: TS(),
       updatedAt: TS()
     };
 
-    // 1) 업무일지 저장
+    // 1) 업무일지 먼저 저장 (ID 확보)
     const ref = await db.collection('kpi_work_journal').add(logData);
 
-    // 2) 지표 선택했으면 KPI 자동 반영
+    // 2) 이미지 업로드
+    if (wjPendingImages.length > 0) {
+      if (btn) btn.textContent = `사진 업로드중... (0/${wjPendingImages.length})`;
+      const imageUrls = [];
+      for (let i = 0; i < wjPendingImages.length; i++) {
+        if (btn) btn.textContent = `사진 업로드중... (${i+1}/${wjPendingImages.length})`;
+        const file = wjPendingImages[i].file;
+        const ext = file.name?.split('.').pop() || 'png';
+        const path = `work_journal/${currentUser?.id||'anon'}/${ref.id}_${i}.${ext}`;
+        const storageRef = storage.ref(path);
+        await storageRef.put(file);
+        const url = await storageRef.getDownloadURL();
+        imageUrls.push(url);
+      }
+      await db.collection('kpi_work_journal').doc(ref.id).update({ images: imageUrls });
+    }
+
+    // 3) 지표 선택했으면 KPI 자동 반영
     if (lagId && lag) {
-      // okr_laggingIndicators currentValue 증가
       await db.collection('okr_laggingIndicators').doc(lagId).update({
         currentValue: INC(value),
         updatedAt: TS()
       });
-
-      // okr_dailyLogs에 기록 (기존 그로스보드 호환)
       await db.collection('okr_dailyLogs').add({
         type: 'work_journal',
         lagId,
         lagName: lag.name || '',
         krId: lag.krId || null,
         taskId: ref.id,
-        taskTitle: text.substring(0, 50),
+        taskTitle: (text || '사진 기록').substring(0, 50),
         value,
         memberId: currentUser?.id,
         memberName: currentUser?.name,
         date: wjDate,
         createdAt: TS()
       });
-
       toast(`기록 완료! ${lag.name} +${value}${lag.unit||'건'} KPI 반영됨`, 'success');
     } else {
-      toast('기록 완료!', 'success');
+      toast('기록 완료!' + (wjPendingImages.length > 0 ? ` (사진 ${wjPendingImages.length}장)` : ''), 'success');
     }
 
     // 입력 초기화
+    wjPendingImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
+    wjPendingImages = [];
     document.getElementById('wjText').value = '';
     document.getElementById('wjLag').value = '';
     document.getElementById('wjProject').value = '';
@@ -3536,8 +3726,9 @@ async function saveWorkJournal() {
     document.getElementById('wjValue').value = '1';
     document.getElementById('wjPreview').style.display = 'none';
     document.getElementById('wjUnit').textContent = '건';
+    const imgPreview = document.getElementById('wjImagePreview');
+    if (imgPreview) imgPreview.innerHTML = '';
 
-    // 타임라인 새로고침
     loadWorkJournalLogs();
   } catch(err) {
     console.error('업무일지 저장 실패:', err);
