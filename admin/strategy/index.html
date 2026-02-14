@@ -1407,6 +1407,8 @@
   </style>
   <!-- PPT 생성 라이브러리 -->
   <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+  <!-- Excel 다운로드 라이브러리 (SheetJS) -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <!-- 로그인 화면 -->
@@ -1728,6 +1730,7 @@
             <button onclick="openQuickIndicatorModal()" style="padding: 8px 16px; border: none; border-radius: 8px; background: linear-gradient(135deg, #059669, #10B981); cursor: pointer; font-size: 12px; font-weight: 700; color: white; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(5,150,105,0.3);">📝 업무등록</button>
             <button onclick="openTaskPlanModal()" style="padding: 8px 14px; border: 1px solid var(--primary); border-radius: 8px; background: var(--primary-light); cursor: pointer; font-size: 12px; font-weight: 600; color: var(--primary); display: flex; align-items: center; gap: 4px;">+ 프로젝트</button>
             <button onclick="openTaskRequestModal()" style="padding: 8px 14px; border: 1px solid var(--gray-300); border-radius: 8px; background: white; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--gray-600); display: flex; align-items: center; gap: 4px;">📨 요청</button>
+            <button onclick="downloadTaskDataExcel()" style="padding: 8px 14px; border: 1px solid #6366F1; border-radius: 8px; background: linear-gradient(135deg, #EEF2FF, #E0E7FF); cursor: pointer; font-size: 12px; font-weight: 700; color: #4F46E5; display: flex; align-items: center; gap: 4px; box-shadow: 0 1px 4px rgba(99,102,241,0.2);">📥 Excel 다운로드</button>
           </div>
         </div>
 
@@ -29829,6 +29832,192 @@
     function closeMondayBanner() {
       const banner = document.getElementById('mondayPlanBanner');
       if (banner) banner.remove();
+    }
+
+    // ========================================
+    // Excel 다운로드 (업무 + 지표 데이터 → KPI업무관리 이전용)
+    // ========================================
+    async function downloadTaskDataExcel() {
+      const btn = event?.target?.closest('button');
+      if (btn) { btn.disabled = true; btn.textContent = '📥 준비중...'; }
+
+      try {
+        // 1) 데이터 로드
+        const [taskSnap, lagSnap, krSnap, kpiSnap] = await Promise.all([
+          db.collection('taskPlans').orderBy('createdAt','desc').get(),
+          db.collection('okr_laggingIndicators').get(),
+          db.collection('okr_keyResults').orderBy('order','asc').get(),
+          db.collection('okr_kpis').get()
+        ]);
+
+        const tasks = taskSnap.docs.map(d => ({id:d.id,...d.data()}));
+        const lags = lagSnap.docs.map(d => ({id:d.id,...d.data()}));
+        const krs = krSnap.docs.map(d => ({id:d.id,...d.data()}));
+        const kpisData = kpiSnap.docs.map(d => ({id:d.id,...d.data()}));
+        const members = state.teamMembers || [];
+
+        // 헬퍼: Firestore timestamp → 날짜 문자열
+        function tsToStr(v) {
+          if (!v) return '';
+          if (typeof v === 'string') return v;
+          if (v.toDate) return v.toDate().toISOString().split('T')[0];
+          if (v.seconds) return new Date(v.seconds*1000).toISOString().split('T')[0];
+          return '';
+        }
+
+        // 헬퍼: ID → 이름 매핑
+        function krName(id) { const kr = krs.find(k=>k.id===id); return kr?.name||kr?.title||''; }
+        function kpiName(id) { const k = kpisData.find(x=>x.id===id); return k?.name||k?.title||''; }
+        function lagName(id) { const l = lags.find(x=>x.id===id); return l?.name||l?.title||''; }
+        function memberName(id) { const m = members.find(x=>x.id===id); return m?.name||id||''; }
+
+        const statusLabel = {waiting:'대기',doing:'진행중',done:'완료',stopped:'보류',overdue:'지연'};
+
+        // 2) Sheet 1: 담당자별 업무 전체 목록
+        const taskRows = tasks.map(t => ({
+          '담당자': t.assignee || memberName(t.assigneeId) || '미배정',
+          '업무명': t.title || '',
+          '상태': statusLabel[t.status] || t.status || '',
+          '우선순위': t.priority || '',
+          'Key Result': krName(t.krId),
+          '서브KPI': kpiName(t.kpiId),
+          '연결 성과지표': t.linkedLagName || lagName(t.laggingIndicatorId) || '',
+          '지표유형': t.linkedLagType==='output'?'성과형':t.linkedLagType==='input'?'활동형':'',
+          '생성일': tsToStr(t.createdAt),
+          '마감일': t.deadline || t.dueDate || '',
+          '시작일': t.startedAt || '',
+          '완료일': t.actualCompletionDate || '',
+          '주간반복': t.isWeeklyRecurring ? 'O' : '',
+          '지연사유': t.delayReason || '',
+          '설명': t.description || '',
+          '체크리스트': (t.checklist||[]).map(c => `[${c.checked?'V':' '}] ${c.text}`).join(' / ') || '',
+          '업무ID': t.id
+        }));
+
+        // 담당자 > 상태 > 마감일 순 정렬
+        taskRows.sort((a,b) => {
+          if (a['담당자'] !== b['담당자']) return a['담당자'].localeCompare(b['담당자'],'ko');
+          const so = {'진행중':0,'대기':1,'지연':2,'보류':3,'완료':4};
+          if ((so[a['상태']]||9) !== (so[b['상태']]||9)) return (so[a['상태']]||9) - (so[b['상태']]||9);
+          return (a['마감일']||'9999').localeCompare(b['마감일']||'9999');
+        });
+
+        // 3) Sheet 2: 성과지표(Lagging Indicators) 전체
+        const lagRows = lags.map(l => {
+          const kr = krs.find(k=>k.id===l.krId);
+          const kpi = kpisData.find(k=>k.id===l.kpiId);
+          const pct = l.targetValue ? Math.round(((l.currentValue||0)/l.targetValue)*100) : 0;
+          const linkedTasks = tasks.filter(t => t.laggingIndicatorId===l.id);
+          return {
+            'Key Result': kr?.name||kr?.title||'',
+            '서브KPI': kpi?.name||kpi?.title||'',
+            '지표명': l.name||l.title||'',
+            '유형': l.type==='output'?'성과형':'활동형',
+            '단위': l.unit||'건',
+            '목표값': l.targetValue||0,
+            '현재값': l.currentValue||0,
+            '달성률(%)': pct,
+            '기간': l.period==='monthly'?'월간':l.period==='quarterly'?'분기':l.period||'',
+            '연결 업무수': linkedTasks.length,
+            '연결 업무': linkedTasks.map(t=>t.title).join(', '),
+            '담당자': [...new Set(linkedTasks.map(t=>t.assignee||memberName(t.assigneeId)).filter(Boolean))].join(', '),
+            '지표ID': l.id
+          };
+        });
+
+        lagRows.sort((a,b) => {
+          if (a['Key Result'] !== b['Key Result']) return a['Key Result'].localeCompare(b['Key Result'],'ko');
+          return a['서브KPI'].localeCompare(b['서브KPI'],'ko');
+        });
+
+        // 4) Sheet 3: 담당자별 요약
+        const memberMap = {};
+        tasks.forEach(t => {
+          const name = t.assignee || memberName(t.assigneeId) || '미배정';
+          if (!memberMap[name]) memberMap[name] = {total:0,doing:0,done:0,waiting:0,stopped:0,overdue:0,lags:new Set()};
+          memberMap[name].total++;
+          memberMap[name][t.status] = (memberMap[name][t.status]||0) + 1;
+          if (t.laggingIndicatorId) memberMap[name].lags.add(t.laggingIndicatorId);
+        });
+
+        const summaryRows = Object.entries(memberMap).map(([name,v]) => ({
+          '담당자': name,
+          '전체 업무': v.total,
+          '진행중': v.doing||0,
+          '대기': v.waiting||0,
+          '완료': v.done||0,
+          '보류': v.stopped||0,
+          '지연': v.overdue||0,
+          '완료율(%)': v.total ? Math.round((v.done||0)/v.total*100) : 0,
+          '연결 지표수': v.lags.size
+        }));
+        summaryRows.sort((a,b) => a['담당자'].localeCompare(b['담당자'],'ko'));
+
+        // 5) Sheet 4: KPI 구조 (KR → KPI → 지표 계층)
+        const structRows = [];
+        krs.forEach(kr => {
+          const krKpis = kpisData.filter(k => k.keyResultId===kr.id || k.krId===kr.id);
+          if (krKpis.length === 0) {
+            structRows.push({'Key Result':kr.name||kr.title,'서브KPI':'(없음)','지표명':'','유형':'','목표':'','현재':'','달성률':''});
+          }
+          krKpis.forEach(kpi => {
+            const kpiLags = lags.filter(l => l.kpiId===kpi.id);
+            if (kpiLags.length === 0) {
+              structRows.push({'Key Result':kr.name||kr.title,'서브KPI':kpi.name||kpi.title,'지표명':'(없음)','유형':'','목표':'','현재':'','달성률':''});
+            }
+            kpiLags.forEach(l => {
+              const pct = l.targetValue ? Math.round(((l.currentValue||0)/l.targetValue)*100) : 0;
+              structRows.push({
+                'Key Result':kr.name||kr.title,
+                '서브KPI':kpi.name||kpi.title,
+                '지표명':l.name||l.title||'',
+                '유형':l.type==='output'?'성과형':'활동형',
+                '목표':l.targetValue||0,
+                '현재':l.currentValue||0,
+                '달성률':pct+'%'
+              });
+            });
+          });
+        });
+
+        // 6) Excel 워크북 생성
+        const wb = XLSX.utils.book_new();
+
+        // Sheet 1: 업무 전체 목록
+        const ws1 = XLSX.utils.json_to_sheet(taskRows);
+        // 컬럼 너비 설정
+        ws1['!cols'] = [
+          {wch:10},{wch:35},{wch:8},{wch:8},{wch:20},{wch:20},{wch:20},{wch:8},
+          {wch:12},{wch:12},{wch:12},{wch:12},{wch:6},{wch:20},{wch:40},{wch:30},{wch:24}
+        ];
+        XLSX.utils.book_append_sheet(wb, ws1, '업무 전체목록');
+
+        // Sheet 2: 성과지표
+        const ws2 = XLSX.utils.json_to_sheet(lagRows);
+        ws2['!cols'] = [{wch:20},{wch:20},{wch:20},{wch:8},{wch:6},{wch:8},{wch:8},{wch:10},{wch:8},{wch:10},{wch:40},{wch:15},{wch:24}];
+        XLSX.utils.book_append_sheet(wb, ws2, '성과지표 목록');
+
+        // Sheet 3: 담당자별 요약
+        const ws3 = XLSX.utils.json_to_sheet(summaryRows);
+        ws3['!cols'] = [{wch:10},{wch:10},{wch:8},{wch:8},{wch:8},{wch:8},{wch:8},{wch:10},{wch:10}];
+        XLSX.utils.book_append_sheet(wb, ws3, '담당자별 요약');
+
+        // Sheet 4: KPI 구조
+        const ws4 = XLSX.utils.json_to_sheet(structRows);
+        ws4['!cols'] = [{wch:25},{wch:25},{wch:25},{wch:8},{wch:8},{wch:8},{wch:8}];
+        XLSX.utils.book_append_sheet(wb, ws4, 'KPI 구조');
+
+        // 7) 다운로드
+        const today = new Date().toISOString().split('T')[0];
+        XLSX.writeFile(wb, `업무관리_이전용_${today}.xlsx`);
+
+        showToast(`Excel 다운로드 완료! (업무 ${tasks.length}건, 지표 ${lags.length}건)`);
+      } catch(err) {
+        console.error('Excel 다운로드 실패:', err);
+        alert('Excel 다운로드 중 오류: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '📥 Excel 다운로드'; }
+      }
     }
 
     // ========================================
