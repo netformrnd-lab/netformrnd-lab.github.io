@@ -716,9 +716,37 @@
       .exp-action-row { flex-wrap:wrap; }
       .exp-action-stats { width:100%; justify-content:space-around; padding-top:8px; border-top:1px solid var(--gray-200); }
     }
+    /* Debug Console Banner */
+    .debug-banner { position:fixed; bottom:0; left:0; right:0; z-index:99999; background:#1a1a2e; color:#0f0; font-family:'Courier New',monospace; font-size:11px; max-height:180px; overflow-y:auto; border-top:2px solid #e94560; display:none; }
+    .debug-banner.show { display:block; }
+    .debug-banner-header { display:flex; align-items:center; justify-content:space-between; padding:6px 12px; background:#16213e; position:sticky; top:0; }
+    .debug-banner-header span { color:#e94560; font-weight:700; font-size:12px; }
+    .debug-banner-header button { background:none; border:1px solid #e94560; color:#e94560; font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; font-family:inherit; }
+    .debug-banner-header button:hover { background:#e94560; color:white; }
+    .debug-log { padding:6px 12px; border-bottom:1px solid #16213e; line-height:1.5; word-break:break-all; }
+    .debug-log.error { color:#ff6b6b; }
+    .debug-log.warn { color:#ffd93d; }
+    .debug-log.info { color:#6bcb77; }
+    .debug-log .ts { color:#4d96ff; margin-right:6px; }
+    .debug-toggle { position:fixed; bottom:8px; right:8px; z-index:99998; width:36px; height:36px; border-radius:50%; background:#e94560; color:white; border:none; font-size:16px; cursor:pointer; box-shadow:0 2px 8px rgba(233,69,96,0.4); display:flex; align-items:center; justify-content:center; }
+    .debug-toggle:hover { background:#c23152; }
   </style>
 </head>
 <body>
+
+<!-- Debug Console Banner -->
+<div class="debug-banner" id="debugBanner">
+  <div class="debug-banner-header">
+    <span>&#128187; 디버그 콘솔</span>
+    <div style="display:flex;gap:6px">
+      <button onclick="clearDebugLog()">Clear</button>
+      <button onclick="copyDebugLog()">Copy</button>
+      <button onclick="toggleDebugBanner()">닫기</button>
+    </div>
+  </div>
+  <div id="debugLogList"></div>
+</div>
+<button class="debug-toggle" id="debugToggle" onclick="toggleDebugBanner()" title="디버그 콘솔">&#128187;</button>
 
 <!-- Login -->
 <div class="login-screen" id="loginScreen">
@@ -728,6 +756,7 @@
     <input type="text" class="form-input" id="loginId" placeholder="아이디" onkeydown="if(event.key==='Enter')doLogin()">
     <input type="password" class="form-input" id="loginPw" placeholder="비밀번호" onkeydown="if(event.key==='Enter')doLogin()">
     <button class="btn-primary" onclick="doLogin()">로그인</button>
+    <div id="loginDebugInfo" style="margin-top:12px;text-align:left;font-size:11px;color:#999;display:none"></div>
   </div>
 </div>
 
@@ -1217,18 +1246,70 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
 
 <script>
-// ===== Firebase =====
-firebase.initializeApp({
-  apiKey:"AIzaSyAQf_Cu9wMji5QsMBQns5eg6nOD_vmrZMs",
-  authDomain:"moyeora-deal-manager.firebaseapp.com",
-  projectId:"moyeora-deal-manager",
-  storageBucket:"moyeora-deal-manager.firebasestorage.app",
-  messagingSenderId:"527148187832",
-  appId:"1:527148187832:web:dc35b0413a7157db34744d"
+// ===== Debug Console =====
+const _debugLogs = [];
+function _dlog(msg, type='info') {
+  const ts = new Date().toLocaleTimeString('ko-KR',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  _debugLogs.push({ts, msg:String(msg), type});
+  const list = document.getElementById('debugLogList');
+  if (list) {
+    const el = document.createElement('div');
+    el.className = 'debug-log ' + type;
+    el.innerHTML = `<span class="ts">[${ts}]</span>${String(msg).replace(/</g,'&lt;')}`;
+    list.appendChild(el);
+    list.scrollTop = list.scrollHeight;
+  }
+}
+function toggleDebugBanner() {
+  const b = document.getElementById('debugBanner');
+  b.classList.toggle('show');
+}
+function clearDebugLog() {
+  _debugLogs.length = 0;
+  document.getElementById('debugLogList').innerHTML = '';
+}
+function copyDebugLog() {
+  const text = _debugLogs.map(l => `[${l.ts}][${l.type}] ${l.msg}`).join('\n');
+  navigator.clipboard.writeText(text).then(() => _dlog('로그 클립보드 복사 완료','info')).catch(() => {});
+}
+// 글로벌 에러 캡처
+window.addEventListener('error', function(e) {
+  _dlog(`JS ERROR: ${e.message} (${e.filename}:${e.lineno})`, 'error');
 });
+window.addEventListener('unhandledrejection', function(e) {
+  _dlog(`PROMISE REJECTED: ${e.reason}`, 'error');
+});
+// console 오버라이드 (원본 보존)
+const _origConsole = { log:console.log, error:console.error, warn:console.warn };
+console.log = function(...args) { _origConsole.log.apply(console, args); _dlog(args.map(a => typeof a==='object'?JSON.stringify(a):String(a)).join(' '), 'info'); };
+console.error = function(...args) { _origConsole.error.apply(console, args); _dlog(args.map(a => typeof a==='object'?JSON.stringify(a):String(a)).join(' '), 'error'); };
+console.warn = function(...args) { _origConsole.warn.apply(console, args); _dlog(args.map(a => typeof a==='object'?JSON.stringify(a):String(a)).join(' '), 'warn'); };
+
+_dlog('페이지 로드됨, Firebase 초기화 시작...', 'info');
+
+// ===== Firebase =====
+try {
+  firebase.initializeApp({
+    apiKey:"AIzaSyAQf_Cu9wMji5QsMBQns5eg6nOD_vmrZMs",
+    authDomain:"moyeora-deal-manager.firebaseapp.com",
+    projectId:"moyeora-deal-manager",
+    storageBucket:"moyeora-deal-manager.firebasestorage.app",
+    messagingSenderId:"527148187832",
+    appId:"1:527148187832:web:dc35b0413a7157db34744d"
+  });
+  _dlog('Firebase 초기화 성공', 'info');
+} catch(e) {
+  _dlog('Firebase 초기화 실패: ' + e.message, 'error');
+}
 const db = firebase.firestore();
 const TS = firebase.firestore.FieldValue.serverTimestamp;
 const INC = firebase.firestore.FieldValue.increment;
+
+// Firebase 연결 테스트
+_dlog('Firestore 연결 테스트 중...', 'info');
+db.collection('teamMembers').limit(1).get()
+  .then(snap => { _dlog(`Firestore 연결 OK (teamMembers: ${snap.size}건 확인)`, 'info'); })
+  .catch(err => { _dlog(`Firestore 연결 실패: ${err.code} - ${err.message}`, 'error'); });
 
 // ===== State =====
 let currentUser = null;
@@ -1268,15 +1349,48 @@ function doLogin() {
   const id = document.getElementById('loginId').value.trim();
   const pw = document.getElementById('loginPw').value.trim();
   if (!id || !pw) return toast('아이디와 비밀번호를 입력하세요','error');
+
+  const loginBtn = document.querySelector('#loginScreen .btn-primary');
+  if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '로그인 중...'; }
+  _dlog(`로그인 시도: id="${id}"`, 'info');
+
   db.collection('teamMembers').get().then(snap => {
+    _dlog(`teamMembers 조회 완료: ${snap.size}명`, 'info');
     const members = snap.docs.map(d => ({id:d.id,...d.data()}));
+
+    // 디버그: 계정 목록 표시
+    const debugInfo = document.getElementById('loginDebugInfo');
+    if (debugInfo) {
+      debugInfo.style.display = 'block';
+      debugInfo.innerHTML = `<div style="margin-bottom:4px;color:#666;font-weight:600">등록된 계정 (${members.length}명):</div>` +
+        members.map(m => `<div style="padding:2px 0;color:#888">${m.name||'?'} / loginId: ${m.loginId||'(없음)'}</div>`).join('');
+    }
+
+    _dlog(`계정 검색 중... 입력 id="${id}"`, 'info');
+    members.forEach(m => {
+      _dlog(`  - name="${m.name}", loginId="${m.loginId||'없음'}", hasPassword=${!!m.password}, hasLoginPw=${!!m.loginPw}`, 'info');
+    });
+
     const found = members.find(m => (m.loginId===id||m.name===id) && (m.password===pw||m.loginPw===pw));
-    if (!found) return toast('로그인 실패','error');
+    if (!found) {
+      _dlog(`로그인 실패: id="${id}" 일치 계정 없음`, 'error');
+      const idMatch = members.find(m => m.loginId===id||m.name===id);
+      if (idMatch) _dlog(`아이디 일치 계정 발견 (${idMatch.name}), 비밀번호 불일치`, 'warn');
+      else _dlog(`아이디 일치 계정 없음. loginId 또는 name 필드 확인 필요`, 'warn');
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = '로그인'; }
+      return toast('로그인 실패','error');
+    }
+
+    _dlog(`로그인 성공: ${found.name} (${found.id})`, 'info');
     currentUser = found;
     teamMembers = members;
     document.getElementById('loginScreen').style.display = 'none';
     initApp();
-  }).catch(() => toast('서버 오류','error'));
+  }).catch(err => {
+    _dlog(`로그인 서버 오류: ${err.code||''} ${err.message||err}`, 'error');
+    if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = '로그인'; }
+    toast('서버 오류: ' + (err.message||'네트워크 확인'),'error');
+  });
 }
 
 // ===== Listener Unsubscribe Management =====
