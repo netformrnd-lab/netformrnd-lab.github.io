@@ -2390,10 +2390,11 @@ function renderProjectDetail() {
         <button class="btn-secondary btn-sm" style="font-size:11px;padding:3px 10px;margin-left:auto" onclick="openAddLagModal('${p.id}')">+ 성과지표 추가</button>
       </div>
       ${relLags.map(l => {
-        const pct = l.targetValue ? Math.round((l.currentValue||0)/l.targetValue*100) : 0;
+        const ev = getEffectiveValue(l.id);
+        const pct = l.targetValue ? Math.round(ev/l.targetValue*100) : 0;
         return `<div class="lag-card">
           <div class="lag-info">
-            <div class="lag-name">${esc(l.name||l.title||'')}</div>
+            <div class="lag-name">${esc(l.name||l.title||'')} <span style="font-size:9px;padding:1px 5px;border-radius:4px;background:${l.type==='output'?'#FEF3C7':'#DBEAFE'};color:${l.type==='output'?'#D97706':'#2563EB'}">${l.type==='output'?'성과':'행동'}</span></div>
             <div class="lag-meta">
               <span>${esc(l.unit||'건')}</span>
               <span>${l.period==='quarterly'?'분기':l.period==='yearly'?'연간':'월간'}</span>
@@ -2401,7 +2402,7 @@ function renderProjectDetail() {
             </div>
           </div>
           <div class="lag-progress">
-            <div class="lag-value">${l.currentValue||0}</div>
+            <div class="lag-value">${ev}</div>
             <div class="lag-target">/ ${l.targetValue||'-'} ${esc(l.unit||'건')}</div>
           </div>
           <div style="width:60px"><div class="progress-bar-sm"><div class="progress-bar-fill" style="width:${Math.min(100,pct)}%;background:${pct>=100?'var(--success)':'var(--primary)'}"></div></div><div style="font-size:10px;color:var(--gray-400);text-align:center;margin-top:2px">${pct}%</div></div>
@@ -5224,6 +5225,20 @@ const MEETING_TYPES = {
 };
 
 // ===== OKR Calculation Functions =====
+// 핵심: dailyLogs를 진실의 단일 소스(SSOT)로 사용, currentValue는 캐시
+function getEffectiveValue(lagId) {
+  const logsSum = dailyLogs
+    .filter(l => (l.lagId || l.laggingIndicatorId) === lagId)
+    .reduce((s, l) => s + (Number(l.value || l.resultValue) || 0), 0);
+  const lag = laggingIndicators.find(l => l.id === lagId);
+  const cv = Number(lag?.currentValue) || 0;
+  // 완료된 액션 중 dailyLog 누락된 것 보정
+  const doneActionsVal = actions
+    .filter(a => a.lagId === lagId && a.status === 'done')
+    .reduce((s, a) => s + (Number(a.kpiValue) || 1), 0);
+  return Math.max(logsSum, cv, doneActionsVal);
+}
+
 function calcOkrKPIRate(kpiId) {
   const kpi = kpis.find(k => k.id === kpiId);
   if (!kpi) return '0.000';
@@ -5233,7 +5248,8 @@ function calcOkrKPIRate(kpiId) {
   if (targetLags.length === 0) return '0.000';
   const rates = targetLags.map(lag => {
     if (!lag.targetValue || lag.targetValue <= 0) return 0;
-    return Math.min(((lag.currentValue || 0) / lag.targetValue) * 100, 100);
+    const ev = getEffectiveValue(lag.id);
+    return Math.min((ev / lag.targetValue) * 100, 100);
   });
   return (rates.reduce((s,r) => s+r, 0) / rates.length).toFixed(3);
 }
@@ -5256,6 +5272,60 @@ function formatVal(v, unit) {
 }
 function gbGetTodayStr() { return localDateStr(new Date()); }
 function isMoneyUnit(u) { return ['원','만원','억','달러','$'].includes(u); }
+
+// ===== 데이터 동기화 (Firestore currentValue 재계산) =====
+async function syncAllKpiData() {
+  if (!confirm('모든 지표의 달성 데이터를 dailyLogs 기준으로 재계산합니다.\n(기존/신규 데이터 통합)')) return;
+  toast('데이터 동기화 중...');
+  let synced = 0, created = 0;
+  try {
+    // 1단계: 완료된 액션 중 dailyLog 누락 건 생성
+    for (const act of actions.filter(a => a.lagId && a.status === 'done')) {
+      const hasLog = dailyLogs.some(l =>
+        l.taskId === act.id && ((l.lagId || l.laggingIndicatorId) === act.lagId));
+      if (!hasLog) {
+        const lag = laggingIndicators.find(l => l.id === act.lagId);
+        await db.collection('okr_dailyLogs').add({
+          type: 'kpi_auto', lagId: act.lagId, laggingIndicatorId: act.lagId,
+          lagName: act.lagName || lag?.name || '', krId: act.krId || '',
+          taskId: act.id, taskTitle: act.title || '',
+          value: Number(act.kpiValue) || 1, resultValue: Number(act.kpiValue) || 1,
+          memberId: act.assigneeId || '', memberName: act.assignee || act.assigneeName || '',
+          date: act.actualCompletionDate || act.completedAt?.toDate?.()?.toISOString?.()?.slice(0,10) || localDateStr(new Date()),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        created++;
+      }
+    }
+    // 잠시 대기하여 onSnapshot이 새 로그를 반영하도록
+    if (created > 0) await new Promise(r => setTimeout(r, 1500));
+
+    // 2단계: 모든 지표의 currentValue를 dailyLogs 합산값으로 재계산
+    const batch = db.batch();
+    for (const lag of laggingIndicators) {
+      const logsSum = dailyLogs
+        .filter(l => (l.lagId || l.laggingIndicatorId) === lag.id)
+        .reduce((s, l) => s + (Number(l.value || l.resultValue) || 0), 0);
+      const doneSum = actions
+        .filter(a => a.lagId === lag.id && a.status === 'done')
+        .reduce((s, a) => s + (Number(a.kpiValue) || 1), 0);
+      const newVal = Math.max(logsSum, doneSum);
+      if (newVal !== (Number(lag.currentValue) || 0)) {
+        batch.update(db.collection('okr_laggingIndicators').doc(lag.id), {
+          currentValue: newVal,
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        synced++;
+      }
+    }
+    await batch.commit();
+    toast(`동기화 완료! 로그 ${created}건 생성, 지표 ${synced}개 업데이트`, 'success');
+    renderCurrentView();
+  } catch (e) {
+    console.error('syncAllKpiData error:', e);
+    toast('동기화 실패: ' + e.message, 'error');
+  }
+}
 
 // ===== Additional OKR Data Listeners =====
 function listenOkrExtended() {
@@ -5348,12 +5418,15 @@ function renderGrowthTeam() {
     return;
   }
 
-  // ===== 2. Mindmap Toggle Button =====
-  html += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+  // ===== 2. Mindmap Toggle + Sync + PNG Buttons =====
+  const unlinkedCount = actions.filter(a=>!a.lagId && a.status==='done').length;
+  html += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
     <button onclick="gbToggleMindmap()" style="padding:10px 16px;font-size:12px;font-weight:600;background:${gbMindmapVisible?'#D97706':'#F59E0B'};color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">
       ${gbMindmapVisible?'&#10005; 마인드맵 닫기':'&#128506; 마인드맵 보기'}
     </button>
+    <button onclick="syncAllKpiData()" style="padding:10px 16px;font-size:12px;font-weight:600;background:linear-gradient(135deg,#10B981,#059669);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128260; 데이터 동기화</button>
     <button onclick="gbSavePng('growthTeamScroll','팀그로스보드')" style="padding:10px 16px;font-size:12px;font-weight:600;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128248; PNG 저장</button>
+    ${unlinkedCount>0?`<span style="font-size:11px;color:var(--warning);background:#FEF3C7;padding:6px 12px;border-radius:8px;font-weight:600">&#9888; 미연결 완료 행동지표 ${unlinkedCount}개</span>`:''}
   </div>`;
 
   // ===== 3. SVG-style Mindmap (from index.html) =====
@@ -5533,7 +5606,7 @@ function renderGrowthTeam() {
       const rate = parseFloat(calcOkrKPIRate(kpi.id));
       const kpiLags = laggingIndicators.filter(l => l.kpiId===kpi.id);
       const target = kpi.targetValue || kpiLags.reduce((s,l)=>s+(l.targetValue||0),0);
-      const current = kpiLags.reduce((s,l)=>s+(l.currentValue||0),0);
+      const current = kpiLags.reduce((s,l)=>s+getEffectiveValue(l.id),0);
       kpiStatusData.push({...kpi, kr, krIdx:ki, rate, targetValue:target, currentValue:current,
         inputCount:kpiLags.filter(l=>l.type!=='output').length, outputCount:kpiLags.filter(l=>l.type==='output').length});
     });
@@ -5591,24 +5664,28 @@ function renderGrowthTeam() {
               <div>
                 <div style="font-size:11px;font-weight:600;color:var(--gray-600);margin-bottom:8px">&#128229; Input Metrics (행동지표) <span style="font-size:10px;padding:2px 6px;background:var(--gray-200);border-radius:8px">${inputs.length}개</span></div>
                 ${inputs.length>0?inputs.map(m => {
+                  const ev = getEffectiveValue(m.id);
                   const logs = dailyLogs.filter(l=>(l.laggingIndicatorId||l.lagId)===m.id);
-                  const total = logs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+                  const linkedActs = actions.filter(a=>a.lagId===m.id);
+                  const doneActs = linkedActs.filter(a=>a.status==='done').length;
+                  const pct = m.targetValue>0?Math.round(ev/m.targetValue*100):0;
                   const vLabel = m.version?'['+m.version+'] ':'';
                   return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:white;border-radius:8px;margin-bottom:4px;border:1px solid var(--gray-200)">
-                    <div><div style="font-size:11px;font-weight:500">${vLabel}${esc(m.name||'')}</div><div style="font-size:9px;color:var(--gray-400)">A/B 버전: ${m.version||'A'}</div></div>
-                    <div style="text-align:right"><div style="font-size:12px;font-weight:600">${total.toLocaleString()}${esc(m.unit||'건')}</div><div style="font-size:9px;color:var(--gray-400)">${logs.length}회 기록</div></div>
+                    <div><div style="font-size:11px;font-weight:500">${vLabel}${esc(m.name||'')}</div><div style="font-size:9px;color:var(--gray-400)">행동지표 ${linkedActs.length}개 (완료 ${doneActs}개) &#183; 기록 ${logs.length}회</div></div>
+                    <div style="text-align:right"><div style="font-size:12px;font-weight:600">${ev.toLocaleString()}${esc(m.unit||'건')}${m.targetValue>0?'<span style="font-size:10px;color:var(--gray-400)"> / '+m.targetValue.toLocaleString()+'</span>':''}</div><div style="font-size:9px;font-weight:600;color:${pct>=80?'var(--success)':pct>=50?'var(--warning)':'var(--gray-400)'}">${pct}%</div></div>
                   </div>`;
                 }).join(''):'<div style="font-size:11px;color:var(--gray-400);padding:10px;text-align:center">등록된 Input Metrics가 없습니다</div>'}
               </div>
               <div>
                 <div style="font-size:11px;font-weight:600;color:var(--success);margin-bottom:8px">&#128228; Output Metrics (성과지표) <span style="font-size:10px;padding:2px 6px;background:#ECFDF5;color:var(--success);border-radius:8px">${outputs.length}개</span></div>
                 ${outputs.length>0?outputs.map(m => {
+                  const ev = getEffectiveValue(m.id);
                   const logs = dailyLogs.filter(l=>(l.laggingIndicatorId||l.lagId)===m.id);
-                  const total = logs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+                  const pct = m.targetValue>0?Math.round(ev/m.targetValue*100):0;
                   const vLabel = m.version?'['+m.version+'] ':'';
                   return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:#ECFDF5;border-radius:8px;margin-bottom:4px;border:1px solid var(--success)">
-                    <div><div style="font-size:11px;font-weight:500">${vLabel}${esc(m.name||'')}</div><div style="font-size:9px;color:var(--gray-500)">A/B 버전: ${m.version||'A'}</div></div>
-                    <div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--success)">${formatVal(total,m.unit)}</div><div style="font-size:9px;color:var(--gray-500)">${logs.length}회 기록</div></div>
+                    <div><div style="font-size:11px;font-weight:500">${vLabel}${esc(m.name||'')}</div><div style="font-size:9px;color:var(--gray-500)">기록 ${logs.length}회${m.targetValue>0?' &#183; 목표 '+formatVal(m.targetValue,m.unit):''}</div></div>
+                    <div style="text-align:right"><div style="font-size:12px;font-weight:700;color:var(--success)">${formatVal(ev,m.unit)}</div><div style="font-size:9px;font-weight:600;color:${pct>=80?'var(--success)':pct>=50?'var(--warning)':'var(--gray-500)'}">${pct}%</div></div>
                   </div>`;
                 }).join(''):'<div style="font-size:11px;color:var(--gray-400);padding:10px;text-align:center">등록된 Output Metrics가 없습니다</div>'}
               </div>
@@ -5623,11 +5700,11 @@ function renderGrowthTeam() {
   // ===== 6. Input vs Output Summary (from index.html) =====
   const allInputLags = laggingIndicators.filter(l=>l.type!=='output');
   const allOutputLags = laggingIndicators.filter(l=>l.type==='output');
+  const totalInputVal = allInputLags.reduce((s,l)=>s+getEffectiveValue(l.id),0);
+  const totalOutputVal = allOutputLags.reduce((s,l)=>s+getEffectiveValue(l.id),0);
   const inputLogs = dailyLogs.filter(log => allInputLags.some(l=>l.id===(log.laggingIndicatorId||log.lagId)));
   const outputLogs = dailyLogs.filter(log => allOutputLags.some(l=>l.id===(log.laggingIndicatorId||log.lagId)));
-  const totalInputVal = inputLogs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
   const todayInputVal = inputLogs.filter(l=>l.date===todayStr).reduce((s,l)=>s+(l.resultValue||l.value||0),0);
-  const totalOutputVal = outputLogs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
   const todayOutputVal = outputLogs.filter(l=>l.date===todayStr).reduce((s,l)=>s+(l.resultValue||l.value||0),0);
 
   html += `<div class="gb-section">
@@ -5756,6 +5833,56 @@ function renderGrowthTeam() {
     html += '</div>';
   }
 
+  // ===== 9.5 Data Health: Legacy indicators + Unlinked actions =====
+  const orphanLags = laggingIndicators.filter(l => {
+    const ev = getEffectiveValue(l.id);
+    const hasAction = actions.some(a => a.lagId === l.id);
+    return ev > 0 && !hasAction;
+  });
+  const unlinkedDone = actions.filter(a => !a.lagId && a.status === 'done');
+  const noTypeLags = laggingIndicators.filter(l => !l.type);
+  if (orphanLags.length > 0 || unlinkedDone.length > 0 || noTypeLags.length > 0) {
+    html += `<div class="gb-section" style="border:2px solid var(--warning);background:#FFFBEB">
+      <div class="gb-section-title" style="color:#B45309">&#9888; 데이터 연결 현황 <span style="font-size:10px;font-weight:400">매핑이 필요한 항목을 확인하고 연결하세요</span></div>`;
+    if (orphanLags.length > 0) {
+      html += `<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:#92400E;margin-bottom:6px">&#128203; 기존 데이터 지표 (행동지표 미연결 - ${orphanLags.length}개)</div>`;
+      orphanLags.forEach(l => {
+        const ev = getEffectiveValue(l.id);
+        const logs = dailyLogs.filter(dl => (dl.lagId || dl.laggingIndicatorId) === l.id);
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:white;border-radius:8px;margin-bottom:4px;border:1px solid #FDE68A">
+          <span style="font-size:10px">${l.type==='output'?'&#128228;':'&#128229;'}</span>
+          <span style="flex:1;font-size:12px">${esc(l.name||'')} <span style="color:var(--gray-400)">(${esc(l.unit||'건')}, 기록 ${logs.length}회, 누적 ${ev})</span></span>
+          <span style="font-size:10px;padding:2px 8px;background:#FEF3C7;color:#92400E;border-radius:6px;font-weight:600">기존 데이터</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    if (unlinkedDone.length > 0) {
+      html += `<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;color:#92400E;margin-bottom:6px">&#9889; 완료했지만 지표 미연결 행동지표 (${unlinkedDone.length}개)</div>`;
+      unlinkedDone.slice(0, 5).forEach(a => {
+        const p = projects.find(x => x.id === a.projectId);
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:white;border-radius:8px;margin-bottom:4px;border:1px solid #FDE68A;cursor:pointer" onclick="openEditAction('${a.id}')">
+          <span style="font-size:10px">&#9989;</span>
+          <span style="flex:1;font-size:12px">${esc(a.title||'')} ${p?'<span style="color:var(--gray-400)">('+esc(p.title||'')+')</span>':''}</span>
+          <span style="font-size:10px;padding:2px 8px;background:#DBEAFE;color:var(--primary);border-radius:6px;font-weight:600;cursor:pointer">연결하기</span>
+        </div>`;
+      });
+      if (unlinkedDone.length > 5) html += `<div style="font-size:10px;color:#92400E;padding:4px 12px">외 ${unlinkedDone.length - 5}개</div>`;
+      html += '</div>';
+    }
+    if (noTypeLags.length > 0) {
+      html += `<div><div style="font-size:11px;font-weight:600;color:#92400E;margin-bottom:6px">&#128295; 유형 미설정 지표 (${noTypeLags.length}개) - 행동/성과 구분이 필요합니다</div>`;
+      noTypeLags.forEach(l => {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:white;border-radius:8px;margin-bottom:4px;border:1px solid #FDE68A;cursor:pointer" onclick="openLagModal('${l.id}','')">
+          <span style="font-size:12px">${esc(l.name||'')}</span>
+          <span style="font-size:10px;padding:2px 8px;background:#FEE2E2;color:var(--danger);border-radius:6px;font-weight:600">유형 설정</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
   // ===== 10. Hierarchical Mindmap (preserved from new) =====
   html += `<div class="gb-section">
     <div class="gb-section-title">&#128506; KPI 계층 마인드맵 <span style="font-size:10px;font-weight:400;color:var(--gray-400)">KR &#8594; KPI &#8594; 지표 &#8594; 연결 업무 + 기여자</span></div>
@@ -5776,7 +5903,8 @@ function renderGrowthTeam() {
         <div style="display:flex;align-items:center;justify-content:space-between"><span>&#128204; ${esc(kpi.name||kpi.title||'')}</span><span style="font-size:11px;font-weight:700;color:var(--purple)">${kpiRate}%</span></div>
       </div>`;
       kpiLags.forEach(l => {
-        const lPct = l.targetValue?Math.round((l.currentValue||0)/l.targetValue*100):0;
+        const lEv = getEffectiveValue(l.id);
+        const lPct = l.targetValue?Math.round(lEv/l.targetValue*100):0;
         const lColor = lPct>=100?'var(--success)':lPct>=50?'var(--primary)':'var(--gray-500)';
         const lagActions = actions.filter(a=>a.lagId===l.id);
         const lagDone = lagActions.filter(a=>a.status==='done').length;
@@ -5790,7 +5918,7 @@ function renderGrowthTeam() {
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span style="font-size:10px">${l.type==='input'?'&#128229;':'&#128228;'}</span>
             <span style="flex:1;font-size:12px">${esc(l.name||'')}</span>
-            <span style="font-weight:700;font-size:12px;color:${lColor}">${l.currentValue||0}<span style="color:var(--gray-400);font-weight:400">/${l.targetValue||'-'} ${esc(l.unit||'')}</span></span>
+            <span style="font-weight:700;font-size:12px;color:${lColor}">${lEv}<span style="color:var(--gray-400);font-weight:400">/${l.targetValue||'-'} ${esc(l.unit||'')}</span></span>
             <span style="font-size:11px;font-weight:700;color:${lColor}">${lPct}%</span>
           </div>`;
         if (lagActions.length>0) html += `<div style="display:flex;gap:6px;margin-top:3px;margin-left:18px;flex-wrap:wrap"><span style="font-size:10px;color:var(--gray-500)">&#9889; 업무 ${lagActions.length}건</span>${lagDone>0?'<span style="font-size:10px;color:var(--success)">&#9989;'+lagDone+'완료</span>':''}${lagDoing>0?'<span style="font-size:10px;color:var(--primary)">&#128994;'+lagDoing+'진행</span>':''}</div>`;
@@ -5827,6 +5955,7 @@ function renderGrowthPersonal() {
     </div>
     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <button onclick="pgbToggleMindmap()" style="padding:8px 14px;font-size:11px;font-weight:600;background:#6366F1;color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">${pgbMindmapVisible?'&#10005; 마인드맵 닫기':'&#128506; 마인드맵 보기'}</button>
+      <button onclick="syncAllKpiData()" style="padding:8px 14px;font-size:11px;font-weight:600;background:linear-gradient(135deg,#10B981,#059669);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128260; 동기화</button>
       <button onclick="gbSavePng('growthPersonalScroll','개인그로스보드')" style="padding:8px 14px;font-size:11px;font-weight:600;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128248; PNG 저장</button>
       <select class="gb-filter-select" onchange="pgbUpdatePeriod(this.value)" style="padding:8px 10px">
         <option value="all" ${pgbPeriodFilter==='all'?'selected':''}>전체 기간</option>
