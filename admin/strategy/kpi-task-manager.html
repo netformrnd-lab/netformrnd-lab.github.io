@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="KPI 업무관리 시스템 - OKR 기반 전략 실행 관리">
+  <meta name="theme-color" content="#3182f6">
   <title>KPI 업무관리 - 전략센터</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
   <style>
@@ -231,6 +233,14 @@
     .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 20px; color:var(--gray-400); }
     .empty-state .icon { font-size:32px; margin-bottom:8px; }
     .empty-state .text { font-size:13px; }
+
+    /* Accessibility: 키보드 포커스 표시 */
+    *:focus-visible { outline:2px solid var(--primary); outline-offset:2px; border-radius:4px; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+    /* Loading skeleton animation */
+    @keyframes shimmer { 0%{background-position:-200px 0} 100%{background-position:200px 0} }
+    .skeleton { background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-50) 50%,var(--gray-100) 75%); background-size:400px 100%; animation:shimmer 1.5s ease-in-out infinite; border-radius:6px; }
 
     /* Scrollbar */
     ::-webkit-scrollbar{width:6px;height:6px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:var(--gray-300);border-radius:3px} ::-webkit-scrollbar-thumb:hover{background:var(--gray-400)}
@@ -907,12 +917,14 @@
 <button class="debug-toggle" id="debugToggle" onclick="toggleDebugBanner()" title="디버그 콘솔">&#128187;</button>
 
 <!-- Login -->
-<div class="login-screen" id="loginScreen">
+<div class="login-screen" id="loginScreen" role="dialog" aria-label="로그인">
   <div class="login-box">
     <h2>KPI 업무관리</h2>
     <p>전략센터 계정으로 로그인하세요</p>
-    <input type="text" class="form-input" id="loginId" placeholder="아이디" onkeydown="if(event.key==='Enter')doLogin()">
-    <input type="password" class="form-input" id="loginPw" placeholder="비밀번호" onkeydown="if(event.key==='Enter')doLogin()">
+    <label for="loginId" class="sr-only">아이디</label>
+    <input type="text" class="form-input" id="loginId" placeholder="아이디" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
+    <label for="loginPw" class="sr-only">비밀번호</label>
+    <input type="password" class="form-input" id="loginPw" placeholder="비밀번호" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
     <button class="btn-primary" onclick="doLogin()">로그인</button>
     <div id="loginDebugInfo" style="margin-top:12px;text-align:left;font-size:11px;color:#999;display:none"></div>
   </div>
@@ -955,7 +967,7 @@
 </aside>
 
 <!-- Main -->
-<div class="main-content">
+<main class="main-content" role="main">
   <!-- Seed Banner -->
   <div class="seed-banner" id="seedBanner" style="display:none">
     <div class="msg">프로젝트 데이터가 없습니다. Sub-KPI 기반으로 초기 데이터를 등록하시겠습니까?<small>13개 서브KPI → 프로젝트 + 로드맵 + 행동지표 자동 생성</small></div>
@@ -983,6 +995,7 @@
       <button class="hamburger-btn" onclick="toggleSidebar()">&#9776;</button>
       <div class="topbar-title" id="topbarTitle">대시보드</div>
       <div class="topbar-count" id="topbarCount"></div>
+      <span id="syncStatusBadge" style="display:none;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;align-items:center;gap:3px"></span>
     </div>
     <div class="topbar-right" id="topbarRight">
       <div class="view-tabs" id="viewTabs" style="display:none">
@@ -1078,7 +1091,7 @@
   <div class="view-content" id="viewSchedule">
     <div class="gb-scroll" id="scheduleScroll" style="flex:1;overflow-y:auto;padding:20px 24px;"></div>
   </div>
-</div>
+</main>
 
 <!-- Schedule Detail/Edit Modal -->
 <div class="modal-overlay" id="scheduleModal" style="display:none">
@@ -1113,11 +1126,11 @@
 </div>
 
 <!-- Action Modal -->
-<div class="modal-overlay" id="actionModal">
+<div class="modal-overlay" id="actionModal" role="dialog" aria-modal="true" aria-labelledby="aModalTitle">
   <div class="modal">
     <div class="modal-header">
       <h3 id="aModalTitle">행동지표 등록</h3>
-      <button class="modal-close" onclick="closeActionModal()">&times;</button>
+      <button class="modal-close" onclick="closeActionModal()" aria-label="닫기">&times;</button>
     </div>
     <div class="modal-body">
       <div class="form-group">
@@ -1515,11 +1528,44 @@ const storage = firebase.storage();
 const TS = firebase.firestore.FieldValue.serverTimestamp;
 const INC = firebase.firestore.FieldValue.increment;
 
+// ===== Retry Helper for Firestore =====
+async function firestoreRetry(operation, maxRetries=3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try { return await operation(); }
+    catch(err) {
+      if (i === maxRetries - 1) throw err;
+      const isRetryable = ['unavailable','deadline-exceeded','resource-exhausted','aborted'].includes(err.code);
+      if (!isRetryable) throw err;
+      await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+    }
+  }
+}
+
+// ===== Debounce Helper =====
+function debounce(fn, ms=150) {
+  let timer;
+  return function(...args) { clearTimeout(timer); timer = setTimeout(() => fn.apply(this, args), ms); };
+}
+
+// ===== Sync Status Indicator =====
+let _syncOK = true;
+function setSyncStatus(ok) {
+  _syncOK = ok;
+  const badge = document.getElementById('syncStatusBadge');
+  if (badge) {
+    badge.style.display = 'inline-flex';
+    badge.textContent = ok ? '동기화됨' : '연결 끊김';
+    badge.style.background = ok ? 'var(--success-light)' : 'var(--danger-light)';
+    badge.style.color = ok ? 'var(--success)' : 'var(--danger)';
+    if (ok) setTimeout(() => { badge.style.display = 'none'; }, 2000);
+  }
+}
+
 // Firebase 연결 테스트
 _dlog('Firestore 연결 테스트 중...', 'info');
 db.collection('teamMembers').limit(1).get()
-  .then(snap => { _dlog(`Firestore 연결 OK (teamMembers: ${snap.size}건 확인)`, 'info'); })
-  .catch(err => { _dlog(`Firestore 연결 실패: ${err.code} - ${err.message}`, 'error'); });
+  .then(snap => { _dlog(`Firestore 연결 OK (teamMembers: ${snap.size}건 확인)`, 'info'); setSyncStatus(true); })
+  .catch(err => { _dlog(`Firestore 연결 실패: ${err.code} - ${err.message}`, 'error'); setSyncStatus(false); });
 
 // ===== State =====
 let currentUser = null;
@@ -1573,13 +1619,11 @@ function doLogin() {
     if (debugInfo) {
       debugInfo.style.display = 'block';
       debugInfo.innerHTML = `<div style="margin-bottom:4px;color:#666;font-weight:600">등록된 계정 (${members.length}명):</div>` +
-        members.map(m => `<div style="padding:2px 0;color:#888">${m.name||'?'} / loginId: ${m.loginId||'(없음)'}</div>`).join('');
+        members.map(m => `<div style="padding:2px 0;color:#888">${esc(m.name||'?')} / loginId: ${esc(m.loginId||'(없음)')}</div>`).join('');
     }
 
     _dlog(`계정 검색 중... 입력 id="${id}"`, 'info');
-    members.forEach(m => {
-      _dlog(`  - name="${m.name}", loginId="${m.loginId||'없음'}", hasPassword=${!!m.password}, hasLoginPw=${!!m.loginPw}`, 'info');
-    });
+    _dlog(`  등록 계정 ${members.length}명, loginId 매칭 시도중...`, 'info');
 
     const found = members.find(m => (m.loginId===id||m.name===id) && (m.password===pw||m.loginPw===pw));
     if (!found) {
@@ -1632,7 +1676,11 @@ function initApp() {
 function listenLaggingIndicators() {
   _sub('laggingIndicators', db.collection('okr_laggingIndicators').onSnapshot(snap => {
     laggingIndicators = snap.docs.map(d => ({id:d.id,...d.data()}));
+    setSyncStatus(true);
     if (currentView==='growthTeam'||currentView==='growthPersonal'||currentView==='okrSettings'||currentView==='projectDetail') renderCurrentView();
+  }, err => {
+    console.error('listenLaggingIndicators error:', err);
+    setSyncStatus(false);
   }));
 }
 
@@ -1658,17 +1706,23 @@ async function loadKPIData() {
   const pKR = document.getElementById('pKR');
   keyResults.forEach(kr => pKR.add(new Option(kr.name||kr.title, kr.id)));
 
-  // Real-time listeners: 목표설정 변경 → 전체 뷰 동기화
-  _sub('keyResults', db.collection('okr_keyResults').orderBy('order','asc').onSnapshot(snap => {
-    keyResults = snap.docs.map(d => ({id:d.id,...d.data()}));
+  // Real-time listeners: 목표설정 변경 → 전체 뷰 동기화 (디바운싱 적용)
+  const _debouncedKRRender = debounce(() => {
     refreshKRSelects();
     renderSidebarProjects();
     if (['growthTeam','okrSettings','projects','projectDetail','dashboard'].includes(currentView)) renderCurrentView();
-  }));
+  }, 150);
+  _sub('keyResults', db.collection('okr_keyResults').orderBy('order','asc').onSnapshot(snap => {
+    keyResults = snap.docs.map(d => ({id:d.id,...d.data()}));
+    _debouncedKRRender();
+  }, err => { console.error('listenKR error:', err); setSyncStatus(false); }));
+  const _debouncedKPIRender = debounce(() => {
+    if (['growthTeam','okrSettings','projects','projectDetail'].includes(currentView)) renderCurrentView();
+  }, 150);
   _sub('kpis', db.collection('okr_kpis').onSnapshot(snap => {
     kpis = snap.docs.map(d => ({id:d.id,...d.data()}));
-    if (['growthTeam','okrSettings','projects','projectDetail'].includes(currentView)) renderCurrentView();
-  }));
+    _debouncedKPIRender();
+  }, err => { console.error('listenKPIs error:', err); setSyncStatus(false); }));
 }
 
 // KR 셀렉트 실시간 갱신 (프로젝트 폼)
@@ -1702,18 +1756,28 @@ function listenProjects() {
     } else {
       document.getElementById('seedBanner').style.display = 'none';
     }
+    setSyncStatus(true);
     renderCurrentView();
+  }, err => {
+    console.error('listenProjects error:', err);
+    setSyncStatus(false);
   }));
 }
 
 // ===== Listen Actions =====
+const _debouncedRender = debounce(() => renderCurrentView(), 100);
 function listenActions() {
   _sub('actions', db.collection('kpi_tasks').orderBy('createdAt','desc').onSnapshot(snap => {
     actions = snap.docs.map(d => ({id:d.id,...d.data()}));
     document.getElementById('badgeActions').textContent = actions.length;
     document.getElementById('badgeMy').textContent = actions.filter(a => a.assigneeId===currentUser?.id).length;
     applyFilters();
-    renderCurrentView();
+    setSyncStatus(true);
+    _debouncedRender();
+  }, err => {
+    console.error('listenActions error:', err);
+    setSyncStatus(false);
+    toast('데이터 동기화 오류. 페이지를 새로고침하세요.','error');
   }));
 }
 
@@ -1734,6 +1798,15 @@ function updateProjectSelects() {
 function renderSidebarProjects() {
   const c = document.getElementById('sidebarProjectList');
   if (projects.length === 0) { c.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:var(--gray-400)">프로젝트 없음</div>'; return; }
+
+  // 프로젝트별 액션 카운트 사전 계산 (O(n) vs O(n*m))
+  const projActionCount = {};
+  const projDoneCount = {};
+  actions.forEach(a => {
+    if (!a.projectId) return;
+    projActionCount[a.projectId] = (projActionCount[a.projectId] || 0) + 1;
+    if (a.status === 'done') projDoneCount[a.projectId] = (projDoneCount[a.projectId] || 0) + 1;
+  });
 
   // Build hierarchy: 메인KPI → 카테고리 → 프로젝트
   const krColors = ['#3182f6','#8B5CF6','#06B6D4','#10B981','#F59E0B','#F97316','#EF4444','#EC4899'];
@@ -1768,8 +1841,8 @@ function renderSidebarProjects() {
         html += `<div style="font-size:9px;font-weight:600;color:var(--gray-500);padding:3px 10px 1px 20px">${esc(catName)}</div>`;
       }
       catProjs.forEach(p => {
-        const cnt = actions.filter(a => a.projectId===p.id).length;
-        const done = actions.filter(a => a.projectId===p.id && a.status==='done').length;
+        const cnt = projActionCount[p.id] || 0;
+        const done = projDoneCount[p.id] || 0;
         const active = detailProjectId === p.id;
         html += `<div class="sidebar-item ${active?'active':''}" onclick="goProjectDetail('${p.id}')" style="font-size:11px;padding:5px 10px 5px 24px">
           <span style="color:${color};font-size:8px">&#9632;</span> ${esc(p.title)}
@@ -1784,7 +1857,7 @@ function renderSidebarProjects() {
   if (noKR.length > 0) {
     html += '<div style="font-size:10px;font-weight:700;color:var(--gray-500);padding:6px 10px 2px">&#128194; 미분류</div>';
     noKR.forEach(p => {
-      const cnt = actions.filter(a => a.projectId===p.id).length;
+      const cnt = projActionCount[p.id] || 0;
       const active = detailProjectId === p.id;
       html += `<div class="sidebar-item ${active?'active':''}" onclick="goProjectDetail('${p.id}')" style="font-size:11px;padding:5px 10px 5px 24px">
         <span style="color:var(--gray-400);font-size:8px">&#9632;</span> ${esc(p.title)}
@@ -2663,9 +2736,10 @@ function loadLagSelect(projId) {
   relLags.forEach(l => sel.add(new Option(`${l.name} (${l.unit||'건'})`, l.id)));
 }
 
-function saveAction() {
+async function saveAction() {
   const title = document.getElementById('aTitle').value.trim();
   if (!title) return toast('행동지표명을 입력하세요','error');
+  if (title.length > 200) return toast('행동지표명이 너무 깁니다 (최대 200자)','error');
   const saveBtn = document.querySelector('#actionModal .modal-footer .btn-primary');
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '저장중...'; }
   const projectId = document.getElementById('aProject').value||null;
@@ -2715,12 +2789,12 @@ function saveAction() {
       data.completedAt = TS();
       data.actualCompletionDate = localDateStr(new Date());
       if (!old.startedAt && !data.startedAt) data.startedAt = localDateStr(new Date());
-      if (data.lagId) incKPI({...old,...data,id:editingActionId});
+      if (data.lagId) await incKPI({...old,...data,id:editingActionId});
     }
     if (old && old.status==='done' && status!=='done') {
       data.completedAt = firebase.firestore.FieldValue.delete();
       data.actualCompletionDate = firebase.firestore.FieldValue.delete();
-      if (old.lagId) decKPI(old);
+      if (old.lagId) await decKPI(old);
     }
     const changes = old ? diffFields(old, data, ['title','description','status','priority','assigneeId','deadline','phaseId','lagId','kpiValue','projectId']) : {};
     db.collection('kpi_tasks').doc(editingActionId).update(data).then(() => {
@@ -2747,7 +2821,9 @@ function saveAction() {
     // 신규 등록 시 진행중이면 startedAt 자동 설정
     if (status === 'doing') data.startedAt = localDateStr(new Date());
     if (status === 'done') { data.startedAt = localDateStr(new Date()); data.actualCompletionDate = localDateStr(new Date()); data.completedAt = TS(); }
-    db.collection('kpi_tasks').add(data).then((ref) => {
+    try {
+      const ref = await db.collection('kpi_tasks').add(data);
+      if (status === 'done' && data.lagId) await incKPI({...data, id:ref.id});
       logChange({
         documentType:'action', documentId:ref.id, collectionName:'kpi_tasks',
         action:'create', changes:{title:{newValue:data.title},status:{newValue:data.status}},
@@ -2755,12 +2831,12 @@ function saveAction() {
         displayName:`행동지표 생성: ${data.title}`, projectId:data.projectId
       });
       toast('등록 완료','success'); closeActionModal();
-    }).catch(err => {
+    } catch(err) {
       console.error('saveAction create failed:', err);
       toast('등록 실패. 다시 시도해주세요.','error');
-    }).finally(() => {
+    } finally {
       if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '저장'; }
-    });
+    }
   }
 }
 
@@ -2800,19 +2876,21 @@ async function deleteAction() {
 function toggleActionDone(id, done) {
   const a = actions.find(x => x.id===id);
   if (!a) return;
+  // 이미 같은 상태면 무시 (중복 클릭 방지)
+  if (done && a.status === 'done') return;
+  if (!done && a.status !== 'done') return;
   const upd = { status: done?'done':'pending', updatedAt: TS() };
   if (done) {
     upd.completedAt = TS();
     upd.actualCompletionDate = localDateStr(new Date());
     if (!a.startedAt) upd.startedAt = localDateStr(new Date());
-    if (a.lagId) incKPI(a);
   } else {
     upd.completedAt = firebase.firestore.FieldValue.delete();
     upd.actualCompletionDate = firebase.firestore.FieldValue.delete();
-    if (a.lagId) decKPI(a);
   }
-  db.collection('kpi_tasks').doc(id).update(upd).then(() => {
-    if (done && a.lagId) toast('완료! KPI 반영됨','success');
+  db.collection('kpi_tasks').doc(id).update(upd).then(async () => {
+    if (done && a.lagId) { await incKPI(a); toast('완료! KPI 반영됨','success'); }
+    if (!done && a.lagId) { await decKPI(a); }
   }).catch(err => {
     console.error('toggleActionDone failed:', err);
     toast('상태 변경 실패','error');
@@ -2965,20 +3043,23 @@ function loadFixedGoals() {
 function applyFixedItems() {
   if (weeklyFixedItems.length === 0) return;
   const week = getWeekDates(wfWeekOffset);
+  const weekDatesSet = new Set(week.dates);
   let changed = false;
+  // 현재 주에 이미 배치된 모든 actionId 수집
+  const allPlacedIds = new Set();
+  Object.entries(weeklyFocusItems).forEach(([date, arr]) => {
+    if (weekDatesSet.has(date)) arr.forEach(id => allPlacedIds.add(id));
+  });
   weeklyFixedItems.forEach(fi => {
     const a = actions.find(x => x.id === fi.actionId);
     if (!a || a.status === 'done') return;
-    const inWeek = Object.values(weeklyFocusItems).some(arr => arr.includes(fi.actionId));
-    if (!inWeek) {
-      const dayIdx = fi.preferDay != null ? fi.preferDay : 0;
-      const date = week.dates[Math.min(dayIdx, 4)];
-      if (!weeklyFocusItems[date]) weeklyFocusItems[date] = [];
-      if (!weeklyFocusItems[date].includes(fi.actionId)) {
-        weeklyFocusItems[date].push(fi.actionId);
-        changed = true;
-      }
-    }
+    if (allPlacedIds.has(fi.actionId)) return; // 이미 이번 주에 배치됨
+    const dayIdx = fi.preferDay != null ? fi.preferDay : 0;
+    const date = week.dates[Math.min(dayIdx, 4)];
+    if (!weeklyFocusItems[date]) weeklyFocusItems[date] = [];
+    weeklyFocusItems[date].push(fi.actionId);
+    allPlacedIds.add(fi.actionId);
+    changed = true;
   });
   if (changed) saveWeeklyFocus();
 }
@@ -3443,26 +3524,38 @@ function saveProject() {
 }
 
 // ===== KPI Auto-tracking =====
-function incKPI(task) {
+async function incKPI(task) {
   if (!task.lagId) return;
   const lag = laggingIndicators.find(l => l.id === task.lagId);
   if (!lag) { console.warn('incKPI: lagId not found, skipping:', task.lagId); return; }
   const val = task.kpiValue||1;
-  db.collection('okr_laggingIndicators').doc(task.lagId).update({ currentValue:INC(val), updatedAt:TS() })
-    .catch(err => { console.error('incKPI update failed:', err); toast('KPI 반영 실패','error'); });
-  db.collection('okr_dailyLogs').add({
-    type:'kpi_auto', lagId:task.lagId, lagName:task.lagName||lag.name||'',
-    krId:task.krId, taskId:task.id, taskTitle:task.title,
-    value:val, memberId:currentUser?.id, memberName:currentUser?.name,
-    date:localDateStr(new Date()), createdAt:TS()
-  }).catch(err => console.error('dailyLog add failed:', err));
+  try {
+    const batch = db.batch();
+    batch.update(db.collection('okr_laggingIndicators').doc(task.lagId), { currentValue:INC(val), updatedAt:TS() });
+    const logRef = db.collection('okr_dailyLogs').doc();
+    batch.set(logRef, {
+      type:'kpi_auto', lagId:task.lagId, laggingIndicatorId:task.lagId,
+      lagName:task.lagName||lag.name||'',
+      krId:task.krId||null, taskId:task.id, taskTitle:task.title,
+      value:val, memberId:currentUser?.id, memberName:currentUser?.name,
+      date:localDateStr(new Date()), createdAt:TS()
+    });
+    await batch.commit();
+  } catch(err) {
+    console.error('incKPI batch failed:', err);
+    toast('KPI 반영 실패. 재시도해주세요.','error');
+  }
 }
-function decKPI(task) {
+async function decKPI(task) {
   if (!task.lagId) return;
   const lag = laggingIndicators.find(l => l.id === task.lagId);
   if (!lag) { console.warn('decKPI: lagId not found, skipping:', task.lagId); return; }
-  db.collection('okr_laggingIndicators').doc(task.lagId).update({ currentValue:INC(-(task.kpiValue||1)), updatedAt:TS() })
-    .catch(err => { console.error('decKPI update failed:', err); toast('KPI 차감 실패','error'); });
+  try {
+    await db.collection('okr_laggingIndicators').doc(task.lagId).update({ currentValue:INC(-(task.kpiValue||1)), updatedAt:TS() });
+  } catch(err) {
+    console.error('decKPI update failed:', err);
+    toast('KPI 차감 실패. 재시도해주세요.','error');
+  }
 }
 
 // ===== 업무일지 (Work Journal) =====
@@ -3553,7 +3646,7 @@ function onWjLagChange() {
     const pct = target ? Math.round(current/target*100) : 0;
     document.getElementById('wjUnit').textContent = unit;
     preview.style.display = 'block';
-    preview.innerHTML = `&#127919; <strong>${opt.text.split('(')[0].trim()}</strong> — 현재 ${current}/${target}${unit} (${pct}%) → 기록하면 <strong>+<span id="wjPreviewVal">1</span>${unit}</strong> 반영`;
+    preview.innerHTML = `&#127919; <strong>${esc(opt.text.split('(')[0].trim())}</strong> — 현재 ${current}/${target}${esc(unit)} (${pct}%) → 기록하면 <strong>+<span id="wjPreviewVal">1</span>${esc(unit)}</strong> 반영`;
     projSel.style.display = 'block';
 
     // 지표에 연결된 프로젝트 자동 선택
@@ -3569,10 +3662,32 @@ function onWjLagChange() {
   }
 }
 
+// 이미지 검증 상수
+const WJ_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const WJ_MAX_IMAGES = 5;
+const WJ_ALLOWED_TYPES = ['image/jpeg','image/png','image/gif','image/webp'];
+
+function wjValidateImage(file) {
+  if (!WJ_ALLOWED_TYPES.includes(file.type)) {
+    toast(`지원하지 않는 형식입니다: ${file.type}. JPG/PNG/GIF/WebP만 가능합니다.`,'error');
+    return false;
+  }
+  if (file.size > WJ_MAX_FILE_SIZE) {
+    toast(`파일이 너무 큽니다 (${(file.size/1024/1024).toFixed(1)}MB). 최대 10MB까지 가능합니다.`,'error');
+    return false;
+  }
+  if (wjPendingImages.length >= WJ_MAX_IMAGES) {
+    toast(`이미지는 최대 ${WJ_MAX_IMAGES}장까지 첨부할 수 있습니다.`,'error');
+    return false;
+  }
+  return true;
+}
+
 // 이미지 파일 선택
 function wjHandleFileSelect(e) {
   const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
   files.forEach(f => {
+    if (!wjValidateImage(f)) return;
     const url = URL.createObjectURL(f);
     wjPendingImages.push({file:f, previewUrl:url});
   });
@@ -3586,15 +3701,19 @@ function wjHandlePaste(e) {
   const imageItems = items.filter(i => i.type.startsWith('image/'));
   if (imageItems.length === 0) return;
   e.preventDefault();
+  let added = 0;
   imageItems.forEach(item => {
     const file = item.getAsFile();
-    if (file) {
+    if (file && wjValidateImage(file)) {
       const url = URL.createObjectURL(file);
       wjPendingImages.push({file, previewUrl:url});
+      added++;
     }
   });
-  wjRenderImagePreviews();
-  toast(`이미지 ${imageItems.length}장 붙여넣기 완료`);
+  if (added > 0) {
+    wjRenderImagePreviews();
+    toast(`이미지 ${added}장 붙여넣기 완료`);
+  }
 }
 
 function wjRenderImagePreviews() {
@@ -5225,29 +5344,39 @@ const MEETING_TYPES = {
 };
 
 // ===== OKR Calculation Functions =====
-// 핵심: dailyLogs를 진실의 단일 소스(SSOT)로 사용, currentValue는 캐시
+// 핵심: dailyLogs를 진실의 단일 소스(SSOT)로 사용, currentValue는 폴백 캐시
 function getEffectiveValue(lagId) {
+  // 1) dailyLogs 합산 (SSOT)
   const logsSum = dailyLogs
     .filter(l => (l.lagId || l.laggingIndicatorId) === lagId)
     .reduce((s, l) => s + (Number(l.value || l.resultValue) || 0), 0);
-  const lag = laggingIndicators.find(l => l.id === lagId);
-  const cv = Number(lag?.currentValue) || 0;
-  // 완료된 액션 중 dailyLog 누락된 것 보정
-  const doneActionsVal = actions
-    .filter(a => a.lagId === lagId && a.status === 'done')
+
+  // 2) 완료된 액션 중 dailyLog에 누락된 건만 추가 보정
+  const loggedTaskIds = new Set(
+    dailyLogs.filter(l => (l.lagId || l.laggingIndicatorId) === lagId && l.taskId).map(l => l.taskId)
+  );
+  const missingDoneVal = actions
+    .filter(a => a.lagId === lagId && a.status === 'done' && a.id && !loggedTaskIds.has(a.id))
     .reduce((s, a) => s + (Number(a.kpiValue) || 1), 0);
-  return Math.max(logsSum, cv, doneActionsVal);
+
+  const computed = logsSum + missingDoneVal;
+
+  // 3) currentValue는 로그/액션이 전혀 없을 때만 폴백
+  if (computed > 0) return computed;
+  const lag = laggingIndicators.find(l => l.id === lagId);
+  return Number(lag?.currentValue) || 0;
 }
 
 function calcOkrKPIRate(kpiId) {
   const kpi = kpis.find(k => k.id === kpiId);
   if (!kpi) return '0.000';
-  const kpiLags = laggingIndicators.filter(l => l.kpiId === kpiId);
+  const kpiLags = laggingIndicators.filter(l => l.kpiId === kpiId && l.isActive !== false);
   const outputLags = kpiLags.filter(l => l.type === 'output');
   const targetLags = outputLags.length > 0 ? outputLags : kpiLags;
   if (targetLags.length === 0) return '0.000';
-  const rates = targetLags.map(lag => {
-    if (!lag.targetValue || lag.targetValue <= 0) return 0;
+  const validLags = targetLags.filter(lag => lag.targetValue && lag.targetValue > 0);
+  if (validLags.length === 0) return '0.000';
+  const rates = validLags.map(lag => {
     const ev = getEffectiveValue(lag.id);
     return Math.min((ev / lag.targetValue) * 100, 100);
   });
@@ -5300,16 +5429,19 @@ async function syncAllKpiData() {
     // 잠시 대기하여 onSnapshot이 새 로그를 반영하도록
     if (created > 0) await new Promise(r => setTimeout(r, 1500));
 
-    // 2단계: 모든 지표의 currentValue를 dailyLogs 합산값으로 재계산
+    // 2단계: 모든 지표의 currentValue를 dailyLogs 합산 + 누락된 완료 액션으로 재계산
     const batch = db.batch();
     for (const lag of laggingIndicators) {
       const logsSum = dailyLogs
         .filter(l => (l.lagId || l.laggingIndicatorId) === lag.id)
         .reduce((s, l) => s + (Number(l.value || l.resultValue) || 0), 0);
-      const doneSum = actions
-        .filter(a => a.lagId === lag.id && a.status === 'done')
+      const loggedTaskIds = new Set(
+        dailyLogs.filter(l => (l.lagId || l.laggingIndicatorId) === lag.id && l.taskId).map(l => l.taskId)
+      );
+      const missingDoneSum = actions
+        .filter(a => a.lagId === lag.id && a.status === 'done' && a.id && !loggedTaskIds.has(a.id))
         .reduce((s, a) => s + (Number(a.kpiValue) || 1), 0);
-      const newVal = Math.max(logsSum, doneSum);
+      const newVal = logsSum + missingDoneSum;
       if (newVal !== (Number(lag.currentValue) || 0)) {
         batch.update(db.collection('okr_laggingIndicators').doc(lag.id), {
           currentValue: newVal,
