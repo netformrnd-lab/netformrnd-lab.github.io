@@ -5887,7 +5887,7 @@ function renderGrowthPersonal() {
     const outputGoals = goalsWithProgress.filter(g=>g.lagType==='output');
 
     html += `<div class="pgb-quarter-card">
-      <div class="pgb-quarter-title"><span>&#127919; ${currentYear}년 ${currentQuarter}분기 개인 목표</span></div>`;
+      <div class="pgb-quarter-title"><span>&#127919; ${currentYear}년 ${currentQuarter}분기 개인 목표</span><button onclick="openQuarterlyGoalModal('${selectedId}')" style="background:rgba(255,255,255,0.25);border:none;color:white;padding:4px 12px;border-radius:8px;font-size:11px;cursor:pointer;font-weight:600">&#9998; 편집</button></div>`;
     if (inputGoals.length>0) {
       html += `<div style="margin-bottom:12px"><div style="font-size:11px;opacity:0.85;margin-bottom:8px">&#128203; 행동지표 목표</div><div class="pgb-goal-grid">`;
       inputGoals.forEach(g => {
@@ -5921,7 +5921,7 @@ function renderGrowthPersonal() {
     html += `<div style="margin-bottom:14px;background:var(--gray-50);border:2px dashed var(--gray-300);border-radius:var(--card-radius);text-align:center;padding:20px">
       <div style="font-size:28px;margin-bottom:6px">&#127919;</div>
       <div style="font-size:13px;color:var(--gray-600);margin-bottom:8px">${currentYear}년 ${currentQuarter}분기 개인 목표가 없어요</div>
-      <div style="font-size:11px;color:var(--gray-400)">전략센터에서 분기 목표를 설정할 수 있습니다</div>
+      <button onclick="openQuarterlyGoalModal('${selectedId}')" style="margin-top:8px;background:var(--primary);border:none;color:white;padding:8px 20px;border-radius:10px;font-size:12px;cursor:pointer;font-weight:700">&#10133; 분기 목표 설정하기</button>
     </div>`;
   }
 
@@ -6652,7 +6652,195 @@ function gbCapturePng(element, filename) {
     toast('PNG 이미지가 저장되었습니다','success');
   }).catch(err => { console.error('PNG 저장 실패:', err); toast('PNG 저장에 실패했습니다','error'); });
 }
-function fmtDate(s){if(!s)return'';const d=new Date(s);return`${d.getMonth()+1}/${d.getDate()}`;}
+
+// ===== Quarterly Goal Modal (synced with strategy center via okr_quarterlyGoals) =====
+function openQuarterlyGoalModal(memberId) {
+  const now = new Date();
+  const cYear = now.getFullYear();
+  const cQuarter = Math.floor(now.getMonth()/3)+1;
+  const member = teamMembers.find(m=>m.id===memberId);
+  const memberName = member?.name||'팀원';
+
+  // All lag indicators grouped by KR → KPI
+  const krGroups = {};
+  keyResults.forEach((kr,ki) => {
+    const krKpis = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id);
+    if (krKpis.length===0) return;
+    krGroups[kr.id] = {kr, ki, kpis: krKpis.map(kpi => {
+      const lags = laggingIndicators.filter(l=>l.kpiId===kpi.id);
+      return {kpi, inputLags:lags.filter(l=>l.type!=='output'), outputLags:lags.filter(l=>l.type==='output')};
+    })};
+  });
+
+  const existingGoals = okrQuarterlyGoals.filter(g=>g.memberId===memberId&&g.year===cYear&&g.quarter===cQuarter);
+
+  let modalHtml = `<div style="padding:24px;max-width:680px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="font-size:28px">&#127919;</span>
+      <div>
+        <div style="font-size:18px;font-weight:700;color:var(--gray-900)">분기별 개인 목표 설정</div>
+        <div style="font-size:12px;color:var(--gray-500)">${esc(memberName)}님의 ${cYear}년 ${cQuarter}분기 목표</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin:16px 0">
+      <select id="qgYear" onchange="qgRefresh('${memberId}')" style="padding:8px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-weight:600;font-family:inherit">
+        ${[cYear-1,cYear,cYear+1].map(y=>`<option value="${y}" ${y===cYear?'selected':''}>${y}년</option>`).join('')}
+      </select>
+      <select id="qgQuarter" onchange="qgRefresh('${memberId}')" style="padding:8px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-weight:600;font-family:inherit">
+        ${[1,2,3,4].map(q=>`<option value="${q}" ${q===cQuarter?'selected':''}>${q}분기</option>`).join('')}
+      </select>
+    </div>
+    <div id="qgGoalsList" style="max-height:450px;overflow-y:auto;margin-bottom:16px">`;
+
+  if (Object.keys(krGroups).length===0) {
+    modalHtml += '<div style="padding:30px;text-align:center;color:var(--gray-400)"><div style="font-size:36px;margin-bottom:8px">&#128203;</div>등록된 KPI/지표가 없습니다<br><span style="font-size:11px">목표설정에서 먼저 KPI와 지표를 등록하세요</span></div>';
+  } else {
+    Object.values(krGroups).forEach(({kr,ki,kpis:krKpis}) => {
+      const color = okrColors[ki%okrColors.length];
+      modalHtml += `<div style="border:2px solid ${color};border-radius:12px;overflow:hidden;margin-bottom:12px">
+        <div style="background:${color};padding:10px 16px;color:white">
+          <div style="font-size:14px;font-weight:700">&#127919; 메인KPI ${ki+1}: ${esc(kr.name||kr.title||'')}</div>
+          <div style="font-size:10px;opacity:0.85">서브KPI ${krKpis.length}개</div>
+        </div>
+        <div style="padding:12px;display:flex;flex-direction:column;gap:10px;background:#FAFAFA">`;
+      krKpis.forEach(({kpi, inputLags, outputLags}) => {
+        const hasGoal = existingGoals.some(g=>inputLags.some(l=>l.id===g.lagId)||outputLags.some(l=>l.id===g.lagId));
+        modalHtml += `<div class="qg-kpi-card" data-kpi-id="${kpi.id}" style="padding:14px;background:white;border:1px solid var(--gray-200);border-radius:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:9px;padding:2px 6px;background:${color}20;color:${color};border-radius:4px;font-weight:600">서브KPI</span>
+              <span style="font-size:13px;font-weight:700">${esc(kpi.name||kpi.title||'')}</span>
+            </div>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+              <input type="checkbox" class="qg-enabled" ${hasGoal?'checked':''} onchange="const p=this.closest('.qg-kpi-card').querySelector('.qg-inputs');if(p)p.style.display=this.checked?'block':'none'" style="width:15px;height:15px;cursor:pointer">
+              <span style="font-size:11px;color:var(--gray-500)">설정</span>
+            </label>
+          </div>
+          <div class="qg-inputs" style="display:${hasGoal?'block':'none'}">`;
+        if (inputLags.length>0) {
+          modalHtml += `<div style="margin-bottom:8px"><div style="font-size:10px;font-weight:600;color:#10B981;margin-bottom:6px">&#128203; 행동지표</div>`;
+          inputLags.forEach(lag => {
+            const existing = existingGoals.find(g=>g.lagId===lag.id);
+            const qTarget = lag.targetValue>0?Math.round(lag.targetValue/4):0;
+            modalHtml += `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#ECFDF5;border-radius:8px;border:1px solid #D1FAE5;margin-bottom:4px">
+              <span style="font-size:12px;flex:1;font-weight:500">${esc(lag.name||'')}</span>
+              ${lag.targetValue>0?`<span style="font-size:10px;color:var(--gray-400)">연간 ${lag.targetValue}${esc(lag.unit||'건')}</span>`:''}
+              <input type="number" class="qg-target" data-lag-id="${lag.id}" data-lag-type="input" value="${existing?.targetValue||''}" placeholder="${qTarget}" style="width:65px;padding:6px 8px;border:2px solid #A7F3D0;border-radius:6px;font-size:12px;text-align:center;font-weight:600;font-family:inherit">
+              <span style="font-size:11px;color:var(--gray-500)">${esc(lag.unit||'건')}</span>
+            </div>`;
+          });
+          modalHtml += '</div>';
+        }
+        if (outputLags.length>0) {
+          modalHtml += `<div><div style="font-size:10px;font-weight:600;color:#F59E0B;margin-bottom:6px">&#128176; 성과지표</div>`;
+          outputLags.forEach(lag => {
+            const existing = existingGoals.find(g=>g.lagId===lag.id);
+            const gTarget = lag.targetValue||kpi.targetValue||0;
+            const qTarget = gTarget>0?Math.round(gTarget/4):0;
+            modalHtml += `<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#FFFBEB;border-radius:8px;border:1px solid #FDE68A;margin-bottom:4px">
+              <span style="font-size:12px;flex:1;font-weight:500">${esc(lag.name||'')}</span>
+              ${gTarget>0?`<span style="font-size:10px;color:var(--gray-400)">연간 ${gTarget.toLocaleString()}${esc(lag.unit||kpi.unit||'')}</span>`:''}
+              <input type="number" class="qg-target" data-lag-id="${lag.id}" data-lag-type="output" value="${existing?.targetValue||''}" placeholder="${qTarget}" style="width:80px;padding:6px 8px;border:2px solid #FCD34D;border-radius:6px;font-size:12px;text-align:center;font-weight:600;font-family:inherit">
+              <span style="font-size:11px;color:var(--gray-500)">${esc(lag.unit||kpi.unit||'')}</span>
+            </div>`;
+          });
+          modalHtml += '</div>';
+        }
+        if (inputLags.length===0&&outputLags.length===0) modalHtml += '<div style="font-size:11px;color:var(--gray-400)">등록된 지표가 없습니다</div>';
+        modalHtml += '</div></div>';
+      });
+      modalHtml += '</div></div>';
+    });
+  }
+
+  modalHtml += `</div>
+    <div style="background:linear-gradient(135deg,#EEF2FF,#E0E7FF);padding:10px 14px;border-radius:8px;margin-bottom:16px">
+      <div style="font-size:11px;color:var(--gray-600)">&#128161; <strong>안내:</strong> 체크박스를 선택하고 목표 수량을 입력하세요. 전략센터와 자동 동기화됩니다.</div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="qgClose()" style="padding:10px 20px;background:var(--gray-200);color:var(--gray-700);border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">취소</button>
+      <button onclick="qgSave('${memberId}')" style="padding:10px 20px;background:linear-gradient(135deg,#10B981,#059669);color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 3px 10px rgba(16,185,129,0.3)">저장</button>
+    </div>
+  </div>`;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'qgOverlay';
+  overlay.className = 'modal-overlay show';
+  overlay.onclick = (e) => { if(e.target===overlay) qgClose(); };
+  overlay.innerHTML = `<div class="modal" style="width:700px;max-height:90vh;overflow-y:auto">${modalHtml}</div>`;
+  document.body.appendChild(overlay);
+}
+
+function qgClose() { const o=document.getElementById('qgOverlay'); if(o) o.remove(); }
+
+function qgRefresh(memberId) {
+  const year = parseInt(document.getElementById('qgYear')?.value)||new Date().getFullYear();
+  const quarter = parseInt(document.getElementById('qgQuarter')?.value)||1;
+  const goals = okrQuarterlyGoals.filter(g=>g.memberId===memberId&&g.year===year&&g.quarter===quarter);
+
+  document.querySelectorAll('.qg-kpi-card').forEach(card => {
+    const checkbox = card.querySelector('.qg-enabled');
+    const inputs = card.querySelector('.qg-inputs');
+    const hasGoal = [...card.querySelectorAll('.qg-target')].some(inp => goals.some(g=>g.lagId===inp.dataset.lagId));
+    if (checkbox) checkbox.checked = hasGoal;
+    if (inputs) inputs.style.display = hasGoal?'block':'none';
+    card.querySelectorAll('.qg-target').forEach(inp => {
+      const g = goals.find(g=>g.lagId===inp.dataset.lagId);
+      inp.value = g?.targetValue||'';
+    });
+  });
+  toast(`${year}년 ${quarter}분기 목표 불러옴`);
+}
+
+async function qgSave(memberId) {
+  const year = parseInt(document.getElementById('qgYear')?.value)||new Date().getFullYear();
+  const quarter = parseInt(document.getElementById('qgQuarter')?.value)||1;
+
+  const goals = [];
+  document.querySelectorAll('.qg-kpi-card').forEach(card => {
+    const checkbox = card.querySelector('.qg-enabled');
+    if (!checkbox?.checked) return;
+    const kpiId = card.dataset.kpiId;
+    const kpi = kpis.find(k=>k.id===kpiId);
+    card.querySelectorAll('.qg-target').forEach(inp => {
+      const tv = parseFloat(inp.value)||0;
+      if (tv<=0) return;
+      const lagId = inp.dataset.lagId;
+      const lagType = inp.dataset.lagType;
+      const lag = laggingIndicators.find(l=>l.id===lagId);
+      goals.push({kpiId, kpiName:kpi?.name||'', lagId, lagName:lag?.name||'', lagType, targetValue:tv, unit:lag?.unit||kpi?.unit||'건'});
+    });
+  });
+
+  if (goals.length===0) { toast('최소 1개 이상의 지표 목표를 입력하세요','error'); return; }
+
+  try {
+    toast('목표 저장 중...');
+    const batch = db.batch();
+    // Delete existing goals for this quarter
+    okrQuarterlyGoals.filter(g=>g.memberId===memberId&&g.year===year&&g.quarter===quarter).forEach(g => {
+      batch.delete(db.collection('okr_quarterlyGoals').doc(g.id));
+    });
+    // Add new goals
+    goals.forEach(g => {
+      const ref = db.collection('okr_quarterlyGoals').doc();
+      batch.set(ref, {
+        memberId, year, quarter,
+        kpiId:g.kpiId, kpiName:g.kpiName,
+        lagId:g.lagId, lagName:g.lagName, lagType:g.lagType,
+        targetValue:g.targetValue, unit:g.unit,
+        title:`${g.lagName} (${g.lagType==='output'?'성과':'행동'})`,
+        createdAt:firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    await batch.commit();
+    qgClose();
+    toast(`${year}년 ${quarter}분기 목표 저장 완료!`,'success');
+  } catch(e) {
+    console.error('분기목표 저장 오류:', e);
+    toast('목표 저장 실패','error');
+  }
+}
 function toast(msg,type){const c=document.getElementById('toastContainer');const t=document.createElement('div');t.className='toast'+(type?' '+type:'');t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),3000);}
 
 // ===== Mobile =====
