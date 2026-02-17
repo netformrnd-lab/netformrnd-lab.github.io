@@ -1618,6 +1618,21 @@
   </div>
 </nav>
 
+<!-- OKR Edit Modal -->
+<div class="modal-overlay" id="okrEditModal">
+  <div class="modal" style="width:520px">
+    <div class="modal-header">
+      <h3 id="okrEditTitle">OKR 편집</h3>
+      <button class="modal-close" onclick="closeOkrEditModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="okrEditBody"></div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeOkrEditModal()">취소</button>
+      <button class="btn-primary" id="okrEditSaveBtn" onclick="saveOkrEdit()">저장</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-container" id="toastContainer" role="status" aria-live="polite"></div>
 
 <!-- Firebase -->
@@ -2149,6 +2164,66 @@ function getWeekDates(offset) {
   return { monday:dates[0], friday:dates[4], dates };
 }
 
+// ===== KPI Velocity & Period Comparison Helpers =====
+function calcKpiVelocity(lagId) {
+  // Calculate daily pace for a lagging indicator based on recent 30 days of data
+  const now = new Date();
+  const d30 = new Date(); d30.setDate(now.getDate()-30);
+  const d30Str = localDateStr(d30);
+  const recentLogs = dailyLogs.filter(l => (l.lagId||l.laggingIndicatorId)===lagId && l.date && l.date>=d30Str);
+  const totalVal = recentLogs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+  const activeDays = new Set(recentLogs.map(l=>l.date)).size;
+  const dailyRate = activeDays>0 ? totalVal/activeDays : 0;
+  return { totalVal, activeDays, dailyRate, logCount: recentLogs.length };
+}
+function calcKrVelocity(krId) {
+  const lag = laggingIndicators.find(l => l.krId===krId) || {};
+  const krKpis = kpis.filter(k=>k.keyResultId===krId||k.krId===krId);
+  const krLags = laggingIndicators.filter(l=>l.krId===krId||krKpis.some(k=>l.kpiId===k.id));
+  const rate = parseFloat(calcOkrKRRate(krId))||0;
+  const remaining = 100-rate;
+  // Aggregate velocity across all lags
+  let totalDailyRate=0, totalRemaining=0;
+  krLags.forEach(l => {
+    const vel = calcKpiVelocity(l.id);
+    const ev = getEffectiveValue(l.id);
+    const target = l.targetValue||0;
+    totalDailyRate += vel.dailyRate;
+    totalRemaining += Math.max(0, target-ev);
+  });
+  const daysNeeded = totalDailyRate>0 ? Math.ceil(totalRemaining/totalDailyRate) : Infinity;
+  // Days until end date
+  const endDate = okrObjective?.endDate ? new Date(okrObjective.endDate) : null;
+  const daysLeft = endDate ? Math.max(0, Math.ceil((endDate-new Date())/(1000*60*60*24))) : null;
+  const onTrack = daysLeft!==null ? daysNeeded<=daysLeft : null;
+  return { rate, daysNeeded, daysLeft, onTrack, totalDailyRate, totalRemaining };
+}
+function getPeriodLogs(offsetWeeks) {
+  // Get logs for a specific week (0=this week, -1=last week, etc.)
+  const now = new Date();
+  const mon = new Date(now); mon.setDate(now.getDate()-now.getDay()+1+(offsetWeeks*7));
+  const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+  const monStr = localDateStr(mon);
+  const sunStr = localDateStr(sun);
+  return dailyLogs.filter(l=>l.date && l.date>=monStr && l.date<=sunStr);
+}
+function getMonthLogs(offsetMonths) {
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth()+offsetMonths, 1);
+  const last = new Date(target.getFullYear(), target.getMonth()+1, 0);
+  const startStr = localDateStr(target);
+  const endStr = localDateStr(last);
+  return dailyLogs.filter(l=>l.date && l.date>=startStr && l.date<=endStr);
+}
+function getPeriodActions(offsetWeeks) {
+  const now = new Date();
+  const mon = new Date(now); mon.setDate(now.getDate()-now.getDay()+1+(offsetWeeks*7));
+  const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+  const monStr = localDateStr(mon);
+  const sunStr = localDateStr(sun);
+  return actions.filter(a => a.actualCompletionDate && a.actualCompletionDate>=monStr && a.actualCompletionDate<=sunStr);
+}
+
 function renderDashboard() {
   const week = getWeekDates(0);
   const todayStr = localDateStr(new Date());
@@ -2181,16 +2256,37 @@ function renderDashboard() {
 
   // ===== KPI 실시간 달성률 계산 =====
   const objRate = parseFloat(calcOkrObjectiveRate());
-  const krRates = keyResults.map(kr => ({
-    id: kr.id,
-    name: kr.name || kr.title || '메인KPI',
-    rate: parseFloat(calcOkrKRRate(kr.id)),
-    kpiCount: kpis.filter(k => k.keyResultId===kr.id || k.krId===kr.id).length,
-    lagCount: laggingIndicators.filter(l => {
-      const kpiIds = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id).map(k=>k.id);
-      return kpiIds.includes(l.kpiId);
-    }).length
-  }));
+  const krRates = keyResults.map(kr => {
+    const vel = calcKrVelocity(kr.id);
+    return {
+      id: kr.id,
+      name: kr.name || kr.title || '메인KPI',
+      rate: vel.rate,
+      kpiCount: kpis.filter(k => k.keyResultId===kr.id || k.krId===kr.id).length,
+      lagCount: laggingIndicators.filter(l => {
+        const kpiIds = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id).map(k=>k.id);
+        return kpiIds.includes(l.kpiId);
+      }).length,
+      velocity: vel
+    };
+  });
+
+  // ===== 기간 비교 데이터 =====
+  const thisWeekLogs = getPeriodLogs(0);
+  const lastWeekLogs = getPeriodLogs(-1);
+  const thisWeekActions = getPeriodActions(0);
+  const lastWeekActions = getPeriodActions(-1);
+  const thisMonthLogs = getMonthLogs(0);
+  const lastMonthLogs = getMonthLogs(-1);
+  const weekLogDelta = thisWeekLogs.length - lastWeekLogs.length;
+  const weekLogPct = lastWeekLogs.length>0 ? Math.round((weekLogDelta/lastWeekLogs.length)*100) : (thisWeekLogs.length>0?100:0);
+  const weekActDelta = thisWeekActions.length - lastWeekActions.length;
+  const monthLogDelta = thisMonthLogs.length - lastMonthLogs.length;
+  const monthLogPct = lastMonthLogs.length>0 ? Math.round((monthLogDelta/lastMonthLogs.length)*100) : (thisMonthLogs.length>0?100:0);
+  const thisWeekVal = thisWeekLogs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+  const lastWeekVal = lastWeekLogs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+  const weekValDelta = thisWeekVal - lastWeekVal;
+  const weekValPct = lastWeekVal>0 ? Math.round((weekValDelta/lastWeekVal)*100) : (thisWeekVal>0?100:0);
 
   // ===== 전략 실행 사이클 단계 판별 =====
   // 1:전략수립, 2:빠른실행, 3:데이터축적, 4:분석/파악, 5:고도화
@@ -2206,11 +2302,11 @@ function renderDashboard() {
   if (hasStrategy && hasExecution && hasData && needsOptimize) cyclePhase = 5;
 
   const cycleSteps = [
-    { num:1, icon:'&#127919;', label:'전략 수립', desc:'KPI/목표 설정' },
-    { num:2, icon:'&#9889;', label:'빠른 실행', desc:'업무 등록/진행' },
-    { num:3, icon:'&#128200;', label:'데이터 축적', desc:'실행 기록 자동 적재' },
-    { num:4, icon:'&#128269;', label:'분석/파악', desc:'현황 즉시 확인' },
-    { num:5, icon:'&#128640;', label:'고도화', desc:'전략 재설정/개선' }
+    { num:1, icon:'&#127919;', label:'전략 수립', desc:'KPI/목표 설정', view:'okrSettings' },
+    { num:2, icon:'&#9889;', label:'빠른 실행', desc:'업무 등록/진행', view:'actions' },
+    { num:3, icon:'&#128200;', label:'데이터 축적', desc:'실행 기록 자동 적재', view:'workJournal' },
+    { num:4, icon:'&#128269;', label:'분석/파악', desc:'현황 즉시 확인', view:'growthTeam' },
+    { num:5, icon:'&#128640;', label:'고도화', desc:'전략 재설정/개선', view:'okrSettings' }
   ];
 
   // ===== 데이터 축적 트렌드 (최근 14일) =====
@@ -2252,8 +2348,56 @@ function renderDashboard() {
   if (unassigned.length > 3) {
     insights.push({ type:'warn', icon:'&#128197;', title:`미배정 업무 ${unassigned.length}건`, desc:'일정에 배치되지 않은 업무가 많습니다. 주간계획에서 배치하세요.', action:'주간계획', actionFn:"goView('weeklyPlan')" });
   }
+  // [트렌드] 지난주 대비 활동량 변화
+  if (lastWeekLogs.length >= 3) {
+    if (weekLogPct <= -30) {
+      insights.push({ type:'danger', icon:'&#128200;', title:`활동량 ${Math.abs(weekLogPct)}% 감소`, desc:`지난주 ${lastWeekLogs.length}건 → 금주 ${thisWeekLogs.length}건. 데이터 축적 속도가 크게 떨어졌습니다.`, action:'업무일지', actionFn:"goView('workJournal')" });
+    } else if (weekLogPct >= 30) {
+      insights.push({ type:'success', icon:'&#128640;', title:`활동량 ${weekLogPct}% 증가!`, desc:`지난주 ${lastWeekLogs.length}건 → 금주 ${thisWeekLogs.length}건. 데이터 축적이 가속화되고 있습니다.`, action:'그로스보드', actionFn:"goView('growthTeam')" });
+    }
+  }
+  // [트렌드] 페이스 부족 KR 경고
+  const behindKRs = krRates.filter(kr => kr.velocity.onTrack===false && kr.velocity.daysNeeded!==Infinity);
+  if (behindKRs.length > 0) {
+    const bkr = behindKRs[0];
+    insights.push({ type:'danger', icon:'&#9200;', title:`${bkr.name} 페이스 부족`, desc:`현재 속도면 목표까지 ${bkr.velocity.daysNeeded}일 필요하지만 남은 기간은 ${bkr.velocity.daysLeft}일입니다. 전략 재검토가 필요합니다.`, action:'목표설정', actionFn:"goView('okrSettings')" });
+  }
+  // [트렌드] 3주째 정체 KR
+  const twoWeeksAgoLogs = getPeriodLogs(-2);
+  const staleKRs = krRates.filter(kr => {
+    const krKpis2 = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id);
+    const lagIds = laggingIndicators.filter(l=>l.krId===kr.id||krKpis2.some(k=>l.kpiId===k.id)).map(l=>l.id);
+    const tw = thisWeekLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).length;
+    const lw = lastWeekLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).length;
+    const tw2 = twoWeeksAgoLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).length;
+    return kr.rate>0 && kr.rate<80 && tw<=1 && lw<=1 && tw2<=1;
+  });
+  if (staleKRs.length > 0) {
+    insights.push({ type:'warn', icon:'&#128683;', title:`${staleKRs[0].name} 3주째 정체`, desc:'최근 3주간 활동이 거의 없습니다. 행동지표를 재점검하거나 새로운 실행 전략이 필요합니다.', action:'그로스보드', actionFn:"goView('growthTeam')" });
+  }
+  // [트렌드] 기여값 급증 KR (지난주 대비 2배 이상)
+  const surgingKRs = krRates.map(kr => {
+    const krKpis2 = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id);
+    const lagIds = laggingIndicators.filter(l=>l.krId===kr.id||krKpis2.some(k=>l.kpiId===k.id)).map(l=>l.id);
+    const twVal = thisWeekLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+    const lwVal = lastWeekLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+    return {name:kr.name, twVal, lwVal, ratio: lwVal>0?twVal/lwVal:0};
+  }).filter(k=>k.ratio>=2 && k.lwVal>=3);
+  if (surgingKRs.length > 0) {
+    insights.push({ type:'success', icon:'&#128293;', title:`${surgingKRs[0].name} 기여값 급증!`, desc:`지난주 대비 ${surgingKRs[0].ratio.toFixed(1)}배 증가 (${surgingKRs[0].lwVal}→${surgingKRs[0].twVal}). 이 모멘텀을 유지하세요!`, action:'그로스보드', actionFn:"goView('growthTeam')" });
+  }
 
   let html = `
+    <!-- 0. Export buttons -->
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+      <span style="font-size:11px;font-weight:600;color:var(--gray-500);padding:6px 0">&#128229; 데이터 내보내기:</span>
+      <button onclick="exportKpiSummary()" style="padding:4px 10px;font-size:10px;font-weight:600;background:var(--primary-light);color:var(--primary);border:1px solid var(--primary);border-radius:6px;cursor:pointer;font-family:inherit">KPI 요약</button>
+      <button onclick="exportIndicators()" style="padding:4px 10px;font-size:10px;font-weight:600;background:#ECFDF5;color:var(--success);border:1px solid var(--success);border-radius:6px;cursor:pointer;font-family:inherit">성과지표</button>
+      <button onclick="exportActions()" style="padding:4px 10px;font-size:10px;font-weight:600;background:#FEF3C7;color:#D97706;border:1px solid #D97706;border-radius:6px;cursor:pointer;font-family:inherit">행동지표</button>
+      <button onclick="exportDailyLogs()" style="padding:4px 10px;font-size:10px;font-weight:600;background:#EEF2FF;color:#6366F1;border:1px solid #6366F1;border-radius:6px;cursor:pointer;font-family:inherit">업무기록</button>
+      <button onclick="exportProjects()" style="padding:4px 10px;font-size:10px;font-weight:600;background:#FDF2F8;color:#EC4899;border:1px solid #EC4899;border-radius:6px;cursor:pointer;font-family:inherit">프로젝트</button>
+    </div>
+
     <!-- 1. 전략 실행 사이클 -->
     <div class="dash-section">
       <div class="dash-section-header">
@@ -2265,7 +2409,7 @@ function renderDashboard() {
           const isDone = s.num < cyclePhase;
           const isActive = s.num === cyclePhase;
           return `${i>0?'<span class="cycle-arrow">&#8594;</span>':''}
-            <div class="cycle-step ${isActive?'active':''} ${isDone?'done':''}">
+            <div class="cycle-step ${isActive?'active':''} ${isDone?'done':''}" onclick="goView('${s.view}')" style="cursor:pointer" title="${s.label} 바로가기">
               <div class="step-num">${s.icon}</div>
               <div class="step-label">${s.label}</div>
               <div class="step-desc">${s.desc}</div>
@@ -2274,10 +2418,10 @@ function renderDashboard() {
       </div>
     </div>
 
-    <!-- 2. KPI 실시간 현황 -->
+    <!-- 2. KPI 실시간 현황 + 속도 예측 -->
     <div class="dash-section">
       <div class="dash-section-header">
-        <div class="dash-section-label">&#128202; KPI 실시간 현황</div>
+        <div class="dash-section-label">&#128202; KPI 실시간 현황 & 페이스</div>
         <span class="dash-section-link" onclick="goView('growthTeam')">상세 보기 &#8594;</span>
       </div>
       <div class="kpi-rt-grid">
@@ -2286,15 +2430,25 @@ function renderDashboard() {
           <div class="kpi-rt-rate">${objRate.toFixed(1)}%</div>
           <div class="kpi-rt-detail">${okrObjective ? esc(okrObjective.name||'') : '목표 미설정'} | 메인KPI ${keyResults.length}개</div>
           <div class="kpi-rt-bar"><div class="kpi-rt-bar-fill" style="width:${Math.min(objRate,100)}%"></div></div>
+          ${okrObjective?.endDate?`<div style="margin-top:6px;font-size:10px;color:var(--gray-500)">&#128197; 마감: ${okrObjective.endDate} (D-${Math.max(0,Math.ceil((new Date(okrObjective.endDate)-new Date())/(1000*60*60*24)))})</div>`:''}
         </div>
         ${krRates.slice(0,5).map((kr,i) => {
           const rateColor = kr.rate>=80?'var(--success)':kr.rate>=40?'var(--primary)':kr.rate>=10?'var(--warning)':'var(--gray-600)';
           const barColor = kr.rate>=80?'var(--success)':kr.rate>=40?'var(--primary)':kr.rate>=10?'var(--warning)':'var(--gray-400)';
+          const v = kr.velocity;
+          const paceLabel = v.onTrack===null ? '' : v.onTrack ? '&#128994; 정상 페이스' : '&#128308; 페이스 부족';
+          const paceColor = v.onTrack===null ? 'var(--gray-400)' : v.onTrack ? 'var(--success)' : 'var(--danger)';
+          const etaText = v.daysNeeded===Infinity ? '데이터 부족' : `${v.daysNeeded}일 필요`;
+          const daysLeftText = v.daysLeft!==null ? `D-${v.daysLeft}` : '';
           return `<div class="kpi-rt-card">
             <div class="kpi-rt-label"><span style="font-size:14px">${okrIcons[i%okrIcons.length]}</span> ${esc(kr.name)}</div>
             <div class="kpi-rt-rate" style="color:${rateColor}">${kr.rate.toFixed(1)}%</div>
             <div class="kpi-rt-detail">서브KPI ${kr.kpiCount}개 | 성과지표 ${kr.lagCount}개</div>
             <div class="kpi-rt-bar"><div class="kpi-rt-bar-fill" style="width:${Math.min(kr.rate,100)}%;background:${barColor}"></div></div>
+            <div style="margin-top:6px;display:flex;justify-content:space-between;align-items:center;font-size:10px">
+              <span style="color:${paceColor};font-weight:600">${paceLabel}</span>
+              <span style="color:var(--gray-400)">${v.totalDailyRate>0?'일 '+v.totalDailyRate.toFixed(1)+'/일':''} ${etaText} ${daysLeftText?'| '+daysLeftText:''}</span>
+            </div>
           </div>`;
         }).join('')}
       </div>
@@ -2377,6 +2531,73 @@ function renderDashboard() {
           &#128161; 실행할수록 데이터가 쌓이고, 데이터가 쌓일수록 정확한 전략 수립이 가능합니다
         </div>
       </div>
+    </div>
+
+    <!-- 4.5 기간 비교 분석 -->
+    <div class="dash-section">
+      <div class="dash-section-header">
+        <div class="dash-section-label">&#128200; 기간 비교 분석</div>
+        <div style="font-size:10px;color:var(--gray-400)">지난 주/월 대비 변화량</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+        <div style="padding:12px;border-radius:10px;background:white;border:1px solid var(--gray-200);text-align:center">
+          <div style="font-size:10px;color:var(--gray-500);margin-bottom:4px">금주 KPI 기록</div>
+          <div style="font-size:20px;font-weight:800;color:var(--primary)">${thisWeekLogs.length}</div>
+          <div style="font-size:11px;font-weight:600;color:${weekLogDelta>=0?'var(--success)':'var(--danger)'}">
+            ${weekLogDelta>=0?'&#9650;':'&#9660;'} ${Math.abs(weekLogDelta)}건 (${weekLogDelta>=0?'+':''}${weekLogPct}%)
+          </div>
+          <div style="font-size:9px;color:var(--gray-400)">vs 지난주 ${lastWeekLogs.length}건</div>
+        </div>
+        <div style="padding:12px;border-radius:10px;background:white;border:1px solid var(--gray-200);text-align:center">
+          <div style="font-size:10px;color:var(--gray-500);margin-bottom:4px">금주 기여값</div>
+          <div style="font-size:20px;font-weight:800;color:var(--success)">${thisWeekVal.toLocaleString()}</div>
+          <div style="font-size:11px;font-weight:600;color:${weekValDelta>=0?'var(--success)':'var(--danger)'}">
+            ${weekValDelta>=0?'&#9650;':'&#9660;'} ${Math.abs(weekValDelta).toLocaleString()} (${weekValDelta>=0?'+':''}${weekValPct}%)
+          </div>
+          <div style="font-size:9px;color:var(--gray-400)">vs 지난주 ${lastWeekVal.toLocaleString()}</div>
+        </div>
+        <div style="padding:12px;border-radius:10px;background:white;border:1px solid var(--gray-200);text-align:center">
+          <div style="font-size:10px;color:var(--gray-500);margin-bottom:4px">금주 업무완료</div>
+          <div style="font-size:20px;font-weight:800;color:#6366F1">${thisWeekActions.length}</div>
+          <div style="font-size:11px;font-weight:600;color:${weekActDelta>=0?'var(--success)':'var(--danger)'}">
+            ${weekActDelta>=0?'&#9650;':'&#9660;'} ${Math.abs(weekActDelta)}건
+          </div>
+          <div style="font-size:9px;color:var(--gray-400)">vs 지난주 ${lastWeekActions.length}건</div>
+        </div>
+        <div style="padding:12px;border-radius:10px;background:white;border:1px solid var(--gray-200);text-align:center">
+          <div style="font-size:10px;color:var(--gray-500);margin-bottom:4px">이번달 기록</div>
+          <div style="font-size:20px;font-weight:800;color:#D97706">${thisMonthLogs.length}</div>
+          <div style="font-size:11px;font-weight:600;color:${monthLogDelta>=0?'var(--success)':'var(--danger)'}">
+            ${monthLogDelta>=0?'&#9650;':'&#9660;'} ${Math.abs(monthLogDelta)}건 (${monthLogDelta>=0?'+':''}${monthLogPct}%)
+          </div>
+          <div style="font-size:9px;color:var(--gray-400)">vs 지난달 ${lastMonthLogs.length}건</div>
+        </div>
+      </div>
+      ${(() => {
+        // KR별 주간 비교
+        const krComps = krRates.map(kr => {
+          const krKpis2 = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id);
+          const krLags = laggingIndicators.filter(l=>l.krId===kr.id||krKpis2.some(k=>l.kpiId===k.id));
+          const lagIds = krLags.map(l=>l.id);
+          const twVal = thisWeekLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+          const lwVal = lastWeekLogs.filter(l=>lagIds.includes(l.lagId||l.laggingIndicatorId)).reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+          const delta = twVal-lwVal;
+          return {name:kr.name, twVal, lwVal, delta};
+        }).filter(k=>k.twVal>0||k.lwVal>0);
+        if (krComps.length===0) return '';
+        return '<div style="margin-top:12px"><div style="font-size:11px;font-weight:600;color:var(--gray-600);margin-bottom:6px">KR별 주간 기여값 변화</div>' +
+          krComps.map((k,i) => {
+            const color = okrColors[i%okrColors.length];
+            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:white;border-radius:8px;margin-bottom:3px;border:1px solid var(--gray-100)">' +
+              '<span style="width:8px;height:8px;border-radius:50%;background:'+color+'"></span>' +
+              '<span style="flex:1;font-size:11px;font-weight:500">'+esc(k.name)+'</span>' +
+              '<span style="font-size:11px;color:var(--gray-500)">'+k.lwVal+'</span>' +
+              '<span style="font-size:11px;color:var(--gray-400)">&#8594;</span>' +
+              '<span style="font-size:11px;font-weight:700;color:var(--primary)">'+k.twVal+'</span>' +
+              '<span style="font-size:10px;font-weight:600;color:'+(k.delta>=0?'var(--success)':'var(--danger)')+'">('+(k.delta>=0?'+':'')+k.delta+')</span>' +
+            '</div>';
+          }).join('') + '</div>';
+      })()}
     </div>
 
     <!-- 5. 인사이트 & 추천 -->
@@ -6091,7 +6312,19 @@ function renderGrowthTeam() {
         <div class="gb-kr-title" style="margin:0"><span class="kr-icon">${okrIcons[ki%okrIcons.length]}</span> ${esc(kr.name||kr.title||'')}</div>
         <span style="padding:3px 10px;border-radius:20px;font-size:12px;font-weight:800;background:${color}20;color:${color}">${rate}%</span>
       </div>
-      <div class="gb-progress-bar" style="margin-bottom:10px"><div class="gb-progress-fill" style="width:${Math.min(rateNum,100)}%;background:${color}"></div></div>`;
+      <div class="gb-progress-bar" style="margin-bottom:6px"><div class="gb-progress-fill" style="width:${Math.min(rateNum,100)}%;background:${color}"></div></div>`;
+
+    // Velocity/Pace
+    const krVel = calcKrVelocity(kr.id);
+    if (krVel.totalDailyRate>0 || krVel.daysLeft!==null) {
+      const paceIcon = krVel.onTrack===null?'&#9898;':krVel.onTrack?'&#128994;':'&#128308;';
+      const paceText = krVel.onTrack===null?'':krVel.onTrack?'정상 페이스':'페이스 부족';
+      const paceColor = krVel.onTrack===null?'var(--gray-400)':krVel.onTrack?'var(--success)':'var(--danger)';
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:var(--gray-50);border-radius:6px;margin-bottom:8px;font-size:10px">
+        <span style="color:${paceColor};font-weight:600">${paceIcon} ${paceText}</span>
+        <span style="color:var(--gray-500)">${krVel.totalDailyRate>0?'일 '+krVel.totalDailyRate.toFixed(1):''} ${krVel.daysNeeded!==Infinity?'| 완료까지 '+krVel.daysNeeded+'일':''} ${krVel.daysLeft!==null?'| D-'+krVel.daysLeft:''}</span>
+      </div>`;
+    }
 
     // Meeting links
     if (krMeetings.length > 0) {
@@ -7778,78 +8011,121 @@ function toggleOkrKR(krId) {
 }
 
 // ===== OKR CRUD Modals =====
-function editOkrObjective() {
-  const current = okrObjective;
-  const title = prompt('Objective 제목:', current?.title||current?.name||'');
-  if (title === null) return;
-  const desc = prompt('설명:', current?.description||'');
-  if (desc === null) return;
-
-  if (current) {
-    db.collection('okr_objective').doc(current.id).update({title, description:desc, updatedAt:TS()}).then(() => toast('Objective 수정 완료','success')).catch(err => { console.error(err); toast('수정 실패','error'); });
-  } else {
-    db.collection('okr_objective').add({title, name:title, description:desc, createdAt:TS(), updatedAt:TS()}).then(() => toast('Objective 생성 완료','success')).catch(err => { console.error(err); toast('생성 실패','error'); });
+// ===== OKR Edit Modal System =====
+let _okrEditCtx = null;
+function openOkrEditModal(type, data) {
+  _okrEditCtx = {type, data};
+  const modal = document.getElementById('okrEditModal');
+  const title = document.getElementById('okrEditTitle');
+  const body = document.getElementById('okrEditBody');
+  let html = '';
+  if (type==='objective') {
+    const c = data||okrObjective;
+    title.textContent = c ? 'Objective 수정' : 'Objective 생성';
+    html = `<div class="form-group"><label class="form-label">Objective 제목 *</label><input type="text" class="form-input" id="okrE_title" value="${esc(c?.title||c?.name||'')}" placeholder="예: 2025년 매출 10억 달성"></div>
+      <div class="form-group"><label class="form-label">설명</label><textarea class="form-input" id="okrE_desc" placeholder="Objective 설명">${esc(c?.description||'')}</textarea></div>
+      <div class="form-row"><div class="form-group"><label class="form-label">시작일</label><input type="date" class="form-input" id="okrE_start" value="${c?.startDate||''}"></div><div class="form-group"><label class="form-label">종료일</label><input type="date" class="form-input" id="okrE_end" value="${c?.endDate||''}"></div></div>`;
+  } else if (type==='kr') {
+    const kr = data;
+    title.textContent = kr ? 'Key Result 수정' : 'Key Result 추가';
+    html = `<div class="form-group"><label class="form-label">Key Result 이름 *</label><input type="text" class="form-input" id="okrE_name" value="${esc(kr?.name||kr?.title||'')}" placeholder="예: 신규 고객 100명 확보"></div>
+      <div class="form-group"><label class="form-label">설명</label><textarea class="form-input" id="okrE_desc" placeholder="KR 상세 설명">${esc(kr?.description||'')}</textarea></div>`;
+  } else if (type==='kpi') {
+    const kpi = data?.kpi;
+    title.textContent = kpi ? 'KPI 수정' : 'KPI 추가';
+    html = `<div class="form-group"><label class="form-label">KPI 이름 *</label><input type="text" class="form-input" id="okrE_name" value="${esc(kpi?.name||kpi?.title||'')}" placeholder="예: 월간 방문자 수"></div>
+      <div class="form-row"><div class="form-group"><label class="form-label">가중치 (%)</label><input type="number" class="form-input" id="okrE_weight" value="${kpi?.weight||''}" placeholder="0~100"></div>
+      <div class="form-group"><label class="form-label">단위</label><input type="text" class="form-input" id="okrE_unit" value="${esc(kpi?.unit||'')}" placeholder="건/원/명"></div></div>
+      <div class="form-group"><label class="form-label">목표값</label><input type="number" class="form-input" id="okrE_target" value="${kpi?.targetValue||''}" placeholder="100"></div>`;
+  } else if (type==='lag') {
+    const lag = data?.lag;
+    title.textContent = lag ? '성과지표 수정' : '성과지표 추가';
+    html = `<div class="form-group"><label class="form-label">지표 이름 *</label><input type="text" class="form-input" id="okrE_name" value="${esc(lag?.name||lag?.title||'')}" placeholder="예: 상담 건수"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">단위</label><input type="text" class="form-input" id="okrE_unit" value="${esc(lag?.unit||'건')}" placeholder="건/원/명/개/회/%"></div>
+        <div class="form-group"><label class="form-label">목표값</label><input type="number" class="form-input" id="okrE_target" value="${lag?.targetValue||100}" placeholder="100"></div>
+      </div>
+      <div class="form-group"><label class="form-label">유형 *</label>
+        <div style="display:flex;gap:8px">
+          <label style="flex:1;display:flex;align-items:center;gap:6px;padding:10px;border:2px solid ${(!lag||lag?.type==='input')?'var(--primary)':'var(--gray-200)'};border-radius:8px;cursor:pointer;background:${(!lag||lag?.type==='input')?'var(--primary-light)':'white'}">
+            <input type="radio" name="okrE_type" value="input" ${(!lag||lag?.type==='input')?'checked':''}> <span style="font-size:12px;font-weight:600">&#128229; Input (활동)</span>
+          </label>
+          <label style="flex:1;display:flex;align-items:center;gap:6px;padding:10px;border:2px solid ${lag?.type==='output'?'var(--success)':'var(--gray-200)'};border-radius:8px;cursor:pointer;background:${lag?.type==='output'?'#ECFDF5':'white'}">
+            <input type="radio" name="okrE_type" value="output" ${lag?.type==='output'?'checked':''}> <span style="font-size:12px;font-weight:600">&#128228; Output (성과)</span>
+          </label>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">A/B 버전</label>
+        <select class="form-input" id="okrE_version"><option value="">없음</option><option value="A" ${lag?.version==='A'?'selected':''}>A</option><option value="B" ${lag?.version==='B'?'selected':''}>B</option><option value="C" ${lag?.version==='C'?'selected':''}>C</option></select>
+      </div>`;
+  }
+  body.innerHTML = html;
+  modal.classList.add('show');
+  setTimeout(()=>{ const first = body.querySelector('input[type="text"],input:not([type])'); if(first) first.focus(); },100);
+}
+function closeOkrEditModal() { document.getElementById('okrEditModal').classList.remove('show'); _okrEditCtx=null; }
+function saveOkrEdit() {
+  if (!_okrEditCtx) return;
+  const {type, data} = _okrEditCtx;
+  if (type==='objective') {
+    const title = document.getElementById('okrE_title').value.trim();
+    if (!title) return toast('제목을 입력하세요','error');
+    const desc = document.getElementById('okrE_desc').value.trim();
+    const startDate = document.getElementById('okrE_start').value||null;
+    const endDate = document.getElementById('okrE_end').value||null;
+    const current = data||okrObjective;
+    if (current) {
+      db.collection('okr_objective').doc(current.id).update({title,name:title,description:desc,startDate,endDate,updatedAt:TS()}).then(()=>{toast('Objective 수정 완료','success');closeOkrEditModal();}).catch(e=>{console.error(e);toast('수정 실패','error');});
+    } else {
+      db.collection('okr_objective').add({title,name:title,description:desc,startDate,endDate,createdAt:TS(),updatedAt:TS()}).then(()=>{toast('Objective 생성 완료','success');closeOkrEditModal();}).catch(e=>{console.error(e);toast('생성 실패','error');});
+    }
+  } else if (type==='kr') {
+    const name = document.getElementById('okrE_name').value.trim();
+    if (!name) return toast('이름을 입력하세요','error');
+    const desc = document.getElementById('okrE_desc').value.trim();
+    if (data) {
+      db.collection('okr_keyResults').doc(data.id).update({name,title:name,description:desc,updatedAt:TS()}).then(()=>{toast('수정 완료','success');closeOkrEditModal();logChange({documentType:'key_result',documentId:data.id,action:'update',displayName:`KR 수정: ${name}`});}).catch(e=>{console.error(e);toast('수정 실패','error');});
+    } else {
+      db.collection('okr_keyResults').add({name,title:name,description:desc,order:keyResults.length,createdAt:TS(),updatedAt:TS()}).then(()=>{toast('KR 추가 완료','success');closeOkrEditModal();logChange({documentType:'key_result',action:'create',displayName:`KR 추가: ${name}`});}).catch(e=>{console.error(e);toast('KR 추가 실패','error');});
+    }
+  } else if (type==='kpi') {
+    const name = document.getElementById('okrE_name').value.trim();
+    if (!name) return toast('이름을 입력하세요','error');
+    const weight = parseInt(document.getElementById('okrE_weight').value)||0;
+    const unit = document.getElementById('okrE_unit').value.trim();
+    const targetValue = parseInt(document.getElementById('okrE_target').value)||0;
+    const kpi = data?.kpi;
+    const krId = data?.krId;
+    if (kpi) {
+      db.collection('okr_kpis').doc(kpi.id).update({name,title:name,weight,unit,targetValue,updatedAt:TS()}).then(()=>{toast('수정 완료','success');closeOkrEditModal();logChange({documentType:'kpi',documentId:kpi.id,action:'update',displayName:`KPI 수정: ${name}`});}).catch(e=>{console.error(e);toast('수정 실패','error');});
+    } else {
+      db.collection('okr_kpis').add({name,title:name,keyResultId:krId,krId,weight,unit,targetValue,createdAt:TS(),updatedAt:TS()}).then(()=>{toast('KPI 추가 완료','success');closeOkrEditModal();logChange({documentType:'kpi',action:'create',displayName:`KPI 추가: ${name}`});}).catch(e=>{console.error(e);toast('KPI 추가 실패','error');});
+    }
+  } else if (type==='lag') {
+    const name = document.getElementById('okrE_name').value.trim();
+    if (!name) return toast('이름을 입력하세요','error');
+    const unit = document.getElementById('okrE_unit').value.trim()||'건';
+    const targetValue = parseInt(document.getElementById('okrE_target').value)||0;
+    const typeVal = document.querySelector('input[name="okrE_type"]:checked')?.value||'input';
+    const version = document.getElementById('okrE_version').value||null;
+    const lag = data?.lag;
+    const kpiId = data?.kpiId;
+    const krId = data?.krId;
+    if (lag) {
+      db.collection('okr_laggingIndicators').doc(lag.id).update({name,title:name,unit,targetValue,type:typeVal,version,updatedAt:TS()}).then(()=>{toast('수정 완료','success');closeOkrEditModal();logChange({documentType:'lagging_indicator',documentId:lag.id,action:'update',displayName:`지표 수정: ${name}`});}).catch(e=>{console.error(e);toast('수정 실패','error');});
+    } else {
+      db.collection('okr_laggingIndicators').add({name,title:name,kpiId,krId,unit,targetValue,currentValue:0,type:typeVal,version,period:'monthly',createdAt:TS(),updatedAt:TS()}).then(()=>{toast('지표 추가 완료','success');closeOkrEditModal();logChange({documentType:'lagging_indicator',action:'create',displayName:`지표 추가: ${name}`});}).catch(e=>{console.error(e);toast('지표 추가 실패','error');});
+    }
   }
 }
-
-function addOkrKR() {
-  const name = prompt('Key Result 이름:');
-  if (!name) return;
-  const order = keyResults.length;
-  db.collection('okr_keyResults').add({name, title:name, order, createdAt:TS(), updatedAt:TS()}).then(() => {
-    toast('Key Result 추가 완료','success');
-    logChange({documentType:'key_result',action:'create',displayName:`KR 추가: ${name}`});
-  }).catch(err => { console.error(err); toast('KR 추가 실패','error'); });
-}
-
-function editOkrKR(krId) {
-  const kr = keyResults.find(k => k.id===krId);
-  if (!kr) return;
-  const name = prompt('Key Result 이름:', kr.name||kr.title||'');
-  if (!name || name === (kr.name||kr.title)) return;
-  db.collection('okr_keyResults').doc(krId).update({name, title:name, updatedAt:TS()}).then(() => {
-    toast('수정 완료','success');
-    logChange({documentType:'key_result',documentId:krId,action:'update',displayName:`KR 수정: ${name}`,changes:{name:{oldValue:kr.name,newValue:name}}});
-  }).catch(err => { console.error(err); toast('수정 실패','error'); });
-}
-
-function addOkrKPI(krId) {
-  const name = prompt('KPI 이름:');
-  if (!name) return;
-  db.collection('okr_kpis').add({name, title:name, keyResultId:krId, krId, createdAt:TS(), updatedAt:TS()}).then(() => {
-    toast('KPI 추가 완료','success');
-    logChange({documentType:'kpi',action:'create',displayName:`KPI 추가: ${name}`});
-  }).catch(err => { console.error(err); toast('KPI 추가 실패','error'); });
-}
-
-function editOkrKPI(kpiId) {
-  const kpi = kpis.find(k => k.id===kpiId);
-  if (!kpi) return;
-  const name = prompt('KPI 이름:', kpi.name||kpi.title||'');
-  if (!name || name === (kpi.name||kpi.title)) return;
-  const weight = prompt('가중치 (%):', kpi.weight||'');
-  const updates = {name, title:name, updatedAt:TS()};
-  if (weight !== null && weight !== '') updates.weight = parseInt(weight)||0;
-  db.collection('okr_kpis').doc(kpiId).update(updates).then(() => {
-    toast('수정 완료','success');
-    logChange({documentType:'kpi',documentId:kpiId,action:'update',displayName:`KPI 수정: ${name}`});
-  }).catch(err => { console.error(err); toast('수정 실패','error'); });
-}
-
-function addOkrLag(kpiId, krId) {
-  const name = prompt('지표 이름:');
-  if (!name) return;
-  const unit = prompt('단위 (건/원/명/개/회/%):','건');
-  const target = prompt('목표값:','100');
-  const type = confirm('Input(활동) 지표입니까?\nOK=Input, Cancel=Output') ? 'input' : 'output';
-  db.collection('okr_laggingIndicators').add({
-    name, title:name, kpiId, krId, unit:unit||'건', targetValue:parseInt(target)||0, currentValue:0, type,
-    period:'monthly', createdAt:TS(), updatedAt:TS()
-  }).then(() => {
-    toast('지표 추가 완료','success');
-    logChange({documentType:'lagging_indicator',action:'create',displayName:`지표 추가: ${name}`});
-  }).catch(err => { console.error(err); toast('지표 추가 실패','error'); });
-}
+// Legacy wrappers for compatibility
+function editOkrObjective() { openOkrEditModal('objective', okrObjective); }
+function addOkrKR() { openOkrEditModal('kr', null); }
+function editOkrKR(krId) { const kr = keyResults.find(k=>k.id===krId); if(kr) openOkrEditModal('kr', kr); }
+function addOkrKPI(krId) { openOkrEditModal('kpi', {kpi:null, krId}); }
+function editOkrKPI(kpiId) { const kpi = kpis.find(k=>k.id===kpiId); if(kpi) openOkrEditModal('kpi', {kpi, krId:kpi.krId||kpi.keyResultId}); }
+function addOkrLag(kpiId, krId) { openOkrEditModal('lag', {lag:null, kpiId, krId}); }
+function editOkrLag(lagId) { const lag = laggingIndicators.find(l=>l.id===lagId); if(lag) openOkrEditModal('lag', {lag, kpiId:lag.kpiId, krId:lag.krId}); }
 
 // ===== OKR Delete Functions =====
 function deleteOkrKR(krId) {
@@ -7890,6 +8166,81 @@ function deleteOkrLag(lagId) {
 
 // Helpers
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+// ===== CSV Export =====
+function csvEscape(val) { const s=String(val??''); return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s; }
+function downloadCsv(filename, headers, rows) {
+  const bom = '\uFEFF';
+  const csv = bom + headers.map(csvEscape).join(',') + '\n' + rows.map(r=>r.map(csvEscape).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename+'_'+localDateStr(new Date())+'.csv';
+  link.click();
+  URL.revokeObjectURL(link.href);
+  toast('CSV 파일이 다운로드되었습니다','success');
+}
+function exportKpiSummary() {
+  const headers = ['메인KPI','달성률(%)','서브KPI수','성과지표수','일평균속도','목표달성예상일수','남은일수','페이스상태'];
+  const rows = keyResults.map(kr => {
+    const vel = calcKrVelocity(kr.id);
+    const kpiCount = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id).length;
+    const lagCount = laggingIndicators.filter(l=>{const kIds=kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id).map(k=>k.id);return kIds.includes(l.kpiId);}).length;
+    return [kr.name||kr.title, vel.rate.toFixed(1), kpiCount, lagCount, vel.totalDailyRate.toFixed(2), vel.daysNeeded===Infinity?'N/A':vel.daysNeeded, vel.daysLeft??'N/A', vel.onTrack===null?'N/A':vel.onTrack?'정상':'부족'];
+  });
+  downloadCsv('KPI현황요약', headers, rows);
+}
+function exportIndicators() {
+  const headers = ['메인KPI','서브KPI','지표명','유형','단위','목표값','현재값','달성률(%)','기록횟수','연결행동지표수','버전'];
+  const rows = [];
+  keyResults.forEach(kr => {
+    const krKpis = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id);
+    krKpis.forEach(kpi => {
+      const kpiLags = laggingIndicators.filter(l=>l.kpiId===kpi.id);
+      kpiLags.forEach(lag => {
+        const ev = getEffectiveValue(lag.id);
+        const pct = lag.targetValue>0?Math.round(ev/lag.targetValue*100):0;
+        const logCnt = dailyLogs.filter(l=>(l.lagId||l.laggingIndicatorId)===lag.id).length;
+        const actCnt = actions.filter(a=>a.lagId===lag.id).length;
+        rows.push([kr.name||kr.title, kpi.name||kpi.title, lag.name, lag.type==='output'?'Output':'Input', lag.unit||'건', lag.targetValue||0, ev, pct, logCnt, actCnt, lag.version||'']);
+      });
+    });
+  });
+  downloadCsv('성과지표상세', headers, rows);
+}
+function exportActions() {
+  const headers = ['프로젝트','행동지표명','상태','우선순위','담당자','마감일','로드맵단계','연결지표','KPI기여값'];
+  const rows = actions.map(a => {
+    const proj = projects.find(p=>p.id===a.projectId);
+    const lag = laggingIndicators.find(l=>l.id===a.lagId);
+    const phase = proj?.roadmap?.find(ph=>ph.id===a.phaseId);
+    return [proj?.title||'', a.title||'', a.status||'', a.priority||'', a.assigneeName||a.assignee||'', a.deadline||'', phase?.label||'', lag?.name||'', a.kpiValue||''];
+  });
+  downloadCsv('행동지표목록', headers, rows);
+}
+function exportDailyLogs() {
+  const headers = ['날짜','지표명','유형','기여값','단위','팀원','메인KPI','서브KPI'];
+  const rows = dailyLogs.slice(0,2000).map(l => {
+    const lag = laggingIndicators.find(x=>x.id===(l.lagId||l.laggingIndicatorId));
+    const kpi = lag?kpis.find(k=>k.id===lag.kpiId):null;
+    const kr = lag?keyResults.find(k=>k.id===lag.krId):null;
+    return [l.date||'', l.lagName||lag?.name||'', lag?.type==='output'?'Output':'Input', l.resultValue||l.value||0, lag?.unit||'', l.memberName||'', kr?.name||'', kpi?.name||''];
+  });
+  downloadCsv('업무기록내역', headers, rows);
+}
+function exportProjects() {
+  const headers = ['프로젝트명','메인KPI','서브KPI','담당자','카테고리','전체행동지표','완료','진행중','완료율(%)','로드맵단계수'];
+  const rows = projects.map(p => {
+    const kr = keyResults.find(k=>k.id===p.krId);
+    const kpi = kpis.find(k=>k.id===p.kpiId);
+    const pa = actions.filter(a=>a.projectId===p.id);
+    const done = pa.filter(a=>a.status==='done').length;
+    const doing = pa.filter(a=>a.status==='doing').length;
+    const pct = pa.length>0?Math.round(done/pa.length*100):0;
+    return [p.title||'', kr?.name||'', kpi?.name||'', p.assigneeName||'', p.category||'', pa.length, done, doing, pct, (p.roadmap||[]).length];
+  });
+  downloadCsv('프로젝트현황', headers, rows);
+}
 
 // ===== PNG Export (from index.html) =====
 function gbSavePng(containerId, filename) {
