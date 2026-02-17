@@ -507,7 +507,10 @@
     .mobile-bottom-nav-inner { display:flex; justify-content:space-around; align-items:center; }
     .mobile-nav-item { display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 12px; border:none; background:none; color:var(--gray-500); font-size:10px; font-family:inherit; cursor:pointer; border-radius:8px; -webkit-tap-highlight-color:transparent; }
     .mobile-nav-item.active { color:var(--primary); font-weight:600; }
-    .mobile-nav-item .nav-icon { font-size:20px; line-height:1; }
+    .mobile-nav-item .nav-icon { font-size:20px; line-height:1; position:relative; }
+    .mobile-nav-badge { position:absolute; top:-4px; right:-8px; min-width:14px; height:14px; padding:0 3px; background:var(--danger); color:white; font-size:9px; font-weight:800; border-radius:7px; display:flex; align-items:center; justify-content:center; line-height:1; }
+    .mobile-nav-dot { position:absolute; top:-2px; right:-6px; width:8px; height:8px; background:var(--primary); border-radius:50%; border:2px solid white; animation:navPulse 2s infinite; }
+    @keyframes navPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
     /* Mobile FAB (floating action button) */
     .mobile-fab { display:none; position:fixed; bottom:76px; right:16px; width:52px; height:52px; border-radius:50%; background:var(--primary); color:white; border:none; font-size:26px; box-shadow:0 4px 14px rgba(49,130,246,0.4); cursor:pointer; z-index:49; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
@@ -1983,6 +1986,7 @@ function listenActions() {
     applyFilters();
     setSyncStatus(true);
     _debouncedRender();
+    try { updateMobileNavBadges(); } catch(e) {}
   }, err => {
     console.error('listenActions error:', err);
     setSyncStatus(false);
@@ -2413,6 +2417,22 @@ function renderDashboard() {
   const paceEmoji = paceBad>0?'&#128308;':paceOk>0?'&#128994;':'&#9898;';
   const todayDoneCount = actions.filter(a=>a.actualCompletionDate===todayStr||(a.status==='done'&&a.completedAt&&typeof a.completedAt.toDate==='function'&&localDateStr(a.completedAt.toDate())===todayStr)).length;
 
+  // ===== "지금 이거 하세요" 상황 인식 CTA =====
+  let ctaIcon='', ctaTitle='', ctaDesc='', ctaBtn='', ctaFn='', ctaColor='var(--primary)';
+  if (cyclePhase===1) {
+    ctaIcon='&#127919;'; ctaTitle='먼저 목표를 설정하세요'; ctaDesc='KPI와 목표를 만들어야 모든 기능이 동작합니다'; ctaBtn='목표 설정하러 가기'; ctaFn="goView('okrSettings')"; ctaColor='#6366F1';
+  } else if (totalOverdue>0) {
+    ctaIcon='&#128680;'; ctaTitle=`마감 초과 ${totalOverdue}건! 지금 처리하세요`; ctaDesc='기한이 지난 업무부터 처리해야 KPI가 올라갑니다'; ctaBtn='초과 업무 확인'; ctaFn="goView('actions')"; ctaColor='var(--danger)';
+  } else if (todayTopActions.length>0) {
+    ctaIcon='&#9889;'; ctaTitle=`오늘 할 일 ${todayMyActions.length}건 남았습니다`; ctaDesc=todayTopActions.map(a=>esc(a.title||'')).join(', '); ctaBtn='내 업무 보기'; ctaFn="goView('myActions')"; ctaColor='var(--primary)';
+  } else if (cyclePhase===2) {
+    ctaIcon='&#128221;'; ctaTitle='업무를 등록하세요'; ctaDesc='목표 달성을 위한 구체적 행동지표를 만들어보세요'; ctaBtn='업무 등록'; ctaFn="goView('actions')"; ctaColor='var(--success)';
+  } else if (recentLogs===0 && actions.length>0) {
+    ctaIcon='&#128221;'; ctaTitle='이번 주 기록이 없습니다'; ctaDesc='업무일지를 남기면 데이터가 쌓여 분석이 가능해집니다'; ctaBtn='업무일지 쓰기'; ctaFn="goView('workJournal')"; ctaColor='#6366F1';
+  } else {
+    ctaIcon='&#128202;'; ctaTitle='현황 분석을 확인하세요'; ctaDesc='KPI 달성률과 팀 성과를 그로스보드에서 확인하세요'; ctaBtn='그로스보드'; ctaFn="goView('growthTeam')"; ctaColor='var(--success)';
+  }
+
   let html = `
     <!-- CEO 핵심 요약 -->
     <div style="background:linear-gradient(135deg,#1E293B,#334155);border-radius:14px;padding:18px 20px;margin-bottom:16px;color:white">
@@ -2448,6 +2468,38 @@ function renderDashboard() {
           </div>`).join(''):'<div style="font-size:13px;font-weight:600;opacity:0.5">오늘 할 업무 없음</div>'}</div>
       </div>
     </div>
+
+    <!-- 지금 이거 하세요 CTA -->
+    <div onclick="${ctaFn}" style="display:flex;align-items:center;gap:14px;padding:14px 18px;margin-bottom:12px;background:white;border:2px solid ${ctaColor};border-radius:12px;cursor:pointer;transition:all 0.15s;box-shadow:0 2px 8px rgba(0,0,0,0.06)" onmouseover="this.style.transform='translateY(-1px)'" onmouseout="this.style.transform=''">
+      <div style="font-size:28px;flex-shrink:0">${ctaIcon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:800;color:var(--gray-900);margin-bottom:2px">${ctaTitle}</div>
+        <div style="font-size:11px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${ctaDesc}</div>
+      </div>
+      <div style="padding:8px 14px;background:${ctaColor};color:white;border-radius:8px;font-size:12px;font-weight:700;white-space:nowrap;flex-shrink:0">${ctaBtn} &rarr;</div>
+    </div>
+
+    <!-- 처음이시라면 가이드 -->
+    <details style="margin-bottom:12px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;overflow:hidden" ${cyclePhase<=2?'open':''}>
+      <summary style="padding:10px 14px;font-size:12px;font-weight:700;color:var(--gray-600);cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent">
+        <span>&#128161;</span> 이 앱 이렇게 쓰세요 (3단계)
+        <span style="margin-left:auto;font-size:10px;color:var(--gray-400)">펼치기/접기</span>
+      </summary>
+      <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:8px">
+        <div onclick="goView('okrSettings')" style="display:flex;gap:10px;align-items:center;padding:10px 12px;background:${cyclePhase>=2?'#ECFDF5':'white'};border:1px solid ${cyclePhase>=2?'var(--success)':'var(--gray-200)'};border-radius:8px;cursor:pointer">
+          <div style="width:28px;height:28px;border-radius:50%;background:${cyclePhase>=2?'var(--success)':'var(--primary)'};color:white;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0">${cyclePhase>=2?'&#10003;':'1'}</div>
+          <div><div style="font-size:13px;font-weight:700;color:var(--gray-800)">목표 설정</div><div style="font-size:10px;color:var(--gray-500)">KPI/목표를 만들면 자동 추적이 시작됩니다</div></div>
+        </div>
+        <div onclick="goView('actions')" style="display:flex;gap:10px;align-items:center;padding:10px 12px;background:${cyclePhase>=3?'#ECFDF5':'white'};border:1px solid ${cyclePhase>=3?'var(--success)':'var(--gray-200)'};border-radius:8px;cursor:pointer">
+          <div style="width:28px;height:28px;border-radius:50%;background:${cyclePhase>=3?'var(--success)':'var(--gray-300)'};color:white;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0">${cyclePhase>=3?'&#10003;':'2'}</div>
+          <div><div style="font-size:13px;font-weight:700;color:var(--gray-800)">업무 등록 & 완료 체크</div><div style="font-size:10px;color:var(--gray-500)">할 일 등록 후 완료하면 KPI에 자동 반영됩니다</div></div>
+        </div>
+        <div onclick="goView('growthTeam')" style="display:flex;gap:10px;align-items:center;padding:10px 12px;background:${cyclePhase>=4?'#ECFDF5':'white'};border:1px solid ${cyclePhase>=4?'var(--success)':'var(--gray-200)'};border-radius:8px;cursor:pointer">
+          <div style="width:28px;height:28px;border-radius:50%;background:${cyclePhase>=4?'var(--success)':'var(--gray-300)'};color:white;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex-shrink:0">${cyclePhase>=4?'&#10003;':'3'}</div>
+          <div><div style="font-size:13px;font-weight:700;color:var(--gray-800)">그로스보드에서 확인</div><div style="font-size:10px;color:var(--gray-500)">데이터가 쌓이면 달성률/추세를 자동 분석합니다</div></div>
+        </div>
+      </div>
+    </details>
 
     <!-- 0. Export buttons -->
     <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
@@ -8567,6 +8619,23 @@ function mobileNav(view) {
   document.querySelectorAll('.mobile-nav-item').forEach(el => el.classList.toggle('active', el.dataset.mv===view));
   goView(view);
   closeSidebar();
+}
+function updateMobileNavBadges() {
+  const today = localDateStr(new Date());
+  const myActs = actions.filter(a=>a.assigneeId===currentUser?.id);
+  const overdueCount = myActs.filter(a=>a.deadline&&a.status!=='done'&&a.deadline<today).length;
+  const todayCount = myActs.filter(a=>a.status!=='done'&&(a.deadline===today||a.status==='doing')).length;
+  document.querySelectorAll('.mobile-nav-item').forEach(el => {
+    const icon = el.querySelector('.nav-icon');
+    if (!icon) return;
+    icon.querySelectorAll('.mobile-nav-badge,.mobile-nav-dot').forEach(b=>b.remove());
+    const mv = el.dataset.mv;
+    if (mv==='actions' && overdueCount>0) {
+      icon.insertAdjacentHTML('beforeend',`<span class="mobile-nav-badge">${overdueCount}</span>`);
+    } else if (mv==='my' && todayCount>0) {
+      icon.insertAdjacentHTML('beforeend',`<span class="mobile-nav-badge" style="background:var(--primary)">${todayCount}</span>`);
+    }
+  });
 }
 
 // Patch goView to also close sidebar on mobile
