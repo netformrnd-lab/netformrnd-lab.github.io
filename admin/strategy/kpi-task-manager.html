@@ -6111,6 +6111,293 @@ function renderGrowthTeam() {
   });
   html += '</div></div>';
 
+  // ===== 4.5 Project & Roadmap Status =====
+  if (projects.length > 0) {
+    html += `<div class="gb-section">
+      <div class="gb-section-title">&#128194; 프로젝트 & 로드맵 현황 <span style="font-size:10px;font-weight:400;color:var(--gray-400)">${projects.length}개 프로젝트</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">`;
+    projects.forEach(proj => {
+      const kr = keyResults.find(k=>k.id===proj.krId);
+      const kpi = kpis.find(k=>k.id===proj.kpiId);
+      const pa = actions.filter(a=>a.projectId===proj.id);
+      const paDone = pa.filter(a=>a.status==='done').length;
+      const paDoing = pa.filter(a=>a.status==='doing').length;
+      const paPct = pa.length>0?Math.round(paDone/pa.length*100):0;
+      const phases = proj.roadmap||[];
+      const krRate = kr?calcOkrKRRate(kr.id):'–';
+      const krColor = kr?okrColors[keyResults.indexOf(kr)%okrColors.length]:'var(--gray-400)';
+      // Calculate per-phase stats
+      const phaseStats = phases.map(ph => {
+        const phActions = pa.filter(a=>a.phaseId===ph.id);
+        const phDone = phActions.filter(a=>a.status==='done').length;
+        const phPct = phActions.length>0?Math.round(phDone/phActions.length*100):0;
+        return {ph, total:phActions.length, done:phDone, pct:phPct};
+      });
+      // Determine current phase (first phase not 100% done with actions, or first with doing)
+      const currentPhaseIdx = phaseStats.findIndex(ps => ps.total>0 && ps.pct<100);
+      const assignee = proj.assigneeName||'';
+
+      html += `<div style="background:white;border:1px solid var(--gray-200);border-radius:var(--card-radius);padding:16px;cursor:pointer;transition:all .15s;border-top:3px solid ${krColor}" onclick="goProjectDetail('${proj.id}')">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:700;color:var(--gray-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(proj.title||'')}</div>
+            <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+              ${kr?`<span style="font-size:10px;padding:2px 8px;background:${krColor}15;color:${krColor};border-radius:8px;font-weight:600">${esc(kr.name||'')} ${krRate}%</span>`:'<span style="font-size:10px;padding:2px 8px;background:var(--gray-100);color:var(--gray-500);border-radius:8px">KR 미연결</span>'}
+              ${kpi?`<span style="font-size:10px;padding:2px 8px;background:var(--purple-light);color:var(--purple);border-radius:8px;font-weight:600">${esc(kpi.name||'')}</span>`:''}
+              ${assignee?`<span style="font-size:10px;color:var(--gray-500)">&#128100; ${esc(assignee)}</span>`:''}
+            </div>
+          </div>
+          <span style="padding:4px 10px;border-radius:16px;font-size:12px;font-weight:800;background:${paPct>=80?'var(--success)':paPct>=50?'var(--warning)':'var(--gray-400)'}20;color:${paPct>=80?'var(--success)':paPct>=50?'var(--warning)':'var(--gray-500)'}">${paPct}%</span>
+        </div>`;
+
+      // Roadmap phases mini bar
+      if (phases.length>0) {
+        html += `<div style="margin-bottom:8px">
+          <div style="font-size:10px;font-weight:600;color:var(--gray-500);margin-bottom:6px">&#128506; 로드맵 ${phases.length}단계</div>
+          <div style="display:flex;gap:3px;margin-bottom:6px">`;
+        phaseStats.forEach((ps, pi) => {
+          const isActive = pi===currentPhaseIdx;
+          const isDone = ps.pct===100 && ps.total>0;
+          const bgColor = isDone?'var(--success)':isActive?'var(--primary)':'var(--gray-200)';
+          html += `<div style="flex:1;height:6px;border-radius:3px;background:${bgColor};position:relative" title="${esc(ps.ph.label||'')} ${ps.done}/${ps.total}">
+            ${isActive&&ps.pct>0?`<div style="height:100%;width:${ps.pct}%;background:var(--primary);border-radius:3px;opacity:0.5"></div>`:''}
+          </div>`;
+        });
+        html += '</div><div style="display:flex;gap:4px;flex-wrap:wrap">';
+        phaseStats.forEach((ps, pi) => {
+          const isActive = pi===currentPhaseIdx;
+          const isDone = ps.pct===100 && ps.total>0;
+          html += `<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:${isDone?'#ECFDF5':isActive?'#EEF2FF':'var(--gray-50)'};color:${isDone?'var(--success)':isActive?'var(--primary)':'var(--gray-400)'};font-weight:${isActive?'700':'500'}">${esc(ps.ph.label||'단계'+(pi+1))} ${ps.done}/${ps.total}</span>`;
+        });
+        html += '</div></div>';
+      }
+
+      // Action summary
+      html += `<div style="display:flex;gap:8px;padding-top:8px;border-top:1px solid var(--gray-100)">
+          <span style="font-size:11px;color:var(--gray-500)">&#128203; ${pa.length}개</span>
+          <span style="font-size:11px;color:var(--success)">&#9989; ${paDone}</span>
+          <span style="font-size:11px;color:var(--primary)">&#128994; ${paDoing}</span>
+          <span style="font-size:11px;color:var(--gray-400)">&#9744; ${pa.length-paDone-paDoing}</span>
+        </div>
+      </div>`;
+    });
+    html += '</div></div>';
+  }
+
+  // ===== 4.6 KR × Roadmap Matrix & Phase KPI Analysis =====
+  {
+    // Build KR-Project-Phase analysis data
+    const krProjData = keyResults.map((kr,ki) => {
+      const krProjs = projects.filter(p=>p.krId===kr.id);
+      const krKpis = kpis.filter(k=>k.keyResultId===kr.id||k.krId===kr.id);
+      const krLags = laggingIndicators.filter(l=>l.krId===kr.id||krKpis.some(k=>l.kpiId===k.id));
+      const krRate = calcOkrKRRate(kr.id);
+      return {kr,ki,krProjs,krKpis,krLags,krRate};
+    });
+
+    // Aggregate all phase stats across all projects
+    const allPhaseAgg = {};
+    projects.forEach(proj => {
+      const phases = proj.roadmap||[];
+      const pa = actions.filter(a=>a.projectId===proj.id);
+      phases.forEach(ph => {
+        const phActions = pa.filter(a=>a.phaseId===ph.id);
+        const phDone = phActions.filter(a=>a.status==='done').length;
+        const phDoing = phActions.filter(a=>a.status==='doing').length;
+        // KPI value generated in this phase (sum of dailyLogs for actions in this phase)
+        let phKpiVal = 0;
+        phActions.filter(a=>a.status==='done'&&a.lagId).forEach(a => {
+          const logs = dailyLogs.filter(l=>l.taskId===a.id);
+          phKpiVal += logs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+        });
+        // Member participation
+        const phMembers = new Set();
+        phActions.forEach(a=>{ if(a.assigneeId) phMembers.add(a.assigneeId); });
+        const key = ph.label||'unknown';
+        if (!allPhaseAgg[key]) allPhaseAgg[key] = {label:key,total:0,done:0,doing:0,kpiVal:0,members:new Set(),projects:[],bottleneck:false};
+        allPhaseAgg[key].total += phActions.length;
+        allPhaseAgg[key].done += phDone;
+        allPhaseAgg[key].doing += phDoing;
+        allPhaseAgg[key].kpiVal += phKpiVal;
+        phMembers.forEach(m=>allPhaseAgg[key].members.add(m));
+        allPhaseAgg[key].projects.push({proj,phActions,phDone,phDoing,phKpiVal});
+      });
+    });
+    // Identify bottleneck phases
+    Object.values(allPhaseAgg).forEach(ph => {
+      if (ph.total>=3 && ph.done/ph.total<0.3 && ph.doing>0) ph.bottleneck = true;
+    });
+    const phaseList = Object.values(allPhaseAgg);
+
+    html += `<div class="gb-section">
+      <div class="gb-section-title">&#128202; KPI × 로드맵 분석 보드</div>`;
+
+    // --- A. KR × Project Roadmap Mapping ---
+    html += `<div style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;color:var(--gray-700);margin-bottom:10px;display:flex;align-items:center;gap:6px">&#127919; KR별 프로젝트 로드맵 매핑</div>`;
+    krProjData.forEach(({kr,ki,krProjs,krRate}) => {
+      const color = okrColors[ki%okrColors.length];
+      if (krProjs.length===0) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:4px;border-radius:8px;background:var(--gray-50);border-left:3px solid ${color}">
+          <span style="font-size:12px;font-weight:600;color:${color}">${esc(kr.name||'')}</span>
+          <span style="font-size:10px;color:var(--gray-400)">연결 프로젝트 없음</span>
+          <span style="margin-left:auto;font-size:11px;font-weight:700;color:${color}">${krRate}%</span>
+        </div>`;
+        return;
+      }
+      html += `<div style="margin-bottom:8px;border:1px solid ${color}30;border-radius:10px;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:${color}08;border-bottom:1px solid ${color}20">
+          <span style="font-size:12px;font-weight:700;color:${color}">${okrIcons[ki%okrIcons.length]} ${esc(kr.name||'')}</span>
+          <span style="font-size:10px;padding:2px 8px;background:${color}20;color:${color};border-radius:8px">${krProjs.length}개 프로젝트</span>
+          <span style="margin-left:auto;font-size:14px;font-weight:800;color:${color}">${krRate}%</span>
+        </div>`;
+      krProjs.forEach(proj => {
+        const phases = proj.roadmap||[];
+        const pa = actions.filter(a=>a.projectId===proj.id);
+        const paDone = pa.filter(a=>a.status==='done').length;
+        const paPct = pa.length>0?Math.round(paDone/pa.length*100):0;
+        html += `<div style="padding:10px 14px;border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="goProjectDetail('${proj.id}')">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:12px;font-weight:600">${esc(proj.title||'')}</span>
+            ${proj.assigneeName?'<span style="font-size:10px;color:var(--gray-400)">&#128100;'+esc(proj.assigneeName)+'</span>':''}
+            <span style="margin-left:auto;font-size:11px;font-weight:700;color:${paPct>=80?'var(--success)':paPct>=50?'var(--warning)':'var(--gray-500)'}">${paPct}% (${paDone}/${pa.length})</span>
+          </div>`;
+        if (phases.length>0) {
+          html += '<div style="display:flex;gap:4px">';
+          phases.forEach(ph => {
+            const phA = pa.filter(a=>a.phaseId===ph.id);
+            const phD = phA.filter(a=>a.status==='done').length;
+            const phP = phA.length>0?Math.round(phD/phA.length*100):0;
+            const isDone = phP===100&&phA.length>0;
+            const hasWork = phA.length>0;
+            html += `<div style="flex:1;text-align:center;padding:4px;border-radius:6px;background:${isDone?'#ECFDF5':hasWork?'#EEF2FF':'var(--gray-50)'}">
+              <div style="font-size:8px;font-weight:600;color:${isDone?'var(--success)':hasWork?'var(--primary)':'var(--gray-400)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(ph.label||'')}</div>
+              <div style="font-size:10px;font-weight:700;color:${isDone?'var(--success)':hasWork?'var(--primary)':'var(--gray-300)'}">${phD}/${phA.length}</div>
+              <div style="height:3px;background:var(--gray-200);border-radius:2px;margin-top:2px"><div style="height:100%;width:${phP}%;background:${isDone?'var(--success)':'var(--primary)'};border-radius:2px"></div></div>
+            </div>`;
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // --- B. Phase-level Execution Summary ---
+    if (phaseList.length>0) {
+      const maxPhTotal = Math.max(...phaseList.map(p=>p.total),1);
+      html += `<div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:700;color:var(--gray-700);margin-bottom:10px;display:flex;align-items:center;gap:6px">&#128200; 로드맵 단계별 실행 현황 <span style="font-size:10px;font-weight:400;color:var(--gray-400)">전체 프로젝트 합산</span></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">`;
+      phaseList.forEach(ph => {
+        const phPct = ph.total>0?Math.round(ph.done/ph.total*100):0;
+        const barW = ph.total/maxPhTotal*100;
+        html += `<div style="padding:12px;border-radius:10px;background:${ph.bottleneck?'#FEF2F2':'white'};border:1px solid ${ph.bottleneck?'var(--danger)':'var(--gray-200)'}">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-size:11px;font-weight:700;color:var(--gray-800)">${esc(ph.label)}</span>
+            ${ph.bottleneck?'<span style="font-size:9px;padding:2px 6px;background:var(--danger);color:white;border-radius:4px;font-weight:700">병목</span>':''}
+          </div>
+          <div style="display:flex;gap:4px;margin-bottom:6px">
+            <div style="flex:1;text-align:center;background:var(--gray-50);border-radius:4px;padding:4px">
+              <div style="font-size:8px;color:var(--gray-400)">전체</div>
+              <div style="font-size:14px;font-weight:800">${ph.total}</div>
+            </div>
+            <div style="flex:1;text-align:center;background:#ECFDF5;border-radius:4px;padding:4px">
+              <div style="font-size:8px;color:var(--success)">완료</div>
+              <div style="font-size:14px;font-weight:800;color:var(--success)">${ph.done}</div>
+            </div>
+            <div style="flex:1;text-align:center;background:#EEF2FF;border-radius:4px;padding:4px">
+              <div style="font-size:8px;color:var(--primary)">진행</div>
+              <div style="font-size:14px;font-weight:800;color:var(--primary)">${ph.doing}</div>
+            </div>
+          </div>
+          <div style="height:5px;background:var(--gray-200);border-radius:3px;overflow:hidden"><div style="height:100%;width:${phPct}%;background:${phPct>=100?'var(--success)':phPct>=50?'var(--primary)':'var(--warning)'};border-radius:3px"></div></div>
+          <div style="display:flex;justify-content:space-between;margin-top:4px">
+            <span style="font-size:10px;color:var(--gray-400)">${phPct}%</span>
+            <span style="font-size:10px;color:var(--gray-400)">&#128101; ${ph.members.size}명</span>
+          </div>
+        </div>`;
+      });
+      html += '</div></div>';
+
+      // --- C. Phase-level KPI Contribution ---
+      const phasesWithKpi = phaseList.filter(p=>p.kpiVal>0);
+      if (phasesWithKpi.length>0) {
+        const maxKpiVal = Math.max(...phasesWithKpi.map(p=>p.kpiVal),1);
+        html += `<div style="margin-bottom:20px">
+          <div style="font-size:12px;font-weight:700;color:var(--gray-700);margin-bottom:10px;display:flex;align-items:center;gap:6px">&#128176; 로드맵 단계별 KPI 기여도 <span style="font-size:10px;font-weight:400;color:var(--gray-400)">완료된 행동지표의 KPI 기여값 합산</span></div>
+          <div style="display:flex;gap:6px;align-items:flex-end;height:120px;padding:0 8px">`;
+        phasesWithKpi.forEach(ph => {
+          const barH = ph.kpiVal/maxKpiVal*100;
+          html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+            <span style="font-size:10px;font-weight:700;color:var(--primary)">${ph.kpiVal}</span>
+            <div style="width:100%;max-width:60px;height:${barH}%;min-height:4px;background:linear-gradient(180deg,var(--primary),#6366F1);border-radius:4px 4px 0 0"></div>
+            <span style="font-size:9px;color:var(--gray-600);text-align:center;word-break:keep-all">${esc(ph.label)}</span>
+          </div>`;
+        });
+        html += '</div></div>';
+      }
+
+      // --- D. Phase-level Member Participation ---
+      const phaseMembers = {};
+      phaseList.forEach(ph => {
+        ph.members.forEach(mid => {
+          const m = teamMembers.find(x=>x.id===mid);
+          if (!m) return;
+          if (!phaseMembers[mid]) phaseMembers[mid] = {name:m.name,phases:{}};
+          phaseMembers[mid].phases[ph.label] = true;
+        });
+      });
+      if (Object.keys(phaseMembers).length>0) {
+        html += `<div>
+          <div style="font-size:12px;font-weight:700;color:var(--gray-700);margin-bottom:10px;display:flex;align-items:center;gap:6px">&#128101; 단계별 팀원 참여 분포</div>
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:11px">
+              <thead><tr><th style="text-align:left;padding:6px 10px;border-bottom:2px solid var(--gray-200);color:var(--gray-600)">팀원</th>`;
+        phaseList.forEach(ph => {
+          html += `<th style="text-align:center;padding:6px 8px;border-bottom:2px solid var(--gray-200);color:var(--gray-600);white-space:nowrap">${esc(ph.label)}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+        Object.entries(phaseMembers).forEach(([mid,m]) => {
+          html += `<tr><td style="padding:6px 10px;font-weight:600;border-bottom:1px solid var(--gray-100)">${esc(m.name)}</td>`;
+          phaseList.forEach(ph => {
+            const active = m.phases[ph.label];
+            // Count member's actions in this phase
+            let mPhActions = 0, mPhDone = 0;
+            ph.projects.forEach(pp => {
+              pp.phActions.filter(a=>a.assigneeId===mid).forEach(a => { mPhActions++; if(a.status==='done') mPhDone++; });
+            });
+            html += `<td style="text-align:center;padding:6px 8px;border-bottom:1px solid var(--gray-100);background:${active?'#EEF2FF':'transparent'}">
+              ${mPhActions>0?`<span style="font-weight:700;color:${mPhDone===mPhActions&&mPhActions>0?'var(--success)':'var(--primary)'}">${mPhDone}/${mPhActions}</span>`:'<span style="color:var(--gray-300)">-</span>'}
+            </td>`;
+          });
+          html += '</tr>';
+        });
+        html += '</tbody></table></div></div>';
+      }
+    }
+
+    // --- E. Bottleneck Warnings ---
+    const bottlenecks = phaseList.filter(p=>p.bottleneck);
+    if (bottlenecks.length>0) {
+      html += `<div style="margin-top:12px;padding:12px 16px;background:#FEF2F2;border:1px solid var(--danger);border-radius:10px">
+        <div style="font-size:12px;font-weight:700;color:var(--danger);margin-bottom:8px">&#9888; 로드맵 병목 경고</div>`;
+      bottlenecks.forEach(ph => {
+        const phPct = ph.total>0?Math.round(ph.done/ph.total*100):0;
+        const projNames = ph.projects.filter(pp=>pp.phActions.length>0).map(pp=>esc(pp.proj.title||'')).join(', ');
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:11px">
+          <span style="font-weight:700">${esc(ph.label)}</span>
+          <span style="color:var(--gray-600)">완료율 ${phPct}% (${ph.done}/${ph.total})</span>
+          <span style="color:var(--gray-400)">&#8594; ${projNames}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+  }
+
   // ===== 5. KPI Detail Table with Filters (from index.html) =====
   html += `<div class="gb-section">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -6750,7 +7037,7 @@ function renderGrowthPersonal() {
       <div style="font-size:10px;color:var(--gray-400)">총 ${memberTotalValue} / 팀 ${teamTotalValue}</div>
     </div>`;
 
-  // Project contribution
+  // Project contribution with roadmap
   const memberProjectIds = [...new Set(memberActions.map(a=>a.projectId).filter(Boolean))];
   if (memberProjectIds.length>0) {
     memberProjectIds.forEach(pid => {
@@ -6762,19 +7049,118 @@ function renderGrowthPersonal() {
       const kr = keyResults.find(k=>k.id===proj.krId);
       const allProjDone = actions.filter(a=>a.projectId===pid&&a.status==='done').length;
       const projContribPct = allProjDone>0?Math.round(projDone/allProjDone*100):(projActions.length>0?100:0);
-      html += `<div class="pgb-indicator-row" style="cursor:pointer" onclick="goProjectDetail('${pid}')">
-        <span style="font-size:14px">&#128194;</span>
-        <span class="pgb-indicator-name">${esc(proj.title||'')} <span style="font-size:10px;color:var(--gray-400)">${kr?esc(kr.name||''):''}</span></span>
-        <span style="font-weight:700;color:var(--primary)">${projDone}/${projActions.length}</span>
-        <div style="width:60px"><div class="gb-progress-bar" style="height:4px"><div class="gb-progress-fill" style="width:${projPct}%;background:${projPct>=100?'var(--success)':'var(--primary)'}"></div></div></div>
-        <span style="font-size:11px;font-weight:600;color:${projPct>=80?'var(--success)':'var(--primary)'}">${projPct}%</span>
-        <span style="font-size:9px;padding:1px 6px;background:var(--cyan-light);color:var(--cyan);border-radius:8px;font-weight:600">&#128101;${projContribPct}%</span>
-      </div>`;
+      const krColor = kr?okrColors[keyResults.indexOf(kr)%okrColors.length]:'var(--gray-400)';
+      const phases = proj.roadmap||[];
+
+      html += `<div style="margin-bottom:10px;padding:12px;border-radius:10px;border:1px solid var(--gray-200);border-left:4px solid ${krColor};background:white;cursor:pointer" onclick="goProjectDetail('${pid}')">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:13px;font-weight:700;color:var(--gray-800)">${esc(proj.title||'')}</span>
+          ${kr?`<span style="font-size:10px;padding:2px 6px;background:${krColor}15;color:${krColor};border-radius:6px;font-weight:600">${esc(kr.name||'')}</span>`:''}
+          <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+            <span style="font-weight:700;font-size:12px;color:${projPct>=80?'var(--success)':'var(--primary)'}">${projDone}/${projActions.length} (${projPct}%)</span>
+            <span style="font-size:9px;padding:2px 6px;background:var(--cyan-light);color:var(--cyan);border-radius:8px;font-weight:600">&#128101;기여 ${projContribPct}%</span>
+          </span>
+        </div>`;
+
+      // Roadmap phase detail
+      if (phases.length>0) {
+        html += '<div style="display:flex;gap:3px;margin-bottom:6px">';
+        const phaseData = phases.map(ph => {
+          const myPhActions = projActions.filter(a=>a.phaseId===ph.id);
+          const myPhDone = myPhActions.filter(a=>a.status==='done').length;
+          const allPhActions = actions.filter(a=>a.projectId===pid&&a.phaseId===ph.id);
+          const allPhDone = allPhActions.filter(a=>a.status==='done').length;
+          const myPct = myPhActions.length>0?Math.round(myPhDone/myPhActions.length*100):0;
+          const isDone = allPhActions.length>0&&allPhDone===allPhActions.length;
+          const isActive = allPhActions.length>0&&!isDone&&allPhActions.some(a=>a.status==='doing');
+          return {ph,myPhActions,myPhDone,allPhActions:allPhActions.length,allPhDone,myPct,isDone,isActive};
+        });
+        phaseData.forEach(pd => {
+          const bgColor = pd.isDone?'var(--success)':pd.isActive?'var(--primary)':'var(--gray-200)';
+          html += `<div style="flex:1;height:5px;border-radius:3px;background:${bgColor}" title="${esc(pd.ph.label||'')} 내 ${pd.myPhDone}/${pd.myPhActions.length}"></div>`;
+        });
+        html += '</div><div style="display:flex;gap:4px;flex-wrap:wrap">';
+        phaseData.forEach(pd => {
+          if (pd.myPhActions.length===0 && pd.allPhActions===0) {
+            html += `<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:var(--gray-50);color:var(--gray-300)">${esc(pd.ph.label||'')}</span>`;
+          } else {
+            html += `<span style="font-size:9px;padding:2px 6px;border-radius:4px;background:${pd.isDone?'#ECFDF5':pd.isActive?'#EEF2FF':'var(--gray-50)'};color:${pd.isDone?'var(--success)':pd.isActive?'var(--primary)':'var(--gray-500)'};font-weight:${pd.isActive?'700':'500'}">${esc(pd.ph.label||'')} ${pd.myPhDone}/${pd.myPhActions.length}${pd.allPhActions>pd.myPhActions.length?' (전체 '+pd.allPhDone+'/'+pd.allPhActions+')':''}</span>`;
+          }
+        });
+        html += '</div>';
+      }
+      html += '</div>';
     });
   } else {
     html += '<div style="font-size:12px;color:var(--gray-400);padding:8px">연결된 프로젝트가 없습니다</div>';
   }
   html += '</div>';
+
+  // ===== 5.5 Personal Roadmap Progress Board =====
+  if (memberProjectIds.length>0) {
+    // Aggregate member's phase-level data across projects
+    const myPhaseAgg = {};
+    memberProjectIds.forEach(pid => {
+      const proj = projects.find(p=>p.id===pid);
+      if (!proj || !proj.roadmap) return;
+      const phases = proj.roadmap;
+      const myProjActions = memberActions.filter(a=>a.projectId===pid);
+      phases.forEach(ph => {
+        const myPhA = myProjActions.filter(a=>a.phaseId===ph.id);
+        const myPhDone = myPhA.filter(a=>a.status==='done').length;
+        const key = ph.label||'unknown';
+        if (!myPhaseAgg[key]) myPhaseAgg[key] = {label:key,myTotal:0,myDone:0,kpiVal:0,projects:[]};
+        myPhaseAgg[key].myTotal += myPhA.length;
+        myPhaseAgg[key].myDone += myPhDone;
+        // KPI value from my done actions in this phase
+        let phKpiVal = 0;
+        myPhA.filter(a=>a.status==='done'&&a.lagId).forEach(a => {
+          const logs = dailyLogs.filter(l=>l.taskId===a.id&&l.memberId===selectedId);
+          phKpiVal += logs.reduce((s,l)=>s+(l.resultValue||l.value||0),0);
+        });
+        myPhaseAgg[key].kpiVal += phKpiVal;
+        if (myPhA.length>0) myPhaseAgg[key].projects.push({title:proj.title,done:myPhDone,total:myPhA.length});
+      });
+    });
+    const myPhases = Object.values(myPhaseAgg).filter(p=>p.myTotal>0);
+
+    if (myPhases.length>0) {
+      const totalMyActions = myPhases.reduce((s,p)=>s+p.myTotal,0);
+      const totalMyDone = myPhases.reduce((s,p)=>s+p.myDone,0);
+      const phColors = ['#6366F1','#10B981','#F59E0B','#EC4899','#0EA5E9','#A855F7'];
+
+      html += `<div class="pgb-card">
+        <div class="pgb-card-title">&#128506; 내 로드맵 단계별 진행도 <span style="font-size:10px;font-weight:400;color:var(--gray-400)">전체 ${totalMyDone}/${totalMyActions} 완료</span></div>`;
+
+      // Phase distribution bar
+      html += '<div style="display:flex;height:24px;border-radius:12px;overflow:hidden;margin-bottom:14px;border:1px solid var(--gray-200)">';
+      myPhases.forEach((ph,i) => {
+        const pct = totalMyActions>0?ph.myTotal/totalMyActions*100:0;
+        if (pct<1) return;
+        const donePct = ph.myTotal>0?Math.round(ph.myDone/ph.myTotal*100):0;
+        html += `<div style="width:${pct}%;background:${phColors[i%phColors.length]};display:flex;align-items:center;justify-content:center;font-size:9px;color:white;font-weight:700;min-width:20px;position:relative" title="${esc(ph.label)} ${donePct}%">${pct>=12?esc(ph.label)+' '+donePct+'%':''}</div>`;
+      });
+      html += '</div>';
+
+      // Phase detail cards
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">';
+      myPhases.forEach((ph,i) => {
+        const donePct = ph.myTotal>0?Math.round(ph.myDone/ph.myTotal*100):0;
+        const color = phColors[i%phColors.length];
+        html += `<div style="padding:10px;border-radius:8px;border:1px solid ${color}30;background:${color}08">
+          <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:6px">${esc(ph.label)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+            <span style="font-size:16px;font-weight:800;color:var(--gray-800)">${ph.myDone}<span style="font-size:11px;color:var(--gray-400);font-weight:500">/${ph.myTotal}</span></span>
+            <span style="font-size:11px;font-weight:700;color:${donePct>=80?'var(--success)':donePct>=50?color:'var(--gray-500)'}">${donePct}%</span>
+          </div>
+          <div style="height:4px;background:var(--gray-200);border-radius:2px;overflow:hidden"><div style="height:100%;width:${donePct}%;background:${color};border-radius:2px"></div></div>
+          ${ph.kpiVal>0?`<div style="margin-top:4px;font-size:9px;color:var(--gray-500)">KPI +${ph.kpiVal}</div>`:''}
+          <div style="margin-top:4px">${ph.projects.map(p=>`<div style="font-size:9px;color:var(--gray-400);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.title)} ${p.done}/${p.total}</div>`).join('')}</div>
+        </div>`;
+      });
+      html += '</div></div>';
+    }
+  }
 
   // ===== 6. KPI Detail Cards (from index.html) =====
   const activeKR = krContributions.filter(kr=>kr.totalLogs>0);
