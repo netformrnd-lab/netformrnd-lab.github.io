@@ -6344,6 +6344,34 @@ function calcOkrObjectiveRate() {
   const rates = keyResults.map(kr => parseFloat(calcOkrKRRate(kr.id)));
   return (rates.reduce((s,r) => s+r, 0) / rates.length).toFixed(3);
 }
+// 0% 원인 진단 함수
+function diagnoseKPIRate(kpiId) {
+  const kpi = kpis.find(k => k.id === kpiId);
+  if (!kpi) return {rate:0, reason:'KPI를 찾을 수 없음', icon:'❓'};
+  const kpiLags = laggingIndicators.filter(l => l.kpiId === kpiId && l.isActive !== false);
+  if (kpiLags.length === 0) return {rate:0, reason:'연결된 성과지표 없음', icon:'🔗', fix:'목표설정에서 성과지표를 추가하세요'};
+  const outputLags = kpiLags.filter(l => l.type === 'output');
+  const targetLags = outputLags.length > 0 ? outputLags : kpiLags;
+  const untypedCount = kpiLags.filter(l => !l.type).length;
+  const validLags = targetLags.filter(lag => lag.targetValue && lag.targetValue > 0);
+  if (validLags.length === 0) {
+    if (untypedCount > 0) return {rate:0, reason:`성과지표 ${untypedCount}개 유형 미설정`, icon:'🏷️', fix:'목표설정에서 input/output 유형을 지정하세요'};
+    return {rate:0, reason:'목표값(target) 미설정', icon:'🎯', fix:'목표설정에서 성과지표의 목표값을 입력하세요'};
+  }
+  const rates = validLags.map(lag => Math.min((getEffectiveValue(lag.id)/lag.targetValue)*100,100));
+  const avg = rates.reduce((s,r)=>s+r,0)/rates.length;
+  if (avg === 0) return {rate:0, reason:'실행 데이터 없음 (실적 0)', icon:'📊', fix:'업무를 완료하거나 실행기록을 입력하세요'};
+  return {rate:avg, reason:null, icon:'✅'};
+}
+function diagnoseKRRate(krId) {
+  const krKpis = kpis.filter(k => k.keyResultId === krId || k.krId === krId);
+  if (krKpis.length === 0) return {rate:0, reason:'연결된 서브KPI 없음', icon:'🔗', fix:'목표설정에서 서브KPI를 추가하세요'};
+  const diags = krKpis.map(k => diagnoseKPIRate(k.id));
+  const avg = diags.reduce((s,d)=>s+d.rate,0)/diags.length;
+  const problems = diags.filter(d=>d.reason);
+  if (avg===0 && problems.length>0) return {rate:0, reason:problems[0].reason, icon:problems[0].icon, fix:problems[0].fix, details:problems};
+  return {rate:avg, reason:null, icon:'✅'};
+}
 function formatVal(v, unit) {
   if (!v && v !== 0) return '0';
   if (unit === '원' || unit === '만원' || unit === '억') return v.toLocaleString() + (unit||'');
@@ -6501,6 +6529,28 @@ function renderGrowthTeam() {
     return;
   }
 
+  // ===== Data Health Summary Banner =====
+  {
+    const allLags = laggingIndicators.filter(l=>l.isActive!==false);
+    const noTarget = allLags.filter(l=>!l.targetValue || l.targetValue<=0).length;
+    const noType = allLags.filter(l=>!l.type).length;
+    const orphanKpis = kpis.filter(k=>laggingIndicators.filter(l=>l.kpiId===k.id&&l.isActive!==false).length===0).length;
+    const unlinkedDone = actions.filter(a=>!a.lagId && a.status==='done').length;
+    const issues = [];
+    if (orphanKpis>0) issues.push({icon:'&#128279;', text:`서브KPI ${orphanKpis}개에 성과지표 미연결`, fix:'okrSettings'});
+    if (noTarget>0) issues.push({icon:'&#127919;', text:`성과지표 ${noTarget}개에 목표값 미설정`, fix:'okrSettings'});
+    if (noType>0) issues.push({icon:'&#127991;&#65039;', text:`성과지표 ${noType}개 유형(input/output) 미분류`, fix:'okrSettings'});
+    if (unlinkedDone>0) issues.push({icon:'&#128268;', text:`완료 업무 ${unlinkedDone}개가 KPI에 미연결`, fix:'actions'});
+    if (issues.length>0) {
+      html += `<div style="margin-bottom:16px;padding:12px 16px;background:#FEF3C7;border:1px solid #F59E0B;border-radius:10px">
+        <div style="font-size:12px;font-weight:700;color:#92400E;margin-bottom:8px">&#9888;&#65039; 0%로 표시되는 ${issues.length}가지 원인이 발견되었습니다</div>
+        ${issues.map(i=>`<div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#78350F;padding:3px 0">
+          <span>${i.icon}</span><span style="flex:1">${i.text}</span><span style="color:#D97706;cursor:pointer;font-weight:600;white-space:nowrap" onclick="goView('${i.fix}')">해결하기 &rarr;</span>
+        </div>`).join('')}
+      </div>`;
+    }
+  }
+
   // ===== 2. Mindmap Toggle + Sync + PNG Buttons =====
   const unlinkedCount = actions.filter(a=>!a.lagId && a.status==='done').length;
   html += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
@@ -6614,6 +6664,7 @@ function renderGrowthTeam() {
   keyResults.forEach((kr, ki) => {
     const rate = calcOkrKRRate(kr.id);
     const rateNum = parseFloat(rate)||0;
+    const diag = diagnoseKRRate(kr.id);
     const color = okrColors[ki%okrColors.length];
     const pctColor = rateNum>=80?'var(--success)':rateNum>=50?'var(--primary)':rateNum>=30?'var(--warning)':'var(--danger)';
 
@@ -6629,6 +6680,11 @@ function renderGrowthTeam() {
         <span style="padding:3px 10px;border-radius:20px;font-size:12px;font-weight:800;background:${color}20;color:${color}">${rate}%</span>
       </div>
       <div class="gb-progress-bar" style="margin-bottom:6px"><div class="gb-progress-fill" style="width:${Math.min(rateNum,100)}%;background:${color}"></div></div>`;
+    if (rateNum===0 && diag.reason) {
+      html += `<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--warning-bg);border-radius:6px;margin-bottom:8px;font-size:11px;color:var(--warning-text)">
+        <span>${diag.icon}</span><span>${diag.reason}</span>${diag.fix?`<span style="color:var(--gray-500);margin-left:auto;font-size:10px;cursor:pointer" onclick="goView('okrSettings')" title="${diag.fix}">설정 &rarr;</span>`:''}
+      </div>`;
+    }
 
     // Velocity/Pace
     const krVel = calcKrVelocity(kr.id);
@@ -7033,6 +7089,7 @@ function renderGrowthTeam() {
         <td style="text-align:center;width:110px">
           <div style="font-weight:700;color:${sColor};margin-bottom:3px">${kpi.rate.toFixed(1)}%</div>
           <div style="height:5px;background:var(--gray-200);border-radius:3px;overflow:hidden"><div style="height:100%;width:${Math.min(kpi.rate,100)}%;background:${sColor};border-radius:3px"></div></div>
+          ${(()=>{ if(kpi.rate>0) return ''; const d=diagnoseKPIRate(kpi.id); return d.reason?`<div style="font-size:9px;color:var(--warning-text);margin-top:3px" title="${d.fix||''}">${d.icon} ${d.reason}</div>`:''; })()}
         </td>
       </tr>`;
 
@@ -7378,6 +7435,23 @@ function renderGrowthPersonal() {
   const memberPct = memberActions.length>0?Math.round(memberDone/memberActions.length*100):0;
   const memberInputTotal = memberLogs.filter(l => {const lag=laggingIndicators.find(x=>x.id===(l.lagId||l.laggingIndicatorId));return lag && lag.type!=='output';}).reduce((s,l)=>s+(l.value||l.resultValue||0),0);
   const memberOutputTotal = memberLogs.filter(l => {const lag=laggingIndicators.find(x=>x.id===(l.lagId||l.laggingIndicatorId));return lag && lag.type==='output';}).reduce((s,l)=>s+(l.value||l.resultValue||0),0);
+
+  // Personal Health Banner
+  if (memberActions.length===0 && memberLogs.length===0) {
+    html += `<div style="margin-bottom:14px;padding:14px 16px;background:#EEF2FF;border:1px solid #6366F1;border-radius:10px">
+      <div style="font-size:12px;font-weight:700;color:#4338CA;margin-bottom:6px">&#128161; ${esc(member.name||'')}님의 데이터가 아직 없습니다</div>
+      <div style="font-size:11px;color:#4338CA;opacity:0.8;line-height:1.6">
+        &#8226; <b>행동지표</b>에서 업무를 등록하고 담당자로 지정하세요<br>
+        &#8226; 업무를 <b>완료</b>하면 자동으로 KPI 실적이 쌓입니다<br>
+        &#8226; <b>실행기록</b>을 남기면 Input/Output 합계가 올라갑니다
+      </div>
+    </div>`;
+  } else if (memberLogs.length===0 && memberActions.length>0) {
+    html += `<div style="margin-bottom:14px;padding:12px 16px;background:#FFF7ED;border:1px solid #F59E0B;border-radius:10px">
+      <div style="font-size:12px;font-weight:700;color:#92400E">&#128203; 업무 ${memberActions.length}개가 있지만 실행기록이 없습니다</div>
+      <div style="font-size:11px;color:#78350F;margin-top:4px">업무 상세에서 실행기록을 남기면 Input/Output 데이터가 쌓입니다</div>
+    </div>`;
+  }
 
   // ===== 1. Quarterly Personal Goals (from index.html) =====
   const quarterStartStr = `${currentYear}-${String((currentQuarter-1)*3+1).padStart(2,'0')}-01`;
