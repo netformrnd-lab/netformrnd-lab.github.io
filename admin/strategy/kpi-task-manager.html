@@ -1595,6 +1595,32 @@
 <!-- 업무일지 FAB (빠른 기록) -->
 <button class="wj-fab" onclick="goView('workJournal')" title="업무일지 빠른 기록" id="wjFab">&#9997;&#65039;</button>
 
+<!-- CRM 연동 모달 -->
+<div class="modal-overlay" id="crmSyncModal">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-header">
+      <h3>&#128279; CRM 활동 → KPI 자동 연동</h3>
+      <button class="modal-close" onclick="closeCrmSyncModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px;padding:12px 14px;background:linear-gradient(135deg,#EEF2FF,#E0E7FF);border-radius:10px;font-size:11px;color:#4338CA;line-height:1.7">
+        &#128161; <b>CRM 센터에서 하는 활동</b>(전화, 이메일, SMS 등)을 <b>성과지표</b>에 연결하면,<br>
+        동기화 시 CRM 활동 건수가 자동으로 KPI 실적에 반영됩니다.<br>
+        <span style="opacity:0.7">각 CRM 활동 유형 → 어떤 성과지표에 연결할지 설정하세요.</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:700">활동 유형별 매핑</div>
+        <div id="crmSyncSummary" style="font-size:11px;color:var(--gray-500)">0/9개 연결됨</div>
+      </div>
+      <div id="crmMappingList" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div style="margin-top:20px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+        <button onclick="saveCrmMappings()" style="padding:10px 20px;background:var(--primary);color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">&#128190; 매핑 저장</button>
+        <button onclick="(async()=>{await saveCrmMappings();await runCrmSync();})()" style="padding:10px 20px;background:linear-gradient(135deg,#10B981,#059669);color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">&#128260; 저장 &amp; 동기화 실행</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- 팀원 관리 모달 (관리자 전용) -->
 <div class="modal-overlay" id="teamModal">
   <div class="modal" style="max-width:500px">
@@ -6438,6 +6464,235 @@ async function syncAllKpiData() {
   }
 }
 
+// ===== CRM 활동 → KPI 자동 연동 =====
+let crmMappings = []; // {crmType, crmCollection, lagId, lagName, valuePerActivity}
+
+const CRM_ACTIVITY_TYPES = [
+  {id:'call', label:'전화 상담', collection:'phoneInquiries', icon:'&#128222;'},
+  {id:'email', label:'이메일', collection:'supplierInquiries', icon:'&#128231;'},
+  {id:'sms', label:'SMS 발송', collection:'smsLogs', icon:'&#128172;'},
+  {id:'inquiry_supplier', label:'공급사 문의접수', collection:'supplierInquiries', icon:'&#128230;'},
+  {id:'inquiry_seller', label:'판매사 문의접수', collection:'sellerInquiries', icon:'&#128717;&#65039;'},
+  {id:'proposal', label:'제안서 발송', collection:'proposals', icon:'&#128196;'},
+  {id:'application_supplier', label:'공급사 가입신청', collection:'supplierApplications', icon:'&#128100;'},
+  {id:'application_seller', label:'판매사 가입신청', collection:'sellerApplications', icon:'&#128100;'},
+  {id:'onboarding', label:'온보딩 완료', collection:'pendingSupplierOnboardings', icon:'&#127881;'}
+];
+
+function openCrmSyncModal() {
+  if (!isAdmin() && !isManager()) return toast('관리자 또는 매니저만 설정할 수 있습니다','error');
+  loadCrmMappings();
+  renderCrmMappings();
+  document.getElementById('crmSyncModal').classList.add('show');
+}
+function closeCrmSyncModal() { document.getElementById('crmSyncModal').classList.remove('show'); }
+
+async function loadCrmMappings() {
+  try {
+    const doc = await db.collection('okr_settings').doc('crmMappings').get();
+    crmMappings = doc.exists ? (doc.data().mappings||[]) : [];
+  } catch(e) { crmMappings = []; }
+}
+
+function renderCrmMappings() {
+  const el = document.getElementById('crmMappingList');
+  const activeLags = laggingIndicators.filter(l=>l.isActive!==false);
+  let html = '';
+
+  CRM_ACTIVITY_TYPES.forEach(ct => {
+    const mapping = crmMappings.find(m=>m.crmType===ct.id);
+    const lagId = mapping?.lagId||'';
+    html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--gray-50);border-radius:8px;border:1px solid ${lagId?'var(--success)':'var(--gray-200)'}">
+      <div style="font-size:18px">${ct.icon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600">${ct.label}</div>
+        <div style="font-size:10px;color:var(--gray-500)">${ct.collection}</div>
+      </div>
+      <select id="crmMap_${ct.id}" onchange="updateCrmMapping('${ct.id}',this.value)" style="flex:1;min-width:120px;padding:6px 8px;font-size:11px;border:1px solid var(--gray-200);border-radius:6px;font-family:inherit">
+        <option value="">연결 안 함</option>
+        ${activeLags.map(l=>`<option value="${l.id}" ${lagId===l.id?'selected':''}>${esc(l.name||'')} (${l.type||'미분류'})</option>`).join('')}
+      </select>
+      <div style="width:50px;text-align:center;font-size:10px;color:${lagId?'var(--success)':'var(--gray-400)'}">
+        ${lagId?'&#9989; 연결':'&#10060; 미연결'}
+      </div>
+    </div>`;
+  });
+  el.innerHTML = html;
+
+  // Update summary
+  const linked = crmMappings.filter(m=>m.lagId).length;
+  document.getElementById('crmSyncSummary').innerHTML = `${linked}/${CRM_ACTIVITY_TYPES.length}개 활동 연결됨`;
+}
+
+function updateCrmMapping(crmType, lagId) {
+  const existing = crmMappings.findIndex(m=>m.crmType===crmType);
+  const ct = CRM_ACTIVITY_TYPES.find(c=>c.id===crmType);
+  const lag = laggingIndicators.find(l=>l.id===lagId);
+  if (lagId) {
+    const entry = {crmType, crmCollection:ct?.collection||'', lagId, lagName:lag?.name||'', valuePerActivity:1};
+    if (existing>=0) crmMappings[existing]=entry; else crmMappings.push(entry);
+  } else {
+    if (existing>=0) crmMappings.splice(existing,1);
+  }
+  renderCrmMappings();
+}
+
+async function saveCrmMappings() {
+  try {
+    await db.collection('okr_settings').doc('crmMappings').set({
+      mappings: crmMappings, updatedAt:TS(), updatedBy:currentUser?.id||null
+    });
+    toast('CRM 연동 설정 저장 완료!','success');
+  } catch(e) { toast('저장 실패: '+e.message,'error'); }
+}
+
+async function runCrmSync() {
+  const activeMappings = crmMappings.filter(m=>m.lagId);
+  if (activeMappings.length===0) return toast('연결된 CRM 활동이 없습니다. 먼저 매핑을 설정하세요.','error');
+  if (!confirm(`${activeMappings.length}개 CRM 활동을 KPI에 동기화합니다.\n계속하시겠습니까?`)) return;
+
+  toast('CRM 데이터 동기화 중...');
+  let totalCreated = 0;
+
+  try {
+    // 기존 CRM 동기화 로그 가져오기 (중복 방지)
+    const existingCrmLogs = dailyLogs.filter(l=>l.type&&l.type.startsWith('crm_'));
+    const syncedKeys = new Set(existingCrmLogs.map(l=>l.crmSourceKey||''));
+
+    for (const mapping of activeMappings) {
+      const ct = CRM_ACTIVITY_TYPES.find(c=>c.id===mapping.crmType);
+      if (!ct) continue;
+
+      let created = 0;
+
+      if (mapping.crmType==='sms') {
+        // SMS 발송 로그
+        const snap = await db.collection('smsLogs').orderBy('sentAt','desc').limit(500).get();
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          const key = `crm_sms_${doc.id}`;
+          if (syncedKeys.has(key)) continue;
+          const date = d.sentAt?.toDate?.()?.toISOString?.()?.slice(0,10) || localDateStr(new Date());
+          await db.collection('okr_dailyLogs').add({
+            type:'crm_sms', lagId:mapping.lagId, laggingIndicatorId:mapping.lagId,
+            lagName:mapping.lagName, value:d.count||1,
+            memberId:teamMembers.find(m=>m.name===d.sentBy)?.id||currentUser?.id||'',
+            memberName:d.sentBy||'', date,
+            crmSourceKey:key, crmCollection:'smsLogs', crmDocId:doc.id,
+            note:`SMS ${d.count||1}건 발송`, createdAt:TS()
+          });
+          created++;
+        }
+      } else if (['inquiry_supplier','inquiry_seller','call'].includes(mapping.crmType)) {
+        // 문의/전화 - csHistory에서 활동 추출
+        const collName = ct.collection;
+        const snap = await db.collection(collName).orderBy('createdAt','desc').limit(500).get();
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          if (mapping.crmType==='call' || mapping.crmType.startsWith('inquiry')) {
+            // 문의 건 자체를 1건으로
+            const key = `crm_${mapping.crmType}_${doc.id}`;
+            if (syncedKeys.has(key)) continue;
+            const date = d.createdAt?.toDate?.()?.toISOString?.()?.slice(0,10) || localDateStr(new Date());
+            await db.collection('okr_dailyLogs').add({
+              type:'crm_'+mapping.crmType, lagId:mapping.lagId, laggingIndicatorId:mapping.lagId,
+              lagName:mapping.lagName, value:1,
+              memberId:teamMembers.find(m=>m.name===(d.handler||d.createdBy))?.id||currentUser?.id||'',
+              memberName:d.handler||d.createdBy||'', date,
+              crmSourceKey:key, crmCollection:collName, crmDocId:doc.id,
+              note:`${ct.label}: ${d.companyName||d.name||''}`, createdAt:TS()
+            });
+            created++;
+          }
+          // csHistory 내 개별 활동도 처리
+          if (Array.isArray(d.csHistory)) {
+            for (let i=0;i<d.csHistory.length;i++) {
+              const h = d.csHistory[i];
+              if (mapping.crmType==='call' && h.type!=='call') continue;
+              const key = `crm_cs_${doc.id}_${i}`;
+              if (syncedKeys.has(key)) continue;
+              const date = h.date?.slice(0,10) || localDateStr(new Date());
+              await db.collection('okr_dailyLogs').add({
+                type:'crm_'+h.type, lagId:mapping.lagId, laggingIndicatorId:mapping.lagId,
+                lagName:mapping.lagName, value:1,
+                memberId:teamMembers.find(m=>m.name===h.createdBy)?.id||currentUser?.id||'',
+                memberName:h.createdBy||'', date,
+                crmSourceKey:key, crmCollection:collName, crmDocId:doc.id,
+                note:`${h.type}: ${(h.content||'').slice(0,50)}`, createdAt:TS()
+              });
+              created++;
+            }
+          }
+        }
+      } else if (['application_supplier','application_seller'].includes(mapping.crmType)) {
+        const collName = ct.collection;
+        const snap = await db.collection(collName).orderBy('createdAt','desc').limit(500).get();
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          const key = `crm_${mapping.crmType}_${doc.id}`;
+          if (syncedKeys.has(key)) continue;
+          const date = d.createdAt?.toDate?.()?.toISOString?.()?.slice(0,10) || localDateStr(new Date());
+          await db.collection('okr_dailyLogs').add({
+            type:'crm_'+mapping.crmType, lagId:mapping.lagId, laggingIndicatorId:mapping.lagId,
+            lagName:mapping.lagName, value:1,
+            memberId:currentUser?.id||'', memberName:currentUser?.name||'', date,
+            crmSourceKey:key, crmCollection:collName, crmDocId:doc.id,
+            note:`${ct.label}: ${d.companyName||d.name||''}`, createdAt:TS()
+          });
+          created++;
+        }
+      } else if (mapping.crmType==='proposal') {
+        const snap = await db.collection('proposals').orderBy('createdAt','desc').limit(500).get();
+        for (const doc of snap.docs) {
+          const d = doc.data();
+          const key = `crm_proposal_${doc.id}`;
+          if (syncedKeys.has(key)) continue;
+          const date = d.createdAt?.toDate?.()?.toISOString?.()?.slice(0,10) || localDateStr(new Date());
+          await db.collection('okr_dailyLogs').add({
+            type:'crm_proposal', lagId:mapping.lagId, laggingIndicatorId:mapping.lagId,
+            lagName:mapping.lagName, value:1,
+            memberId:currentUser?.id||'', memberName:currentUser?.name||'', date,
+            crmSourceKey:key, crmCollection:'proposals', crmDocId:doc.id,
+            note:`제안서: ${d.title||d.supplierName||''}`, createdAt:TS()
+          });
+          created++;
+        }
+      } else if (mapping.crmType==='onboarding') {
+        const colls = ['pendingSupplierOnboardings','pendingOnboardings'];
+        for (const collName of colls) {
+          const snap = await db.collection(collName).orderBy('createdAt','desc').limit(500).get();
+          for (const doc of snap.docs) {
+            const d = doc.data();
+            const key = `crm_onboard_${doc.id}`;
+            if (syncedKeys.has(key)) continue;
+            const date = d.createdAt?.toDate?.()?.toISOString?.()?.slice(0,10) || localDateStr(new Date());
+            await db.collection('okr_dailyLogs').add({
+              type:'crm_onboarding', lagId:mapping.lagId, laggingIndicatorId:mapping.lagId,
+              lagName:mapping.lagName, value:1,
+              memberId:currentUser?.id||'', memberName:currentUser?.name||'', date,
+              crmSourceKey:key, crmCollection:collName, crmDocId:doc.id,
+              note:`온보딩: ${d.companyName||d.name||''}`, createdAt:TS()
+            });
+            created++;
+          }
+        }
+      }
+      totalCreated += created;
+    }
+
+    // 동기화 후 currentValue 재계산
+    if (totalCreated > 0) {
+      await new Promise(r=>setTimeout(r,1500));
+      await syncAllKpiData();
+    }
+    toast(`CRM 동기화 완료! ${totalCreated}건의 활동이 KPI에 반영되었습니다`,'success');
+    renderCurrentView();
+  } catch(e) {
+    console.error('CRM sync error:', e);
+    toast('CRM 동기화 실패: '+e.message,'error');
+  }
+}
+
 // ===== Additional OKR Data Listeners =====
 function listenOkrExtended() {
   // Objective
@@ -6558,6 +6813,7 @@ function renderGrowthTeam() {
       ${gbMindmapVisible?'&#10005; 마인드맵 닫기':'&#128506; 마인드맵 보기'}
     </button>
     <button onclick="syncAllKpiData()" style="padding:10px 16px;font-size:12px;font-weight:600;background:linear-gradient(135deg,#10B981,#059669);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128260; 데이터 동기화</button>
+    <button onclick="openCrmSyncModal()" style="padding:10px 16px;font-size:12px;font-weight:600;background:linear-gradient(135deg,#6366F1,#4F46E5);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128279; CRM 연동</button>
     <button onclick="gbSavePng('growthTeamScroll','팀그로스보드')" style="padding:10px 16px;font-size:12px;font-weight:600;background:var(--primary);color:white;border:none;border-radius:8px;cursor:pointer;font-family:inherit">&#128248; PNG 저장</button>
     ${unlinkedCount>0?`<span style="font-size:11px;color:var(--warning);background:#FEF3C7;padding:6px 12px;border-radius:8px;font-weight:600">&#9888; 미연결 완료 행동지표 ${unlinkedCount}개</span>`:''}
   </div>`;
