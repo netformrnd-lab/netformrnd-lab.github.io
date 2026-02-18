@@ -1607,7 +1607,7 @@
         &#128274; 관리자(CEO)만 접근할 수 있습니다. 팀원의 role 필드로 권한을 구분합니다.
       </div>
       <div id="teamMemberList" style="display:flex;flex-direction:column;gap:8px"></div>
-      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--gray-200)">
+      <div id="teamAddSection" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--gray-200)">
         <div style="font-size:13px;font-weight:700;margin-bottom:8px">&#10133; 새 팀원 추가</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <input type="text" id="newMemberName" placeholder="이름" style="flex:1;min-width:80px;padding:8px 10px;font-size:13px;border:1px solid var(--gray-200);border-radius:6px;font-family:inherit">
@@ -1791,7 +1791,8 @@ let teamMembers = [];
 
 // ===== 권한 체크 =====
 function isAdmin() { return currentUser?.role === 'admin' || currentUser?.role === 'ceo'; }
-function canEdit(task) { return isAdmin() || task.assigneeId === currentUser?.id || task.createdBy === currentUser?.id; }
+function isManager() { return currentUser?.role === 'manager'; }
+function canEdit(task) { return isAdmin() || isManager() || task.assigneeId === currentUser?.id || task.createdBy === currentUser?.id; }
 function canDelete(task) { return isAdmin() || task.createdBy === currentUser?.id; }
 let keyResults = [];
 let kpis = [];
@@ -1903,8 +1904,10 @@ async function doLogin() {
 
 // ===== 팀원 관리 (관리자 전용) =====
 function openTeamModal() {
-  if (!isAdmin()) return toast('관리자만 접근할 수 있습니다','error');
+  if (!isAdmin() && !isManager()) return toast('관리자 또는 매니저만 접근할 수 있습니다','error');
   renderTeamList();
+  const addSec = document.getElementById('teamAddSection');
+  if (addSec) addSec.style.display = isAdmin()?'block':'none';
   document.getElementById('teamModal').classList.add('show');
 }
 function closeTeamModal() { document.getElementById('teamModal').classList.remove('show'); }
@@ -1913,6 +1916,7 @@ function renderTeamList() {
   const el = document.getElementById('teamMemberList');
   const roleLabels = { admin:'관리자(CEO)', ceo:'관리자(CEO)', manager:'매니저', employee:'직원' };
   const roleColors = { admin:'var(--primary)', ceo:'var(--primary)', manager:'#D97706', employee:'var(--gray-600)' };
+  const adm = isAdmin();
   el.innerHTML = teamMembers.map(m => {
     const role = m.role || 'employee';
     const isSelf = m.id === currentUser?.id;
@@ -1921,12 +1925,12 @@ function renderTeamList() {
         <div style="font-size:13px;font-weight:700">${esc(m.name||'')} ${isSelf?'<span style="font-size:10px;color:var(--primary)">(나)</span>':''}</div>
         <div style="font-size:11px;color:var(--gray-500)">ID: ${esc(m.loginId||'')} · <span style="color:${roleColors[role]};font-weight:600">${roleLabels[role]||role}</span></div>
       </div>
-      <select onchange="updateMemberRole('${m.id}',this.value)" style="padding:4px 8px;font-size:11px;border:1px solid var(--gray-200);border-radius:4px;font-family:inherit">
+      ${adm?`<select onchange="updateMemberRole('${m.id}',this.value)" style="padding:4px 8px;font-size:11px;border:1px solid var(--gray-200);border-radius:4px;font-family:inherit">
         <option value="admin" ${role==='admin'||role==='ceo'?'selected':''}>관리자</option>
         <option value="manager" ${role==='manager'?'selected':''}>매니저</option>
         <option value="employee" ${role==='employee'||!role?'selected':''}>직원</option>
-      </select>
-      ${!isSelf?`<button onclick="removeMember('${m.id}','${esc(m.name||'')}')" style="padding:4px 8px;font-size:11px;background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);border-radius:4px;cursor:pointer;font-family:inherit">삭제</button>`:''}
+      </select>`:''}
+      ${adm&&!isSelf?`<button onclick="removeMember('${m.id}','${esc(m.name||'')}')" style="padding:4px 8px;font-size:11px;background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);border-radius:4px;cursor:pointer;font-family:inherit">삭제</button>`:''}
     </div>`;
   }).join('');
 }
@@ -1979,7 +1983,7 @@ async function removeMember(memberId, memberName) {
 
 function updateAdminUI() {
   const el = document.getElementById('sidebarTeamMgmt');
-  if (el) el.style.display = isAdmin()?'block':'none';
+  if (el) el.style.display = (isAdmin()||isManager())?'block':'none';
 }
 
 // ===== Listener Unsubscribe Management =====
@@ -5678,6 +5682,7 @@ function closeLagModal() {
 }
 
 async function saveLagIndicator() {
+  if (!isAdmin() && !isManager()) return toast('성과지표 설정은 관리자 또는 매니저만 수정할 수 있습니다','error');
   const name = document.getElementById('lagName').value.trim();
   if (!name) return toast('성과지표명을 입력하세요','error');
 
@@ -8376,6 +8381,7 @@ function openOkrEditModal(type, data) {
 }
 function closeOkrEditModal() { document.getElementById('okrEditModal').classList.remove('show'); _okrEditCtx=null; }
 function saveOkrEdit() {
+  if (!isAdmin() && !isManager()) return toast('목표 설정은 관리자 또는 매니저만 수정할 수 있습니다','error');
   if (!_okrEditCtx) return;
   const {type, data} = _okrEditCtx;
   if (type==='objective') {
