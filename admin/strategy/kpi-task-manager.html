@@ -3278,11 +3278,22 @@ function renderProjects() {
   // 집중모드 필터링
   const displayProjects = focusModeOn ? projects.filter(p => focusProjectIds.has(p.id)) : projects;
 
-  // Build hierarchy
+  // Build hierarchy (kpiId로부터 krId 자동 유추)
   const hierarchy = {};
   const noKR = [];
   displayProjects.forEach(p => {
-    const krId = p.krId;
+    let krId = p.krId;
+    // kpiId는 있지만 krId가 없는 경우 → 서브KPI에서 메인KPI 자동 유추
+    if (!krId && p.kpiId) {
+      const linkedKpi = kpiMap[p.kpiId];
+      if (linkedKpi) {
+        krId = linkedKpi.keyResultId || linkedKpi.krId || null;
+        // DB에도 자동 반영 (1회성)
+        if (krId && typeof db !== 'undefined') {
+          db.collection('kpi_projects').doc(p.id).update({ krId: krId }).catch(function(){});
+        }
+      }
+    }
     if (!krId) { noKR.push(p); return; }
     if (!hierarchy[krId]) hierarchy[krId] = {};
     const kpiId = p.kpiId || '_none';
@@ -4691,10 +4702,17 @@ function saveProject() {
   });
   const assigneeId = document.getElementById('pAssignee').value||null;
   const m = teamMembers.find(x => x.id===assigneeId);
+  let _krId = document.getElementById('pKR').value||null;
+  const _kpiId = document.getElementById('pKPI').value||null;
+  // kpiId가 있는데 krId가 없으면 자동 유추
+  if (!_krId && _kpiId) {
+    const _linkedKpi = kpis.find(k => k.id === _kpiId);
+    if (_linkedKpi) _krId = _linkedKpi.keyResultId || _linkedKpi.krId || null;
+  }
   const data = {
     title, description: document.getElementById('pDesc').value.trim(),
-    krId: document.getElementById('pKR').value||null,
-    kpiId: document.getElementById('pKPI').value||null,
+    krId: _krId,
+    kpiId: _kpiId,
     category: document.getElementById('pCategory').value.trim()||null,
     assigneeId, assigneeName: m?.name||null,
     roadmap, order: projects.length,
@@ -8432,7 +8450,8 @@ function renderOkrSettings() {
     const rateColor = krRate>=80?'var(--success)':krRate>=40?'var(--primary)':krRate>=10?'var(--warning)':'var(--gray-600)';
 
     // Connected projects & actions
-    const krProjects = projects.filter(p => p.krId===kr.id);
+    const krKpiIds = krKpis.map(k => k.id);
+    const krProjects = projects.filter(p => p.krId===kr.id || (!p.krId && p.kpiId && krKpiIds.includes(p.kpiId)));
     const krActions = actions.filter(a => krLags.some(l => l.id===a.lagId) || krProjects.some(p => p.id===a.projectId));
     const krActionsDone = krActions.filter(a => a.status==='done').length;
     const krLogs = dailyLogs.filter(log => krLags.some(lag => lag.id===(log.laggingIndicatorId||log.lagId)));
