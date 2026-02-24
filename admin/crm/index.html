@@ -6473,23 +6473,55 @@
       }
     }
 
-    // 입점고객 검색
+    // 입점고객 검색 (sellers + suppliers 통합, 띄어쓰기 무시, 전화번호 뒷자리 검색)
     function searchExistingCustomers() {
-      const query = document.getElementById('existing-customer-input')?.value?.trim().toLowerCase();
+      const rawQuery = document.getElementById('existing-customer-input')?.value?.trim().toLowerCase();
       const resultsDiv = document.getElementById('existing-customer-results');
 
-      if (!query || query.length < 2) {
+      if (!rawQuery || rawQuery.length < 2) {
         if (resultsDiv) resultsDiv.style.display = 'none';
         return;
       }
 
+      const query = rawQuery.replace(/\s/g, ''); // 띄어쓰기 제거
+
       // state.sellers에서 검색
-      const sellers = state.sellers || [];
-      const matched = sellers.filter(s => {
-        const name = (s.companyName || s.company || '').toLowerCase();
-        const phone = (s.phone || s.contact || '').toLowerCase();
-        return name.includes(query) || phone.includes(query);
-      }).slice(0, 5);
+      const sellers = (state.sellers || []).filter(s => {
+        const name = (s.companyName || s.company || '').toLowerCase().replace(/\s/g, '');
+        const phone = (s.phone || s.contact || '').replace(/[-\s]/g, '');
+        const phoneLast4 = phone.slice(-4);
+        return name.includes(query) || phone.includes(query) || (query.length === 4 && phoneLast4 === query);
+      }).map(s => ({
+        id: s.id,
+        name: s.companyName || s.company || '미등록',
+        phone: s.phone || s.contact || '',
+        source: 'seller'
+      }));
+
+      // state.suppliers에서도 검색 (입점완료 공급사 포함)
+      const suppliers = (state.suppliers || []).filter(s => {
+        const name = (s.name || '').toLowerCase().replace(/\s/g, '');
+        const phone = (s.phone || '').replace(/[-\s]/g, '');
+        const phoneLast4 = phone.slice(-4);
+        const contact = (s.contact || '').toLowerCase().replace(/\s/g, '');
+        // contacts 배열에서도 검색
+        const contactsMatch = (s.contacts || []).some(c => {
+          const cPhone = (c.phone || '').replace(/[-\s]/g, '');
+          const cName = (c.name || '').toLowerCase().replace(/\s/g, '');
+          return cPhone.includes(query) || (query.length === 4 && cPhone.slice(-4) === query) || cName.includes(query);
+        });
+        return name.includes(query) || phone.includes(query) || (query.length === 4 && phoneLast4 === query) || contact.includes(query) || contactsMatch;
+      }).map(s => ({
+        id: s.id,
+        name: s.name || '미등록',
+        phone: s.phone || '',
+        source: 'supplier'
+      }));
+
+      // 중복 제거 후 합치기
+      const sellerIds = new Set(sellers.map(s => s.id));
+      const combined = [...sellers, ...suppliers.filter(s => !sellerIds.has(s.id))];
+      const matched = combined.slice(0, 5);
 
       if (matched.length === 0) {
         resultsDiv.innerHTML = '<div style="padding: 12px; color: #666; font-size: 13px;">검색 결과 없음</div>';
@@ -6498,11 +6530,12 @@
       }
 
       resultsDiv.innerHTML = matched.map(s => `
-        <div onclick="selectExistingCustomer('${s.id}', '${(s.companyName || s.company || '').replace(/'/g, "\\'")}', '${s.phone || s.contact || ''}')"
+        <div onclick="selectExistingCustomer('${s.id}', '${s.name.replace(/'/g, "\\'")}', '${s.phone}')"
              style="padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 13px; color: #333;"
              onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='white'">
-          <strong>${s.companyName || s.company || '미등록'}</strong>
-          <span style="color: #888; margin-left: 8px;">${s.phone || s.contact || ''}</span>
+          <strong>${s.name}</strong>
+          <span style="color: #888; margin-left: 8px;">${s.phone}</span>
+          ${s.source === 'supplier' ? '<span style="color: #059669; margin-left: 6px; font-size: 11px;">[공급사]</span>' : ''}
         </div>
       `).join('');
       resultsDiv.style.display = 'block';
@@ -12029,14 +12062,22 @@
         filtered = filtered.filter(s => !s.onboarding && !isContracted(s));
       }
 
-      // 검색
+      // 검색 (띄어쓰기 무시, 전화번호 뒷자리 검색 지원)
       if (suppliersSearchKeyword) {
-        const keyword = suppliersSearchKeyword.toLowerCase();
-        filtered = filtered.filter(s =>
-          (s.name || '').toLowerCase().includes(keyword) ||
-          (s.contact || '').toLowerCase().includes(keyword) ||
-          (state.supplierProducts || []).filter(p => p.supplierId === s.id).some(p => (p.productName || p.representativeProduct || '').toLowerCase().includes(keyword))
-        );
+        const keyword = suppliersSearchKeyword.toLowerCase().replace(/\s/g, '');
+        filtered = filtered.filter(s => {
+          const name = (s.name || '').toLowerCase().replace(/\s/g, '');
+          const contact = (s.contact || '').toLowerCase().replace(/\s/g, '');
+          const phone = (s.phone || '').replace(/[-\s]/g, '');
+          const phoneLast4 = phone.slice(-4);
+          const contactsMatch = (s.contacts || []).some(c => {
+            const cPhone = (c.phone || '').replace(/[-\s]/g, '');
+            const cName = (c.name || '').toLowerCase().replace(/\s/g, '');
+            return cName.includes(keyword) || cPhone.includes(keyword) || (keyword.length === 4 && cPhone.slice(-4) === keyword);
+          });
+          const productMatch = (state.supplierProducts || []).filter(p => p.supplierId === s.id).some(p => (p.productName || p.representativeProduct || '').toLowerCase().replace(/\s/g, '').includes(keyword));
+          return name.includes(keyword) || contact.includes(keyword) || phone.includes(keyword) || (keyword.length === 4 && phoneLast4 === keyword) || contactsMatch || productMatch;
+        });
       }
 
       // 테이블 렌더링
