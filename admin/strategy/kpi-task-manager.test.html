@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>KPI Task Manager - Unit Tests</title>
+  <style>
+    body { font-family: 'Pretendard', sans-serif; padding: 24px; background: #f9fafb; }
+    h1 { font-size: 20px; margin-bottom: 16px; }
+    .test-suite { background: white; border: 1px solid #e5e8eb; border-radius: 12px; padding: 18px; margin-bottom: 12px; }
+    .test-suite h2 { font-size: 15px; font-weight: 700; margin-bottom: 10px; color: #333d4b; }
+    .test { padding: 6px 10px; margin: 4px 0; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+    .test.pass { background: #D1FAE5; color: #065F46; }
+    .test.fail { background: #FEE2E2; color: #991B1B; }
+    .summary { margin-top: 20px; padding: 16px; background: white; border-radius: 12px; border: 2px solid #e5e8eb; font-size: 15px; font-weight: 700; }
+    .summary.all-pass { border-color: #10B981; color: #065F46; }
+    .summary.has-fail { border-color: #EF4444; color: #991B1B; }
+  </style>
+</head>
+<body>
+<h1>KPI Task Manager - Unit Tests</h1>
+<div id="results"></div>
+<div id="summary"></div>
+
+<script>
+// ===== Test Framework =====
+let _passed = 0, _failed = 0, _suites = [];
+function describe(name, fn) { _suites.push({name, tests:[]}); fn(); }
+function it(name, fn) {
+  const suite = _suites[_suites.length - 1];
+  try { fn(); suite.tests.push({name, pass:true}); _passed++; }
+  catch(e) { suite.tests.push({name, pass:false, error:e.message}); _failed++; }
+}
+function expect(val) {
+  return {
+    toBe(expected) { if (val !== expected) throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(val)}`); },
+    toBeGreaterThan(n) { if (!(val > n)) throw new Error(`Expected ${val} > ${n}`); },
+    toBeLessThanOrEqual(n) { if (!(val <= n)) throw new Error(`Expected ${val} <= ${n}`); },
+    toEqual(expected) { if (JSON.stringify(val) !== JSON.stringify(expected)) throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(val)}`); },
+    toBeTruthy() { if (!val) throw new Error(`Expected truthy, got ${JSON.stringify(val)}`); },
+    toBeFalsy() { if (val) throw new Error(`Expected falsy, got ${JSON.stringify(val)}`); }
+  };
+}
+
+// ===== Extract Core Functions (same logic as kpi-task-manager.html) =====
+
+// getEffectiveValue - SSOT with dailyLogs
+function getEffectiveValue(lagId, dailyLogs, actions, laggingIndicators) {
+  const logsSum = dailyLogs
+    .filter(l => (l.lagId || l.laggingIndicatorId) === lagId)
+    .reduce((s, l) => s + (Number(l.value || l.resultValue) || 0), 0);
+  const loggedTaskIds = new Set(
+    dailyLogs.filter(l => (l.lagId || l.laggingIndicatorId) === lagId && l.taskId).map(l => l.taskId)
+  );
+  const missingDoneVal = actions
+    .filter(a => a.lagId === lagId && a.status === 'done' && a.id && !loggedTaskIds.has(a.id))
+    .reduce((s, a) => s + (Number(a.kpiValue) || 1), 0);
+  const computed = logsSum + missingDoneVal;
+  if (computed > 0) return computed;
+  const lag = laggingIndicators.find(l => l.id === lagId);
+  return Number(lag?.currentValue) || 0;
+}
+
+// calcOkrKPIRate
+function calcOkrKPIRate(kpiId, kpis, laggingIndicators, dailyLogs, actions) {
+  const kpi = kpis.find(k => k.id === kpiId);
+  if (!kpi) return '0.000';
+  const kpiLags = laggingIndicators.filter(l => l.kpiId === kpiId && l.isActive !== false);
+  const outputLags = kpiLags.filter(l => l.type === 'output');
+  const targetLags = outputLags.length > 0 ? outputLags : kpiLags;
+  if (targetLags.length === 0) return '0.000';
+  const validLags = targetLags.filter(lag => lag.targetValue && lag.targetValue > 0);
+  if (validLags.length === 0) return '0.000';
+  const rates = validLags.map(lag => {
+    const ev = getEffectiveValue(lag.id, dailyLogs, actions, laggingIndicators);
+    return Math.min((ev / lag.targetValue) * 100, 100);
+  });
+  return (rates.reduce((s,r) => s+r, 0) / rates.length).toFixed(3);
+}
+
+// SHA-256 (Web Crypto)
+async function sha256(message) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// XSS escape
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ===== Test Suites =====
+
+describe('getEffectiveValue - 달성률 계산', () => {
+  it('dailyLogs 합산이 기본값', () => {
+    const logs = [{lagId:'L1', value:10}, {lagId:'L1', value:20}, {lagId:'L2', value:5}];
+    expect(getEffectiveValue('L1', logs, [], [])).toBe(30);
+  });
+
+  it('dailyLog 없고 완료 액션만 있으면 액션값 사용', () => {
+    const actions = [{id:'A1', lagId:'L1', status:'done', kpiValue:5}];
+    expect(getEffectiveValue('L1', [], actions, [])).toBe(5);
+  });
+
+  it('dailyLog에 이미 기록된 액션은 중복 계산하지 않음', () => {
+    const logs = [{lagId:'L1', taskId:'A1', value:5}];
+    const actions = [{id:'A1', lagId:'L1', status:'done', kpiValue:5}];
+    expect(getEffectiveValue('L1', logs, actions, [])).toBe(5); // 5, not 10
+  });
+
+  it('dailyLog에 없는 완료 액션만 추가 보정', () => {
+    const logs = [{lagId:'L1', taskId:'A1', value:5}];
+    const actions = [
+      {id:'A1', lagId:'L1', status:'done', kpiValue:5},
+      {id:'A2', lagId:'L1', status:'done', kpiValue:3}
+    ];
+    expect(getEffectiveValue('L1', logs, actions, [])).toBe(8); // 5 + 3
+  });
+
+  it('로그와 액션 모두 없으면 currentValue 폴백', () => {
+    const lags = [{id:'L1', currentValue:42}];
+    expect(getEffectiveValue('L1', [], [], lags)).toBe(42);
+  });
+
+  it('로그가 있으면 currentValue 무시', () => {
+    const logs = [{lagId:'L1', value:10}];
+    const lags = [{id:'L1', currentValue:999}];
+    expect(getEffectiveValue('L1', logs, [], lags)).toBe(10);
+  });
+
+  it('진행중(doing) 액션은 무시', () => {
+    const actions = [{id:'A1', lagId:'L1', status:'doing', kpiValue:5}];
+    expect(getEffectiveValue('L1', [], actions, [])).toBe(0);
+  });
+
+  it('laggingIndicatorId 필드도 인식', () => {
+    const logs = [{laggingIndicatorId:'L1', value:7}];
+    expect(getEffectiveValue('L1', logs, [], [])).toBe(7);
+  });
+});
+
+describe('calcOkrKPIRate - KPI 달성률', () => {
+  it('기본 계산: (현재/목표) * 100', () => {
+    const kpis = [{id:'K1'}];
+    const lags = [{id:'L1', kpiId:'K1', type:'output', targetValue:100, isActive:true}];
+    const logs = [{lagId:'L1', value:50}];
+    expect(calcOkrKPIRate('K1', kpis, lags, logs, [])).toBe('50.000');
+  });
+
+  it('100% 캡 적용', () => {
+    const kpis = [{id:'K1'}];
+    const lags = [{id:'L1', kpiId:'K1', type:'output', targetValue:10, isActive:true}];
+    const logs = [{lagId:'L1', value:999}];
+    expect(calcOkrKPIRate('K1', kpis, lags, logs, [])).toBe('100.000');
+  });
+
+  it('output 지표 우선 사용', () => {
+    const kpis = [{id:'K1'}];
+    const lags = [
+      {id:'L1', kpiId:'K1', type:'input', targetValue:100, isActive:true},
+      {id:'L2', kpiId:'K1', type:'output', targetValue:10, isActive:true}
+    ];
+    const logs = [{lagId:'L2', value:5}]; // output만 50%
+    expect(calcOkrKPIRate('K1', kpis, lags, logs, [])).toBe('50.000');
+  });
+
+  it('targetValue=0인 지표는 제외', () => {
+    const kpis = [{id:'K1'}];
+    const lags = [
+      {id:'L1', kpiId:'K1', type:'output', targetValue:0, isActive:true},
+      {id:'L2', kpiId:'K1', type:'output', targetValue:100, isActive:true}
+    ];
+    const logs = [{lagId:'L2', value:80}];
+    expect(calcOkrKPIRate('K1', kpis, lags, logs, [])).toBe('80.000');
+  });
+
+  it('비활성 지표는 제외', () => {
+    const kpis = [{id:'K1'}];
+    const lags = [
+      {id:'L1', kpiId:'K1', type:'output', targetValue:100, isActive:false},
+      {id:'L2', kpiId:'K1', type:'output', targetValue:100, isActive:true}
+    ];
+    const logs = [{lagId:'L2', value:60}];
+    expect(calcOkrKPIRate('K1', kpis, lags, logs, [])).toBe('60.000');
+  });
+
+  it('KPI 없으면 0', () => {
+    expect(calcOkrKPIRate('NONEXIST', [], [], [], [])).toBe('0.000');
+  });
+
+  it('지표 없으면 0', () => {
+    const kpis = [{id:'K1'}];
+    expect(calcOkrKPIRate('K1', kpis, [], [], [])).toBe('0.000');
+  });
+
+  it('여러 지표 평균', () => {
+    const kpis = [{id:'K1'}];
+    const lags = [
+      {id:'L1', kpiId:'K1', type:'output', targetValue:100, isActive:true},
+      {id:'L2', kpiId:'K1', type:'output', targetValue:200, isActive:true}
+    ];
+    const logs = [{lagId:'L1', value:100}, {lagId:'L2', value:100}]; // 100% + 50% = 75%
+    expect(calcOkrKPIRate('K1', kpis, lags, logs, [])).toBe('75.000');
+  });
+});
+
+describe('esc() - XSS 방어', () => {
+  it('HTML 태그 이스케이프', () => {
+    expect(esc('<script>alert("xss")</script>')).toBe('&lt;script&gt;alert("xss")&lt;/script&gt;');
+  });
+
+  it('& 이스케이프', () => {
+    expect(esc('A & B')).toBe('A &amp; B');
+  });
+
+  it('따옴표 이스케이프', () => {
+    expect(esc('"hello"')).toBe('&quot;hello&quot;');
+  });
+
+  it('일반 텍스트는 변경 없음', () => {
+    expect(esc('안녕하세요')).toBe('안녕하세요');
+  });
+
+  it('빈 문자열 처리', () => {
+    expect(esc('')).toBe('');
+  });
+});
+
+describe('sha256 - 비밀번호 해싱', () => {
+  it('동일 입력 → 동일 해시', async () => {
+    const h1 = await sha256('password123');
+    const h2 = await sha256('password123');
+    expect(h1).toBe(h2);
+  });
+
+  it('다른 입력 → 다른 해시', async () => {
+    const h1 = await sha256('password123');
+    const h2 = await sha256('password456');
+    expect(h1 !== h2).toBeTruthy();
+  });
+
+  it('64자 hex 문자열 반환', async () => {
+    const h = await sha256('test');
+    expect(h.length).toBe(64);
+    expect(/^[0-9a-f]+$/.test(h)).toBeTruthy();
+  });
+
+  it('알려진 해시값 검증', async () => {
+    // SHA-256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+    const h = await sha256('hello');
+    expect(h).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  });
+});
+
+// ===== Run Tests =====
+async function runTests() {
+  // Run async tests
+  for (const suite of _suites) {
+    for (const test of suite.tests) {
+      // Already run in describe/it
+    }
+  }
+
+  // SHA-256 async tests need separate handling
+  const asyncSuite = {name: 'sha256 - 비밀번호 해싱 (async)', tests:[]};
+  const asyncTests = [
+    ['동일 입력 → 동일 해시', async () => {
+      const h1 = await sha256('password123');
+      const h2 = await sha256('password123');
+      expect(h1).toBe(h2);
+    }],
+    ['다른 입력 → 다른 해시', async () => {
+      const h1 = await sha256('password123');
+      const h2 = await sha256('password456');
+      expect(h1 !== h2).toBeTruthy();
+    }],
+    ['64자 hex 문자열 반환', async () => {
+      const h = await sha256('test');
+      expect(h.length).toBe(64);
+      expect(/^[0-9a-f]+$/.test(h)).toBeTruthy();
+    }],
+    ['알려진 해시값 검증 (SHA-256 "hello")', async () => {
+      const h = await sha256('hello');
+      expect(h).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+    }]
+  ];
+  // Remove sync sha256 suite (it can't handle async properly)
+  _suites = _suites.filter(s => s.name !== 'sha256 - 비밀번호 해싱');
+  _passed -= 4; // undo the sync attempts
+
+  for (const [name, fn] of asyncTests) {
+    try { await fn(); asyncSuite.tests.push({name, pass:true}); _passed++; }
+    catch(e) { asyncSuite.tests.push({name, pass:false, error:e.message}); _failed++; }
+  }
+  _suites.push(asyncSuite);
+
+  // Render
+  const results = document.getElementById('results');
+  results.innerHTML = _suites.map(suite => `
+    <div class="test-suite">
+      <h2>${suite.name} (${suite.tests.filter(t=>t.pass).length}/${suite.tests.length})</h2>
+      ${suite.tests.map(t => `<div class="test ${t.pass?'pass':'fail'}">
+        ${t.pass?'✅':'❌'} ${t.name}${t.error?' — '+t.error:''}
+      </div>`).join('')}
+    </div>
+  `).join('');
+
+  const summary = document.getElementById('summary');
+  summary.className = 'summary ' + (_failed === 0 ? 'all-pass' : 'has-fail');
+  summary.textContent = `총 ${_passed + _failed}개 테스트: ${_passed}개 통과, ${_failed}개 실패`;
+}
+
+runTests();
+</script>
+</body>
+</html>

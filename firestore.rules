@@ -1,0 +1,149 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== Helper Functions =====
+    function isValidString(field, maxLen) {
+      return field is string && field.size() <= maxLen;
+    }
+    function isValidTimestamp(field) {
+      return field is timestamp;
+    }
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    // ===== Team Members (read-only from client, managed by admin) =====
+    match /teamMembers/{memberId} {
+      allow read: if true;
+      allow write: if false; // 관리자만 Firebase Console에서 수정
+    }
+
+    // ===== KPI Tasks (행동지표) =====
+    match /kpi_tasks/{taskId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['title', 'status'])
+        && isValidString(request.resource.data.title, 200)
+        && request.resource.data.status in ['pending', 'doing', 'done', 'hold'];
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['title','description','status','priority','assigneeId','assignee',
+          'deadline','phaseId','lagId','lagName','kpiValue','type','recurringType',
+          'tags','updatedAt','completedAt','actualCompletionDate','startedAt',
+          'projectId','projectName','krId','kpiId',
+          'hypothesis','controlGroup','testGroup','metric','controlResult','testResult','conclusion']);
+      allow delete: if true;
+    }
+
+    // ===== KPI Task Logs (실행기록) =====
+    match /kpi_task_logs/{logId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['taskId', 'date']);
+      allow update: if true;
+      allow delete: if true;
+    }
+
+    // ===== KPI Projects =====
+    match /kpi_projects/{projectId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['title'])
+        && isValidString(request.resource.data.title, 200);
+      allow update, delete: if true;
+    }
+
+    // ===== OKR Collections =====
+    match /okr_objective/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /okr_keyResults/{krId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['name']);
+      allow update, delete: if true;
+    }
+    match /okr_kpis/{kpiId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['name']);
+      allow update, delete: if true;
+    }
+    match /okr_laggingIndicators/{lagId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['name', 'targetValue']);
+      allow update: if true;
+      allow delete: if true;
+    }
+    match /okr_dailyLogs/{logId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['date'])
+        && isValidString(request.resource.data.date, 10);
+      allow update, delete: if true;
+    }
+    match /okr_subIndicators/{subId} {
+      allow read, write: if true;
+    }
+    match /okr_quarterlyGoals/{goalId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['memberId', 'year', 'quarter']);
+      allow update, delete: if true;
+    }
+
+    // ===== Work Journal (업무일지) =====
+    match /kpi_work_journal/{journalId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['date'])
+        && isValidString(request.resource.data.date, 10);
+      allow update, delete: if true;
+    }
+
+    // ===== Weekly Plans =====
+    match /kpi_weeklyPlans/{planId} {
+      allow read, write: if true;
+    }
+
+    // ===== Schedules =====
+    match /kpi_schedules/{scheduleId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['title', 'date']);
+      allow update, delete: if true;
+    }
+
+    // ===== OKR Meetings =====
+    match /okr_meetings/{meetingId} {
+      allow read, write: if true;
+    }
+
+    // ===== Change Logs (변경이력 - 생성만, 수정 불가) =====
+    match /kpi_changeLogs/{logId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if false; // 변경이력은 수정 불가 (무결성 보장)
+      allow delete: if false;
+    }
+
+    // ===== Deleted Items (휴지통 - 30일 보관) =====
+    match /deletedItems/{itemId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['originalCollection', 'originalId', 'deletedAt']);
+      allow update: if false;
+      allow delete: if true;
+    }
+
+    // ===== Migration tracking =====
+    match /kpi_migration/{docId} {
+      allow read, write: if true;
+    }
+
+    // ===== Proposal Derivatives (맞춤 제안서) =====
+    match /proposalDerivatives/{proposalId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['companyName', 'products', 'status'])
+        && isValidString(request.resource.data.companyName, 200);
+      allow update, delete: if true;
+    }
+
+    // ===== Default: deny all other collections =====
+    match /{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
