@@ -1084,29 +1084,127 @@ async function trackReferralClick(refCode) {
 }
 
 // ===== Cafe24 Integration =====
-// 카페24 쇼핑몰 구매 시 자동으로 레퍼럴 코드를 주문 메모에 전달
-function getCafe24ReferralScript() {
-  const refCode = getCookie('moyeora_ref');
-  if (!refCode) return;
-
-  // 카페24 주문서 페이지에서 주문 메모에 자동 입력
-  if (window.location.pathname.includes('/order/')) {
-    const memoField = document.querySelector('textarea[name="order_memo"]') ||
-                      document.querySelector('textarea[name="memo"]') ||
-                      document.querySelector('#order_memo');
-
-    if (memoField) {
-      const existing = memoField.value.trim();
-      memoField.value = existing ? `${existing}\n[REF:${refCode}]` : `[REF:${refCode}]`;
-    }
-  }
-}
+const CAFE24_PROXY_URL = 'https://cafe24oauthtoken-751113514390.asia-northeast3.run.app';
 
 function getCookie(name) {
   const value = `; ${document.cookie}`;
   const parts = value.split(`; ${name}=`);
   if (parts.length === 2) return parts.pop().split(';').shift();
   return null;
+}
+
+// 카페24 API 프록시 호출
+async function callCafe24ApiFromConsumer(mallId, accessToken, apiEndpoint, apiMethod, apiBody) {
+  const requestBody = { mallId, accessToken, apiEndpoint };
+  if (apiMethod) requestBody.apiMethod = apiMethod;
+  if (apiBody) requestBody.apiBody = apiBody;
+
+  const response = await fetch(CAFE24_PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody)
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error_description || data.error || `API error: ${response.status}`);
+  }
+  return data;
+}
+
+// 카페24 적립금/쿠폰 정보 로드
+async function loadCafe24PointInfo() {
+  try {
+    const configDoc = await db.collection('settings').doc('cafe24').get();
+    if (!configDoc.exists || !configDoc.data().accessToken) {
+      document.getElementById('cafe24-status').textContent = '미연결';
+      document.getElementById('cafe24-status').className = 'api-status disconnected';
+      return;
+    }
+
+    const config = configDoc.data();
+
+    // 사용자의 카페24 회원 매핑 확인
+    if (!state.currentUser) return;
+
+    let cafe24MemberId = null;
+
+    // 매핑 테이블에서 확인
+    const mappingSnap = await db.collection('user_mappings')
+      .where('firebaseUserId', '==', state.currentUser.id)
+      .limit(1)
+      .get();
+
+    if (!mappingSnap.empty) {
+      cafe24MemberId = mappingSnap.docs[0].data().cafe24MemberId;
+    } else {
+      // 전화번호로 카페24 회원 검색 시도
+      try {
+        const phone = state.currentUser.phone;
+        const searchData = await callCafe24ApiFromConsumer(
+          config.mallId,
+          config.accessToken,
+          `/api/v2/admin/customers?cellphone=${encodeURIComponent(phone)}&limit=1`
+        );
+        if (searchData.customers && searchData.customers.length > 0) {
+          cafe24MemberId = searchData.customers[0].member_id;
+          // 매핑 저장
+          await db.collection('user_mappings').add({
+            firebaseUserId: state.currentUser.id,
+            cafe24MemberId: cafe24MemberId,
+            phone: phone,
+            name: state.currentUser.name,
+            referral_code: state.referralCode,
+            mappedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      } catch (searchErr) {
+        console.log('카페24 회원 검색 불가:', searchErr.message);
+      }
+    }
+
+    if (cafe24MemberId) {
+      document.getElementById('cafe24-status').textContent = '연결됨';
+      document.getElementById('cafe24-status').className = 'api-status connected';
+
+      // 적립금 조회
+      try {
+        const mileageData = await callCafe24ApiFromConsumer(
+          config.mallId,
+          config.accessToken,
+          `/api/v2/admin/customers/${cafe24MemberId}/mileage`
+        );
+        if (mileageData.mileage) {
+          const availableMileage = Number(mileageData.mileage.available_mileage) || 0;
+          document.getElementById('cafe24-points').textContent = availableMileage.toLocaleString() + '원';
+        }
+      } catch (mileageErr) {
+        document.getElementById('cafe24-points').textContent = '조회 불가';
+        console.log('적립금 조회 실패:', mileageErr.message);
+      }
+
+      // 쿠폰 조회
+      try {
+        const couponData = await callCafe24ApiFromConsumer(
+          config.mallId,
+          config.accessToken,
+          `/api/v2/admin/customers/${cafe24MemberId}/coupons?issue_type=available`
+        );
+        const couponCount = couponData.coupons ? couponData.coupons.length : 0;
+        document.getElementById('cafe24-coupons').textContent = couponCount + '장';
+      } catch (couponErr) {
+        document.getElementById('cafe24-coupons').textContent = '조회 불가';
+        console.log('쿠폰 조회 실패:', couponErr.message);
+      }
+    } else {
+      document.getElementById('cafe24-status').textContent = '회원 매핑 필요';
+      document.getElementById('cafe24-status').className = 'api-status disconnected';
+      document.getElementById('cafe24-points').textContent = '매핑 후 확인 가능';
+      document.getElementById('cafe24-coupons').textContent = '매핑 후 확인 가능';
+    }
+  } catch (err) {
+    console.error('카페24 정보 로드 오류:', err);
+  }
 }
 
 // ===== Load User Data =====
@@ -1134,6 +1232,7 @@ async function loadUserData() {
 
     updatePointsUI();
     updateHistoryUI();
+    loadCafe24PointInfo();
 
   } catch (err) {
     console.error('데이터 로드 오류:', err);
