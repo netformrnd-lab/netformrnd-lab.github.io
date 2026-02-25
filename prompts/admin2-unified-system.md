@@ -286,9 +286,113 @@ admin/index.html과 동일:
 ### 15. 레퍼런스 라이브러리 (tab: referenceLibrary)
 **렌더 함수**: `renderReferenceLibrary()`
 
-- 참고 자료 관리
-- 가이드 문서
-- 템플릿
+- 참고 자료 등록/관리
+- 이미지 첨부 (자동 압축 기능)
+- 엑셀 일괄 임포트 지원
+- 카테고리별 분류
+- 가이드 문서, 템플릿
+
+### 16. 영업 현황 대시보드 (tab: salesDashboard — 주석 처리됨)
+- 운영센터에서만 사용하도록 비활성화
+- admin2에서는 growthDashboard가 대체
+
+---
+
+## 특수 기능
+
+### J.A.R.V.I.S. Quick Hub
+- 우하단 플로팅 AI 어시스턴트 패널 (다크 테마)
+- 시안 강조색 (#38bdf8)
+- 알림, 오늘의 업무, AI 기능 탭
+
+### 활동 자동 로깅 시스템
+- 운영 활동(공구 등록/수정, 정산 등)이 자동으로 업무일지에 기록
+- `activityLogs` 패턴: source, activityType, timestamp
+- 업무일지의 자동 로그 섹션(`renderAutoLogSection`)과 연동
+
+### 루틴 업무
+- `routineTasks` 엔티티: 반복 업무 관리
+- 일/주/월 단위 반복 설정
+- 업무일지의 루틴 섹션(`renderRoutineSection`)
+
+### 공구 업무 템플릿
+- 공구 등록 시 사전 정의된 체크리스트 업무 자동 생성
+- 준비/마케팅/정산 단계별 템플릿
+
+### PPT 리포트 내보내기
+- 분기 리뷰에서 PPT 파일 자동 생성
+- PptxGenJS 라이브러리 활용
+
+### 이미지 압축
+- 레퍼런스 이미지 업로드 시 자동 압축
+- Canvas API 기반 리사이즈
+
+### 게스트 모드
+- guest 역할 전용 CSS 스타일
+- 편집 기능 차단, 읽기 전용 모드
+- 노란 안내 배너
+
+### 크로스 센터 컨텍스트
+- admin(운영센터)과 동일 Firebase 프로젝트 공유
+- 데이터 실시간 동기화
+- 센터 간 탭 이동 지원 (모바일 FAB)
+
+---
+
+## 데이터 모델 (admin2 고유)
+
+### Strategy (전략)
+```javascript
+{
+  id, year, title, vision, mission,
+  domains: [{ name, description, color }],
+  quarterlyGoals: { Q1: {...}, Q2: {...}, Q3: {...}, Q4: {...} },
+  teamAssignments: [{ memberId, domain }],
+  version, createdAt, updatedAt
+}
+```
+
+### OKR
+```javascript
+{
+  id, objective, quarter, year,
+  assigneeId, assigneeName,
+  keyResults: [{ title, target, current, unit, progress }],
+  strategyId, status,
+  createdAt, updatedAt
+}
+```
+
+### Task (업무)
+```javascript
+{
+  id, title, description, dueDate,
+  status: 'pending'|'in_progress'|'completed',
+  assigneeId, assigneeName,
+  priority: 'high'|'urgent'|'normal',
+  okrId, category,
+  source: 'manual'|'operations-auto'|'deal-template',
+  activityType, completedAt, createdAt
+}
+```
+
+### RoutineTask (루틴 업무)
+```javascript
+{
+  id, title, frequency: 'daily'|'weekly'|'monthly',
+  assigneeId, category,
+  isActive: boolean, createdAt
+}
+```
+
+### Reference (레퍼런스)
+```javascript
+{
+  id, title, content, category,
+  images: [{ url, compressed }],
+  tags: [], createdBy, createdAt
+}
+```
 
 ---
 
