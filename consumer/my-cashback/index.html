@@ -607,7 +607,7 @@
         <div class="lookup-section" id="lookupSection">
             <div class="lookup-title">캐시백 조회</div>
             <div class="lookup-form">
-                <input type="tel" class="lookup-input" id="phoneInput" placeholder="연락처 (010-0000-0000)">
+                <input type="tel" class="lookup-input" id="phoneInput" placeholder="연락처 (01000000000 또는 010-0000-0000)">
                 <button class="btn-lookup" onclick="lookupCashback()">조회</button>
             </div>
         </div>
@@ -777,6 +777,15 @@
         }
 
         // 캐시백 조회
+        function formatPhoneWithHyphen(digits) {
+            if (digits.length === 11) {
+                return digits.slice(0, 3) + '-' + digits.slice(3, 7) + '-' + digits.slice(7);
+            } else if (digits.length === 10) {
+                return digits.slice(0, 3) + '-' + digits.slice(3, 6) + '-' + digits.slice(6);
+            }
+            return digits;
+        }
+
         async function lookupCashback() {
             const phone = document.getElementById('phoneInput').value.trim();
 
@@ -791,29 +800,42 @@
                 return;
             }
 
-            currentPhone = phone;
-            setCookie('moyeora_phone', phone, 30);
+            const formattedPhone = formatPhoneWithHyphen(normalizedPhone);
+            const phoneVariants = [formattedPhone, normalizedPhone];
+            if (phone !== formattedPhone && phone !== normalizedPhone) {
+                phoneVariants.push(phone);
+            }
+
+            currentPhone = formattedPhone;
+            setCookie('moyeora_phone', formattedPhone, 30);
 
             document.getElementById('cashbackContent').classList.remove('hidden');
 
             await Promise.all([
-                loadCashbackHistory(phone),
-                loadReferralHistory(phone)
+                loadCashbackHistory(phoneVariants),
+                loadReferralHistory(phoneVariants)
             ]);
         }
 
         // 캐시백 내역 로드
-        async function loadCashbackHistory(phone) {
+        async function loadCashbackHistory(phoneVariants) {
             try {
                 const snapshot = await db.collection('cashbacks')
-                    .where('phone', '==', phone)
+                    .where('phone', 'in', phoneVariants)
                     .orderBy('earnedAt', 'desc')
                     .get();
 
-                const reviewSnapshot = await db.collection('reviews')
-                    .where('phone', '==', phone)
-                    .where('status', 'in', ['approved', 'rewarded'])
-                    .get();
+                const reviewSnapshots = await Promise.all(
+                    phoneVariants.map(p => db.collection('reviews')
+                        .where('phone', '==', p)
+                        .where('status', 'in', ['approved', 'rewarded'])
+                        .get())
+                );
+                const reviewDocs = [];
+                const seenIds = new Set();
+                reviewSnapshots.forEach(snap => snap.docs.forEach(doc => {
+                    if (!seenIds.has(doc.id)) { seenIds.add(doc.id); reviewDocs.push(doc); }
+                }));
 
                 cashbackHistory = [];
 
@@ -829,7 +851,7 @@
                     });
                 });
 
-                reviewSnapshot.docs.forEach(doc => {
+                reviewDocs.forEach(doc => {
                     const data = doc.data();
                     cashbackHistory.push({
                         id: doc.id,
@@ -928,10 +950,10 @@
         }
 
         // 레퍼럴 내역 로드
-        async function loadReferralHistory(phone) {
+        async function loadReferralHistory(phoneVariants) {
             try {
                 const snapshot = await db.collection('referrals')
-                    .where('referrerPhone', '==', phone)
+                    .where('referrerPhone', 'in', phoneVariants)
                     .orderBy('createdAt', 'desc')
                     .get();
 
