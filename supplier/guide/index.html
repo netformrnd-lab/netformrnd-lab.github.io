@@ -124,7 +124,12 @@
     const TYPES = { '공구': '🛒', '협찬': '🤝', '자사몰': '🏬' };
 
     const root = document.getElementById('root');
-    const guideId = new URLSearchParams(location.search).get('id');
+    const params = new URLSearchParams(location.search);
+    let guideId = params.get('id');
+    const sellerKey = params.get('s');            // 셀러 전용 링크 ?s=셀러ID (진행 중인 제품 전체)
+    let mode = guideId ? 'guide' : (sellerKey ? 'portal' : 'invalid');
+    let portalGuides = [];
+    let fromPortal = false;
     let guide = null;
     let genTheme = '엄마 공감형';
     let genType = '공구';
@@ -148,15 +153,15 @@
     async function patch(obj) { obj.updatedAt = firebase.firestore.FieldValue.serverTimestamp(); await db.collection('sellerGuides').doc(guideId).update(obj); }
 
     async function boot() {
-      if (!guideId) { stateMsg('⚠️', '잘못된 링크입니다. 담당 매니저에게 문의해주세요.'); return; }
       try { await firebase.auth().signInAnonymously(); } catch (e) { console.warn('익명 로그인 실패', e); }
+      if (mode === 'portal') { return loadPortal(); }
+      if (!guideId) { stateMsg('⚠️', '잘못된 링크입니다. 담당 매니저에게 문의해주세요.'); return; }
       try {
         const doc = await db.collection('sellerGuides').doc(guideId).get();
         if (!doc.exists) { stateMsg('🔍', '가이드를 찾을 수 없습니다. 링크를 다시 확인해주세요.'); return; }
         guide = { id: doc.id, ...doc.data() };
         genType = typeOf(guide);
         decided = !!(sbOf(guide) && upOf(guide).length);
-        // 새로고침 중에도 생성 진행 상태면 실시간으로 이어받기
         if (guide.aiStatus && guide.aiStatus.reels === 'generating' && !sbOf(guide)) {
           genPending = 'reels';
           watchUntil(g => sbOf(g) || (g.aiStatus && g.aiStatus.reels === 'failed'), g => { genPending = null; if (sbOf(g)) { decided = true; page = 'guide'; } render(); });
@@ -166,6 +171,76 @@
         }
         render();
       } catch (e) { stateMsg('⚠️', '불러오기 실패: ' + (e.message || e)); }
+    }
+
+    /* ── 셀러 전용 포털: 진행 중인 제품 목록 ── */
+    function pStatus(g) {
+      const sb = sbOf(g), sh = sb ? g.storyboard.shots : [], done = subDone(g);
+      if (g.aiStatus && g.aiStatus.reels === 'generating' && !sb) return { l: 'AI 생성중', c: '#7c3aed', bg: '#f5f3ff' };
+      if (!sb) return { l: '준비 중', c: '#8b95a1', bg: '#f1f3f5' };
+      if (sh.length && done === sh.length) return { l: '제출 완료', c: '#00a35c', bg: '#ecfdf5' };
+      if (done > 0) return { l: '촬영 진행중', c: '#1a5dc8', bg: '#eef4ff' };
+      return { l: '촬영 대기', c: '#d9740a', bg: '#fff3e0' };
+    }
+    async function loadPortal() {
+      try {
+        const snap = await db.collection('sellerGuides').where('sellerId', '==', sellerKey).get();
+        portalGuides = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (!portalGuides.length) { stateMsg('🔍', '아직 등록된 제품이 없어요. 담당 매니저에게 문의해주세요.'); return; }
+        renderPortal();
+      } catch (e) { stateMsg('⚠️', '불러오기 실패: ' + (e.message || e)); }
+    }
+    function renderPortal() {
+      const ms = x => { const t = x && (x.updatedAt || x.createdAt); if (!t) return 0; if (t.toMillis) return t.toMillis(); const p = Date.parse(t); return isNaN(p) ? 0 : p; };
+      portalGuides.sort((a, b) => ms(b) - ms(a));
+      const name = (portalGuides[0] && portalGuides[0].sellerName) || '셀러';
+      let h = `
+        <div class="hero">
+          <div class="hi">내 촬영 가이드 ✨</div>
+          <div class="nm">${esc(name)}님</div>
+          <div class="prod">📦 진행 중인 제품 ${portalGuides.length}개 · 작업할 제품을 선택하세요</div>
+        </div>`;
+      portalGuides.forEach(g => {
+        const s = pStatus(g), sb = sbOf(g), total = sb ? g.storyboard.shots.length : 0, done = subDone(g), pct = total ? Math.round(done / total * 100) : 0;
+        h += `
+          <div class="card" style="cursor:pointer;margin-bottom:0" onclick="openGuide('${g.id}')">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <span class="type-badge">${TYPES[typeOf(g)] || ''} ${esc(typeOf(g))}</span>
+              <span style="font-size:11px;font-weight:700;color:${s.c};background:${s.bg};border-radius:99px;padding:3px 10px">${s.l}</span>
+            </div>
+            <div style="font-size:16px;font-weight:800;margin:9px 0 3px">${esc(g.productName || '제품')}</div>
+            <div style="font-size:12px;color:var(--tert);margin-bottom:11px">${esc(g.categoryName || g.category || '')}</div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="sb-bar" style="flex:1"><i style="width:${pct}%"></i></div>
+              <b style="font-size:12px;color:var(--brand-d)">${done}/${total || '-'}</b>
+              <span style="font-size:12px;font-weight:700;color:var(--brand-d)">열기 →</span>
+            </div>
+          </div>`;
+      });
+      h += `<div class="trust">제품을 선택하면 촬영 가이드·캡션·업로드 화면으로 이동해요</div>`;
+      root.innerHTML = h;
+    }
+    async function openGuide(id) {
+      fromPortal = true; guideId = id; mode = 'guide'; page = 'guide'; genPending = null;
+      stateMsg('⏳', '불러오는 중…');
+      try {
+        const doc = await db.collection('sellerGuides').doc(id).get();
+        if (!doc.exists) { stateMsg('🔍', '가이드를 찾을 수 없습니다.'); return; }
+        guide = { id: doc.id, ...doc.data() };
+        genType = typeOf(guide);
+        decided = !!(sbOf(guide) && upOf(guide).length);
+        if (guide.aiStatus && guide.aiStatus.reels === 'generating' && !sbOf(guide)) {
+          genPending = 'reels';
+          watchUntil(g => sbOf(g) || (g.aiStatus && g.aiStatus.reels === 'failed'), g => { genPending = null; if (sbOf(g)) { decided = true; page = 'guide'; } render(); });
+        }
+        render(); window.scrollTo({ top: 0 });
+      } catch (e) { stateMsg('⚠️', '불러오기 실패: ' + (e.message || e)); }
+    }
+    function backToPortal() {
+      if (_unsub) { _unsub(); _unsub = null; }
+      mode = 'portal'; fromPortal = false; guide = null; guideId = null;
+      window.scrollTo({ top: 0 });
+      loadPortal();
     }
 
     function fileThumb(u) {
@@ -181,6 +256,7 @@
       const ready = sb && decided;
 
       let h = `
+        ${fromPortal ? `<div style="padding:13px 18px 0"><button onclick="backToPortal()" style="background:none;border:none;color:var(--sub);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;padding:0">← 내 제품 목록</button></div>` : ''}
         <div class="hero">
           <div class="hi">${ready ? '촬영 가이드가 준비됐어요 ✨' : '안녕하세요 👋'}</div>
           <div class="nm">${esc(g.sellerName || '셀러')}님</div>
