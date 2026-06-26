@@ -537,6 +537,68 @@
             }
         }
 
+        /* ===== 모바일(≤480px) 반응형 보완 — 데스크탑 레이아웃은 유지, 모바일 가로 넘침 방지 ===== */
+        @media (max-width: 480px) {
+            /* 가로 스크롤 원천 차단 */
+            html, body { max-width: 100%; overflow-x: hidden; }
+
+            /* 모든 미디어는 컨테이너를 넘지 않도록 */
+            img, video, iframe { max-width: 100%; }
+
+            /* 슬라이드 좌우 패딩 축소 */
+            .slide { padding: 28px 16px; }
+            .slide-content { max-width: 100%; }
+
+            /* 모든 다중 컬럼 그리드는 한 줄로 */
+            .cover-layout,
+            .mockup-layout,
+            .problem-grid,
+            .solution-grid,
+            .problem-cost-layout,
+            .gallery-layout,
+            .product-main-grid,
+            [class*="-grid"] {
+                grid-template-columns: 1fr !important;
+                gap: 20px !important;
+            }
+
+            /* 제목/본문 폰트 축소 */
+            .cover-title { font-size: clamp(26px, 8vw, 34px); }
+            .cover-subtitle { font-size: 14px; }
+            .section-title { font-size: clamp(22px, 6.5vw, 30px); }
+            .cover-supplier { font-size: 15px; }
+
+            /* 표지 핸드폰 목업: 화면 폭에 맞춰 축소 + 중앙 정렬 */
+            .phone-mockup-col .phone-mockup,
+            .phone-mockup {
+                width: min(220px, 62vw) !important;
+                height: auto !important;
+                aspect-ratio: 9 / 19;
+            }
+            .phone-mockup::before { width: 70px; height: 22px; }
+            .phone-screen { border-radius: 28px; }
+
+            /* 두 대 나란히 있는 목업 컨테이너: 세로로 쌓고 회전 제거 */
+            .phone-mockup-container {
+                flex-direction: column;
+                align-items: center;
+                gap: 28px;
+                perspective: none;
+            }
+            .phone-mockup,
+            .phone-mockup.second {
+                transform: none !important;
+                margin-top: 0 !important;
+            }
+            .mockup-text { padding-right: 0; }
+
+            /* 표지 메타(날짜)는 흐름 안으로 */
+            .cover-meta { position: static; margin-top: 28px; text-align: left; }
+
+            /* 가로로 길어지기 쉬운 요소들 줄바꿈/스크롤 허용 */
+            .cover-tags { flex-wrap: wrap; }
+        }
+
         /* ===== 슬라이드 2: 문제점 ===== */
         .slide-problem {
             background: var(--bg-light);
@@ -3916,7 +3978,7 @@
     <aside class="slides-sidebar" id="slidesSidebar">
         <div class="sidebar-header">
             <div class="sidebar-logo">
-                <img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Flogo-horizontal.png?alt=media" alt="모여라딜" style="height: 24px; object-fit: contain;">
+                <img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Flogo-horizontal.png?alt=media" data-nofb alt="모여라딜" style="height: 24px; object-fit: contain;">
             </div>
             <span class="sidebar-page-count" id="sidebarPageCount">01 | --</span>
         </div>
@@ -3952,6 +4014,39 @@
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+
+        // ===== 깨진 이미지/영상 폴백 (엑박 방지) =====
+        // 인라인 SVG data URI 플레이스홀더 — 다크테마 + 오렌지 포인트 유지
+        function makePlaceholder(label) {
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">`
+                + `<rect width="400" height="400" fill="#15151f"/>`
+                + `<rect x="130" y="118" width="140" height="120" rx="14" fill="none" stroke="#3a3a4a" stroke-width="9"/>`
+                + `<circle cx="168" cy="158" r="15" fill="#f97316"/>`
+                + `<path d="M150 222 L188 184 L214 210 L246 176 L262 198" fill="none" stroke="#3a3a4a" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`
+                + `<text x="200" y="300" font-family="Pretendard, sans-serif" font-size="30" font-weight="700" fill="#8a8a99" text-anchor="middle">${label}</text>`
+                + `</svg>`;
+            return 'data:image/svg+xml,' + encodeURIComponent(svg);
+        }
+        const PH_PRODUCT = makePlaceholder('상품 이미지');
+        const PH_NEUTRAL = makePlaceholder('콘텐츠 준비중');
+
+        // 캡처 단계에서 모든 img/video 로드 오류를 가로채 플레이스홀더로 대체
+        // (error 이벤트는 버블링되지 않으므로 capture=true 로 window 에서 수신, 동적 추가 이미지도 커버)
+        window.addEventListener('error', function (e) {
+            const t = e.target;
+            if (!t || t.dataset && t.dataset.fb || (t.dataset && t.dataset.nofb !== undefined)) return;
+            if (t.tagName === 'IMG') {
+                t.dataset.fb = '1';
+                t.src = (t.dataset.ph === 'product') ? PH_PRODUCT : PH_NEUTRAL;
+            } else if (t.tagName === 'VIDEO') {
+                t.dataset.fb = '1';
+                const img = document.createElement('img');
+                img.src = PH_NEUTRAL;
+                img.alt = t.getAttribute('alt') || '';
+                img.style.cssText = t.getAttribute('style') || 'width:100%;height:100%;object-fit:cover;';
+                if (t.parentNode) t.parentNode.replaceChild(img, t);
+            }
+        }, true);
 
         // 상태 관리
         let proposalId = null;
@@ -4255,7 +4350,7 @@
                                     <!-- 왼쪽: 상품 이미지 -->
                                     <div class="product-image-col">
                                         <div class="product-image-box">
-                                            ${product.image ? `<img src="${product.image}" alt="${product.name}">` : '<div class="product-placeholder">📦</div>'}
+                                            ${product.image ? `<img src="${product.image}" alt="${product.name}" data-ph="product">` : '<div class="product-placeholder">📦</div>'}
                                         </div>
                                     </div>
 
@@ -4484,7 +4579,7 @@
                                         </div>
                                         <!-- 헤더 -->
                                         <div class="reels-header">
-                                            <div class="reels-avatar"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Ffavicon.ico.ico?alt=media" alt="M" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;"></div>
+                                            <div class="reels-avatar"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Ffavicon.ico.ico?alt=media" data-nofb alt="M" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;"></div>
                                             <div class="reels-user">
                                                 <span class="reels-username">seller_moyeora</span>
                                                 <span class="reels-label">공동구매 셀러</span>
@@ -4589,7 +4684,7 @@
                             </div>
                             <div class="solution-card new fade-in delay-3">
                                 <div class="solution-card-header">
-                                    <div class="solution-card-title"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Flogo-horizontal.png?alt=media" alt="모여라딜" style="height: 22px; vertical-align: middle; margin-right: 4px;"></div>
+                                    <div class="solution-card-title"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Flogo-horizontal.png?alt=media" data-nofb alt="모여라딜" style="height: 22px; vertical-align: middle; margin-right: 4px;"></div>
                                     <span class="recommend-badge">추천</span>
                                 </div>
                                 <ul class="solution-list">
@@ -4705,7 +4800,7 @@
                                     <div class="phone-screen">
                                         <div class="insta-feed">
                                             <div class="insta-header">
-                                                <div class="insta-avatar"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Ffavicon.ico.ico?alt=media" alt="M" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;"></div>
+                                                <div class="insta-avatar"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Ffavicon.ico.ico?alt=media" data-nofb alt="M" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;"></div>
                                                 <div>
                                                     <div class="insta-username">seller_mom_${proposalData.companyName ? proposalData.companyName.substring(0,2) : 'deal'}</div>
                                                     <div class="insta-badge">공동구매 셀러</div>
@@ -4714,7 +4809,7 @@
                                             <div class="insta-image">
                                                 <div class="insta-carousel" id="instaCarousel">
                                                     ${products && products[0] && products[0].image
-                                                        ? `<div class="insta-carousel-item"><img src="${products[0].image}" alt="상품"></div>`
+                                                        ? `<div class="insta-carousel-item"><img src="${products[0].image}" alt="상품" data-ph="product"></div>`
                                                         : ''
                                                     }
                                                     ${reelsGifs.slice(0, 4).map((gif, i) => `
@@ -4779,7 +4874,7 @@
                                 <div class="content-gallery">
                                     <div class="content-item featured">
                                         ${products && products[0] && products[0].image
-                                            ? `<img src="${products[0].image}" alt="콘텐츠">`
+                                            ? `<img src="${products[0].image}" alt="콘텐츠" data-ph="product">`
                                             : '<div class="content-placeholder video"><i class="fas fa-video"></i></div>'
                                         }
                                         <div class="play-icon"><i class="fas fa-play"></i></div>
@@ -5017,7 +5112,7 @@
                             <!-- 모여라딜 지원 (풀서포트) -->
                             <div class="process-role moyeora">
                                 <div class="role-header">
-                                    <div class="role-icon moyeora-icon"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Ffavicon.ico.ico?alt=media" alt="M" style="width: 28px; height: 28px; border-radius: 50%; object-fit: cover;"></div>
+                                    <div class="role-icon moyeora-icon"><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Ffavicon.ico.ico?alt=media" data-nofb alt="M" style="width: 28px; height: 28px; border-radius: 50%; object-fit: cover;"></div>
                                     <h3>모여라딜이 지원</h3>
                                     <span class="role-badge full">풀서포트</span>
                                 </div>
@@ -5243,7 +5338,7 @@
                             유통 거품 없이, 확실한 판매를 경험하세요
                         </p>
                         <div class="cta-box fade-in delay-2">
-                            <h4><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Flogo-horizontal.png?alt=media" alt="모여라딜" style="height: 20px; vertical-align: middle; margin-right: 6px;">파트너팀</h4>
+                            <h4><img src="https://firebasestorage.googleapis.com/v0/b/moyeora-deal-manager.firebasestorage.app/o/logo%2Flogo-horizontal.png?alt=media" data-nofb alt="모여라딜" style="height: 20px; vertical-align: middle; margin-right: 6px;">파트너팀</h4>
                             <p>moyeoradeal@naver.com · 070-8664-0609</p>
                         </div>
                         <br>
@@ -5303,7 +5398,7 @@
                     <div class="product-card ${isFeatured ? 'featured' : ''}">
                         <div class="product-image">
                             ${isFeatured ? '<div class="product-badge">대표 상품</div>' : ''}
-                            ${product.image ? `<img src="${product.image}" alt="${product.name}">` : product.icon || '📦'}
+                            ${product.image ? `<img src="${product.image}" alt="${product.name}" data-ph="product">` : product.icon || '📦'}
                         </div>
                         <div class="product-info">
                             <div class="product-name">${product.name}</div>
