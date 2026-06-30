@@ -146,6 +146,7 @@
     const shotsOf = g => sbOf(g) ? g.storyboard.shots : [];
     const upOf = g => Array.isArray(g.uploads) ? g.uploads : [];
     const finOf = g => Array.isArray(g.finalUploads) ? g.finalUploads : [];
+    const rawOf = g => Array.isArray(g.rawUploads) ? g.rawUploads : [];
     const shotUp = (g, o) => upOf(g).filter(u => Number(u.shotOrder) === Number(o));
     const subDone = g => shotsOf(g).filter(s => shotUp(g, s.order).length > 0).length;
     const typeOf = g => g.type || '공구';
@@ -383,8 +384,14 @@
               <div class="shot-prog" id="prog${s.order}"></div>
             </div>`;
         });
-        const fu = finOf(g);
+        const ru = rawOf(g), fu = finOf(g);
         h += `
+          <div class="card">
+            <div class="sectit">📦 촬영본 한번에 올리기 <span style="font-weight:500;color:var(--tert)">· 컷 구분 없이 한꺼번에</span></div>
+            <div class="final-drop" onclick="document.getElementById('rawInput').click()"><div class="ic">📦</div><div class="t">촬영한 영상 한번에 올리기</div><div class="s">여러 개를 한꺼번에 선택해서 올려요</div><input type="file" id="rawInput" multiple accept="video/*,image/*" style="display:none" onchange="pickRaw(this)"></div>
+            <div class="shot-prog" id="rawProg"></div>
+            ${ru.map(u => `<div class="shot-file">${fileThumb(u)}<a class="fn" href="${u.url}" target="_blank" rel="noopener">${esc(u.name)}</a><button class="fx" onclick="delRaw('${esc(u.path)}')">삭제</button></div>`).join('')}
+          </div>
           <div class="card">
             <div class="sectit">🎬 최종본 올리기 <span style="font-weight:500;color:var(--tert)">· 편집 완료 영상</span></div>
             <div class="final-drop" onclick="document.getElementById('finalInput').click()"><div class="ic">🎬</div><div class="t">편집 완료한 릴스(최종 영상) 올리기</div><div class="s">완성된 영상 파일을 올려주세요</div><input type="file" id="finalInput" multiple accept="video/*,image/*" style="display:none" onchange="pickFinal(this)"></div>
@@ -511,6 +518,22 @@
     async function delFinal(path) {
       if (!confirm('이 최종본을 삭제할까요?')) return;
       try { await storage.ref().child(path).delete().catch(() => {}); const finalUploads = finOf(guide).filter(u => u.path !== path); await patch({ finalUploads }); guide.finalUploads = finalUploads; render(); }
+      catch (e) { alert('삭제 실패: ' + (e.message || e)); }
+    }
+    async function pickRaw(input) {
+      const files = Array.from(input.files || []); input.value = '';
+      if (!files.length) return;
+      const prog = document.getElementById('rawProg');
+      try {
+        if (prog) prog.textContent = '업로드 중…';
+        const added = await uploadTo('촬영본모음', files, 'seller');
+        const rawUploads = rawOf(guide).concat(added);
+        await patch({ rawUploads }); guide.rawUploads = rawUploads; render();
+      } catch (e) { if (prog) prog.textContent = '업로드 실패: ' + (e.message || e); }
+    }
+    async function delRaw(path) {
+      if (!confirm('이 영상을 삭제할까요?')) return;
+      try { await storage.ref().child(path).delete().catch(() => {}); const rawUploads = rawOf(guide).filter(u => u.path !== path); await patch({ rawUploads }); guide.rawUploads = rawUploads; render(); }
       catch (e) { alert('삭제 실패: ' + (e.message || e)); }
     }
 
