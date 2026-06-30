@@ -76,6 +76,9 @@
     .shot-up{margin-top:9px;}
     .shot-upbtn{display:block;text-align:center;font-size:13px;font-weight:700;border:none;background:var(--brand);color:#fff;border-radius:9px;padding:12px;cursor:pointer;}
     .shot-pick{display:block;text-align:center;margin-top:7px;font-size:11px;color:var(--tert);cursor:pointer;text-decoration:underline;}
+    .ed-i{flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;outline:none;}
+    .ed-t{display:block;width:100%;margin-top:7px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;line-height:1.45;outline:none;resize:vertical;min-height:42px;}
+    .ed-i:focus,.ed-t:focus{border-color:var(--brand);}
     .shot-file{display:flex;align-items:center;gap:8px;margin-top:8px;background:var(--okl);border:1px solid #c8efd9;border-radius:9px;padding:7px 10px;}
     .shot-file .ic{width:30px;height:30px;border-radius:7px;background-size:cover;background-position:center;background:linear-gradient(135deg,#fc9600,#e08600);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;text-decoration:none;flex-shrink:0;}
     .shot-file .fn{font-size:12px;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink);text-decoration:none;}
@@ -137,6 +140,7 @@
     let decided = false;
     let page = 'guide';   // guide | upload
     let genPending = null; // 'reels' | 'caption' | null
+    let editingSb = false;
     let _unsub = null;
 
     const esc = s => { if (s == null) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; };
@@ -334,8 +338,24 @@
             <div class="sb-head"><span><span class="type-badge">${TYPES[typeOf(g)] || ''} ${esc(typeOf(g))}</span> <span class="sb-theme">🎭 ${esc(sb.theme || '')}</span></span><span class="sb-total">${total}컷 · ${esc(sb.totalDuration || '')}</span></div>
             <div class="sb-title">${esc(sb.title || '최종 릴스 구성안')}</div>
             <div style="font-size:12px;color:var(--tert);margin-top:5px">아래 컷 순서대로 촬영하고 캡션을 준비한 뒤, 업로드로 넘어가세요.</div>
-            ${done === 0 ? `<button class="regen" onclick="regen()">🔄 구성안 다시 만들기</button>` : ''}
+            <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+              ${editingSb ? '' : `<button class="regen" style="margin:0" onclick="toggleEditSb()">✏️ 구성안 수정</button>`}
+              ${done === 0 && !editingSb ? `<button class="regen" style="margin:0" onclick="regen()">🔄 다시 만들기</button>` : ''}
+            </div>
           </div>`;
+        if (editingSb) {
+          shotsOf(g).forEach(s => {
+            h += `
+              <div class="shot">
+                <div class="shot-t"><span class="shot-n">${s.order}</span><input class="ed-i" id="edDur_${s.order}" value="${esc(s.duration || '')}" placeholder="길이 (예: 1.5초)"></div>
+                <textarea class="ed-t" id="edScene_${s.order}" placeholder="장면 설명">${esc(s.scene || '')}</textarea>
+                <textarea class="ed-t" id="edSub_${s.order}" placeholder="자막">${esc(s.subtitle || '')}</textarea>
+              </div>`;
+          });
+          h += `<div style="padding:2px 18px 0;display:flex;gap:8px"><button class="btn-main" style="flex:1" onclick="saveSb()">💾 저장</button><button class="cap-regen" onclick="cancelSb()">취소</button></div>`;
+          h += `<div class="trust">수정 후 저장하면 셀러·관리자 화면에 바로 반영돼요</div>`;
+          root.innerHTML = h; return;
+        }
         shotsOf(g).forEach(s => {
           const ok = shotUp(g, s.order).length > 0;
           h += `
@@ -409,6 +429,16 @@
     function accept() { decided = true; page = 'guide'; render(); }
     function goPage(p) { page = p; render(); }
     async function regen() { if (!confirm('현재 구성안을 지우고 다시 선택할까요?')) return; await patch({ storyboard: null }); guide.storyboard = null; decided = false; render(); }
+    function toggleEditSb() { editingSb = !editingSb; render(); }
+    function cancelSb() { editingSb = false; render(); }
+    async function saveSb() {
+      const sb = sbOf(guide); if (!sb) return;
+      const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+      const shots = sb.shots.map(s => ({ ...s, duration: v('edDur_' + s.order), scene: v('edScene_' + s.order), subtitle: v('edSub_' + s.order) }));
+      const storyboard = { ...sb, shots };
+      try { await patch({ storyboard }); guide.storyboard = storyboard; editingSb = false; render(); }
+      catch (e) { alert('저장 실패: ' + (e.message || e)); }
+    }
 
     /* ── Manus 요청 / 실시간 대기 ── */
     function watchUntil(predicate, onDone) {
