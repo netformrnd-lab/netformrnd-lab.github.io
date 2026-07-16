@@ -3077,7 +3077,8 @@ function renderNav() {
   const commonMenus = [
     { id: 'dashboard', label: '대시보드' },
     { id: 'calendar', label: '내 일정' },
-    { id: 'orders', label: '주문현황' }
+    { id: 'orders', label: '주문현황' },
+    { id: 'cafe24', label: '카페24' }
   ];
   
   const supplierMenus = [
@@ -3190,6 +3191,7 @@ function renderPage(page) {
     case 'urgent': renderUrgentSales(content); break;
     case 'settlement': renderSettlement(content); break;
     case 'suggest': renderSuggest(content); break;
+    case 'cafe24': renderCafe24Features(content); break;
   }
 }
 
@@ -9338,6 +9340,337 @@ async function removeContentFile(dealId, fileIdx) {
   } catch (e) {
     console.error(e);
     showToast('파일 삭제에 실패했습니다.');
+  }
+}
+
+// ===== 카페24 연동 기능 =====
+function renderCafe24Features(container) {
+  const orders = state.cafe24Orders || [];
+  const currentName = (state.currentUser?.name || '').trim().toLowerCase();
+  const cleanCurrentName = currentName.replace(/[\s\-\_\(\)\/]/g, '');
+  const currentId = state.currentUser?.id || '';
+
+  // 내 주문 필터링
+  let myOrders = orders;
+  if (state.userType === 'supplier') {
+    myOrders = orders.filter(order => {
+      const supplierName = (order.supplier_name || '').trim().toLowerCase();
+      const brandName = (order.brand_name || '').trim().toLowerCase();
+      const cleanSupplier = supplierName.replace(/[\s\-\_\(\)]/g, '');
+      const cleanBrand = brandName.replace(/[\s\-\_\(\)]/g, '');
+      if (supplierName === currentName || brandName === currentName) return true;
+      if (cleanSupplier && (cleanSupplier.includes(cleanCurrentName) || cleanCurrentName.includes(cleanSupplier))) return true;
+      if (cleanBrand && (cleanBrand.includes(cleanCurrentName) || cleanCurrentName.includes(cleanBrand))) return true;
+      return false;
+    });
+  } else {
+    myOrders = orders.filter(order => {
+      const sellerName = (order.seller_name || '').trim().toLowerCase();
+      const cleanSeller = sellerName.replace(/[\s\-\_\(\)\/]/g, '');
+      if (sellerName === currentName) return true;
+      if (cleanSeller && (cleanSeller.includes(cleanCurrentName) || cleanCurrentName.includes(cleanSeller))) return true;
+      return false;
+    });
+  }
+
+  // 기간별 집계
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  const weekStart = new Date(today); weekStart.setDate(today.getDate() - today.getDay() + 1);
+  const weekStartStr = weekStart.toISOString().split('T')[0];
+  const monthStartStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+
+  const todayOrders = myOrders.filter(o => o.order_date && o.order_date.startsWith(todayStr));
+  const weekOrders = myOrders.filter(o => o.order_date && o.order_date >= weekStartStr);
+  const monthOrders = myOrders.filter(o => o.order_date && o.order_date >= monthStartStr);
+
+  const todaySales = todayOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const weekSales = weekOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const monthSales = monthOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const totalSales = myOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+
+  // 배송 상태
+  const noTrackingCount = myOrders.filter(o => !o.tracking_number).length;
+  const shippingCount = myOrders.filter(o => o.tracking_number && o.order_status !== 'delivered').length;
+  const deliveredCount = myOrders.filter(o => o.order_status === 'delivered' || o.shipping_status === 'delivered').length;
+
+  // 일별 매출 (최근 14일)
+  const last14Days = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const daySales = myOrders.filter(o => o.order_date && o.order_date.startsWith(dateStr))
+      .reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    last14Days.push({ date: dateStr, label: `${d.getMonth()+1}/${d.getDate()}`, sales: daySales });
+  }
+  const maxDailySales = Math.max(...last14Days.map(d => d.sales), 1);
+
+  // 최근 주문 10건
+  const recentOrders = myOrders.slice(0, 10);
+
+  // 상품별 집계
+  const productStats = {};
+  myOrders.forEach(o => {
+    const pName = o.product_name || '(상품명 없음)';
+    if (!productStats[pName]) productStats[pName] = { count: 0, qty: 0, amount: 0 };
+    productStats[pName].count++;
+    productStats[pName].qty += Number(o.quantity) || 1;
+    productStats[pName].amount += Number(o.total_amount) || 0;
+  });
+  const topProducts = Object.entries(productStats)
+    .sort((a, b) => b[1].amount - a[1].amount)
+    .slice(0, 5);
+
+  const fmtNum = (n) => n.toLocaleString('ko-KR');
+
+  container.innerHTML = `
+    <div style="margin-bottom: 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <div>
+          <h2 style="font-size: 20px; font-weight: 800; margin-bottom: 4px;">카페24 연동 현황</h2>
+          <p style="font-size: 13px; color: var(--gray-500);">내 카페24 주문 데이터 실시간 연동</p>
+        </div>
+        <span style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; background: ${orders.length > 0 ? '#E8FAF4' : '#FFF0F0'}; color: ${orders.length > 0 ? '#12B886' : '#F04452'};">
+          <span style="width: 6px; height: 6px; border-radius: 50%; background: currentColor;"></span>
+          ${orders.length > 0 ? '연동 중' : '데이터 없음'}
+        </span>
+      </div>
+
+      <!-- 매출 요약 카드 -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;">
+        <div class="card" style="text-align: center; padding: 18px 12px; background: linear-gradient(135deg, #EBF3FF, #C3DAFF); border: 1px solid #C3DAFF;">
+          <div style="font-size: 11px; font-weight: 600; color: #6B7684; margin-bottom: 6px;">오늘 매출</div>
+          <div style="font-size: 20px; font-weight: 900; color: #1B64DA;">${fmtNum(todaySales)}</div>
+          <div style="font-size: 11px; color: #AEB5C0; margin-top: 4px;">${todayOrders.length}건</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 18px 12px;">
+          <div style="font-size: 11px; font-weight: 600; color: #6B7684; margin-bottom: 6px;">이번 주 매출</div>
+          <div style="font-size: 20px; font-weight: 900; color: #333D4B;">${fmtNum(weekSales)}</div>
+          <div style="font-size: 11px; color: #AEB5C0; margin-top: 4px;">${weekOrders.length}건</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 18px 12px; background: linear-gradient(135deg, #E8FAF4, #d0f4ea); border: 1px solid #b5edd9;">
+          <div style="font-size: 11px; font-weight: 600; color: #6B7684; margin-bottom: 6px;">이번 달 매출</div>
+          <div style="font-size: 20px; font-weight: 900; color: #12B886;">${fmtNum(monthSales)}</div>
+          <div style="font-size: 11px; color: #AEB5C0; margin-top: 4px;">${monthOrders.length}건</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 18px 12px;">
+          <div style="font-size: 11px; font-weight: 600; color: #6B7684; margin-bottom: 6px;">전체 매출</div>
+          <div style="font-size: 20px; font-weight: 900; color: #333D4B;">${fmtNum(totalSales)}</div>
+          <div style="font-size: 11px; color: #AEB5C0; margin-top: 4px;">총 ${myOrders.length}건</div>
+        </div>
+      </div>
+
+      <!-- 배송 현황 -->
+      <div class="card" style="margin-bottom: 16px;">
+        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 14px;">📦 배송 현황</h3>
+        <div style="display: flex; gap: 8px;">
+          <div style="flex: 1; background: ${noTrackingCount > 0 ? '#FFF8E8' : '#E8FAF4'}; padding: 14px 10px; border-radius: 10px; text-align: center;">
+            <div style="font-size: 20px; font-weight: 900; color: ${noTrackingCount > 0 ? '#FFA800' : '#12B886'}; margin-bottom: 4px;">${noTrackingCount}</div>
+            <div style="font-size: 11px; color: #6B7684; font-weight: 600;">송장 미입력</div>
+          </div>
+          <div style="flex: 1; background: #EBF3FF; padding: 14px 10px; border-radius: 10px; text-align: center;">
+            <div style="font-size: 20px; font-weight: 900; color: #3182F6; margin-bottom: 4px;">${shippingCount}</div>
+            <div style="font-size: 11px; color: #6B7684; font-weight: 600;">배송 중</div>
+          </div>
+          <div style="flex: 1; background: #E8FAF4; padding: 14px 10px; border-radius: 10px; text-align: center;">
+            <div style="font-size: 20px; font-weight: 900; color: #12B886; margin-bottom: 4px;">${deliveredCount}</div>
+            <div style="font-size: 11px; color: #6B7684; font-weight: 600;">배송 완료</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 일별 매출 차트 (최근 14일) -->
+      <div class="card" style="margin-bottom: 16px;">
+        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 14px;">📊 최근 14일 매출 추이</h3>
+        <div style="display: flex; align-items: flex-end; gap: 3px; height: 140px; padding: 0 4px;">
+          ${last14Days.map(d => {
+            const height = maxDailySales > 0 ? (d.sales / maxDailySales * 110) : 0;
+            return `<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;">
+              <div style="font-size: 8px; color: #AEB5C0; white-space: nowrap;">${d.sales > 0 ? fmtNum(Math.round(d.sales/10000)) + '만' : ''}</div>
+              <div style="width: 100%; background: linear-gradient(180deg, #3182F6, #1B64DA); border-radius: 3px 3px 0 0; min-height: 2px; height: ${Math.max(height, 2)}px;" title="${d.date}: ${fmtNum(d.sales)}원"></div>
+              <div style="font-size: 8px; color: #AEB5C0; transform: rotate(-45deg); white-space: nowrap; margin-top: 2px;">${d.label}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- 상품별 매출 TOP 5 -->
+      ${topProducts.length > 0 ? `
+      <div class="card" style="margin-bottom: 16px;">
+        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 14px;">🏆 상품별 매출 TOP 5</h3>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          ${topProducts.map(([name, stat], idx) => {
+            const maxAmount = topProducts[0][1].amount || 1;
+            const widthPercent = (stat.amount / maxAmount * 100).toFixed(0);
+            const colors = ['#3182F6', '#12B886', '#FFA800', '#F04452', '#6B7684'];
+            return `<div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="font-size: 12px; font-weight: 600; color: #333D4B; display: flex; align-items: center; gap: 6px;">
+                  <span style="width: 20px; height: 20px; border-radius: 6px; background: ${colors[idx]}; color: #fff; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; font-weight: 900;">${idx + 1}</span>
+                  ${name.length > 20 ? name.substring(0, 20) + '...' : name}
+                </span>
+                <span style="font-size: 12px; font-weight: 700; color: #333D4B;">${fmtNum(stat.amount)}원</span>
+              </div>
+              <div style="height: 6px; background: #F2F4F6; border-radius: 3px; overflow: hidden;">
+                <div style="width: ${widthPercent}%; height: 100%; background: ${colors[idx]}; border-radius: 3px;"></div>
+              </div>
+              <div style="font-size: 10px; color: #AEB5C0; margin-top: 2px;">${stat.count}건 · ${stat.qty}개</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      ` : ''}
+
+      <!-- 친구 초대 레퍼럴 현황 -->
+      <div class="card" style="margin-bottom: 16px;">
+        <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 14px;">🎁 친구 초대 레퍼럴 현황</h3>
+        <div id="cafe24-referral-stats" style="text-align: center; padding: 16px; color: #AEB5C0; font-size: 13px;">
+          <div class="loading" style="margin: 0 auto 8px;"></div>
+          레퍼럴 데이터 로딩 중...
+        </div>
+      </div>
+
+      <!-- 카페24 API 기능 안내 -->
+      <div class="card" style="margin-bottom: 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff;">
+        <div style="display: inline-block; background: rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; margin-bottom: 10px;">CAFE24 API</div>
+        <h3 style="font-size: 16px; font-weight: 800; margin-bottom: 10px; color: #fff;">카페24 API 연동 기능</h3>
+        <p style="font-size: 12px; opacity: 0.85; line-height: 1.7; margin-bottom: 16px;">운영센터(admin2)에서 설정된 카페24 API를 통해 다음 기능이 자동으로 연동됩니다.</p>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          ${[
+            { icon: '📦', title: '주문 관리', desc: '실시간 주문 조회·관리', status: 'active' },
+            { icon: '📊', title: '매출 통계', desc: '일별/월별 매출 분석', status: 'active' },
+            { icon: '🚚', title: '배송 추적', desc: '송장 입력·배송 현황', status: 'active' },
+            { icon: '💰', title: '정산 관리', desc: '셀러/공급사 정산서', status: 'active' },
+            { icon: '🏷️', title: '상품 연동', desc: '카페24 상품번호 매칭', status: 'active' },
+            { icon: '🎫', title: '쿠폰 관리', desc: '카페24 쿠폰 발급·관리', status: 'active' },
+            { icon: '🎁', title: '적립금', desc: '포인트 적립·사용 연동', status: 'active' },
+            { icon: '👥', title: '회원 매핑', desc: '카페24↔Firebase 회원 연동', status: 'active' },
+            { icon: '📈', title: '상품 분석', desc: '카테고리별 매출 분석', status: 'soon' },
+            { icon: '🔔', title: '주문 알림', desc: 'Webhook 실시간 알림', status: 'soon' }
+          ].map(f => `
+            <div style="background: rgba(255,255,255,${f.status === 'active' ? '0.18' : '0.08'}); padding: 12px; border-radius: 10px; ${f.status === 'soon' ? 'opacity: 0.65;' : ''}">
+              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                <span style="font-size: 16px;">${f.icon}</span>
+                <span style="font-size: 12px; font-weight: 700; color: #fff;">${f.title}</span>
+                ${f.status === 'soon' ? '<span style="font-size: 9px; background: rgba(255,255,255,0.2); padding: 1px 6px; border-radius: 6px; font-weight: 600;">SOON</span>' : '<span style="font-size: 9px; background: rgba(18,184,134,0.4); padding: 1px 6px; border-radius: 6px; font-weight: 600;">ON</span>'}
+              </div>
+              <div style="font-size: 10px; opacity: 0.75; line-height: 1.5;">${f.desc}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <!-- 최근 주문 목록 -->
+      <div class="card" style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+          <h3 style="font-size: 15px; font-weight: 700;">📋 최근 주문</h3>
+          <button onclick="renderPage('orders')" style="background: none; border: 1px solid #E5E8EB; padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; color: #6B7684; cursor: pointer; font-family: inherit;">전체보기 →</button>
+        </div>
+        ${recentOrders.length > 0 ? `
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            ${recentOrders.map(o => {
+              const orderDate = o.order_date ? o.order_date.split('T')[0] : '-';
+              const statusColor = o.tracking_number ? '#12B886' : '#FFA800';
+              const statusText = o.tracking_number ? '발송완료' : '준비중';
+              return `<div style="display: flex; align-items: center; gap: 12px; padding: 12px; background: #F9FAFB; border-radius: 10px;">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-size: 13px; font-weight: 600; color: #333D4B; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${o.product_name || '상품명 없음'}</div>
+                  <div style="font-size: 11px; color: #AEB5C0; margin-top: 2px;">${orderDate} · ${o.receiver_name || '-'}</div>
+                </div>
+                <div style="text-align: right; flex-shrink: 0;">
+                  <div style="font-size: 13px; font-weight: 700; color: #333D4B;">${fmtNum(Number(o.total_amount) || 0)}원</div>
+                  <span style="font-size: 10px; font-weight: 600; color: ${statusColor}; background: ${statusColor}15; padding: 2px 6px; border-radius: 4px;">${statusText}</span>
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        ` : `
+          <div style="text-align: center; padding: 32px 16px; color: #AEB5C0;">
+            <div style="font-size: 32px; margin-bottom: 8px;">📭</div>
+            <div style="font-size: 13px; font-weight: 600; color: #6B7684; margin-bottom: 4px;">주문 데이터가 없습니다</div>
+            <div style="font-size: 12px;">운영센터에서 카페24 주문을 동기화해주세요</div>
+          </div>
+        `}
+      </div>
+
+      <!-- 친구 초대 배너 -->
+      <div class="card" style="background: linear-gradient(135deg, #3182F6 0%, #1B64DA 100%); color: #fff; margin-bottom: 16px; cursor: pointer;" onclick="window.open('/consumer/friend-invite/', '_blank')">
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <div style="font-size: 36px;">🎁</div>
+          <div style="flex: 1;">
+            <div style="font-size: 15px; font-weight: 800; margin-bottom: 4px;">친구 초대 시스템</div>
+            <div style="font-size: 12px; opacity: 0.8; line-height: 1.6;">소비자가 친구를 초대하면 둘 다 포인트를 적립받아요.<br>카페24 쇼핑몰과 자동 연동됩니다.</div>
+          </div>
+          <div style="font-size: 20px; opacity: 0.7;">→</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // 레퍼럴 현황 비동기 로드
+  loadCafe24ReferralStats();
+}
+
+async function loadCafe24ReferralStats() {
+  const container = document.getElementById('cafe24-referral-stats');
+  if (!container) return;
+
+  try {
+    const [ordersSnap, cashbacksSnap, usersSnap] = await Promise.all([
+      db.collection('cafe24_orders').orderBy('order_date', 'desc').limit(500).get(),
+      db.collection('cashbacks').orderBy('created_at', 'desc').limit(100).get(),
+      db.collection('consumer_users').limit(100).get()
+    ]);
+
+    const orders = ordersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const cashbacks = cashbacksSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // 레퍼럴 주문 필터
+    const referralOrders = orders.filter(o => {
+      const memo = (o.buyer_memo || o.order_memo || o.memo || '');
+      return memo.includes('[REF:');
+    });
+
+    const totalReferralSales = referralOrders.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    const totalCashbackPaid = cashbacks.filter(c => c.status === 'completed' || c.status === 'processed')
+      .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+    const activeReferrers = users.filter(u => u.inviteCount > 0).length;
+    const fmtNum = (n) => n.toLocaleString('ko-KR');
+
+    container.innerHTML = `
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+        <div style="background: #EBF3FF; padding: 14px; border-radius: 10px; text-align: center;">
+          <div style="font-size: 20px; font-weight: 900; color: #3182F6;">${referralOrders.length}</div>
+          <div style="font-size: 11px; color: #6B7684; font-weight: 600; margin-top: 2px;">레퍼럴 주문</div>
+        </div>
+        <div style="background: #E8FAF4; padding: 14px; border-radius: 10px; text-align: center;">
+          <div style="font-size: 20px; font-weight: 900; color: #12B886;">${fmtNum(totalReferralSales)}원</div>
+          <div style="font-size: 11px; color: #6B7684; font-weight: 600; margin-top: 2px;">레퍼럴 매출</div>
+        </div>
+        <div style="background: #FFF8E8; padding: 14px; border-radius: 10px; text-align: center;">
+          <div style="font-size: 20px; font-weight: 900; color: #FFA800;">${fmtNum(totalCashbackPaid)}원</div>
+          <div style="font-size: 11px; color: #6B7684; font-weight: 600; margin-top: 2px;">캐시백 지급</div>
+        </div>
+        <div style="background: #F5F3FF; padding: 14px; border-radius: 10px; text-align: center;">
+          <div style="font-size: 20px; font-weight: 900; color: #8B5CF6;">${activeReferrers}</div>
+          <div style="font-size: 11px; color: #6B7684; font-weight: 600; margin-top: 2px;">활성 추천인</div>
+        </div>
+      </div>
+      ${referralOrders.length > 0 ? `
+        <div style="font-size: 11px; color: #AEB5C0; text-align: center;">
+          전환율: ${orders.length > 0 ? ((referralOrders.length / orders.length) * 100).toFixed(1) : 0}% | 등록 회원: ${users.length}명
+        </div>
+      ` : `
+        <div style="font-size: 12px; color: #AEB5C0; text-align: center;">
+          레퍼럴 주문이 아직 없습니다. 친구 초대 링크를 공유해주세요!
+        </div>
+      `}
+    `;
+  } catch (err) {
+    console.error('레퍼럴 통계 로드 오류:', err);
+    container.innerHTML = '<div style="font-size: 12px; color: #AEB5C0; text-align: center;">통계 로드 실패</div>';
   }
 }
 
